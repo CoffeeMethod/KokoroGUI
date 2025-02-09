@@ -5,6 +5,10 @@
 
 ![image](https://github.com/user-attachments/assets/f19d08f3-aed5-4d29-b5f0-b5e391b08dec)
 
+
+https://github.com/user-attachments/assets/df2eac14-3ba5-4608-a1b9-59fcff8955de
+
+
 This is a simple Text-to-Speech (TTS) application built using Python and the `kokoro` library. It provides a graphical user interface (GUI) built with `tkinter` that allows users to convert text into speech using various voices. The application supports saving the generated audio to `.wav` files, selecting different voices, and customizing output filenames and directories.
 
 ## Features
