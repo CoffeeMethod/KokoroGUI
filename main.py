@@ -1,236 +1,410 @@
 import os
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from kokoro import KPipeline
+import threading
+import asyncio
 import soundfile as sf
 import torch
 import numpy as np
 import time
+from kokoro import KPipeline
+import concurrent.futures
 
+# --- Thread Local Storage for Parallel Pipelines ---
+thread_local = threading.local()
+
+def get_thread_pipeline(lang_code="a"):
+    """Get or create a KPipeline instance for the current thread."""
+    if not hasattr(thread_local, "pipeline"):
+        try:
+            # We assume lang_code is constant 'a' (American English) for now
+            thread_local.pipeline = KPipeline(lang_code=lang_code)
+        except Exception as e:
+            print(f"Error init pipeline in thread {threading.get_ident()}: {e}")
+            return None
+    return thread_local.pipeline
+
+# --- Async Helper ---
+class AsyncLoopThread(threading.Thread):
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.loop = asyncio.new_event_loop()
+        self.running = True
+
+    def run(self):
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
+
+    def stop(self):
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        self.join()
+
+    def run_coro(self, coro):
+        return asyncio.run_coroutine_threadsafe(coro, self.loop)
+
+# --- Main Application ---
 class TTSApp:
-  def __init__(self, master):
-    self.master = master
-    master.title("Text-to-Speech Application")
+    def __init__(self, master):
+        self.master = master
+        master.title("Kokoro TTS - Async Multithreaded")
+        master.geometry("600x750")
 
-    # Variables
-    self.text = tk.StringVar()
-    self.voice = tk.StringVar(value="af_heart")  # Default voice
-    self.filename = tk.StringVar(value="output")  # Default filename
-    self.output_directory = tk.StringVar(value="audio_output")
-    self.pipeline = None  # Initialize pipeline to None
-    self.separate_files = tk.BooleanVar(value=True)  # Default: separate files
-    self.timecode_format = tk.StringVar(
-        value="%Y%m%d%H%M%S"
-    )  # Default timecode format
-    self.combine_post = tk.BooleanVar(
-        value=False
-    )  # Default: don't combine post
+        # Core Variables
+        self.text_var = tk.StringVar()
+        self.file_path_var = tk.StringVar()
+        self.voice = tk.StringVar(value="af_heart")
+        self.filename = tk.StringVar(value="output")
+        self.output_directory = tk.StringVar(value="audio_output")
+        self.separate_files = tk.BooleanVar(value=True)
+        self.timecode_format = tk.StringVar(value="%Y%m%d%H%M%S")
+        self.combine_post = tk.BooleanVar(value=True)
+        self.num_threads = tk.IntVar(value=1)
+        self.pipeline = None # Main pipeline for single thread
+        self.is_generating = False
+        self.cancel_event = threading.Event()
 
-    # UI elements
-    self.create_widgets()
+        # Background Processing
+        self.worker = AsyncLoopThread()
+        self.worker.start()
 
-  def create_widgets(self):
-    # Text Input
-    ttk.Label(self.master, text="Enter Text:").grid(
-        row=0, column=0, padx=5, pady=5, sticky="w"
-    )
-    self.text_entry = tk.Text(self.master, height=5, width=40)
-    self.text_entry.grid(row=0, column=1, padx=5, pady=5)
+        # UI Setup
+        self.create_widgets()
+        
+        # Initialize Pipeline in background (Primary pipeline)
+        self.status_label.config(text="Initializing primary pipeline...")
+        self.worker.run_coro(self.init_pipeline_async())
 
-    # Voice Recommendation Label
-    self.voice_recommendation_label = ttk.Label(
-        self.master,
-        text="Recommended voices: af_heart, am_michael, am_puck",
-    )
-    self.voice_recommendation_label.grid(
-        row=1, column=1, padx=5, pady=5, sticky="w"
-    )
+    def create_widgets(self):
+        main_frame = ttk.Frame(self.master, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
-    # Voice Selection
-    ttk.Label(self.master, text="Select Voice:").grid(
-        row=2, column=0, padx=5, pady=5, sticky="w"
-    )
-    self.voice_options = [
-        "af_alloy",
-        "af_aoede",
-        "af_bella",
-        "af_jessica",
-        "af_kore",
-        "af_nicole",
-        "af_nova",
-        "af_river",
-        "af_sarah",
-        "af_sky",
-        "am_adam",
-        "am_echo",
-        "am_eric",
-        "am_fenrir",
-        "am_liam",
-        "am_michael",
-        "am_onyx",
-        "am_puck",
-        "am_santa",
-        "af_heart",
-    ]  # All voices
-    self.voice_combo = ttk.Combobox(
-        self.master, textvariable=self.voice, values=self.voice_options
-    )
-    self.voice_combo.grid(row=2, column=1, padx=5, pady=5, sticky="w")
+        # 1. Input Source
+        input_group = ttk.LabelFrame(main_frame, text="Input", padding="5")
+        input_group.pack(fill=tk.X, pady=5)
 
-    # Filename Input
-    ttk.Label(self.master, text="Enter Filename:").grid(
-        row=3, column=0, padx=5, pady=5, sticky="w"
-    )
-    self.filename_entry = ttk.Entry(self.master, textvariable=self.filename)
-    self.filename_entry.grid(row=3, column=1, padx=5, pady=5, sticky="w")
+        self.notebook = ttk.Notebook(input_group)
+        self.notebook.pack(fill=tk.BOTH, expand=True, pady=5)
 
-    # Output Directory
-    ttk.Label(self.master, text="Output Directory:").grid(
-        row=4, column=0, padx=5, pady=5, sticky="w"
-    )
-    self.output_dir_entry = ttk.Entry(
-        self.master, textvariable=self.output_directory, width=30
-    )
-    self.output_dir_entry.grid(row=4, column=1, padx=5, pady=5, sticky="w")
+        # Tab 1: Direct Text
+        self.text_frame = ttk.Frame(self.notebook, padding=5)
+        self.notebook.add(self.text_frame, text="Direct Text")
+        self.text_entry = tk.Text(self.text_frame, height=6, width=40)
+        self.text_entry.pack(fill=tk.BOTH, expand=True)
 
-    self.browse_button = ttk.Button(
-        self.master, text="Browse", command=self.browse_directory
-    )
-    self.browse_button.grid(row=4, column=2, padx=5, pady=5, sticky="w")
+        # Tab 2: File
+        self.file_frame = ttk.Frame(self.notebook, padding=5)
+        self.notebook.add(self.file_frame, text="Load File")
+        
+        file_row = ttk.Frame(self.file_frame)
+        file_row.pack(fill=tk.X)
+        ttk.Entry(file_row, textvariable=self.file_path_var, width=40).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        ttk.Button(file_row, text="Browse...", command=self.browse_file).pack(side=tk.LEFT)
+        ttk.Label(self.file_frame, text="Supports .txt files. Ideal for books.").pack(anchor="w", pady=5)
 
-    # Separate Files Checkbox
-    self.separate_files_check = ttk.Checkbutton(
-        self.master,
-        text="Separate Audio Files",
-        variable=self.separate_files,
-    )
-    self.separate_files_check.grid(row=5, column=1, padx=5, pady=5, sticky="w")
+        # 2. Configuration
+        config_group = ttk.LabelFrame(main_frame, text="Configuration", padding="5")
+        config_group.pack(fill=tk.X, pady=5)
 
-    # Timecode Format Input
-    ttk.Label(self.master, text="Timecode Format:").grid(
-        row=6, column=0, padx=5, pady=5, sticky="w"
-    )
-    self.timecode_format_entry = ttk.Entry(
-        self.master, textvariable=self.timecode_format, width=30
-    )
-    self.timecode_format_entry.grid(row=6, column=1, padx=5, pady=5, sticky="w")
+        # Voice
+        voice_row = ttk.Frame(config_group)
+        voice_row.pack(fill=tk.X, pady=2)
+        ttk.Label(voice_row, text="Voice:", width=15).pack(side=tk.LEFT)
+        self.voice_options = [
+            "af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", 
+            "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", 
+            "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", 
+            "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa"
+        ]
+        ttk.Combobox(voice_row, textvariable=self.voice, values=self.voice_options).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-    # Combine Post-Processing Checkbox
-    self.combine_post_check = ttk.Checkbutton(
-        self.master,
-        text="Combine After Generation",
-        variable=self.combine_post,
-    )
-    self.combine_post_check.grid(row=7, column=1, padx=5, pady=5, sticky="w")
+        # Output Dir
+        dir_row = ttk.Frame(config_group)
+        dir_row.pack(fill=tk.X, pady=2)
+        ttk.Label(dir_row, text="Output Dir:", width=15).pack(side=tk.LEFT)
+        ttk.Entry(dir_row, textvariable=self.output_directory).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        ttk.Button(dir_row, text="Browse", command=self.browse_directory).pack(side=tk.LEFT)
 
-    # Convert Button
-    self.convert_button = ttk.Button(
-        self.master, text="Convert to Speech", command=self.convert_text
-    )
-    self.convert_button.grid(row=8, column=1, padx=5, pady=10)
+        # Filename
+        file_name_row = ttk.Frame(config_group)
+        file_name_row.pack(fill=tk.X, pady=2)
+        ttk.Label(file_name_row, text="Base Filename:", width=15).pack(side=tk.LEFT)
+        ttk.Entry(file_name_row, textvariable=self.filename).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-    # Status Label
-    self.status_label = ttk.Label(self.master, text="")
-    self.status_label.grid(row=9, column=0, columnspan=3, padx=5, pady=5)
+        # Options
+        opts_row = ttk.Frame(config_group)
+        opts_row.pack(fill=tk.X, pady=5)
+        ttk.Checkbutton(opts_row, text="Keep Separate Chunks", variable=self.separate_files).pack(side=tk.LEFT, padx=10)
+        ttk.Checkbutton(opts_row, text="Combine into One File", variable=self.combine_post).pack(side=tk.LEFT, padx=10)
 
-  def browse_directory(self):
-    directory = filedialog.askdirectory()
-    if directory:
-      self.output_directory.set(directory)
+        # Multithreading Config
+        thread_row = ttk.Frame(config_group)
+        thread_row.pack(fill=tk.X, pady=10)
+        ttk.Label(thread_row, text="Speed / Parallel Processes:").pack(side=tk.LEFT, padx=(0,5))
+        self.thread_spin = ttk.Spinbox(thread_row, from_=1, to=8, textvariable=self.num_threads, width=5)
+        self.thread_spin.pack(side=tk.LEFT)
+        ttk.Label(thread_row, text="(Warning: High RAM usage)").pack(side=tk.LEFT, padx=5)
 
-  def initialize_pipeline(self):
-    # Initialize the pipeline only once
-    if self.pipeline is None:
-      try:
-        self.pipeline = KPipeline(lang_code="a")
-        self.status_label.config(text="Pipeline Initialized.")
-      except Exception as e:
-        messagebox.showerror("Error", f"Failed to initialize pipeline: {e}")
-        self.status_label.config(text="Pipeline Initialization Failed.")
-        self.pipeline = None  # Reset pipeline to None in case of failure
-        return False  # Indicate failure
-    return True  # Indicate success
+        # 3. Actions
+        action_frame = ttk.Frame(main_frame, padding="5")
+        action_frame.pack(fill=tk.BOTH, expand=True)
 
-  def convert_text(self):
-    if not self.initialize_pipeline():
-      return  # Exit if pipeline initialization failed
+        self.progress = ttk.Progressbar(action_frame, mode='indeterminate')
+        self.progress.pack(fill=tk.X, pady=10)
 
-    text = self.text_entry.get("1.0", tk.END).strip()
-    voice = self.voice.get()
-    filename = self.filename.get()
-    output_directory = self.output_directory.get()
-    separate_files = self.separate_files.get()
-    timecode_format = self.timecode_format.get()
-    combine_post = self.combine_post.get()
+        btn_row = ttk.Frame(action_frame)
+        btn_row.pack(fill=tk.X)
+        self.convert_button = ttk.Button(btn_row, text="Start Conversion", command=self.start_conversion)
+        self.convert_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        self.cancel_button = ttk.Button(btn_row, text="Cancel", command=self.cancel_conversion, state=tk.DISABLED)
+        self.cancel_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
-    if not text:
-      messagebox.showerror("Error", "Please enter text to convert.")
-      return
+        self.status_label = ttk.Label(action_frame, text="Ready", wraplength=550)
+        self.status_label.pack(pady=10)
 
-    os.makedirs(output_directory, exist_ok=True)
+    # --- Logic ---
 
-    try:
-      generator = self.pipeline(text, voice=voice, speed=1, split_pattern=r"\n+")
+    def browse_directory(self):
+        d = filedialog.askdirectory()
+        if d: self.output_directory.set(d)
 
-      # Get a unique time identifier
-      time_identifier = time.strftime(timecode_format)
+    def browse_file(self):
+        f = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
+        if f: self.file_path_var.set(f)
 
-      audio_segments = []  # Store audio segments for post-processing
+    def update_status(self, msg, is_error=False):
+        color = "red" if is_error else "black"
+        self.master.after(0, lambda: self.status_label.config(text=msg, foreground=color))
 
-      for i, (gs, ps, audio) in enumerate(generator):
-        print(f"Type of audio: {type(audio)}")
+    def update_ui_state(self, generating):
+        state = tk.DISABLED if generating else tk.NORMAL
+        cancel_state = tk.NORMAL if generating else tk.DISABLED
+        self.master.after(0, lambda: self._set_ui_state(state, cancel_state, generating))
 
-        if isinstance(audio, torch.Tensor):
-          print("Audio is a torch.Tensor")
-          audio_numpy = audio.cpu().numpy()
-          print(f"Type of audio_numpy: {type(audio_numpy)}")
+    def _set_ui_state(self, main_state, cancel_state, generating):
+        self.convert_button.config(state=main_state)
+        self.cancel_button.config(state=cancel_state)
+        if generating:
+            self.progress.start(10)
         else:
-          print("Audio is NOT a torch.Tensor")
-          audio_numpy = audio
+            self.progress.stop()
 
-        if not isinstance(audio_numpy, np.ndarray):
-          audio_numpy = np.array(audio_numpy)
-          print(f"Converted audio to numpy array: {type(audio_numpy)}")
+    def cancel_conversion(self):
+        if self.is_generating:
+            self.cancel_event.set()
+            self.update_status("Cancelling... please wait for current chunks.")
 
-        audio_bytes = audio_numpy.tobytes()
-        print(f"Type of audio_bytes: {type(audio_bytes)}")
+    async def init_pipeline_async(self):
+        try:
+            self.pipeline = await asyncio.to_thread(KPipeline, lang_code="a")
+            self.update_status("Pipeline Initialized and Ready.")
+        except Exception as e:
+            self.update_status(f"Pipeline Init Failed: {e}", True)
 
-        # Save individual segments
-        file_path = os.path.join(
-            output_directory, f"{filename}_{time_identifier}_{i}.wav"
-        )
-        sf.write(file_path, audio_numpy, 24000)
-        print(f"Saved audio to {file_path}")
-        audio_segments.append(file_path)  # Store the file path
+    def smart_split(self, text, chunk_size=3000):
+        """Splits text into chunks respecting paragraph boundaries."""
+        chunks = []
+        current_chunk = []
+        current_len = 0
+        
+        # Split by double newline first to preserve paragraphs
+        paragraphs = text.split('\n\n')
+        
+        for para in paragraphs:
+            # If a single paragraph is huge, split it by single newline
+            if len(para) > chunk_size:
+                lines = para.split('\n')
+                for line in lines:
+                    if current_len + len(line) > chunk_size and current_chunk:
+                        chunks.append("\n".join(current_chunk))
+                        current_chunk = []
+                        current_len = 0
+                    current_chunk.append(line)
+                    current_len += len(line)
+            else:
+                if current_len + len(para) > chunk_size and current_chunk:
+                    chunks.append("\n\n".join(current_chunk))
+                    current_chunk = []
+                    current_len = 0
+                current_chunk.append(para)
+                current_len += len(para)
+        
+        if current_chunk:
+            chunks.append("\n\n".join(current_chunk))
+            
+        return [c for c in chunks if c.strip()] # Remove empty chunks
 
-      if combine_post:
-        # Post-processing: Combine all audio segments into a single file
-        all_audio = []
-        for file_path in audio_segments:
-          # Load each audio segment from file
-          audio_numpy, samplerate = sf.read(file_path)
-          all_audio.append(audio_numpy)
+    def process_chunk_task(self, chunk_data):
+        """Executed by a worker thread."""
+        index, text, config = chunk_data
+        
+        if self.cancel_event.is_set():
+            return []
 
-        # Concatenate all audio segments
-        combined_audio = np.concatenate(all_audio)
+        # Get thread-local pipeline
+        pipeline = get_thread_pipeline()
+        if not pipeline:
+            raise RuntimeError("Failed to initialize pipeline in thread.")
 
-        # Save the combined audio to a single file
-        combined_file_path = os.path.join(
-            output_directory, f"{filename}_{time_identifier}_combined.wav"
-        )
-        sf.write(combined_file_path, combined_audio, 24000)
-        print(f"Saved combined audio to {combined_file_path}")
+        # Generate
+        generator = pipeline(text, voice=config['voice'], speed=1, split_pattern=r"\n+")
+        
+        chunk_files = []
+        sub_idx = 0
+        
+        base_name = f"{config['filename']}_{config['time_id']}_part{index}"
+        
+        for _, _, audio in generator:
+            if self.cancel_event.is_set(): break
 
-      self.status_label.config(text="Conversion complete!")
-      messagebox.showinfo("Success", "Text converted to speech successfully!")
+            if isinstance(audio, torch.Tensor):
+                audio = audio.cpu().numpy()
+                
+            file_name = f"{base_name}_{sub_idx}.wav"
+            path = os.path.join(config['out_dir'], file_name)
+            
+            sf.write(path, audio, 24000)
+            chunk_files.append(path)
+            sub_idx += 1
+            
+        return chunk_files
 
-    except Exception as e:
-      messagebox.showerror("Error", f"Conversion failed: {e}")
-      self.status_label.config(text=f"Conversion failed: {e}")
+    def start_conversion(self):
+        if self.is_generating: return
+        
+        # Gather inputs
+        mode = self.notebook.index(self.notebook.select())
+        text_data = ""
+        
+        if mode == 0: # Direct Text
+            text_data = self.text_entry.get("1.0", tk.END).strip()
+            if not text_data:
+                messagebox.showerror("Error", "Please enter text.")
+                return
+        else: # File
+            fpath = self.file_path_var.get()
+            if not os.path.exists(fpath):
+                messagebox.showerror("Error", "File does not exist.")
+                return
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    text_data = f.read()
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not read file: {e}")
+                return
+
+        if not text_data: return
+        
+        # Check pipeline if 1 thread
+        if self.num_threads.get() == 1 and not self.pipeline:
+             messagebox.showwarning("Wait", "Pipeline is still initializing...")
+             return
+
+        self.is_generating = True
+        self.cancel_event.clear()
+        self.update_ui_state(True)
+        
+        # Config
+        config = {
+            'voice': self.voice.get(),
+            'filename': self.filename.get(),
+            'out_dir': self.output_directory.get(),
+            'separate': self.separate_files.get(),
+            'combine': self.combine_post.get(),
+            'timecode': self.timecode_format.get(),
+            'time_id': time.strftime(self.timecode_format.get())
+        }
+        
+        self.worker.run_coro(self.process_text_async(text_data, config))
+
+    async def process_text_async(self, text, config):
+        try:
+            self.update_status("Preparing text...")
+            os.makedirs(config['out_dir'], exist_ok=True)
+            
+            num_workers = self.num_threads.get()
+            
+            # 1. Split text
+            chunks = self.smart_split(text, chunk_size=5000 if num_workers > 1 else 1000000)
+            total_chunks = len(chunks)
+            self.update_status(f"Split text into {total_chunks} parts. Starting {num_workers} workers...")
+            
+            # Prepare tasks
+            tasks_data = [(i, c, config) for i, c in enumerate(chunks)]
+            all_generated_files = [None] * total_chunks # Placeholder for order
+            
+            # 2. Run Parallel
+            loop = asyncio.get_running_loop()
+            
+            # Use ThreadPoolExecutor
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = []
+                # Map futures to indices to reconstruct order later
+                future_to_index = {}
+                
+                for i, data in enumerate(tasks_data):
+                    fut = loop.run_in_executor(executor, self.process_chunk_task, data)
+                    futures.append(fut)
+                    future_to_index[fut] = i
+                
+                # Wait for all to complete
+                # We use asyncio.gather to get them in order of submission (which is what we want)
+                results = await asyncio.gather(*futures, return_exceptions=True)
+                
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        print(f"Chunk {i} failed: {result}")
+                        self.update_status(f"Error in chunk {i}", True)
+                    else:
+                        all_generated_files[i] = result
+
+            if self.cancel_event.is_set():
+                self.update_status("Conversion Cancelled.")
+                return
+
+            # Flatten file list in order
+            final_file_list = []
+            for sublist in all_generated_files:
+                if sublist: final_file_list.extend(sublist)
+            
+            self.update_status(f"Generated {len(final_file_list)} segments. Combining...")
+
+            # Combine if needed
+            if config['combine'] and final_file_list:
+                combine_path = os.path.join(config['out_dir'], f"{config['filename']}_{config['time_id']}_combined.wav")
+                await self.smart_combine(final_file_list, combine_path)
+                
+                if not config['separate']:
+                    for p in final_file_list:
+                        try: os.remove(p)
+                        except: pass
+                
+                self.update_status(f"Done! Saved: {combine_path}")
+            else:
+                 self.update_status("Conversion Complete!")
+
+        except Exception as e:
+            print(e)
+            self.update_status(f"Error: {e}", True)
+        finally:
+            self.is_generating = False
+            self.update_ui_state(False)
+
+    async def smart_combine(self, file_paths, output_path):
+        def combine_worker():
+            with sf.SoundFile(output_path, 'w', samplerate=24000, channels=1) as out_f:
+                for fp in file_paths:
+                    if self.cancel_event.is_set(): break
+                    try:
+                        data, _ = sf.read(fp)
+                        out_f.write(data)
+                    except Exception as e:
+                        print(f"Failed to read/write segment {fp}: {e}")
+        
+        await asyncio.to_thread(combine_worker)
 
 
-# Main application
 if __name__ == "__main__":
-  root = tk.Tk()
-  app = TTSApp(root)
-  root.mainloop()
+    root = tk.Tk()
+    app = TTSApp(root)
+    root.mainloop()
