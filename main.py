@@ -169,8 +169,10 @@ class TTSApp:
         # Options
         opts_row = ttk.Frame(config_group)
         opts_row.pack(fill=tk.X, pady=5)
+        self.export_subtitles = tk.BooleanVar(value=False)
         ttk.Checkbutton(opts_row, text="Keep Separate Chunks", variable=self.separate_files).pack(side=tk.LEFT, padx=10)
         ttk.Checkbutton(opts_row, text="Combine into One File", variable=self.combine_post).pack(side=tk.LEFT, padx=10)
+        ttk.Checkbutton(opts_row, text="Export Subtitles (.srt)", variable=self.export_subtitles).pack(side=tk.LEFT, padx=10)
 
         # Multithreading Config
         thread_row = ttk.Frame(config_group)
@@ -322,7 +324,7 @@ class TTSApp:
         
         base_name = f"{config['filename']}_{config['time_id']}_part{index}"
         
-        for _, _, audio in generator:
+        for graphemes, _, audio in generator:
             if self.cancel_event.is_set(): break
 
             if isinstance(audio, torch.Tensor):
@@ -332,7 +334,15 @@ class TTSApp:
             path = os.path.join(config['out_dir'], file_name)
             
             sf.write(path, audio, 24000)
-            chunk_files.append(path)
+            
+            # Calculate duration in seconds (24000 Hz)
+            duration = len(audio) / 24000.0
+            
+            chunk_files.append({
+                "path": path,
+                "text": graphemes,
+                "duration": duration
+            })
             sub_idx += 1
             
         return chunk_files
@@ -386,11 +396,37 @@ class TTSApp:
             'out_dir': self.output_directory.get(),
             'separate': self.separate_files.get(),
             'combine': self.combine_post.get(),
+            'export_subtitles': self.export_subtitles.get(),
             'timecode': self.timecode_format.get(),
             'time_id': time.strftime(self.timecode_format.get())
         }
         
         self.worker.run_coro(self.process_text_async(text_data, config))
+
+    def generate_srt(self, segments, output_path):
+        def format_time(seconds):
+            millis = int((seconds - int(seconds)) * 1000)
+            seconds = int(seconds)
+            minutes, seconds = divmod(seconds, 60)
+            hours, minutes = divmod(minutes, 60)
+            return f"{hours:02}:{minutes:02}:{seconds:02},{millis:03}"
+
+        try:
+            with open(output_path, "w", encoding="utf-8") as f:
+                current_time = 0.0
+                for i, seg in enumerate(segments):
+                    start = current_time
+                    end = current_time + seg['duration']
+                    
+                    f.write(f"{i+1}\n")
+                    f.write(f"{format_time(start)} --> {format_time(end)}\n")
+                    f.write(f"{seg['text'].strip()}\n\n")
+                    
+                    current_time = end
+            return True
+        except Exception as e:
+            print(f"Failed to generate SRT: {e}")
+            return False
 
     async def process_text_async(self, text, config):
         try:
@@ -438,19 +474,26 @@ class TTSApp:
                 return
 
             # Flatten file list in order
-            final_file_list = []
+            final_segment_list = []
             for sublist in all_generated_files:
-                if sublist: final_file_list.extend(sublist)
+                if sublist: final_segment_list.extend(sublist)
             
-            self.update_status(f"Generated {len(final_file_list)} segments. Combining...")
+            final_file_paths = [seg['path'] for seg in final_segment_list]
+            
+            self.update_status(f"Generated {len(final_segment_list)} segments. Combining...")
+
+            # Export Subtitles
+            if config['export_subtitles'] and final_segment_list:
+                srt_path = os.path.join(config['out_dir'], f"{config['filename']}_{config['time_id']}_combined.srt")
+                self.generate_srt(final_segment_list, srt_path)
 
             # Combine if needed
-            if config['combine'] and final_file_list:
+            if config['combine'] and final_file_paths:
                 combine_path = os.path.join(config['out_dir'], f"{config['filename']}_{config['time_id']}_combined.wav")
-                await self.smart_combine(final_file_list, combine_path)
+                await self.smart_combine(final_file_paths, combine_path)
                 
                 if not config['separate']:
-                    for p in final_file_list:
+                    for p in final_file_paths:
                         try: os.remove(p)
                         except: pass
                 
