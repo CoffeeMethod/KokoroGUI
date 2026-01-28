@@ -30,8 +30,13 @@ This is a simple Text-to-Speech (TTS) application built using Python and the `ko
 -   soundfile
 -   torch
 -   numpy
+-   pypdf
+-   EbookLib
+-   beautifulsoup4
 
 You can install the required packages using pip:
 
 ```bash
-pip install tkinter kokoro soundfile torch numpy
+pip install tkinter kokoro soundfile torch numpy pypdf EbookLib beautifulsoup4
+
+

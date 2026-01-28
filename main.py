@@ -9,6 +9,15 @@ import numpy as np
 import time
 from kokoro import KPipeline
 import concurrent.futures
+import pypdf
+import ebooklib
+from ebooklib import epub
+from bs4 import BeautifulSoup
+import warnings
+
+# Suppress ebooklib warnings about future ignores
+warnings.filterwarnings("ignore", category=UserWarning, module='ebooklib')
+warnings.filterwarnings("ignore", category=FutureWarning, module='ebooklib')
 
 # --- Thread Local Storage for Parallel Pipelines ---
 thread_local = threading.local()
@@ -100,7 +109,7 @@ class TTSApp:
         file_row.pack(fill=tk.X)
         ttk.Entry(file_row, textvariable=self.file_path_var, width=40).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         ttk.Button(file_row, text="Browse...", command=self.browse_file).pack(side=tk.LEFT)
-        ttk.Label(self.file_frame, text="Supports .txt files. Ideal for books.").pack(anchor="w", pady=5)
+        ttk.Label(self.file_frame, text="Supports .txt, .pdf, and .epub files. Ideal for books.").pack(anchor="w", pady=5)
 
         # 2. Configuration
         config_group = ttk.LabelFrame(main_frame, text="Configuration", padding="5")
@@ -177,7 +186,14 @@ class TTSApp:
         if d: self.output_directory.set(d)
 
     def browse_file(self):
-        f = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
+        file_types = [
+            ("Supported Files", "*.txt *.pdf *.epub"),
+            ("Text Files", "*.txt"),
+            ("PDF Files", "*.pdf"),
+            ("EPUB Files", "*.epub"),
+            ("All Files", "*.*")
+        ]
+        f = filedialog.askopenfilename(filetypes=file_types)
         if f: self.file_path_var.set(f)
 
     def update_status(self, msg, is_error=False):
@@ -208,6 +224,31 @@ class TTSApp:
             self.update_status("Pipeline Initialized and Ready.")
         except Exception as e:
             self.update_status(f"Pipeline Init Failed: {e}", True)
+
+    def extract_pdf_text(self, fpath):
+        text = ""
+        try:
+            reader = pypdf.PdfReader(fpath)
+            for page in reader.pages:
+                extracted = page.extract_text()
+                if extracted:
+                    text += extracted + "\n\n"
+        except Exception as e:
+            raise Exception(f"PDF Error: {e}")
+        return text
+
+    def extract_epub_text(self, fpath):
+        text = ""
+        try:
+            book = epub.read_epub(fpath)
+            for item in book.get_items():
+                if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                    # Use BeautifulSoup to strip HTML tags
+                    soup = BeautifulSoup(item.get_content(), 'html.parser')
+                    text += soup.get_text(separator='\n\n') + "\n\n"
+        except Exception as e:
+            raise Exception(f"EPUB Error: {e}")
+        return text
 
     def smart_split(self, text, chunk_size=3000):
         """Splits text into chunks respecting paragraph boundaries."""
@@ -295,8 +336,13 @@ class TTSApp:
                 messagebox.showerror("Error", "File does not exist.")
                 return
             try:
-                with open(fpath, "r", encoding="utf-8") as f:
-                    text_data = f.read()
+                if fpath.lower().endswith(".pdf"):
+                    text_data = self.extract_pdf_text(fpath)
+                elif fpath.lower().endswith(".epub"):
+                    text_data = self.extract_epub_text(fpath)
+                else:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        text_data = f.read()
             except Exception as e:
                 messagebox.showerror("Error", f"Could not read file: {e}")
                 return
