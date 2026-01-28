@@ -69,6 +69,7 @@ class TTSApp:
         self.combine_post = tk.BooleanVar(value=True)
         self.num_threads = tk.IntVar(value=1)
         self.speed_var = tk.DoubleVar(value=1.0)
+        self.split_pattern_var = tk.StringVar(value=r"\n+")
         self.pipeline = None # Main pipeline for single thread
         self.is_generating = False
         self.cancel_event = threading.Event()
@@ -146,6 +147,24 @@ class TTSApp:
         ttk.Label(speed_row, text="Audio Speed:", width=15).pack(side=tk.LEFT)
         self.speed_spin = ttk.Spinbox(speed_row, from_=0.5, to=2.0, increment=0.1, textvariable=self.speed_var, width=5)
         self.speed_spin.pack(side=tk.LEFT)
+
+        # Split Pattern
+        split_row = ttk.Frame(config_group)
+        split_row.pack(fill=tk.X, pady=2)
+        ttk.Label(split_row, text="Split By:", width=15).pack(side=tk.LEFT)
+        
+        self.split_map = {
+            "Natural (Newlines)": r"\n+",
+            "Paragraphs (Double Newline)": r"\n\n+",
+            "Sentences (.!?)": r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|\!)\s"
+        }
+        # Invert map for display
+        self.split_display_map = {v: k for k, v in self.split_map.items()}
+        
+        self.split_combo = ttk.Combobox(split_row, values=list(self.split_map.keys()), state="readonly")
+        self.split_combo.set("Natural (Newlines)")
+        self.split_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.split_combo.bind("<<ComboboxSelected>>", lambda e: self.split_pattern_var.set(self.split_map[self.split_combo.get()]))
 
         # Options
         opts_row = ttk.Frame(config_group)
@@ -296,7 +315,7 @@ class TTSApp:
             raise RuntimeError("Failed to initialize pipeline in thread.")
 
         # Generate
-        generator = pipeline(text, voice=config['voice'], speed=config['speed'], split_pattern=r"\n+")
+        generator = pipeline(text, voice=config['voice'], speed=config['speed'], split_pattern=config['split_pattern'])
         
         chunk_files = []
         sub_idx = 0
@@ -362,6 +381,7 @@ class TTSApp:
         config = {
             'voice': self.voice.get(),
             'speed': self.speed_var.get(),
+            'split_pattern': self.split_pattern_var.get(),
             'filename': self.filename.get(),
             'out_dir': self.output_directory.get(),
             'separate': self.separate_files.get(),
