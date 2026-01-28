@@ -17,16 +17,19 @@ Kokoro TTS GUI provides a convenient way to convert large amounts of text or ent
 -   **Multi-Source Input:**
     -   **Direct Text:** Paste text directly into the application.
     -   **File Support:** Load and process `.txt`, `.pdf`, and `.epub` files. Ideal for converting e-books to audiobooks.
--   **High-Quality Voices:** Choose from a wide variety of male and female voices (American English).
+-   **High-Quality Voices:** Choose from a wide variety of American English voices (Male & Female).
 -   **Advanced Configuration:**
-    -   **Parallel Processing:** Utilize multiple CPU/GPU threads to speed up generation (configurable number of processes).
+    -   **Parallel Processing:** Utilize multiple threads to speed up generation (configurable number of processes).
     -   **Audio Speed:** Adjust playback speed from 0.5x to 2.0x.
     -   **Smart Splitting:** Split text by newlines, paragraphs, or sentences for optimal prosody.
 -   **Flexible Output:**
-    -   **Chunking:** Save speech segments as individual `.wav` files.
-    -   **Automatic Merging:** Automatically combine all segments into a single high-quality audio file.
+    -   **Automatic Merging:** Automatically combine all segments into a single high-quality `.wav` audio file.
+    -   **Subtitle Export:** Generate `.srt` subtitle files synchronized with the audio.
+    -   **Chunking:** Option to keep individual speech segments as separate files.
     -   **Custom Naming:** Define base filenames and output directories.
--   **Real-time Feedback:** Progress tracking and status updates during the conversion process.
+-   **Robust Processing:**
+    -   **Text Cleaning:** Automatically strips HTML and formatting from EPUBs for clean reading.
+    -   **Real-time Feedback:** Live progress tracking, time estimation, and status updates.
 
 ## Prerequisites
 
