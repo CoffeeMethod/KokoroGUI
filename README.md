@@ -24,7 +24,7 @@ This is a simple Text-to-Speech (TTS) application built using Python and the `ko
 
 ## Requirements
 
--   Python 3.9
+-   Python 3.11
 -   tkinter
 -   kokoro
 -   soundfile
