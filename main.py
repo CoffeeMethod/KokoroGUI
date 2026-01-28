@@ -14,6 +14,7 @@ import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
 import warnings
+import re
 
 # Suppress ebooklib warnings about future ignores
 warnings.filterwarnings("ignore", category=UserWarning, module='ebooklib')
@@ -73,6 +74,13 @@ class TTSApp:
         self.pipeline = None # Main pipeline for single thread
         self.is_generating = False
         self.cancel_event = threading.Event()
+        self.progress_lock = threading.Lock()
+        self.total_chars = 0
+        self.processed_chars = 0
+        self.merge_progress = 0.0
+        self.phase_weight = 1.0
+        self.current_snippet = ""
+        self.start_time = 0
 
         # Background Processing
         self.worker = AsyncLoopThread()
@@ -186,8 +194,18 @@ class TTSApp:
         action_frame = ttk.Frame(main_frame, padding="5")
         action_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.progress = ttk.Progressbar(action_frame, mode='indeterminate')
-        self.progress.pack(fill=tk.X, pady=10)
+        # Progress Info
+        info_frame = ttk.Frame(action_frame)
+        info_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.time_label = ttk.Label(info_frame, text="Time: 00:00 / ETA: --:--")
+        self.time_label.pack(side=tk.LEFT)
+        
+        self.percent_label = ttk.Label(info_frame, text="0%")
+        self.percent_label.pack(side=tk.RIGHT)
+
+        self.detail_label = ttk.Label(action_frame, text="...", font=("Consolas", 8), foreground="grey")
+        self.detail_label.pack(fill=tk.X, pady=(0, 10))
 
         btn_row = ttk.Frame(action_frame)
         btn_row.pack(fill=tk.X)
@@ -201,6 +219,58 @@ class TTSApp:
         self.status_label.pack(pady=10)
 
     # --- Logic ---
+
+    def on_progress_update(self, char_count, text_snippet):
+        with self.progress_lock:
+            self.processed_chars += char_count
+            self.current_snippet = text_snippet
+        
+        self.master.after(0, self._update_progress_ui)
+
+    def _update_progress_ui(self):
+        if not self.is_generating or self.total_chars == 0: return
+
+        # Throttle updates (max 20fps)
+        now = time.time()
+        if hasattr(self, '_last_ui_update') and (now - self._last_ui_update < 0.05):
+            return
+        self._last_ui_update = now
+
+        elapsed = time.time() - self.start_time
+        
+        # Generation Progress (0.0 - 1.0)
+        gen_fraction = min(self.processed_chars / self.total_chars, 1.0)
+        
+        # Total Weighted Progress
+        # If phase_weight is 0.9, generation is 0-90%, merge is 90-100%
+        total_fraction = (gen_fraction * self.phase_weight) + (self.merge_progress * (1.0 - self.phase_weight))
+        
+        percentage = total_fraction * 100
+        # Cap visual percentage at 99.9% until explicit finish
+        if percentage > 99.9: percentage = 99.9
+        
+        # ETA Calculation
+        # We use total_fraction for ETA to represent total job time
+        if total_fraction > 0.01:
+            total_time_est = elapsed / total_fraction
+            remaining = max(0, total_time_est - elapsed)
+            eta_str = time.strftime('%M:%S', time.gmtime(remaining))
+        else:
+            eta_str = "--:--"
+            
+        elapsed_str = time.strftime('%M:%S', time.gmtime(elapsed))
+        
+        # Update UI
+        self.percent_label.config(text=f"{int(percentage)}%")
+        self.time_label.config(text=f"Time: {elapsed_str} / ETA: {eta_str}")
+        
+        # Truncate snippet
+        clean_snip = self.current_snippet.replace("\n", " ").strip()
+        if len(clean_snip) > 50: clean_snip = clean_snip[:47] + "..."
+        if self.merge_progress > 0 and gen_fraction >= 0.99:
+             self.detail_label.config(text=f"Merging... {int(self.merge_progress*100)}%")
+        else:
+             self.detail_label.config(text=f"Processing: {clean_snip}")
 
     def browse_directory(self):
         d = filedialog.askdirectory()
@@ -229,10 +299,6 @@ class TTSApp:
     def _set_ui_state(self, main_state, cancel_state, generating):
         self.convert_button.config(state=main_state)
         self.cancel_button.config(state=cancel_state)
-        if generating:
-            self.progress.start(10)
-        else:
-            self.progress.stop()
 
     def cancel_conversion(self):
         if self.is_generating:
@@ -326,6 +392,9 @@ class TTSApp:
         
         for graphemes, _, audio in generator:
             if self.cancel_event.is_set(): break
+            
+            # Report progress (1 segment completed)
+            self.on_progress_update(len(graphemes), graphemes)
 
             if isinstance(audio, torch.Tensor):
                 audio = audio.cpu().numpy()
@@ -438,7 +507,15 @@ class TTSApp:
             # 1. Split text
             chunks = self.smart_split(text, chunk_size=5000 if num_workers > 1 else 1000000)
             total_chunks = len(chunks)
-            self.update_status(f"Split text into {total_chunks} parts. Starting {num_workers} workers...")
+            
+            # Init Progress
+            self.total_chars = sum(len(c) for c in chunks)
+            self.processed_chars = 0
+            self.merge_progress = 0.0
+            self.phase_weight = 0.9 if config['combine'] else 1.0
+            self.start_time = time.time()
+            
+            self.update_status(f"Queued {len(chunks)} blocks. Starting {num_workers} workers...")
             
             # Prepare tasks
             tasks_data = [(i, c, config) for i, c in enumerate(chunks)]
@@ -501,6 +578,10 @@ class TTSApp:
             else:
                  self.update_status("Conversion Complete!")
 
+            # Force 100% on completion
+            self.master.after(0, lambda: self.percent_label.config(text="100%"))
+            self.master.after(0, lambda: self.time_label.config(text=f"Time: {time.strftime('%M:%S', time.gmtime(time.time() - self.start_time))} / ETA: 00:00"))
+
         except Exception as e:
             print(e)
             self.update_status(f"Error: {e}", True)
@@ -510,12 +591,19 @@ class TTSApp:
 
     async def smart_combine(self, file_paths, output_path):
         def combine_worker():
+            total_files = len(file_paths)
             with sf.SoundFile(output_path, 'w', samplerate=24000, channels=1) as out_f:
-                for fp in file_paths:
+                for i, fp in enumerate(file_paths):
                     if self.cancel_event.is_set(): break
                     try:
                         data, _ = sf.read(fp)
                         out_f.write(data)
+                        
+                        # Update Merge Progress
+                        fraction = (i + 1) / total_files
+                        self.merge_progress = fraction
+                        self.master.after(0, self._update_progress_ui)
+                        
                     except Exception as e:
                         print(f"Failed to read/write segment {fp}: {e}")
         
