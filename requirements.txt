@@ -5,3 +5,5 @@ numpy==2.4.1
 pypdf==6.6.2
 soundfile==0.13.1
 torch==2.10.0
+customtkinter
+packaging
