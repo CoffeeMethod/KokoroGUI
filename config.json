@@ -1,1 +1,13 @@
-{"appearance": "Dark", "scaling": "100%"}
+{
+    "appearance": "Dark",
+    "scaling": "100%",
+    "voice": "af_heart",
+    "filename": "output",
+    "out_dir": "audio_output",
+    "speed": 1.0,
+    "num_threads": 1,
+    "split_pattern": "\\n+",
+    "separate": false,
+    "combine": true,
+    "export_subtitles": false
+}

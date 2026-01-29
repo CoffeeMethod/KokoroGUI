@@ -18,6 +18,7 @@ class TTSApp(ctk.CTk):
 
         self.title("Kokoro TTS GUI (Modern)")
         self.geometry("700x850")
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
         
         # Load Settings
         self.settings = self.load_settings()
@@ -29,19 +30,25 @@ class TTSApp(ctk.CTk):
         self.engine.on_status = self.on_engine_status
         self.engine.on_finish = self.on_engine_finish
         
+        # Auto-save timer
+        self.save_timer = None
+        
         # Variables
         self.file_path_var = ctk.StringVar()
-        self.voice_var = ctk.StringVar(value="af_heart")
-        self.filename_var = ctk.StringVar(value="output")
-        self.output_dir_var = ctk.StringVar(value="audio_output")
-        self.speed_var = ctk.DoubleVar(value=1.0)
-        self.num_threads_var = ctk.IntVar(value=1)
-        self.split_pattern_var = ctk.StringVar(value=r"\n+")
+        self.voice_var = ctk.StringVar(value=self.settings.get("voice", "af_heart"))
+        self.filename_var = ctk.StringVar(value=self.settings.get("filename", "output"))
+        self.output_dir_var = ctk.StringVar(value=self.settings.get("out_dir", "audio_output"))
+        self.speed_var = ctk.DoubleVar(value=self.settings.get("speed", 1.0))
+        self.num_threads_var = ctk.IntVar(value=self.settings.get("num_threads", 1))
+        self.split_pattern_var = ctk.StringVar(value=self.settings.get("split_pattern", r"\n+"))
         
-        self.separate_files = ctk.BooleanVar(value=True)
-        self.combine_post = ctk.BooleanVar(value=True)
-        self.export_subtitles = ctk.BooleanVar(value=False)
+        self.separate_files = ctk.BooleanVar(value=self.settings.get("separate", True))
+        self.combine_post = ctk.BooleanVar(value=self.settings.get("combine", True))
+        self.export_subtitles = ctk.BooleanVar(value=self.settings.get("export_subtitles", False))
         self.timecode_format = "%Y%m%d%H%M%S"
+
+        # Setup Auto-save Traces
+        self.setup_autosave()
 
         self.create_widgets()
         
@@ -49,8 +56,34 @@ class TTSApp(ctk.CTk):
         self.status_label.configure(text="Initializing engine...")
         self.engine.worker.run_coro(self.engine.init_pipeline_async())
 
+    def setup_autosave(self):
+        vars_to_trace = [
+            self.voice_var, self.filename_var, self.output_dir_var,
+            self.speed_var, self.num_threads_var, self.split_pattern_var,
+            self.separate_files, self.combine_post, self.export_subtitles
+        ]
+        for v in vars_to_trace:
+            v.trace_add("write", self.schedule_save)
+
+    def schedule_save(self, *args):
+        if self.save_timer:
+            self.after_cancel(self.save_timer)
+        self.save_timer = self.after(1000, self.save_settings)
+
     def load_settings(self):
-        defaults = {"appearance": "Dark", "scaling": "100%"}
+        defaults = {
+            "appearance": "Dark", 
+            "scaling": "100%",
+            "voice": "af_heart",
+            "filename": "output",
+            "out_dir": "audio_output",
+            "speed": 1.0,
+            "num_threads": 1,
+            "split_pattern": r"\n+",
+            "separate": True,
+            "combine": True,
+            "export_subtitles": False
+        }
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, "r") as f:
@@ -60,9 +93,24 @@ class TTSApp(ctk.CTk):
         return defaults
 
     def save_settings(self):
+        if self.save_timer:
+            self.after_cancel(self.save_timer)
+            self.save_timer = None
+            
+        if hasattr(self, 'voice_var'):
+            self.settings['voice'] = self.voice_var.get()
+            self.settings['filename'] = self.filename_var.get()
+            self.settings['out_dir'] = self.output_dir_var.get()
+            self.settings['speed'] = self.speed_var.get()
+            self.settings['num_threads'] = self.num_threads_var.get()
+            self.settings['split_pattern'] = self.split_pattern_var.get()
+            self.settings['separate'] = self.separate_files.get()
+            self.settings['combine'] = self.combine_post.get()
+            self.settings['export_subtitles'] = self.export_subtitles.get()
+
         try:
             with open(CONFIG_FILE, "w") as f:
-                json.dump(self.settings, f)
+                json.dump(self.settings, f, indent=4)
         except Exception as e:
             print(f"Failed to save settings: {e}")
 
@@ -164,7 +212,16 @@ class TTSApp(ctk.CTk):
             "Sentences (.!?)": r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|\!)\s"
         }
         self.split_combo = ctk.CTkComboBox(config_frame, values=list(self.split_map.keys()), command=self.update_split_pattern)
-        self.split_combo.set("Natural (Newlines)")
+        
+        # Determine initial selection based on loaded variable
+        initial_pattern = self.split_pattern_var.get()
+        initial_key = "Natural (Newlines)" # Default
+        for k, v in self.split_map.items():
+            if v == initial_pattern:
+                initial_key = k
+                break
+        self.split_combo.set(initial_key)
+        
         self.split_combo.grid(row=5, column=1, sticky="ew", padx=10, pady=5)
 
         # --- 3. Advanced Options ---
@@ -225,14 +282,14 @@ class TTSApp(ctk.CTk):
     def open_settings(self):
         toplevel = ctk.CTkToplevel(self)
         toplevel.title("Settings")
-        toplevel.geometry("400x300")
+        toplevel.geometry("400x380")
         toplevel.grab_set() # Modal
         
         # Center the window
         toplevel.update_idletasks()
         x = self.winfo_x() + (self.winfo_width() // 2) - (toplevel.winfo_width() // 2)
         y = self.winfo_y() + (self.winfo_height() // 2) - (toplevel.winfo_height() // 2)
-        toplevel.geometry(f"+{x}+{y}")
+        toplevel.geometry(f"400x380+{x}+{y}")
 
         frame = ctk.CTkFrame(toplevel)
         frame.pack(fill="both", expand=True, padx=20, pady=20)
@@ -374,6 +431,10 @@ class TTSApp(ctk.CTk):
     def cancel_conversion(self):
         self.engine.cancel()
         self.status_label.configure(text="Cancelling... waiting for workers...", text_color="orange")
+
+    def on_close(self):
+        self.save_settings()
+        self.destroy()
 
 if __name__ == "__main__":
     app = TTSApp()
