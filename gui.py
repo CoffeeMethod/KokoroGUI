@@ -1,6 +1,8 @@
 import os
 import time
 import json
+import re
+import winsound
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import threading
@@ -272,6 +274,9 @@ class TTSApp(ctk.CTk):
 
         btn_frame = ctk.CTkFrame(action_frame, fg_color="transparent")
         btn_frame.pack(fill="x", pady=10)
+
+        self.preview_btn = ctk.CTkButton(btn_frame, text="Preview Audio", command=self.preview_conversion, height=40, fg_color="#2B719E", hover_color="#205578")
+        self.preview_btn.pack(side="left", fill="x", expand=True, padx=5)
         
         self.start_btn = ctk.CTkButton(btn_frame, text="Start Generation", command=self.start_conversion, height=40, font=("Roboto", 14, "bold"))
         self.start_btn.pack(side="left", fill="x", expand=True, padx=5)
@@ -367,6 +372,7 @@ class TTSApp(ctk.CTk):
         cancel_state = "normal" if is_running else "disabled"
         
         self.start_btn.configure(state=state)
+        self.preview_btn.configure(state=state)
         self.cancel_btn.configure(state=cancel_state)
         self.thread_minus_btn.configure(state=state)
         self.thread_plus_btn.configure(state=state)
@@ -374,6 +380,58 @@ class TTSApp(ctk.CTk):
         
         if not is_running:
             self.progress_bar.set(0 if self.engine.cancel_event.is_set() else 1)
+
+    def preview_conversion(self):
+        # 1. Get Text
+        current_tab = self.tab_view.get()
+        text_data = ""
+        
+        if current_tab == "Direct Text":
+            text_data = self.text_entry.get("1.0", "end").strip()
+        else:
+            fpath = self.file_path_var.get()
+            if os.path.exists(fpath):
+                try:
+                    text_data = self.engine.extract_text_from_file(fpath)
+                except:
+                    pass
+        
+        if not text_data:
+            text_data = "This is a sample audio preview using the Koh-koh-ro TTS engine. It demonstrates the voice quality and speed settings."
+            
+        # Truncate to 2 sentences
+        sentences = re.split(r'(?<=[.!?])\s+', text_data)
+        preview_text = " ".join(sentences[:2])
+        if len(preview_text) > 500: # Safety cap
+             preview_text = preview_text[:500]
+             
+        # Config
+        voice = self.voice_var.get()
+        speed = self.speed_var.get()
+        
+        # Temp file
+        import tempfile
+        tmp_path = os.path.join(tempfile.gettempdir(), "kokoro_preview.wav")
+        
+        self.status_label.configure(text="Generating preview...", text_color="blue")
+        
+        def _on_preview_done(future):
+            def _ui_update():
+                try:
+                    success = future.result()
+                    if success:
+                        self.status_label.configure(text="Playing preview...", text_color="green")
+                        winsound.PlaySound(tmp_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                        self.after(3000, lambda: self.status_label.configure(text="Ready", text_color="gray"))
+                    else:
+                        self.status_label.configure(text="Preview failed.", text_color="red")
+                except Exception as e:
+                    self.status_label.configure(text=f"Preview error: {e}", text_color="red")
+            
+            self.after(0, _ui_update)
+        
+        future = self.engine.worker.run_coro(self.engine.generate_preview(preview_text, voice, speed, tmp_path))
+        future.add_done_callback(_on_preview_done)
 
     def start_conversion(self):
         # 0. Validate Threads

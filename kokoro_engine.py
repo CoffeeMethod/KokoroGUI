@@ -5,6 +5,7 @@ import time
 import concurrent.futures
 import soundfile as sf
 import torch
+import numpy as np
 import pypdf
 import ebooklib
 from ebooklib import epub
@@ -66,6 +67,36 @@ class KokoroEngine:
         except Exception as e:
             if self.on_status: self.on_status(f"Pipeline Init Failed: {e}", True)
             return False
+
+    async def generate_preview(self, text, voice, speed, output_path):
+        def _gen():
+            if not self.pipeline:
+                # Try to use thread local if main pipeline not available, or init new
+                p = get_thread_pipeline()
+                if not p: return False
+            else:
+                p = self.pipeline
+
+            try:
+                # Generate
+                generator = p(text, voice=voice, speed=speed, split_pattern=r"\n+")
+                pieces = []
+                for _, _, audio in generator:
+                    if isinstance(audio, torch.Tensor):
+                        audio = audio.cpu().numpy()
+                    pieces.append(audio)
+                
+                if not pieces:
+                    return False
+                
+                full_audio = np.concatenate(pieces)
+                sf.write(output_path, full_audio, 24000)
+                return True
+            except Exception as e:
+                print(f"Preview error: {e}")
+                return False
+
+        return await asyncio.to_thread(_gen)
 
     def extract_text_from_file(self, fpath):
         if not os.path.exists(fpath):
