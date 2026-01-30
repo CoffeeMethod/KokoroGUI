@@ -6,6 +6,7 @@ import concurrent.futures
 import soundfile as sf
 import torch
 import numpy as np
+import scipy.signal
 import pypdf
 import ebooklib
 from ebooklib import epub
@@ -59,6 +60,56 @@ class KokoroEngine:
         self.on_status = None   # func(msg, is_error)
         self.on_finish = None   # func()
 
+    def process_audio(self, audio, sr, config):
+        """
+        Apply post-processing: Pitch (Resample), Volume, Normalize, Trim.
+        Returns: (processed_audio, new_sr)
+        """
+        # 1. Trim Silence (Simple threshold)
+        if config.get('trim_silence', False):
+            threshold = 0.01
+            # Find first index > threshold
+            mask = np.abs(audio) > threshold
+            if np.any(mask):
+                start = np.argmax(mask)
+                end = len(audio) - np.argmax(mask[::-1])
+                audio = audio[start:end]
+
+        # 2. Volume / Gain
+        vol = config.get('volume', 1.0)
+        if vol != 1.0:
+            audio = audio * vol
+
+        # 3. Pitch Shift (Resampling)
+        # Note: We handled the duration compensation by adjusting the generation speed beforehand.
+        # Here we just do the resampling to shift the pitch back (or forth).
+        # Pitch > 0 means higher pitch.
+        # If user wanted higher pitch, we generated SLOWER (longer).
+        # Now we play it faster (shorter) to get higher pitch and normal length.
+        pitch_semitones = config.get('pitch', 0.0)
+        if pitch_semitones != 0.0:
+            # Factor: >1 means higher frequency (shorter duration)
+            # 2^(st/12)
+            factor = 2 ** (pitch_semitones / 12.0)
+            
+            # Target length = Original / Factor
+            new_len = int(len(audio) / factor)
+            if new_len > 0:
+                # Scipy resample uses Fourier method usually, or we can use signal.resample
+                try:
+                    audio = scipy.signal.resample(audio, new_len)
+                except Exception as e:
+                    print(f"Resample failed: {e}")
+
+        # 4. Normalization
+        if config.get('normalize', False):
+            peak = np.max(np.abs(audio))
+            if peak > 0:
+                target_peak = 0.98
+                audio = audio / peak * target_peak
+
+        return audio
+
     async def init_pipeline_async(self):
         try:
             self.pipeline = await asyncio.to_thread(KPipeline, lang_code="a")
@@ -68,18 +119,31 @@ class KokoroEngine:
             if self.on_status: self.on_status(f"Pipeline Init Failed: {e}", True)
             return False
 
-    async def generate_preview(self, text, voice, speed, output_path):
+    async def generate_preview(self, text, voice, speed, output_path, extra_config=None):
         def _gen():
             if not self.pipeline:
-                # Try to use thread local if main pipeline not available, or init new
                 p = get_thread_pipeline()
                 if not p: return False
             else:
                 p = self.pipeline
 
             try:
+                # Pitch Compensation Logic
+                # If pitch is +2 st (factor 1.12), we want higher pitch.
+                # Resampling to 1/1.12 makes it higher pitch but shorter.
+                # So generate it 1.12x longer (slower).
+                # Speed_eff = Speed / Factor
+                
+                eff_speed = speed
+                pitch_semitones = 0.0
+                if extra_config:
+                    pitch_semitones = extra_config.get('pitch', 0.0)
+                    if pitch_semitones != 0.0:
+                        factor = 2 ** (pitch_semitones / 12.0)
+                        eff_speed = speed / factor
+
                 # Generate
-                generator = p(text, voice=voice, speed=speed, split_pattern=r"\n+")
+                generator = p(text, voice=voice, speed=eff_speed, split_pattern=r"\n+")
                 pieces = []
                 for _, _, audio in generator:
                     if isinstance(audio, torch.Tensor):
@@ -90,6 +154,11 @@ class KokoroEngine:
                     return False
                 
                 full_audio = np.concatenate(pieces)
+                
+                # Post Process
+                if extra_config:
+                    full_audio = self.process_audio(full_audio, 24000, extra_config)
+                
                 sf.write(output_path, full_audio, 24000)
                 return True
             except Exception as e:
@@ -183,7 +252,14 @@ class KokoroEngine:
         pipeline = get_thread_pipeline()
         if not pipeline: raise RuntimeError("Failed to initialize pipeline in thread.")
 
-        generator = pipeline(text, voice=config['voice'], speed=config['speed'], split_pattern=config['split_pattern'])
+        # Speed Adjustment for Pitch Compensation
+        eff_speed = config['speed']
+        pitch_semitones = config.get('pitch', 0.0)
+        if pitch_semitones != 0.0:
+            factor = 2 ** (pitch_semitones / 12.0)
+            eff_speed = eff_speed / factor
+
+        generator = pipeline(text, voice=config['voice'], speed=eff_speed, split_pattern=config['split_pattern'])
         chunk_files = []
         sub_idx = 0
         base_name = f"{config['filename']}_{config['time_id']}_part{index}"
@@ -197,7 +273,10 @@ class KokoroEngine:
 
             if isinstance(audio, torch.Tensor):
                 audio = audio.cpu().numpy()
-                
+            
+            # Post Process
+            audio = self.process_audio(audio, 24000, config)
+
             file_name = f"{base_name}_{sub_idx}.wav"
             path = os.path.join(config['out_dir'], file_name)
             sf.write(path, audio, 24000)

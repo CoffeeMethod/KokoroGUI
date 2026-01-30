@@ -13,6 +13,7 @@ ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
 CONFIG_FILE = "config.json"
+PRESETS_DIR = "presets"
 
 class TTSApp(ctk.CTk):
     def __init__(self):
@@ -22,6 +23,10 @@ class TTSApp(ctk.CTk):
         self.geometry("700x850")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         
+        # Ensure presets dir exists
+        if not os.path.exists(PRESETS_DIR):
+            os.makedirs(PRESETS_DIR)
+
         # Load Settings
         self.settings = self.load_settings()
         self.apply_settings()
@@ -41,12 +46,16 @@ class TTSApp(ctk.CTk):
         self.filename_var = ctk.StringVar(value=self.settings.get("filename", "output"))
         self.output_dir_var = ctk.StringVar(value=self.settings.get("out_dir", "audio_output"))
         self.speed_var = ctk.DoubleVar(value=self.settings.get("speed", 1.0))
+        self.volume_var = ctk.DoubleVar(value=self.settings.get("volume", 1.0))
+        self.pitch_var = ctk.DoubleVar(value=self.settings.get("pitch", 0.0))
         self.num_threads_var = ctk.IntVar(value=self.settings.get("num_threads", 1))
         self.split_pattern_var = ctk.StringVar(value=self.settings.get("split_pattern", r"\n+"))
         
         self.separate_files = ctk.BooleanVar(value=self.settings.get("separate", True))
         self.combine_post = ctk.BooleanVar(value=self.settings.get("combine", True))
         self.export_subtitles = ctk.BooleanVar(value=self.settings.get("export_subtitles", False))
+        self.normalize_audio = ctk.BooleanVar(value=self.settings.get("normalize", False))
+        self.trim_silence = ctk.BooleanVar(value=self.settings.get("trim", False))
         self.timecode_format = "%Y%m%d%H%M%S"
 
         # Setup Auto-save Traces
@@ -61,8 +70,10 @@ class TTSApp(ctk.CTk):
     def setup_autosave(self):
         vars_to_trace = [
             self.voice_var, self.filename_var, self.output_dir_var,
-            self.speed_var, self.num_threads_var, self.split_pattern_var,
-            self.separate_files, self.combine_post, self.export_subtitles
+            self.speed_var, self.volume_var, self.pitch_var,
+            self.num_threads_var, self.split_pattern_var,
+            self.separate_files, self.combine_post, self.export_subtitles,
+            self.normalize_audio, self.trim_silence
         ]
         for v in vars_to_trace:
             v.trace_add("write", self.schedule_save)
@@ -80,11 +91,15 @@ class TTSApp(ctk.CTk):
             "filename": "output",
             "out_dir": "audio_output",
             "speed": 1.0,
+            "volume": 1.0,
+            "pitch": 0.0,
             "num_threads": 1,
             "split_pattern": r"\n+",
             "separate": True,
             "combine": True,
-            "export_subtitles": False
+            "export_subtitles": False,
+            "normalize": False,
+            "trim": False
         }
         if os.path.exists(CONFIG_FILE):
             try:
@@ -104,11 +119,15 @@ class TTSApp(ctk.CTk):
             self.settings['filename'] = self.filename_var.get()
             self.settings['out_dir'] = self.output_dir_var.get()
             self.settings['speed'] = self.speed_var.get()
+            self.settings['volume'] = self.volume_var.get()
+            self.settings['pitch'] = self.pitch_var.get()
             self.settings['num_threads'] = self.num_threads_var.get()
             self.settings['split_pattern'] = self.split_pattern_var.get()
             self.settings['separate'] = self.separate_files.get()
             self.settings['combine'] = self.combine_post.get()
             self.settings['export_subtitles'] = self.export_subtitles.get()
+            self.settings['normalize'] = self.normalize_audio.get()
+            self.settings['trim'] = self.trim_silence.get()
 
         try:
             with open(CONFIG_FILE, "w") as f:
@@ -126,6 +145,75 @@ class TTSApp(ctk.CTk):
             ctk.set_widget_scaling(scale_float)
         except:
             ctk.set_widget_scaling(1.0)
+
+    # --- Preset Management ---
+    
+    def refresh_presets(self):
+        presets = ["Select Preset..."]
+        if os.path.exists(PRESETS_DIR):
+            files = [f for f in os.listdir(PRESETS_DIR) if f.endswith(".json")]
+            presets.extend([f[:-5] for f in files]) # Remove .json
+        
+        self.preset_combo.configure(values=presets)
+        self.preset_combo.set("Select Preset...")
+
+    def save_preset_dialog(self):
+        dialog = ctk.CTkInputDialog(text="Enter preset name:", title="Save Preset")
+        name = dialog.get_input()
+        if name:
+            name = re.sub(r'[<>:"/\\|?*]', '', name).strip() # Sanitize
+            if not name: return
+            
+            data = {
+                "voice": self.voice_var.get(),
+                "speed": self.speed_var.get(),
+                "volume": self.volume_var.get(),
+                "pitch": self.pitch_var.get(),
+                "split_pattern": self.split_pattern_var.get(),
+                "normalize": self.normalize_audio.get(),
+                "trim": self.trim_silence.get()
+            }
+            
+            fpath = os.path.join(PRESETS_DIR, f"{name}.json")
+            try:
+                with open(fpath, "w") as f:
+                    json.dump(data, f, indent=4)
+                messagebox.showinfo("Saved", f"Preset '{name}' saved successfully.")
+                self.refresh_presets()
+                self.preset_combo.set(name)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save preset: {e}")
+
+    def load_preset(self, name):
+        if name == "Select Preset...": return
+        
+        fpath = os.path.join(PRESETS_DIR, f"{name}.json")
+        if os.path.exists(fpath):
+            try:
+                with open(fpath, "r") as f:
+                    data = json.load(f)
+                    
+                if "voice" in data: self.voice_var.set(data["voice"])
+                if "speed" in data: self.speed_var.set(data["speed"])
+                if "volume" in data: self.volume_var.set(data["volume"])
+                if "pitch" in data: self.pitch_var.set(data["pitch"])
+                if "split_pattern" in data: self.split_pattern_var.set(data["split_pattern"])
+                if "normalize" in data: self.normalize_audio.set(data["normalize"])
+                if "trim" in data: self.trim_silence.set(data["trim"])
+                
+                # Update UI labels manually since setting var triggers trace but maybe not UI update logic dependent on callbacks
+                self.update_audio_labels(0)
+                self.update_speed_label(self.speed_var.get())
+                
+                # Update split combo logic
+                target_pat = self.split_pattern_var.get()
+                for k, v in self.split_map.items():
+                    if v == target_pat:
+                        self.split_combo.set(k)
+                        break
+
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load preset: {e}")
 
     def create_widgets(self):
         # Main Container
@@ -178,6 +266,18 @@ class TTSApp(ctk.CTk):
 
         ctk.CTkLabel(config_frame, text="Configuration", font=("Roboto", 16, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
 
+        # Presets Row
+        preset_frame = ctk.CTkFrame(config_frame, fg_color="transparent")
+        preset_frame.grid(row=0, column=1, sticky="ew", padx=10, pady=5)
+        
+        self.preset_combo = ctk.CTkComboBox(preset_frame, values=["Select Preset..."], command=self.load_preset, width=150)
+        self.preset_combo.pack(side="left", padx=(0,5))
+        
+        ctk.CTkButton(preset_frame, text="💾", width=30, command=self.save_preset_dialog).pack(side="left", padx=2)
+        ctk.CTkButton(preset_frame, text="🔄", width=30, command=self.refresh_presets).pack(side="left", padx=2)
+        
+        self.refresh_presets()
+
         # Voice Selection
         ctk.CTkLabel(config_frame, text="Voice:").grid(row=1, column=0, sticky="w", padx=10, pady=5)
         self.voice_options = [
@@ -226,9 +326,36 @@ class TTSApp(ctk.CTk):
         
         self.split_combo.grid(row=5, column=1, sticky="ew", padx=10, pady=5)
 
-        # --- 3. Advanced Options ---
+        # --- 3. Audio Control ---
+        audio_frame = ctk.CTkFrame(main_frame)
+        audio_frame.grid(row=2, column=0, sticky="ew", pady=10)
+        audio_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(audio_frame, text="Audio Control", font=("Roboto", 16, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+
+        # Volume
+        self.vol_label = ctk.CTkLabel(audio_frame, text="Volume: 100%")
+        self.vol_label.grid(row=1, column=0, sticky="w", padx=10, pady=5)
+        self.vol_slider = ctk.CTkSlider(audio_frame, from_=0.1, to=2.0, number_of_steps=19, variable=self.volume_var, command=self.update_audio_labels)
+        self.vol_slider.grid(row=1, column=1, sticky="ew", padx=10)
+
+        # Pitch
+        self.pitch_label = ctk.CTkLabel(audio_frame, text="Pitch: 0 st")
+        self.pitch_label.grid(row=2, column=0, sticky="w", padx=10, pady=5)
+        self.pitch_slider = ctk.CTkSlider(audio_frame, from_=-12, to=12, number_of_steps=24, variable=self.pitch_var, command=self.update_audio_labels)
+        self.pitch_slider.grid(row=2, column=1, sticky="ew", padx=10)
+
+        # Toggles
+        toggle_frame = ctk.CTkFrame(audio_frame, fg_color="transparent")
+        toggle_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
+        
+        ctk.CTkCheckBox(toggle_frame, text="Normalize", variable=self.normalize_audio).pack(side="left", padx=5)
+        ctk.CTkCheckBox(toggle_frame, text="Trim Silence", variable=self.trim_silence).pack(side="left", padx=5)
+
+
+        # --- 4. Advanced Options ---
         adv_frame = ctk.CTkFrame(main_frame)
-        adv_frame.grid(row=2, column=0, sticky="ew", pady=10)
+        adv_frame.grid(row=3, column=0, sticky="ew", pady=10)
         
         ctk.CTkLabel(adv_frame, text="Processing Options", font=("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
         
@@ -328,6 +455,10 @@ class TTSApp(ctk.CTk):
 
     # --- Logic ---
 
+    def update_audio_labels(self, value):
+        self.vol_label.configure(text=f"Volume: {int(self.volume_var.get() * 100)}%")
+        self.pitch_label.configure(text=f"Pitch: {int(self.pitch_var.get())} st")
+
     def update_speed_label(self, value):
         self.speed_label.configure(text=f"Speed: {value:.1f}x")
 
@@ -377,6 +508,8 @@ class TTSApp(ctk.CTk):
         self.thread_minus_btn.configure(state=state)
         self.thread_plus_btn.configure(state=state)
         self.thread_entry.configure(state=state)
+        self.vol_slider.configure(state=state)
+        self.pitch_slider.configure(state=state)
         
         if not is_running:
             self.progress_bar.set(0 if self.engine.cancel_event.is_set() else 1)
@@ -397,7 +530,7 @@ class TTSApp(ctk.CTk):
                     pass
         
         if not text_data:
-            text_data = "This is a sample audio preview using the Koh-koh-ro TTS engine. It demonstrates the voice quality and speed settings."
+            text_data = "This is a sample audio preview using the Koh-koh-ro Tea-Tea-S engine. It demonstrates the voice quality and speed settings."
             
         # Truncate to 2 sentences
         sentences = re.split(r'(?<=[.!?])\s+', text_data)
@@ -408,6 +541,13 @@ class TTSApp(ctk.CTk):
         # Config
         voice = self.voice_var.get()
         speed = self.speed_var.get()
+        
+        extra_config = {
+            'volume': self.volume_var.get(),
+            'pitch': self.pitch_var.get(),
+            'normalize': self.normalize_audio.get(),
+            'trim_silence': self.trim_silence.get()
+        }
         
         # Temp file
         import tempfile
@@ -430,7 +570,7 @@ class TTSApp(ctk.CTk):
             
             self.after(0, _ui_update)
         
-        future = self.engine.worker.run_coro(self.engine.generate_preview(preview_text, voice, speed, tmp_path))
+        future = self.engine.worker.run_coro(self.engine.generate_preview(preview_text, voice, speed, tmp_path, extra_config))
         future.add_done_callback(_on_preview_done)
 
     def start_conversion(self):
@@ -478,7 +618,11 @@ class TTSApp(ctk.CTk):
             'combine': self.combine_post.get(),
             'export_subtitles': self.export_subtitles.get(),
             'time_id': time.strftime(self.timecode_format),
-            'num_threads': self.num_threads_var.get()
+            'num_threads': self.num_threads_var.get(),
+            'volume': self.volume_var.get(),
+            'pitch': self.pitch_var.get(),
+            'normalize': self.normalize_audio.get(),
+            'trim_silence': self.trim_silence.get()
         }
 
         # 3. Start
