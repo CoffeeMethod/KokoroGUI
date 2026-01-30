@@ -20,7 +20,7 @@ class TTSApp(ctk.CTk):
         super().__init__()
 
         self.title("Kokoro TTS GUI (Modern)")
-        self.geometry("700x850")
+        self.geometry("700x900")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         
         # Ensure presets dir exists
