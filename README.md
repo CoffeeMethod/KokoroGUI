@@ -2,10 +2,10 @@
 
 A modern, high-quality Text-to-Speech (TTS) application built with Python, featuring a user-friendly graphical interface and powered by the [Kokoro](https://github.com/hexgrad/kokoro) library.
 
-![Kokoro GUI Screenshot](https://github.com/user-attachments/assets/fb727aef-8637-4f86-bb00-787cdad55f14)
+![Kokoro GUI Screenshot](<img width="1225" height="1598" alt="image" src="https://github.com/user-attachments/assets/56a6a3aa-6fa1-4638-ab91-212cdad2eeae" />
+)
 
-
-https://github.com/user-attachments/assets/df2eac14-3ba5-4608-a1b9-59fcff8955de
+[output_20260129210938_combined.wav](https://github.com/user-attachments/files/24953984/output_20260129210938_combined.wav)
 
 
 ## Overview
