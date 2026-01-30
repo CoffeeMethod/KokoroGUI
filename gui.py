@@ -19,7 +19,7 @@ class TTSApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("Kokoro TTS GUI (Modern)")
+        self.title("Kokoro TTS GUI")
         self.geometry("700x900")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         
