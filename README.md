@@ -17,16 +17,22 @@ Kokoro TTS GUI provides a convenient way to convert large amounts of text or ent
 -   **Multi-Source Input:**
     -   **Direct Text:** Paste text directly into the application.
     -   **File Support:** Load and process `.txt`, `.pdf`, and `.epub` files. Ideal for converting e-books to audiobooks.
--   **High-Quality Voices:** Choose from a wide variety of American English voices (Male & Female).
+-   **High-Quality Voices:** Choose from a wide variety of American English voices.
 -   **Advanced Configuration:**
     -   **Parallel Processing:** Utilize multiple threads to speed up generation (configurable number of processes).
     -   **Audio Speed:** Adjust playback speed from 0.5x to 2.0x.
+    -   **Audio Control:** Fine-tune Volume and Pitch.
+    -   **Post-Processing:** Options to Normalize audio and Trim silence.
     -   **Smart Splitting:** Split text by newlines, paragraphs, or sentences for optimal prosody.
 -   **Flexible Output:**
     -   **Automatic Merging:** Automatically combine all segments into a single high-quality `.wav` audio file.
     -   **Subtitle Export:** Generate `.srt` subtitle files synchronized with the audio.
     -   **Chunking:** Option to keep individual speech segments as separate files.
     -   **Custom Naming:** Define base filenames and output directories.
+-   **User Experience:**
+    -   **Presets:** Save and load your favorite voice and audio settings.
+    -   **Audio Preview:** Quickly test voice and speed settings with a short preview.
+    -   **UI Customization:** Adjustable interface scaling and theme (Dark/Light/System).
 -   **Robust Processing:**
     -   **Text Cleaning:** Automatically strips HTML and formatting from EPUBs for clean reading.
     -   **Real-time Feedback:** Live progress tracking, time estimation, and status updates.
@@ -34,8 +40,6 @@ Kokoro TTS GUI provides a convenient way to convert large amounts of text or ent
 ## Prerequisites
 
 -   **Python 3.11+**
--   **FFmpeg** (Recommended for audio processing)
--   **CUDA** (Optional, for GPU acceleration if using PyTorch with CUDA)
 
 ## Installation
 
@@ -71,16 +75,19 @@ Kokoro TTS GUI provides a convenient way to convert large amounts of text or ent
 2.  **Configure your conversion:**
     -   Choose your input method (Direct Text or Load File).
     -   Select a voice from the dropdown menu.
-    -   (Optional) Adjust speed and splitting patterns.
+    -   (Optional) Adjust speed, volume, and pitch.
+    -   (Optional) Use **Presets** to save or load configurations.
     -   Set your desired output directory and filename.
     -   Choose whether to keep separate chunks or merge them into one file.
 
-3.  **Start Conversion:** Click "Start Conversion" and wait for the process to complete. You can monitor progress via the status label and progress bar.
+3.  **Preview & Convert:**
+    -   Click "Preview Audio" to hear a short sample of the current settings.
+    -   Click "Start Conversion" to begin the full process. You can monitor progress via the status label and progress bar.
 
 ## Technologies Used
 
 -   **[Kokoro](https://github.com/hexgrad/kokoro):** The core TTS engine.
--   **Tkinter:** For the graphical user interface.
+-   **Customtkinter:** For the graphical user interface.
 -   **PyTorch:** Deep learning backend for the TTS model.
 -   **SoundFile:** For writing high-quality WAV files.
 -   **PyPDF & EbookLib:** For parsing PDF and EPUB documents.
