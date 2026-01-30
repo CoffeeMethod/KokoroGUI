@@ -5,9 +5,13 @@
     "filename": "output",
     "out_dir": "audio_output",
     "speed": 1.0,
+    "volume": 1.0,
+    "pitch": 0.0,
     "num_threads": 1,
     "split_pattern": "\\n+",
     "separate": false,
     "combine": true,
-    "export_subtitles": false
+    "export_subtitles": false,
+    "normalize": false,
+    "trim": false
 }
