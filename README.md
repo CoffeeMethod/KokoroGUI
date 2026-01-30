@@ -4,6 +4,9 @@ A modern, high-quality Text-to-Speech (TTS) application built with Python, featu
 
 <img width="1225" height="1598" alt="image" src="https://github.com/user-attachments/assets/56a6a3aa-6fa1-4638-ab91-212cdad2eeae" />
 
+
+(demo sounds better in `.wav` but GitHub dosent suport that so its kinda bad)
+
 https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 
