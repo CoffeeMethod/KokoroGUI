@@ -42,6 +42,14 @@ class TTSApp(ctk.CTk):
         
         # Variables
         self.file_path_var = ctk.StringVar()
+        
+        self.standard_voices = [
+            "af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", 
+            "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", 
+            "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", 
+            "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa"
+        ]
+        
         self.voice_var = ctk.StringVar(value=self.settings.get("voice", "af_heart"))
         self.filename_var = ctk.StringVar(value=self.settings.get("filename", "output"))
         self.output_dir_var = ctk.StringVar(value=self.settings.get("out_dir", "audio_output"))
@@ -57,6 +65,12 @@ class TTSApp(ctk.CTk):
         self.normalize_audio = ctk.BooleanVar(value=self.settings.get("normalize", False))
         self.trim_silence = ctk.BooleanVar(value=self.settings.get("trim", False))
         self.timecode_format = "%Y%m%d%H%M%S"
+        
+        # Mixing Variables
+        self.mix_voice_a_var = ctk.StringVar(value=self.standard_voices[0])
+        self.mix_voice_b_var = ctk.StringVar(value=self.standard_voices[1])
+        self.mix_ratio_var = ctk.DoubleVar(value=0.5)
+        self.mix_name_var = ctk.StringVar()
 
         # Setup Auto-save Traces
         self.setup_autosave()
@@ -66,6 +80,13 @@ class TTSApp(ctk.CTk):
         # Init Pipeline
         self.status_label.configure(text="Initializing engine...")
         self.engine.worker.run_coro(self.engine.init_pipeline_async())
+
+    def get_all_voices(self):
+        custom = []
+        if os.path.exists("custom_voices"):
+            custom = [f[:-3] for f in os.listdir("custom_voices") if f.endswith(".pt")]
+        return sorted(self.standard_voices + custom)
+
 
     def setup_autosave(self):
         vars_to_trace = [
@@ -215,21 +236,181 @@ class TTSApp(ctk.CTk):
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load preset: {e}")
 
-    def create_widgets(self):
-        # Main Container
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1) # Main content expands
-        self.grid_rowconfigure(2, weight=0) # Action bar fixed
+    def refresh_voice_lists(self):
+        all_voices = self.get_all_voices()
         
-        # Header
-        header_frame = ctk.CTkFrame(self, fg_color="transparent")
-        header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10,0))
+        # Update Gen Tab Combo
+        if hasattr(self, 'voice_combo'):
+            self.voice_combo.configure(values=all_voices)
+            
+        # Update Mix Tab Combos
+        if hasattr(self, 'mix_combo_a'):
+            self.mix_combo_a.configure(values=all_voices)
+        if hasattr(self, 'mix_combo_b'):
+            self.mix_combo_b.configure(values=all_voices)
+            
+        # Update Custom List
+        if hasattr(self, 'custom_list_frame'):
+            for widget in self.custom_list_frame.winfo_children():
+                widget.destroy()
+                
+            custom = [v for v in all_voices if v not in self.standard_voices]
+            if not custom:
+                ctk.CTkLabel(self.custom_list_frame, text="No custom voices found.", text_color="gray").pack(pady=5)
+            else:
+                for cv in custom:
+                    row = ctk.CTkFrame(self.custom_list_frame)
+                    row.pack(fill="x", pady=2)
+                    ctk.CTkLabel(row, text=cv).pack(side="left", padx=5)
+                    ctk.CTkButton(row, text="X", width=30, fg_color="#c42b1c", command=lambda v=cv: self.delete_custom_voice(v)).pack(side="right", padx=5)
+
+    def delete_custom_voice(self, name):
+        if messagebox.askyesno("Confirm", f"Delete voice '{name}'?"):
+            try:
+                path = os.path.join("custom_voices", f"{name}.pt")
+                if os.path.exists(path):
+                    os.remove(path)
+                    self.refresh_voice_lists()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to delete: {e}")
+
+    def preview_mix(self):
+        v1 = self.mix_voice_a_var.get()
+        v2 = self.mix_voice_b_var.get()
+        ratio = self.mix_ratio_var.get()
         
-        ctk.CTkLabel(header_frame, text="Kokoro TTS", font=("Roboto", 20, "bold")).pack(side="left", padx=5)
-        ctk.CTkButton(header_frame, text="⚙ Settings", width=80, height=28, command=self.open_settings).pack(side="right")
+        preview_text = "This is a preview of your custom mixed voice. How does it sound?"
         
-        main_frame = ctk.CTkScrollableFrame(self)
-        main_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+        # Temp voice name and file
+        import tempfile
+        tmp_voice_name = "_tmp_mix_preview"
+        tmp_audio_path = os.path.join(tempfile.gettempdir(), "kokoro_mix_preview.wav")
+        
+        self.mix_status_label.configure(text="Generating preview...", text_color="blue")
+        
+        async def _run_preview():
+            # 1. Mix to a temporary file (we ignore the file for preview, use tensor)
+            success, msg, tensor = await self.engine.mix_voices(v1, v2, ratio, tmp_voice_name)
+            if not success:
+                return False, msg
+            
+            # 2. Generate audio using that mixed voice tensor
+            success = await self.engine.generate_preview(preview_text, tmp_voice_name, 1.0, tmp_audio_path, voice_tensor=tensor)
+            
+            # 3. Cleanup temp voice file
+            try:
+                p = os.path.join("custom_voices", f"{tmp_voice_name}.pt")
+                if os.path.exists(p): os.remove(p)
+            except: pass
+            
+            return success, ""
+
+        def _on_done(future):
+            try:
+                success, err = future.result()
+                if success:
+                    self.after(0, lambda: self.mix_status_label.configure(text="Playing preview...", text_color="green"))
+                    winsound.PlaySound(tmp_audio_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                else:
+                    self.after(0, lambda: self.mix_status_label.configure(text=f"Preview failed: {err}", text_color="red"))
+            except Exception as e:
+                self.after(0, lambda: self.mix_status_label.configure(text=f"Error: {e}", text_color="red"))
+
+        future = self.engine.worker.run_coro(_run_preview())
+        future.add_done_callback(_on_done)
+
+    def mix_voice_action(self):
+        v1 = self.mix_voice_a_var.get()
+        v2 = self.mix_voice_b_var.get()
+        ratio = self.mix_ratio_var.get()
+        name = self.mix_name_var.get().strip()
+        
+        if not name:
+            messagebox.showwarning("Error", "Please enter a name for the new voice.")
+            return
+        
+        if not re.match(r'^[a-zA-Z0-9_-]+$', name):
+             messagebox.showwarning("Error", "Invalid name. Use alphanumeric, _, - only.")
+             return
+             
+        if name in self.get_all_voices():
+            if not messagebox.askyesno("Overwrite", f"Voice '{name}' exists. Overwrite?"):
+                return
+        
+        self.mix_status_label.configure(text="Mixing...", text_color="blue")
+        self.set_ui_state(True) # Reuse existing lock
+        
+        def _done(future):
+            self.after(0, lambda: self.set_ui_state(False))
+            try:
+                success, msg, _ = future.result()
+                if success:
+                    self.after(0, lambda: self.mix_status_label.configure(text=f"Saved: {name}", text_color="green"))
+                    self.after(0, self.refresh_voice_lists)
+                else:
+                    self.after(0, lambda: self.mix_status_label.configure(text=f"Error: {msg}", text_color="red"))
+            except Exception as e:
+                self.after(0, lambda: self.mix_status_label.configure(text=f"Error: {e}", text_color="red"))
+
+        future = self.engine.worker.run_coro(self.engine.mix_voices(v1, v2, ratio, name))
+        future.add_done_callback(_done)
+
+    def build_mixing_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        
+        # 1. Selection
+        sel_frame = ctk.CTkFrame(parent)
+        sel_frame.pack(fill="x", padx=10, pady=10)
+        sel_frame.grid_columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(sel_frame, text="Voice A:").grid(row=0, column=0, padx=10, pady=10)
+        self.mix_combo_a = ctk.CTkComboBox(sel_frame, variable=self.mix_voice_a_var)
+        self.mix_combo_a.grid(row=0, column=1, sticky="ew", padx=10)
+        
+        ctk.CTkLabel(sel_frame, text="Voice B:").grid(row=1, column=0, padx=10, pady=10)
+        self.mix_combo_b = ctk.CTkComboBox(sel_frame, variable=self.mix_voice_b_var)
+        self.mix_combo_b.grid(row=1, column=1, sticky="ew", padx=10)
+        
+        # 2. Ratio
+        ratio_frame = ctk.CTkFrame(parent)
+        ratio_frame.pack(fill="x", padx=10, pady=10)
+        
+        self.ratio_label = ctk.CTkLabel(ratio_frame, text="Mix: 50% A / 50% B")
+        self.ratio_label.pack(pady=5)
+        
+        def update_ratio_label(val):
+            p = int(val * 100)
+            self.ratio_label.configure(text=f"Mix: {100-p}% A / {p}% B")
+            
+        slider = ctk.CTkSlider(ratio_frame, from_=0.0, to=1.0, number_of_steps=100, variable=self.mix_ratio_var, command=update_ratio_label)
+        slider.pack(fill="x", padx=20, pady=10)
+        
+        # 3. Save
+        save_frame = ctk.CTkFrame(parent)
+        save_frame.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkLabel(save_frame, text="New Voice Name:").pack(side="left", padx=10)
+        ctk.CTkEntry(save_frame, textvariable=self.mix_name_var).pack(side="left", fill="x", expand=True, padx=5)
+        
+        ctk.CTkButton(save_frame, text="🔊 Preview", width=100, fg_color="#2B719E", command=self.preview_mix).pack(side="left", padx=5)
+        ctk.CTkButton(save_frame, text="Create & Save", command=self.mix_voice_action).pack(side="left", padx=10)
+        
+        self.mix_status_label = ctk.CTkLabel(parent, text="", text_color="gray")
+        self.mix_status_label.pack(pady=5)
+        
+        # 4. List
+        ctk.CTkLabel(parent, text="Custom Voices:", font=("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=(20,5))
+        self.custom_list_frame = ctk.CTkScrollableFrame(parent, height=200)
+        self.custom_list_frame.pack(fill="x", padx=10, pady=5)
+        
+        self.refresh_voice_lists()
+
+    def build_generation_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        
+        # Move existing logic here
+        main_frame = ctk.CTkScrollableFrame(parent)
+        main_frame.pack(fill="both", expand=True, padx=5, pady=5)
         main_frame.grid_columnconfigure(0, weight=1)
 
         # --- 1. Input Section ---
@@ -280,13 +461,8 @@ class TTSApp(ctk.CTk):
 
         # Voice Selection
         ctk.CTkLabel(config_frame, text="Voice:").grid(row=1, column=0, sticky="w", padx=10, pady=5)
-        self.voice_options = [
-            "af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", 
-            "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", 
-            "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", 
-            "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa"
-        ]
-        ctk.CTkComboBox(config_frame, values=self.voice_options, variable=self.voice_var).grid(row=1, column=1, sticky="ew", padx=10)
+        self.voice_combo = ctk.CTkComboBox(config_frame, values=self.get_all_voices(), variable=self.voice_var)
+        self.voice_combo.grid(row=1, column=1, sticky="ew", padx=10)
 
         # Output Dir
         ctk.CTkLabel(config_frame, text="Output Folder:").grid(row=2, column=0, sticky="w", padx=10, pady=5)
@@ -382,7 +558,29 @@ class TTSApp(ctk.CTk):
         
         ctk.CTkLabel(thread_frame, text="(More threads = High RAM usage)", text_color="orange").pack(side="left", padx=10)
 
-        # --- 4. Actions & Status ---
+    def create_widgets(self):
+        # Header
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=0)
+
+        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10,0))
+        
+        ctk.CTkLabel(header_frame, text="Kokoro TTS", font=("Roboto", 20, "bold")).pack(side="left", padx=5)
+        ctk.CTkButton(header_frame, text="⚙ Settings", width=80, height=28, command=self.open_settings).pack(side="right")
+
+        # Main Tabs
+        self.main_tabs = ctk.CTkTabview(self)
+        self.main_tabs.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+        
+        gen_tab = self.main_tabs.add("Generate Audio")
+        self.build_generation_tab(gen_tab)
+        
+        mix_tab = self.main_tabs.add("Custom Voice")
+        self.build_mixing_tab(mix_tab)
+
+        # Actions (Global)
         action_frame = ctk.CTkFrame(self)
         action_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=10)
         

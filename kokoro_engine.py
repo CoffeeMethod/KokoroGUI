@@ -18,6 +18,8 @@ from kokoro import KPipeline
 warnings.filterwarnings("ignore", category=UserWarning, module='ebooklib')
 warnings.filterwarnings("ignore", category=FutureWarning, module='ebooklib')
 
+CUSTOM_VOICES_DIR = "custom_voices"
+
 # --- Thread Local Storage ---
 thread_local = threading.local()
 
@@ -55,10 +57,24 @@ class KokoroEngine:
         self.cancel_event = threading.Event()
         self.pipeline = None # Main pipeline for single thread check or init
         
+        if not os.path.exists(CUSTOM_VOICES_DIR):
+            os.makedirs(CUSTOM_VOICES_DIR)
+        
         # Callbacks
         self.on_progress = None # func(percentage, time_elapsed, eta, detail_text)
         self.on_status = None   # func(msg, is_error)
         self.on_finish = None   # func()
+
+    def resolve_voice_path(self, voice_name):
+        """
+        Returns the absolute path if it's a custom voice, 
+        otherwise returns the name as-is (for standard voices).
+        """
+        # Check if it's a custom voice file
+        custom_path = os.path.join(CUSTOM_VOICES_DIR, f"{voice_name}.pt")
+        if os.path.exists(custom_path):
+            return os.path.abspath(custom_path)
+        return voice_name
 
     def process_audio(self, audio, sr, config):
         """
@@ -119,7 +135,52 @@ class KokoroEngine:
             if self.on_status: self.on_status(f"Pipeline Init Failed: {e}", True)
             return False
 
-    async def generate_preview(self, text, voice, speed, output_path, extra_config=None):
+    async def mix_voices(self, v1_name, v2_name, ratio, new_name):
+        def _mix():
+            try:
+                # Ensure we have a pipeline to load voices
+                p = self.pipeline
+                if not p:
+                    p = get_thread_pipeline()
+                    if not p: raise RuntimeError("No pipeline available for mixing")
+                
+                # Resolve inputs (handle custom vs standard)
+                v1_arg = self.resolve_voice_path(v1_name)
+                v2_arg = self.resolve_voice_path(v2_name)
+                
+                # Load tensors
+                # KPipeline.load_voice returns a tensor
+                t1 = p.load_voice(v1_arg)
+                t2 = p.load_voice(v2_arg)
+                
+                if t1 is None or t2 is None:
+                    raise ValueError("Failed to load one of the voices.")
+                
+                # Ensure they are on CPU for mixing
+                if isinstance(t1, torch.Tensor): t1 = t1.cpu()
+                if isinstance(t2, torch.Tensor): t2 = t2.cpu()
+                
+                # Check shapes
+                if t1.shape != t2.shape:
+                    # Try to align? Usually kokoro voices are fixed size [510, 1, 256]
+                    # If different, we might fail or warn.
+                    print(f"Warning: Voice shapes differ {t1.shape} vs {t2.shape}. Mixing might fail or produce garbage.")
+                
+                # Linear Interpolation
+                # mixed = v1 * (1 - ratio) + v2 * ratio
+                # ratio is mix of B. If ratio 0, full A. If ratio 1, full B.
+                mixed = t1 * (1.0 - ratio) + t2 * ratio
+                
+                # Save
+                out_path = os.path.join(CUSTOM_VOICES_DIR, f"{new_name}.pt")
+                torch.save(mixed, out_path)
+                return True, out_path, mixed
+            except Exception as e:
+                return False, str(e), None
+
+        return await asyncio.to_thread(_mix)
+
+    async def generate_preview(self, text, voice, speed, output_path, extra_config=None, voice_tensor=None):
         def _gen():
             if not self.pipeline:
                 p = get_thread_pipeline()
@@ -128,6 +189,17 @@ class KokoroEngine:
                 p = self.pipeline
 
             try:
+                # Resolve voice
+                target_voice = voice
+                
+                if voice_tensor is not None:
+                    # Inject tensor directly to bypass cache/loading issues for previews
+                    target_voice = "_preview_temp"
+                    p.voices[target_voice] = voice_tensor
+                else:
+                    # Resolve path normally
+                    target_voice = self.resolve_voice_path(voice)
+
                 # Pitch Compensation Logic
                 # If pitch is +2 st (factor 1.12), we want higher pitch.
                 # Resampling to 1/1.12 makes it higher pitch but shorter.
@@ -143,7 +215,7 @@ class KokoroEngine:
                         eff_speed = speed / factor
 
                 # Generate
-                generator = p(text, voice=voice, speed=eff_speed, split_pattern=r"\n+")
+                generator = p(text, voice=target_voice, speed=eff_speed, split_pattern=r"\n+")
                 pieces = []
                 for _, _, audio in generator:
                     if isinstance(audio, torch.Tensor):
@@ -259,6 +331,7 @@ class KokoroEngine:
             factor = 2 ** (pitch_semitones / 12.0)
             eff_speed = eff_speed / factor
 
+        # Config voice should already be resolved by start_conversion
         generator = pipeline(text, voice=config['voice'], speed=eff_speed, split_pattern=config['split_pattern'])
         chunk_files = []
         sub_idx = 0
@@ -305,6 +378,9 @@ class KokoroEngine:
         await asyncio.to_thread(combine_worker)
 
     def start_conversion(self, text, config):
+        # Resolve voice path once before distribution
+        config['voice'] = self.resolve_voice_path(config['voice'])
+        
         self.cancel_event.clear()
         self.worker.run_coro(self._process_text_async(text, config))
 
