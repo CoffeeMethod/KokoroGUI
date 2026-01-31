@@ -42,6 +42,36 @@ class TTSApp(ctk.CTk):
         
         # Variables
         self.file_path_var = ctk.StringVar()
+        
+        self.LANGUAGES = {
+            "American English": "a",
+            "British English": "b",
+            "Spanish": "e",
+            "French": "f",
+            "Italian": "i",
+            "Portuguese": "p",
+            "Japanese": "j",
+            "Chinese": "z",
+        }
+        
+        self.VOICE_DB = {
+            "a": ["af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa"],
+            "b": ["bf_alice", "bf_emma", "bf_isabella", "bf_lily", "bm_daniel", "bm_fable", "bm_george", "bm_lewis"],
+            "e": ["ef_dora", "em_alex", "em_santa"],
+            "f": ["ff_siwis"],
+            "i": ["if_sara", "im_nicola"],
+            "p": ["pf_dora", "pm_alex"],
+            "j": ["jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro"],
+            "z": ["zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zm_yunjian"]
+        }
+        
+        self.lang_var = ctk.StringVar(value=self.settings.get("lang_code", "a"))
+        
+        # Determine initial standard voices based on lang
+        self.standard_voices = self.VOICE_DB.get(self.lang_var.get(), [])
+        if not self.standard_voices: # Fallback
+             self.standard_voices = self.VOICE_DB["a"]
+
         self.voice_var = ctk.StringVar(value=self.settings.get("voice", "af_heart"))
         self.filename_var = ctk.StringVar(value=self.settings.get("filename", "output"))
         self.output_dir_var = ctk.StringVar(value=self.settings.get("out_dir", "audio_output"))
@@ -57,6 +87,16 @@ class TTSApp(ctk.CTk):
         self.normalize_audio = ctk.BooleanVar(value=self.settings.get("normalize", False))
         self.trim_silence = ctk.BooleanVar(value=self.settings.get("trim", False))
         self.timecode_format = "%Y%m%d%H%M%S"
+        
+        # Mixing Variables
+        self.mix_lang_a_var = ctk.StringVar(value="a")
+        self.mix_lang_b_var = ctk.StringVar(value="a")
+        self.preview_lang_var = ctk.StringVar(value="a")
+        
+        self.mix_voice_a_var = ctk.StringVar(value=self.VOICE_DB["a"][0])
+        self.mix_voice_b_var = ctk.StringVar(value=self.VOICE_DB["a"][1])
+        self.mix_ratio_var = ctk.DoubleVar(value=0.5)
+        self.mix_name_var = ctk.StringVar()
 
         # Setup Auto-save Traces
         self.setup_autosave()
@@ -65,10 +105,22 @@ class TTSApp(ctk.CTk):
         
         # Init Pipeline
         self.status_label.configure(text="Initializing engine...")
-        self.engine.worker.run_coro(self.engine.init_pipeline_async())
+        self.engine.worker.run_coro(self.engine.init_pipeline_async(self.lang_var.get()))
+
+    def get_all_voices(self, lang_code=None):
+        if lang_code is None:
+            lang_code = self.lang_var.get()
+        
+        standard = self.VOICE_DB.get(lang_code, [])
+        custom = []
+        if os.path.exists("custom_voices"):
+            custom = [f[:-3] for f in os.listdir("custom_voices") if f.endswith(".pt")]
+        return sorted(standard + custom)
+
 
     def setup_autosave(self):
         vars_to_trace = [
+            self.lang_var,
             self.voice_var, self.filename_var, self.output_dir_var,
             self.speed_var, self.volume_var, self.pitch_var,
             self.num_threads_var, self.split_pattern_var,
@@ -77,6 +129,41 @@ class TTSApp(ctk.CTk):
         ]
         for v in vars_to_trace:
             v.trace_add("write", self.schedule_save)
+            
+        # Also trigger voice list update when lang changes
+        self.lang_var.trace_add("write", self.on_lang_change)
+        
+        # Mix tab traces
+        self.mix_lang_a_var.trace_add("write", self.on_mix_lang_a_change)
+        self.mix_lang_b_var.trace_add("write", self.on_mix_lang_b_change)
+
+    def on_lang_change(self, *args):
+        code = self.lang_var.get()
+        self.standard_voices = self.VOICE_DB.get(code, self.VOICE_DB["a"])
+        # Update generation combo
+        if hasattr(self, 'voice_combo'):
+            self.voice_combo.configure(values=self.get_all_voices(code))
+        
+        # Set default voice for this language if current voice is invalid
+        if self.voice_var.get() not in self.VOICE_DB.get(code, []):
+            if self.VOICE_DB.get(code, []):
+                self.voice_var.set(self.VOICE_DB[code][0])
+
+    def on_mix_lang_a_change(self, *args):
+        code = self.mix_lang_a_var.get()
+        if hasattr(self, 'mix_combo_a'):
+            voices = self.get_all_voices(code)
+            self.mix_combo_a.configure(values=voices)
+            if self.mix_voice_a_var.get() not in voices:
+                self.mix_voice_a_var.set(voices[0])
+
+    def on_mix_lang_b_change(self, *args):
+        code = self.mix_lang_b_var.get()
+        if hasattr(self, 'mix_combo_b'):
+            voices = self.get_all_voices(code)
+            self.mix_combo_b.configure(values=voices)
+            if self.mix_voice_b_var.get() not in voices:
+                self.mix_voice_b_var.set(voices[0])
 
     def schedule_save(self, *args):
         if self.save_timer:
@@ -87,6 +174,7 @@ class TTSApp(ctk.CTk):
         defaults = {
             "appearance": "Dark", 
             "scaling": "100%",
+            "lang_code": "a",
             "voice": "af_heart",
             "filename": "output",
             "out_dir": "audio_output",
@@ -115,6 +203,7 @@ class TTSApp(ctk.CTk):
             self.save_timer = None
             
         if hasattr(self, 'voice_var'):
+            self.settings['lang_code'] = self.lang_var.get()
             self.settings['voice'] = self.voice_var.get()
             self.settings['filename'] = self.filename_var.get()
             self.settings['out_dir'] = self.output_dir_var.get()
@@ -215,21 +304,213 @@ class TTSApp(ctk.CTk):
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load preset: {e}")
 
-    def create_widgets(self):
-        # Main Container
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1) # Main content expands
-        self.grid_rowconfigure(2, weight=0) # Action bar fixed
+    def refresh_voice_lists(self):
+        # Update Gen Tab Combo
+        if hasattr(self, 'voice_combo'):
+            self.voice_combo.configure(values=self.get_all_voices(self.lang_var.get()))
+            
+        # Update Mix Tab Combos
+        self.on_mix_lang_a_change()
+        self.on_mix_lang_b_change()
+            
+        # Update Custom List
+        if hasattr(self, 'custom_list_frame'):
+            for widget in self.custom_list_frame.winfo_children():
+                widget.destroy()
+                
+            all_voices = self.get_all_voices(self.lang_var.get())
+            custom = [f[:-3] for f in os.listdir("custom_voices") if f.endswith(".pt")]
+            if not custom:
+                ctk.CTkLabel(self.custom_list_frame, text="No custom voices found.", text_color="gray").pack(pady=5)
+            else:
+                for cv in sorted(custom):
+                    row = ctk.CTkFrame(self.custom_list_frame)
+                    row.pack(fill="x", pady=2)
+                    ctk.CTkLabel(row, text=cv).pack(side="left", padx=5)
+                    ctk.CTkButton(row, text="X", width=30, fg_color="#c42b1c", command=lambda v=cv: self.delete_custom_voice(v)).pack(side="right", padx=5)
+
+    def delete_custom_voice(self, name):
+        if messagebox.askyesno("Confirm", f"Delete voice '{name}'?"):
+            try:
+                path = os.path.join("custom_voices", f"{name}.pt")
+                if os.path.exists(path):
+                    os.remove(path)
+                    self.refresh_voice_lists()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to delete: {e}")
+
+    def preview_mix(self):
+        v1 = self.mix_voice_a_var.get()
+        v2 = self.mix_voice_b_var.get()
+        ratio = self.mix_ratio_var.get()
+        preview_lang = self.preview_lang_var.get()
         
-        # Header
-        header_frame = ctk.CTkFrame(self, fg_color="transparent")
-        header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10,0))
+        preview_text = "This is a preview of your custom mixed voice."
+        if preview_lang == 'f': preview_text = "Ceci est un aperçu de votre voix personnalisée."
+        elif preview_lang == 'e': preview_text = "Esta es una vista previa de su voz personalizada."
+        elif preview_lang == 'i': preview_text = "Questa è un'anteprima della tua voce personalizzata."
+        elif preview_lang == 'p': preview_text = "Esta é uma prévia da sua voz personalizada."
+        elif preview_lang == 'j': preview_text = "これはカスタム合成音声のプレビューです。"
+        elif preview_lang == 'z': preview_text = "这是您的自定义混合语音预览。"
         
-        ctk.CTkLabel(header_frame, text="Kokoro TTS", font=("Roboto", 20, "bold")).pack(side="left", padx=5)
-        ctk.CTkButton(header_frame, text="⚙ Settings", width=80, height=28, command=self.open_settings).pack(side="right")
+        # Temp voice name and file
+        import tempfile
+        tmp_voice_name = "_tmp_mix_preview"
+        tmp_audio_path = os.path.join(tempfile.gettempdir(), "kokoro_mix_preview.wav")
         
-        main_frame = ctk.CTkScrollableFrame(self)
-        main_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+        self.mix_status_label.configure(text="Generating preview...", text_color="blue")
+        
+        async def _run_preview():
+            # 1. Mix to a temporary file (we ignore the file for preview, use tensor)
+            success, msg, tensor = await self.engine.mix_voices(v1, v2, ratio, tmp_voice_name)
+            if not success:
+                return False, msg
+            
+            # 2. Generate audio using that mixed voice tensor and target preview language
+            success = await self.engine.generate_preview(preview_text, tmp_voice_name, 1.0, tmp_audio_path, voice_tensor=tensor, lang_code=preview_lang)
+            
+            # 3. Cleanup temp voice file
+            try:
+                p = os.path.join("custom_voices", f"{tmp_voice_name}.pt")
+                if os.path.exists(p): os.remove(p)
+            except: pass
+            
+            return success, ""
+
+        def _on_done(future):
+            try:
+                success, err = future.result()
+                if success:
+                    self.after(0, lambda: self.mix_status_label.configure(text="Playing preview...", text_color="green"))
+                    winsound.PlaySound(tmp_audio_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                else:
+                    self.after(0, lambda: self.mix_status_label.configure(text=f"Preview failed: {err}", text_color="red"))
+            except Exception as e:
+                self.after(0, lambda: self.mix_status_label.configure(text=f"Error: {e}", text_color="red"))
+
+        future = self.engine.worker.run_coro(_run_preview())
+        future.add_done_callback(_on_done)
+
+    def mix_voice_action(self):
+        v1 = self.mix_voice_a_var.get()
+        v2 = self.mix_voice_b_var.get()
+        ratio = self.mix_ratio_var.get()
+        name = self.mix_name_var.get().strip()
+        
+        if not name:
+            messagebox.showwarning("Error", "Please enter a name for the new voice.")
+            return
+        
+        if not re.match(r'^[a-zA-Z0-9_-]+$', name):
+             messagebox.showwarning("Error", "Invalid name. Use alphanumeric, _, - only.")
+             return
+             
+        if name in self.get_all_voices():
+            if not messagebox.askyesno("Overwrite", f"Voice '{name}' exists. Overwrite?"):
+                return
+        
+        self.mix_status_label.configure(text="Mixing...", text_color="blue")
+        self.set_ui_state(True) # Reuse existing lock
+        
+        def _done(future):
+            self.after(0, lambda: self.set_ui_state(False))
+            try:
+                success, msg, _ = future.result()
+                if success:
+                    self.after(0, lambda: self.mix_status_label.configure(text=f"Saved: {name}", text_color="green"))
+                    self.after(0, self.refresh_voice_lists)
+                else:
+                    self.after(0, lambda: self.mix_status_label.configure(text=f"Error: {msg}", text_color="red"))
+            except Exception as e:
+                self.after(0, lambda: self.mix_status_label.configure(text=f"Error: {e}", text_color="red"))
+
+        future = self.engine.worker.run_coro(self.engine.mix_voices(v1, v2, ratio, name))
+        future.add_done_callback(_done)
+
+    def build_mixing_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        
+        lang_display_map = {v: k for k, v in self.LANGUAGES.items()}
+        
+        # 1. Selection
+        sel_frame = ctk.CTkFrame(parent)
+        sel_frame.pack(fill="x", padx=10, pady=10)
+        sel_frame.grid_columnconfigure(1, weight=1)
+        sel_frame.grid_columnconfigure(2, weight=1)
+        
+        # Voice A Row
+        ctk.CTkLabel(sel_frame, text="Voice A:").grid(row=0, column=0, padx=10, pady=5)
+        
+        def on_lang_a_ui(c): self.mix_lang_a_var.set(self.LANGUAGES[c])
+        mix_lang_a_combo = ctk.CTkComboBox(sel_frame, values=list(self.LANGUAGES.keys()), command=on_lang_a_ui, width=150)
+        mix_lang_a_combo.set(lang_display_map.get(self.mix_lang_a_var.get(), "American English"))
+        mix_lang_a_combo.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        
+        self.mix_combo_a = ctk.CTkComboBox(sel_frame, variable=self.mix_voice_a_var)
+        self.mix_combo_a.grid(row=0, column=2, sticky="ew", padx=5, pady=5)
+        
+        # Voice B Row
+        ctk.CTkLabel(sel_frame, text="Voice B:").grid(row=1, column=0, padx=10, pady=5)
+        
+        def on_lang_b_ui(c): self.mix_lang_b_var.set(self.LANGUAGES[c])
+        mix_lang_b_combo = ctk.CTkComboBox(sel_frame, values=list(self.LANGUAGES.keys()), command=on_lang_b_ui, width=150)
+        mix_lang_b_combo.set(lang_display_map.get(self.mix_lang_b_var.get(), "American English"))
+        mix_lang_b_combo.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        
+        self.mix_combo_b = ctk.CTkComboBox(sel_frame, variable=self.mix_voice_b_var)
+        self.mix_combo_b.grid(row=1, column=2, sticky="ew", padx=5, pady=5)
+        
+        # 2. Ratio
+        ratio_frame = ctk.CTkFrame(parent)
+        ratio_frame.pack(fill="x", padx=10, pady=10)
+        
+        self.ratio_label = ctk.CTkLabel(ratio_frame, text="Mix: 50% A / 50% B")
+        self.ratio_label.pack(pady=5)
+        
+        def update_ratio_label(val):
+            p = int(val * 100)
+            self.ratio_label.configure(text=f"Mix: {100-p}% A / {p}% B")
+            
+        slider = ctk.CTkSlider(ratio_frame, from_=0.0, to=1.0, number_of_steps=100, variable=self.mix_ratio_var, command=update_ratio_label)
+        slider.pack(fill="x", padx=20, pady=10)
+        
+        # 3. Preview Lang & Actions
+        act_frame = ctk.CTkFrame(parent)
+        act_frame.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkLabel(act_frame, text="Preview Language:").grid(row=0, column=0, padx=10, pady=5)
+        
+        def on_prev_lang_ui(c): self.preview_lang_var.set(self.LANGUAGES[c])
+        prev_lang_combo = ctk.CTkComboBox(act_frame, values=list(self.LANGUAGES.keys()), command=on_prev_lang_ui, width=150)
+        prev_lang_combo.set(lang_display_map.get(self.preview_lang_var.get(), "American English"))
+        prev_lang_combo.grid(row=0, column=1, padx=5, pady=5)
+        
+        ctk.CTkButton(act_frame, text="🔊 Preview", width=100, fg_color="#2B719E", command=self.preview_mix).grid(row=0, column=2, padx=10)
+        
+        # Save Row
+        save_frame = ctk.CTkFrame(parent)
+        save_frame.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkLabel(save_frame, text="New Voice Name:").pack(side="left", padx=10)
+        ctk.CTkEntry(save_frame, textvariable=self.mix_name_var).pack(side="left", fill="x", expand=True, padx=5)
+        ctk.CTkButton(save_frame, text="Create & Save", command=self.mix_voice_action).pack(side="left", padx=10)
+        
+        self.mix_status_label = ctk.CTkLabel(parent, text="", text_color="gray")
+        self.mix_status_label.pack(pady=5)
+        
+        # 4. List
+        ctk.CTkLabel(parent, text="Custom Voices:", font=("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=(20,5))
+        self.custom_list_frame = ctk.CTkScrollableFrame(parent, height=200)
+        self.custom_list_frame.pack(fill="x", padx=10, pady=5)
+        
+        self.refresh_voice_lists()
+
+    def build_generation_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        
+        # Move existing logic here
+        main_frame = ctk.CTkScrollableFrame(parent)
+        main_frame.pack(fill="both", expand=True, padx=5, pady=5)
         main_frame.grid_columnconfigure(0, weight=1)
 
         # --- 1. Input Section ---
@@ -278,36 +559,50 @@ class TTSApp(ctk.CTk):
         
         self.refresh_presets()
 
+        # Language Selection
+        ctk.CTkLabel(config_frame, text="Language:").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+        # Reverse map for display
+        lang_display_map = {v: k for k, v in self.LANGUAGES.items()}
+        current_lang_code = self.lang_var.get()
+        
+        def on_lang_ui_change(choice):
+            self.lang_var.set(self.LANGUAGES[choice])
+
+        self.lang_combo = ctk.CTkComboBox(config_frame, values=list(self.LANGUAGES.keys()), command=on_lang_ui_change)
+        
+        # Set initial value
+        if current_lang_code in lang_display_map:
+            self.lang_combo.set(lang_display_map[current_lang_code])
+        else:
+            self.lang_combo.set("American English")
+            
+        self.lang_combo.grid(row=1, column=1, sticky="ew", padx=10)
+
         # Voice Selection
-        ctk.CTkLabel(config_frame, text="Voice:").grid(row=1, column=0, sticky="w", padx=10, pady=5)
-        self.voice_options = [
-            "af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", 
-            "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", 
-            "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", 
-            "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa"
-        ]
-        ctk.CTkComboBox(config_frame, values=self.voice_options, variable=self.voice_var).grid(row=1, column=1, sticky="ew", padx=10)
+        ctk.CTkLabel(config_frame, text="Voice:").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+        self.voice_combo = ctk.CTkComboBox(config_frame, values=self.get_all_voices(), variable=self.voice_var)
+        self.voice_combo.grid(row=2, column=1, sticky="ew", padx=10)
 
         # Output Dir
-        ctk.CTkLabel(config_frame, text="Output Folder:").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(config_frame, text="Output Folder:").grid(row=3, column=0, sticky="w", padx=10, pady=5)
         dir_row = ctk.CTkFrame(config_frame, fg_color="transparent")
-        dir_row.grid(row=2, column=1, sticky="ew", padx=10)
+        dir_row.grid(row=3, column=1, sticky="ew", padx=10)
         dir_row.grid_columnconfigure(0, weight=1)
         ctk.CTkEntry(dir_row, textvariable=self.output_dir_var).grid(row=0, column=0, sticky="ew", padx=(0,5))
         ctk.CTkButton(dir_row, text="...", width=40, command=self.browse_directory).grid(row=0, column=1)
 
         # Filename
-        ctk.CTkLabel(config_frame, text="Base Filename:").grid(row=3, column=0, sticky="w", padx=10, pady=5)
-        ctk.CTkEntry(config_frame, textvariable=self.filename_var).grid(row=3, column=1, sticky="ew", padx=10)
+        ctk.CTkLabel(config_frame, text="Base Filename:").grid(row=4, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkEntry(config_frame, textvariable=self.filename_var).grid(row=4, column=1, sticky="ew", padx=10)
 
         # Speed
         self.speed_label = ctk.CTkLabel(config_frame, text="Speed: 1.0x")
-        self.speed_label.grid(row=4, column=0, sticky="w", padx=10, pady=5)
+        self.speed_label.grid(row=5, column=0, sticky="w", padx=10, pady=5)
         self.speed_slider = ctk.CTkSlider(config_frame, from_=0.5, to=2.0, number_of_steps=15, variable=self.speed_var, command=self.update_speed_label)
-        self.speed_slider.grid(row=4, column=1, sticky="ew", padx=10)
+        self.speed_slider.grid(row=5, column=1, sticky="ew", padx=10)
 
         # Split Pattern
-        ctk.CTkLabel(config_frame, text="Split By:").grid(row=5, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(config_frame, text="Split By:").grid(row=6, column=0, sticky="w", padx=10, pady=5)
         self.split_map = {
             "Natural (Newlines)": r"\n+",
             "Paragraphs (Double Newline)": r"\n\n+",
@@ -324,7 +619,7 @@ class TTSApp(ctk.CTk):
                 break
         self.split_combo.set(initial_key)
         
-        self.split_combo.grid(row=5, column=1, sticky="ew", padx=10, pady=5)
+        self.split_combo.grid(row=6, column=1, sticky="ew", padx=10, pady=5)
 
         # --- 3. Audio Control ---
         audio_frame = ctk.CTkFrame(main_frame)
@@ -382,7 +677,29 @@ class TTSApp(ctk.CTk):
         
         ctk.CTkLabel(thread_frame, text="(More threads = High RAM usage)", text_color="orange").pack(side="left", padx=10)
 
-        # --- 4. Actions & Status ---
+    def create_widgets(self):
+        # Header
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=0)
+
+        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10,0))
+        
+        ctk.CTkLabel(header_frame, text="Kokoro TTS", font=("Roboto", 20, "bold")).pack(side="left", padx=5)
+        ctk.CTkButton(header_frame, text="⚙ Settings", width=80, height=28, command=self.open_settings).pack(side="right")
+
+        # Main Tabs
+        self.main_tabs = ctk.CTkTabview(self)
+        self.main_tabs.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+        
+        gen_tab = self.main_tabs.add("Generate Audio")
+        self.build_generation_tab(gen_tab)
+        
+        mix_tab = self.main_tabs.add("Custom Voice")
+        self.build_mixing_tab(mix_tab)
+
+        # Actions (Global)
         action_frame = ctk.CTkFrame(self)
         action_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=10)
         
@@ -484,7 +801,10 @@ class TTSApp(ctk.CTk):
     def on_engine_status(self, msg, is_error):
         color = "#ff5555" if is_error else "gray" # Red or Gray
         # Schedule update on main thread
-        self.after(0, lambda: self.status_label.configure(text=msg, text_color=color))
+        self.after(0, lambda: self.status_label.configure(text=msg.split('\n')[0], text_color=color))
+        
+        if is_error and "pip install" in msg:
+            self.after(0, lambda: messagebox.showerror("Missing Dependencies", msg))
 
     def on_engine_progress(self, percent, elapsed, eta, detail):
         # Schedule update
@@ -532,11 +852,9 @@ class TTSApp(ctk.CTk):
         if not text_data:
             text_data = "This is a sample audio preview using the Koh-koh-ro Tea-Tea-S engine. It demonstrates the voice quality and speed settings."
             
-        # Truncate to 2 sentences
-        sentences = re.split(r'(?<=[.!?])\s+', text_data)
-        preview_text = " ".join(sentences[:2])
-        if len(preview_text) > 500: # Safety cap
-             preview_text = preview_text[:500]
+        preview_text = text_data
+        if len(preview_text) > 1000: # Slightly larger cap for raw text before engine handles it
+             preview_text = preview_text[:1000]
              
         # Config
         voice = self.voice_var.get()
@@ -570,7 +888,7 @@ class TTSApp(ctk.CTk):
             
             self.after(0, _ui_update)
         
-        future = self.engine.worker.run_coro(self.engine.generate_preview(preview_text, voice, speed, tmp_path, extra_config))
+        future = self.engine.worker.run_coro(self.engine.generate_preview(preview_text, voice, speed, tmp_path, extra_config, lang_code=self.lang_var.get()))
         future.add_done_callback(_on_preview_done)
 
     def start_conversion(self):
@@ -609,6 +927,7 @@ class TTSApp(ctk.CTk):
 
         # 2. Config
         config = {
+            'lang_code': self.lang_var.get(),
             'voice': self.voice_var.get(),
             'speed': self.speed_var.get(),
             'split_pattern': self.split_pattern_var.get(),

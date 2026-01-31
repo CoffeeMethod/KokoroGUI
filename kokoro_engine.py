@@ -12,18 +12,23 @@ import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
 import warnings
+import re
+import json
 from kokoro import KPipeline
 
 # Suppress ebooklib warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='ebooklib')
 warnings.filterwarnings("ignore", category=FutureWarning, module='ebooklib')
 
+CUSTOM_VOICES_DIR = "custom_voices"
+
 # --- Thread Local Storage ---
 thread_local = threading.local()
 
 def get_thread_pipeline(lang_code="a"):
     """Get or create a KPipeline instance for the current thread."""
-    if not hasattr(thread_local, "pipeline"):
+    current = getattr(thread_local, "pipeline", None)
+    if current is None or getattr(current, "lang_code", None) != lang_code:
         try:
             thread_local.pipeline = KPipeline(lang_code=lang_code)
         except Exception as e:
@@ -55,10 +60,24 @@ class KokoroEngine:
         self.cancel_event = threading.Event()
         self.pipeline = None # Main pipeline for single thread check or init
         
+        if not os.path.exists(CUSTOM_VOICES_DIR):
+            os.makedirs(CUSTOM_VOICES_DIR)
+        
         # Callbacks
         self.on_progress = None # func(percentage, time_elapsed, eta, detail_text)
         self.on_status = None   # func(msg, is_error)
         self.on_finish = None   # func()
+
+    def resolve_voice_path(self, voice_name):
+        """
+        Returns the absolute path if it's a custom voice, 
+        otherwise returns the name as-is (for standard voices).
+        """
+        # Check if it's a custom voice file
+        custom_path = os.path.join(CUSTOM_VOICES_DIR, f"{voice_name}.pt")
+        if os.path.exists(custom_path):
+            return os.path.abspath(custom_path)
+        return voice_name
 
     def process_audio(self, audio, sr, config):
         """
@@ -110,55 +129,129 @@ class KokoroEngine:
 
         return audio
 
-    async def init_pipeline_async(self):
+    async def init_pipeline_async(self, lang_code="a"):
         try:
-            self.pipeline = await asyncio.to_thread(KPipeline, lang_code="a")
-            if self.on_status: self.on_status("Pipeline Initialized and Ready.", False)
+            self.pipeline = await asyncio.to_thread(KPipeline, lang_code=lang_code)
+            if self.on_status: self.on_status(f"Pipeline Initialized ({lang_code}).", False)
             return True
         except Exception as e:
-            if self.on_status: self.on_status(f"Pipeline Init Failed: {e}", True)
+            msg = f"Pipeline Init Failed: {e}"
+            err_str = str(e).lower()
+            if lang_code == 'j' and ("fugashi" in err_str or "unidic" in err_str):
+                 msg += "\n(Try: pip install fugashi unidic-lite)"
+            elif lang_code == 'z' and "pypinyin" in err_str:
+                 msg += "\n(Try: pip install pypinyin)"
+            
+            if self.on_status: self.on_status(msg, True)
             return False
 
-    async def generate_preview(self, text, voice, speed, output_path, extra_config=None):
-        def _gen():
-            if not self.pipeline:
-                p = get_thread_pipeline()
-                if not p: return False
-            else:
+    async def mix_voices(self, v1_name, v2_name, ratio, new_name):
+        def _mix():
+            try:
+                # Ensure we have a pipeline to load voices
+                # Use 'a' as default for mixing if main pipeline is not ready
                 p = self.pipeline
+                if not p:
+                    p = get_thread_pipeline('a')
+                    if not p: raise RuntimeError("No pipeline available for mixing")
+                
+                # Resolve inputs (handle custom vs standard)
+                v1_arg = self.resolve_voice_path(v1_name)
+                v2_arg = self.resolve_voice_path(v2_name)
+                
+                # Load tensors
+                # KPipeline.load_voice returns a tensor
+                t1 = p.load_voice(v1_arg)
+                t2 = p.load_voice(v2_arg)
+                
+                if t1 is None or t2 is None:
+                    raise ValueError("Failed to load one of the voices.")
+                
+                # Ensure they are on CPU for mixing
+                if isinstance(t1, torch.Tensor): t1 = t1.cpu()
+                if isinstance(t2, torch.Tensor): t2 = t2.cpu()
+                
+                # Check shapes
+                if t1.shape != t2.shape:
+                    # Try to align? Usually kokoro voices are fixed size [510, 1, 256]
+                    # If different, we might fail or warn.
+                    print(f"Warning: Voice shapes differ {t1.shape} vs {t2.shape}. Mixing might fail or produce garbage.")
+                
+                # Linear Interpolation
+                # mixed = v1 * (1 - ratio) + v2 * ratio
+                # ratio is mix of B. If ratio 0, full A. If ratio 1, full B.
+                mixed = t1 * (1.0 - ratio) + t2 * ratio
+                
+                # Save
+                out_path = os.path.join(CUSTOM_VOICES_DIR, f"{new_name}.pt")
+                torch.save(mixed, out_path)
+                return True, out_path, mixed
+            except Exception as e:
+                return False, str(e), None
+
+        return await asyncio.to_thread(_mix)
+
+    async def generate_preview(self, text, voice, speed, output_path, extra_config=None, voice_tensor=None, lang_code='a'):
+        def _gen():
+            # Use specific lang code for preview
+            p = get_thread_pipeline(lang_code)
+            if not p: return False
 
             try:
-                # Pitch Compensation Logic
-                # If pitch is +2 st (factor 1.12), we want higher pitch.
-                # Resampling to 1/1.12 makes it higher pitch but shorter.
-                # So generate it 1.12x longer (slower).
-                # Speed_eff = Speed / Factor
+                ms_segments = self.parse_multispeaker_text(text)
+                # Truncate to first 2 segments for preview if many
+                if len(ms_segments) > 2:
+                    ms_segments = ms_segments[:2]
                 
-                eff_speed = speed
-                pitch_semitones = 0.0
-                if extra_config:
-                    pitch_semitones = extra_config.get('pitch', 0.0)
-                    if pitch_semitones != 0.0:
-                        factor = 2 ** (pitch_semitones / 12.0)
-                        eff_speed = speed / factor
+                all_pieces = []
 
-                # Generate
-                generator = p(text, voice=voice, speed=eff_speed, split_pattern=r"\n+")
-                pieces = []
-                for _, _, audio in generator:
-                    if isinstance(audio, torch.Tensor):
-                        audio = audio.cpu().numpy()
-                    pieces.append(audio)
+                for speaker_name, segment_text in ms_segments:
+                    # Truncate segment text if too long for preview
+                    if len(segment_text) > 500:
+                        segment_text = segment_text[:500]
+
+                    target_voice = voice
+                    target_speed = speed
+                    target_extra = extra_config.copy() if extra_config else {}
+
+                    if speaker_name:
+                        preset = self.load_preset(speaker_name)
+                        if preset:
+                            target_voice = preset.get('voice', target_voice)
+                            target_speed = preset.get('speed', target_speed)
+                            if 'volume' in preset: target_extra['volume'] = preset['volume']
+                            if 'pitch' in preset: target_extra['pitch'] = preset['pitch']
+                            if 'normalize' in preset: target_extra['normalize'] = preset['normalize']
+                            if 'trim' in preset: target_extra['trim_silence'] = preset['trim']
+                    
+                    # Resolve voice
+                    if voice_tensor is not None and not speaker_name:
+                        # Only use voice_tensor if no speaker name (direct preview of mix)
+                        actual_voice = "_preview_temp"
+                        p.voices[actual_voice] = voice_tensor
+                    else:
+                        actual_voice = self.resolve_voice_path(target_voice)
+
+                    # Pitch Compensation
+                    eff_speed = target_speed
+                    pitch_st = target_extra.get('pitch', 0.0)
+                    if pitch_st != 0.0:
+                        factor = 2 ** (pitch_st / 12.0)
+                        eff_speed = target_speed / factor
+
+                    # Generate
+                    generator = p(segment_text, voice=actual_voice, speed=eff_speed, split_pattern=r"\n+")
+                    for _, _, audio in generator:
+                        if isinstance(audio, torch.Tensor):
+                            audio = audio.cpu().numpy()
+                        # Post Process
+                        audio = self.process_audio(audio, 24000, target_extra)
+                        all_pieces.append(audio)
                 
-                if not pieces:
+                if not all_pieces:
                     return False
                 
-                full_audio = np.concatenate(pieces)
-                
-                # Post Process
-                if extra_config:
-                    full_audio = self.process_audio(full_audio, 24000, extra_config)
-                
+                full_audio = np.concatenate(all_pieces)
                 sf.write(output_path, full_audio, 24000)
                 return True
             except Exception as e:
@@ -193,6 +286,41 @@ class KokoroEngine:
                 text_data = f.read()
                 
         return text_data
+
+    def parse_multispeaker_text(self, text):
+        """
+        Parses text for [PresetName]: syntax.
+        Returns a list of (preset_name, text_segment)
+        """
+        # Regex to find [Name]:
+        # Matches [Something]: followed by text until the next [Something]: or end of string
+        pattern = r"\[([^\]]+)\]:\s*"
+        matches = list(re.finditer(pattern, text))
+        
+        if not matches:
+            return [(None, text)]
+            
+        segments = []
+        for i in range(len(matches)):
+            name = matches[i].group(1)
+            start = matches[i].end()
+            end = matches[i+1].start() if i+1 < len(matches) else len(text)
+            segment_text = text[start:end].strip()
+            if segment_text:
+                segments.append((name, segment_text))
+        
+        return segments
+
+    def load_preset(self, name):
+        """Loads a preset from the presets directory."""
+        preset_path = os.path.join("presets", f"{name}.json")
+        if os.path.exists(preset_path):
+            try:
+                with open(preset_path, "r") as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"Error loading preset {name}: {e}")
+        return None
 
     def smart_split(self, text, chunk_size=3000):
         chunks = []
@@ -249,8 +377,11 @@ class KokoroEngine:
         index, text, config = chunk_data
         if self.cancel_event.is_set(): return []
 
-        pipeline = get_thread_pipeline()
-        if not pipeline: raise RuntimeError("Failed to initialize pipeline in thread.")
+        # Use lang_code from config, default to 'a'
+        lang_code = config.get('lang_code', 'a')
+        pipeline = get_thread_pipeline(lang_code)
+        
+        if not pipeline: raise RuntimeError(f"Failed to initialize pipeline ({lang_code}) in thread.")
 
         # Speed Adjustment for Pitch Compensation
         eff_speed = config['speed']
@@ -259,6 +390,7 @@ class KokoroEngine:
             factor = 2 ** (pitch_semitones / 12.0)
             eff_speed = eff_speed / factor
 
+        # Config voice should already be resolved by start_conversion
         generator = pipeline(text, voice=config['voice'], speed=eff_speed, split_pattern=config['split_pattern'])
         chunk_files = []
         sub_idx = 0
@@ -305,6 +437,9 @@ class KokoroEngine:
         await asyncio.to_thread(combine_worker)
 
     def start_conversion(self, text, config):
+        # Resolve voice path once before distribution
+        config['voice'] = self.resolve_voice_path(config['voice'])
+        
         self.cancel_event.clear()
         self.worker.run_coro(self._process_text_async(text, config))
 
@@ -317,15 +452,43 @@ class KokoroEngine:
             os.makedirs(config['out_dir'], exist_ok=True)
             
             num_workers = config.get('num_threads', 1)
-            chunks = self.smart_split(text, chunk_size=5000 if num_workers > 1 else 1000000)
-            total_chunks = len(chunks)
             
-            total_chars = sum(len(c) for c in chunks)
+            # Multispeaker Support
+            ms_segments = self.parse_multispeaker_text(text)
+            tasks_data = []
+            
+            for speaker_name, segment_text in ms_segments:
+                seg_config = config.copy()
+                if speaker_name:
+                    preset = self.load_preset(speaker_name)
+                    if preset:
+                        seg_config.update(preset)
+                        if 'trim' in preset:
+                            seg_config['trim_silence'] = preset['trim']
+                        # Resolve voice path for the new voice
+                        seg_config['voice'] = self.resolve_voice_path(seg_config['voice'])
+                    else:
+                        if self.on_status: self.on_status(f"Warning: Preset '{speaker_name}' not found.", False)
+
+                # Split this segment into sub-chunks for parallel processing
+                # Use same character limit as original
+                seg_chunks = self.smart_split(segment_text, chunk_size=5000 if num_workers > 1 else 1000000)
+                for chunk in seg_chunks:
+                    # (index, text, config)
+                    tasks_data.append((len(tasks_data), chunk, seg_config))
+
+            total_chunks = len(tasks_data)
+            if total_chunks == 0:
+                if self.on_status: self.on_status("No text to process.", False)
+                if self.on_finish: self.on_finish()
+                return
+
+            total_chars = sum(len(d[1]) for d in tasks_data)
             processed_chars = 0
             start_time = time.time()
             phase_weight = 0.9 if config['combine'] else 1.0
             
-            if self.on_status: self.on_status(f"Queued {len(chunks)} blocks. Starting {num_workers} workers...", False)
+            if self.on_status: self.on_status(f"Queued {total_chunks} blocks. Starting {num_workers} workers...", False)
             
             # Progress tracker
             progress_lock = threading.Lock()
@@ -353,8 +516,7 @@ class KokoroEngine:
                 if self.on_progress:
                     self.on_progress(total_fraction * 100, elapsed, eta_str, f"Processing: {clean_snip}")
 
-            # Prepare tasks
-            tasks_data = [(i, c, config) for i, c in enumerate(chunks)]
+            # All generated files list
             all_generated_files = [None] * total_chunks
             
             loop = asyncio.get_running_loop()
@@ -362,7 +524,6 @@ class KokoroEngine:
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
                 futures = []
                 for i, data in enumerate(tasks_data):
-                    # We pass a lambda that calls our tracker
                     fut = loop.run_in_executor(executor, self.process_chunk_task, data, on_chunk_progress)
                     futures.append(fut)
                 
