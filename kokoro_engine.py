@@ -68,6 +68,25 @@ class KokoroEngine:
         self.on_status = None   # func(msg, is_error)
         self.on_finish = None   # func()
 
+    def apply_lexicon(self, text, lexicon):
+        """
+        Applies a dictionary of replacements to the text.
+        Case-insensitive finding, preserves case of replacement.
+        """
+        if not lexicon:
+            return text
+        
+        for src, dest in lexicon.items():
+            if not src: continue
+            try:
+                # Escape the search term to treat it as literal text
+                pattern = re.compile(re.escape(src), re.IGNORECASE)
+                text = pattern.sub(dest, text)
+            except Exception as e:
+                print(f"Lexicon error for '{src}': {e}")
+                
+        return text
+
     def resolve_voice_path(self, voice_name):
         """
         Returns the absolute path if it's a custom voice, 
@@ -206,6 +225,10 @@ class KokoroEngine:
                 all_pieces = []
 
                 for speaker_name, segment_text in ms_segments:
+                    # Apply Lexicon if provided in extra_config
+                    if extra_config and 'lexicon' in extra_config:
+                        segment_text = self.apply_lexicon(segment_text, extra_config['lexicon'])
+
                     # Truncate segment text if too long for preview
                     if len(segment_text) > 500:
                         segment_text = segment_text[:500]
@@ -457,7 +480,12 @@ class KokoroEngine:
             ms_segments = self.parse_multispeaker_text(text)
             tasks_data = []
             
+            lexicon = config.get('lexicon', {})
+
             for speaker_name, segment_text in ms_segments:
+                # Apply Lexicon
+                segment_text = self.apply_lexicon(segment_text, lexicon)
+
                 seg_config = config.copy()
                 if speaker_name:
                     preset = self.load_preset(speaker_name)
