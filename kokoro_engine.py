@@ -7,6 +7,13 @@ import soundfile as sf
 import torch
 import numpy as np
 import scipy.signal
+from pedalboard import (
+    Pedalboard, Reverb, Compressor, HighShelfFilter, LowShelfFilter,
+    Chorus, Distortion, Phaser, Clipping, Gain, Limiter,
+    HighpassFilter, LowpassFilter, LadderFilter, Delay, PitchShift,
+    GSMFullRateCompressor, Bitcrush
+)
+from pedalboard.io import AudioFile
 import pypdf
 import ebooklib
 from ebooklib import epub
@@ -100,7 +107,7 @@ class KokoroEngine:
 
     def process_audio(self, audio, sr, config):
         """
-        Apply post-processing: Pitch (Resample), Volume, Normalize, Trim.
+        Apply post-processing: Pitch (Resample), Volume, FX (Reverb, EQ, Comp), Normalize, Trim.
         Returns: (processed_audio, new_sr)
         """
         # 1. Trim Silence (Simple threshold)
@@ -119,27 +126,117 @@ class KokoroEngine:
             audio = audio * vol
 
         # 3. Pitch Shift (Resampling)
-        # Note: We handled the duration compensation by adjusting the generation speed beforehand.
-        # Here we just do the resampling to shift the pitch back (or forth).
-        # Pitch > 0 means higher pitch.
-        # If user wanted higher pitch, we generated SLOWER (longer).
-        # Now we play it faster (shorter) to get higher pitch and normal length.
         pitch_semitones = config.get('pitch', 0.0)
         if pitch_semitones != 0.0:
-            # Factor: >1 means higher frequency (shorter duration)
-            # 2^(st/12)
             factor = 2 ** (pitch_semitones / 12.0)
-            
-            # Target length = Original / Factor
             new_len = int(len(audio) / factor)
             if new_len > 0:
-                # Scipy resample uses Fourier method usually, or we can use signal.resample
                 try:
                     audio = scipy.signal.resample(audio, new_len)
                 except Exception as e:
                     print(f"Resample failed: {e}")
 
-        # 4. Normalization
+        # 4. Pedalboard FX
+        fx_chain = []
+        
+        # --- Guitar / Modulation ---
+        if config.get('distortion_enabled', False):
+            drive = config.get('distortion_drive', 25.0)
+            fx_chain.append(Distortion(drive_db=drive))
+            
+        if config.get('chorus_enabled', False):
+            fx_chain.append(Chorus(
+                rate_hz=config.get('chorus_rate', 1.0),
+                depth=config.get('chorus_depth', 0.25),
+                mix=config.get('chorus_mix', 0.5)
+            ))
+            
+        if config.get('phaser_enabled', False):
+            fx_chain.append(Phaser(
+                rate_hz=config.get('phaser_rate', 1.0),
+                depth=config.get('phaser_depth', 0.5),
+                mix=config.get('phaser_mix', 0.5)
+            ))
+            
+        if config.get('clipping_enabled', False):
+            fx_chain.append(Clipping(threshold_db=config.get('clipping_thresh', -6.0)))
+
+        if config.get('bitcrush_enabled', False):
+            fx_chain.append(Bitcrush(bit_depth=config.get('bitcrush_depth', 8.0)))
+            
+        if config.get('gsm_enabled', False):
+            fx_chain.append(GSMFullRateCompressor())
+
+        # --- Filters / EQ ---
+        # HighPass
+        if config.get('highpass_enabled', False):
+            fx_chain.append(HighpassFilter(cutoff_frequency_hz=config.get('highpass_freq', 50.0)))
+
+        # LowPass
+        if config.get('lowpass_enabled', False):
+            fx_chain.append(LowpassFilter(cutoff_frequency_hz=config.get('lowpass_freq', 10000.0)))
+            
+        # Shelves (Bass/Treble) - Simple EQ
+        bass_db = config.get('eq_bass', 0.0)
+        if bass_db != 0.0:
+            fx_chain.append(LowShelfFilter(cutoff_frequency_hz=250, gain_db=bass_db))
+            
+        treble_db = config.get('eq_treble', 0.0)
+        if treble_db != 0.0:
+            fx_chain.append(HighShelfFilter(cutoff_frequency_hz=4000, gain_db=treble_db))
+
+        # --- Spatial / Time ---
+        if config.get('pitch_shift_enabled', False):
+            # High quality pitch shifting without duration change
+            semitones = config.get('pitch_shift_semitones', 0.0)
+            if semitones != 0:
+                fx_chain.append(PitchShift(semitones=semitones))
+
+        if config.get('delay_enabled', False):
+            fx_chain.append(Delay(
+                delay_seconds=config.get('delay_time', 0.5),
+                feedback=config.get('delay_feedback', 0.0),
+                mix=config.get('delay_mix', 0.5)
+            ))
+
+        if config.get('reverb_enabled', False):
+            fx_chain.append(Reverb(
+                room_size=config.get('reverb_room_size', 0.5),
+                damping=config.get('reverb_damping', 0.5),
+                wet_level=config.get('reverb_wet_level', 0.3),
+                dry_level=config.get('reverb_dry_level', 1.0),
+                width=config.get('reverb_width', 1.0)
+            ))
+
+        # --- Dynamics ---
+        if config.get('comp_enabled', False):
+            fx_chain.append(Compressor(
+                threshold_db=config.get('comp_threshold', -20),
+                ratio=config.get('comp_ratio', 4),
+                attack_ms=config.get('comp_attack', 1.0),
+                release_ms=config.get('comp_release', 100.0)
+            ))
+            
+        if config.get('limiter_enabled', False):
+            fx_chain.append(Limiter(
+                threshold_db=config.get('limiter_threshold', -1.0),
+                release_ms=config.get('limiter_release', 100.0)
+            ))
+            
+        if config.get('gain_enabled', False):
+            db = config.get('gain_db', 0.0)
+            if db != 0.0:
+                fx_chain.append(Gain(gain_db=db))
+
+        if fx_chain:
+            try:
+                board = Pedalboard(fx_chain)
+                # Pedalboard expects float32
+                audio = board(audio, sr)
+            except Exception as e:
+                print(f"Pedalboard FX failed: {e}")
+
+        # 5. Normalization
         if config.get('normalize', False):
             peak = np.max(np.abs(audio))
             if peak > 0:
@@ -275,8 +372,16 @@ class KokoroEngine:
                     return False
                 
                 full_audio = np.concatenate(all_pieces)
-                sf.write(output_path, full_audio, 24000)
-                return True
+                
+                try:
+                    with AudioFile(output_path, 'w', samplerate=24000, num_channels=1) as f:
+                        f.write(full_audio)
+                    return True
+                except Exception as e:
+                    print(f"Preview write error: {e}")
+                    # Fallback
+                    sf.write(output_path, full_audio, 24000)
+                    return True
             except Exception as e:
                 print(f"Preview error: {e}")
                 return False
@@ -431,10 +536,21 @@ class KokoroEngine:
             
             # Post Process
             audio = self.process_audio(audio, 24000, config)
+            
+            # Determine format
+            fmt = config.get('format', 'wav').lower()
+            if fmt not in ['wav', 'flac', 'mp3', 'ogg']: fmt = 'wav'
 
-            file_name = f"{base_name}_{sub_idx}.wav"
+            file_name = f"{base_name}_{sub_idx}.{fmt}"
             path = os.path.join(config['out_dir'], file_name)
-            sf.write(path, audio, 24000)
+            
+            try:
+                # Use Pedalboard AudioFile for writing
+                with AudioFile(path, 'w', samplerate=24000, num_channels=1) as f:
+                    f.write(audio)
+            except Exception as e:
+                print(f"Pedalboard write failed: {e}. Fallback to soundfile.")
+                sf.write(path, audio, 24000)
             
             chunk_files.append({
                 "path": path,
@@ -448,15 +564,20 @@ class KokoroEngine:
     async def smart_combine(self, file_paths, output_path, update_callback):
         def combine_worker():
             total_files = len(file_paths)
-            with sf.SoundFile(output_path, 'w', samplerate=24000, channels=1) as out_f:
-                for i, fp in enumerate(file_paths):
-                    if self.cancel_event.is_set(): break
-                    try:
-                        data, _ = sf.read(fp)
-                        out_f.write(data)
-                        if update_callback: update_callback((i + 1) / total_files)
-                    except Exception as e:
-                        print(f"Failed to read/write segment {fp}: {e}")
+            try:
+                # Use Pedalboard AudioFile
+                with AudioFile(output_path, 'w', samplerate=24000, num_channels=1) as out_f:
+                    for i, fp in enumerate(file_paths):
+                        if self.cancel_event.is_set(): break
+                        try:
+                            # Read with SoundFile (reliable for reading various formats)
+                            data, _ = sf.read(fp)
+                            out_f.write(data)
+                            if update_callback: update_callback((i + 1) / total_files)
+                        except Exception as e:
+                            print(f"Failed to read segment {fp}: {e}")
+            except Exception as e:
+                print(f"Combine failed: {e}")
         await asyncio.to_thread(combine_worker)
 
     def start_conversion(self, text, config):
@@ -583,7 +704,9 @@ class KokoroEngine:
 
             if config['combine'] and final_file_paths:
                 if self.on_status: self.on_status("Merging audio files...", False)
-                combine_path = os.path.join(config['out_dir'], f"{config['filename']}_{config['time_id']}_combined.wav")
+                
+                fmt = config.get('format', 'wav').lower()
+                combine_path = os.path.join(config['out_dir'], f"{config['filename']}_{config['time_id']}_combined.{fmt}")
                 
                 def on_merge_progress(frac):
                     total_fraction = (1.0 * phase_weight) + (frac * (1.0 - phase_weight))

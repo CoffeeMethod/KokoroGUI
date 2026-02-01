@@ -14,6 +14,7 @@ ctk.set_default_color_theme("blue")
 
 CONFIG_FILE = "config.json"
 PRESETS_DIR = "presets"
+FX_PRESETS_DIR = os.path.join(PRESETS_DIR, "fx")
 
 class TTSApp(ctk.CTk):
     def __init__(self):
@@ -23,9 +24,11 @@ class TTSApp(ctk.CTk):
         self.geometry("700x900")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         
-        # Ensure presets dir exists
+        # Ensure presets dirs exist
         if not os.path.exists(PRESETS_DIR):
             os.makedirs(PRESETS_DIR)
+        if not os.path.exists(FX_PRESETS_DIR):
+            os.makedirs(FX_PRESETS_DIR)
 
         # Load Settings
         self.settings = self.load_settings()
@@ -74,6 +77,7 @@ class TTSApp(ctk.CTk):
 
         self.voice_var = ctk.StringVar(value=self.settings.get("voice", "af_heart"))
         self.filename_var = ctk.StringVar(value=self.settings.get("filename", "output"))
+        self.output_format_var = ctk.StringVar(value=self.settings.get("format", "wav"))
         self.output_dir_var = ctk.StringVar(value=self.settings.get("out_dir", "audio_output"))
         self.speed_var = ctk.DoubleVar(value=self.settings.get("speed", 1.0))
         self.volume_var = ctk.DoubleVar(value=self.settings.get("volume", 1.0))
@@ -86,8 +90,77 @@ class TTSApp(ctk.CTk):
         self.export_subtitles = ctk.BooleanVar(value=self.settings.get("export_subtitles", False))
         self.normalize_audio = ctk.BooleanVar(value=self.settings.get("normalize", False))
         self.trim_silence = ctk.BooleanVar(value=self.settings.get("trim", False))
+        self.apply_fx_var = ctk.BooleanVar(value=self.settings.get("apply_fx", True))
         self.timecode_format = "%Y%m%d%H%M%S"
+
+        # FX Variables
+        self.reverb_enabled = ctk.BooleanVar(value=self.settings.get("reverb_enabled", False))
+        self.reverb_room_size = ctk.DoubleVar(value=self.settings.get("reverb_room_size", 0.5))
+        self.reverb_wet_level = ctk.DoubleVar(value=self.settings.get("reverb_wet_level", 0.3))
         
+        self.eq_bass = ctk.DoubleVar(value=self.settings.get("eq_bass", 0.0))
+        self.eq_treble = ctk.DoubleVar(value=self.settings.get("eq_treble", 0.0))
+        
+        self.comp_enabled = ctk.BooleanVar(value=self.settings.get("comp_enabled", False))
+        self.comp_threshold = ctk.DoubleVar(value=self.settings.get("comp_threshold", -20.0))
+        self.comp_ratio = ctk.DoubleVar(value=self.settings.get("comp_ratio", 4.0))
+        self.comp_attack = ctk.DoubleVar(value=self.settings.get("comp_attack", 1.0))
+        self.comp_release = ctk.DoubleVar(value=self.settings.get("comp_release", 100.0))
+
+        # Reverb Extended
+        self.reverb_damping = ctk.DoubleVar(value=self.settings.get("reverb_damping", 0.5))
+        self.reverb_dry_level = ctk.DoubleVar(value=self.settings.get("reverb_dry_level", 1.0))
+        self.reverb_width = ctk.DoubleVar(value=self.settings.get("reverb_width", 1.0))
+
+        # New FX
+        # Guitar
+        self.distortion_enabled = ctk.BooleanVar(value=self.settings.get("distortion_enabled", False))
+        self.distortion_drive = ctk.DoubleVar(value=self.settings.get("distortion_drive", 25.0))
+        
+        self.chorus_enabled = ctk.BooleanVar(value=self.settings.get("chorus_enabled", False))
+        self.chorus_rate = ctk.DoubleVar(value=self.settings.get("chorus_rate", 1.0))
+        self.chorus_depth = ctk.DoubleVar(value=self.settings.get("chorus_depth", 0.25))
+        self.chorus_mix = ctk.DoubleVar(value=self.settings.get("chorus_mix", 0.5))
+        
+        self.phaser_enabled = ctk.BooleanVar(value=self.settings.get("phaser_enabled", False))
+        self.phaser_rate = ctk.DoubleVar(value=self.settings.get("phaser_rate", 1.0))
+        self.phaser_depth = ctk.DoubleVar(value=self.settings.get("phaser_depth", 0.5))
+        self.phaser_mix = ctk.DoubleVar(value=self.settings.get("phaser_mix", 0.5))
+        
+        self.clipping_enabled = ctk.BooleanVar(value=self.settings.get("clipping_enabled", False))
+        self.clipping_thresh = ctk.DoubleVar(value=self.settings.get("clipping_thresh", -6.0))
+        
+        # Quality
+        self.bitcrush_enabled = ctk.BooleanVar(value=self.settings.get("bitcrush_enabled", False))
+        self.bitcrush_depth = ctk.DoubleVar(value=self.settings.get("bitcrush_depth", 8.0))
+        
+        self.gsm_enabled = ctk.BooleanVar(value=self.settings.get("gsm_enabled", False))
+        
+        # Filters
+        self.highpass_enabled = ctk.BooleanVar(value=self.settings.get("highpass_enabled", False))
+        self.highpass_freq = ctk.DoubleVar(value=self.settings.get("highpass_freq", 50.0))
+        
+        self.lowpass_enabled = ctk.BooleanVar(value=self.settings.get("lowpass_enabled", False))
+        self.lowpass_freq = ctk.DoubleVar(value=self.settings.get("lowpass_freq", 10000.0))
+
+        # Spatial
+        self.delay_enabled = ctk.BooleanVar(value=self.settings.get("delay_enabled", False))
+        self.delay_time = ctk.DoubleVar(value=self.settings.get("delay_time", 0.5))
+        self.delay_feedback = ctk.DoubleVar(value=self.settings.get("delay_feedback", 0.0))
+        self.delay_mix = ctk.DoubleVar(value=self.settings.get("delay_mix", 0.5))
+        
+        # Pitch
+        self.pitch_shift_enabled = ctk.BooleanVar(value=self.settings.get("pitch_shift_enabled", False))
+        self.pitch_shift_semitones = ctk.DoubleVar(value=self.settings.get("pitch_shift_semitones", 0.0))
+        
+        # Dynamics
+        self.limiter_enabled = ctk.BooleanVar(value=self.settings.get("limiter_enabled", False))
+        self.limiter_threshold = ctk.DoubleVar(value=self.settings.get("limiter_threshold", -1.0))
+        self.limiter_release = ctk.DoubleVar(value=self.settings.get("limiter_release", 100.0))
+        
+        self.gain_enabled = ctk.BooleanVar(value=self.settings.get("gain_enabled", False))
+        self.gain_db = ctk.DoubleVar(value=self.settings.get("gain_db", 0.0))
+
         # Mixing Variables
         self.mix_lang_a_var = ctk.StringVar(value="a")
         self.mix_lang_b_var = ctk.StringVar(value="a")
@@ -121,11 +194,26 @@ class TTSApp(ctk.CTk):
     def setup_autosave(self):
         vars_to_trace = [
             self.lang_var,
-            self.voice_var, self.filename_var, self.output_dir_var,
+            self.voice_var, self.filename_var, self.output_format_var, self.output_dir_var,
             self.speed_var, self.volume_var, self.pitch_var,
             self.num_threads_var, self.split_pattern_var,
             self.separate_files, self.combine_post, self.export_subtitles,
-            self.normalize_audio, self.trim_silence
+            self.normalize_audio, self.trim_silence, self.apply_fx_var,
+            self.reverb_enabled, self.reverb_room_size, self.reverb_wet_level, self.reverb_damping, self.reverb_dry_level, self.reverb_width,
+            self.eq_bass, self.eq_treble,
+            self.comp_enabled, self.comp_threshold, self.comp_ratio, self.comp_attack, self.comp_release,
+            self.distortion_enabled, self.distortion_drive,
+            self.chorus_enabled, self.chorus_rate, self.chorus_depth, self.chorus_mix,
+            self.phaser_enabled, self.phaser_rate, self.phaser_depth, self.phaser_mix,
+            self.clipping_enabled, self.clipping_thresh,
+            self.bitcrush_enabled, self.bitcrush_depth,
+            self.gsm_enabled,
+            self.highpass_enabled, self.highpass_freq,
+            self.lowpass_enabled, self.lowpass_freq,
+            self.delay_enabled, self.delay_time, self.delay_feedback, self.delay_mix,
+            self.pitch_shift_enabled, self.pitch_shift_semitones,
+            self.limiter_enabled, self.limiter_threshold, self.limiter_release,
+            self.gain_enabled, self.gain_db
         ]
         for v in vars_to_trace:
             v.trace_add("write", self.schedule_save)
@@ -177,6 +265,7 @@ class TTSApp(ctk.CTk):
             "lang_code": "a",
             "voice": "af_heart",
             "filename": "output",
+            "format": "wav",
             "out_dir": "audio_output",
             "speed": 1.0,
             "volume": 1.0,
@@ -188,6 +277,50 @@ class TTSApp(ctk.CTk):
             "export_subtitles": False,
             "normalize": False,
             "trim": False,
+            "apply_fx": True,
+            "reverb_enabled": False,
+            "reverb_room_size": 0.5,
+            "reverb_wet_level": 0.3,
+            "reverb_damping": 0.5,
+            "reverb_dry_level": 1.0,
+            "reverb_width": 1.0,
+            "eq_bass": 0.0,
+            "eq_treble": 0.0,
+            "comp_enabled": False,
+            "comp_threshold": -20.0,
+            "comp_ratio": 4.0,
+            "comp_attack": 1.0,
+            "comp_release": 100.0,
+            "distortion_enabled": False,
+            "distortion_drive": 25.0,
+            "chorus_enabled": False,
+            "chorus_rate": 1.0,
+            "chorus_depth": 0.25,
+            "chorus_mix": 0.5,
+            "phaser_enabled": False,
+            "phaser_rate": 1.0,
+            "phaser_depth": 0.5,
+            "phaser_mix": 0.5,
+            "clipping_enabled": False,
+            "clipping_thresh": -6.0,
+            "bitcrush_enabled": False,
+            "bitcrush_depth": 8.0,
+            "gsm_enabled": False,
+            "highpass_enabled": False,
+            "highpass_freq": 50.0,
+            "lowpass_enabled": False,
+            "lowpass_freq": 10000.0,
+            "delay_enabled": False,
+            "delay_time": 0.5,
+            "delay_feedback": 0.0,
+            "delay_mix": 0.5,
+            "pitch_shift_enabled": False,
+            "pitch_shift_semitones": 0.0,
+            "limiter_enabled": False,
+            "limiter_threshold": -1.0,
+            "limiter_release": 100.0,
+            "gain_enabled": False,
+            "gain_db": 0.0,
             "lexicon": {}
         }
         if os.path.exists(CONFIG_FILE):
@@ -207,6 +340,7 @@ class TTSApp(ctk.CTk):
             self.settings['lang_code'] = self.lang_var.get()
             self.settings['voice'] = self.voice_var.get()
             self.settings['filename'] = self.filename_var.get()
+            self.settings['format'] = self.output_format_var.get()
             self.settings['out_dir'] = self.output_dir_var.get()
             self.settings['speed'] = self.speed_var.get()
             self.settings['volume'] = self.volume_var.get()
@@ -218,6 +352,64 @@ class TTSApp(ctk.CTk):
             self.settings['export_subtitles'] = self.export_subtitles.get()
             self.settings['normalize'] = self.normalize_audio.get()
             self.settings['trim'] = self.trim_silence.get()
+            self.settings['apply_fx'] = self.apply_fx_var.get()
+            self.settings['reverb_enabled'] = self.reverb_enabled.get()
+            self.settings['reverb_room_size'] = self.reverb_room_size.get()
+            self.settings['reverb_wet_level'] = self.reverb_wet_level.get()
+            self.settings['reverb_damping'] = self.reverb_damping.get()
+            self.settings['reverb_dry_level'] = self.reverb_dry_level.get()
+            self.settings['reverb_width'] = self.reverb_width.get()
+            
+            self.settings['eq_bass'] = self.eq_bass.get()
+            self.settings['eq_treble'] = self.eq_treble.get()
+            
+            self.settings['comp_enabled'] = self.comp_enabled.get()
+            self.settings['comp_threshold'] = self.comp_threshold.get()
+            self.settings['comp_ratio'] = self.comp_ratio.get()
+            self.settings['comp_attack'] = self.comp_attack.get()
+            self.settings['comp_release'] = self.comp_release.get()
+            
+            self.settings['distortion_enabled'] = self.distortion_enabled.get()
+            self.settings['distortion_drive'] = self.distortion_drive.get()
+            
+            self.settings['chorus_enabled'] = self.chorus_enabled.get()
+            self.settings['chorus_rate'] = self.chorus_rate.get()
+            self.settings['chorus_depth'] = self.chorus_depth.get()
+            self.settings['chorus_mix'] = self.chorus_mix.get()
+            
+            self.settings['phaser_enabled'] = self.phaser_enabled.get()
+            self.settings['phaser_rate'] = self.phaser_rate.get()
+            self.settings['phaser_depth'] = self.phaser_depth.get()
+            self.settings['phaser_mix'] = self.phaser_mix.get()
+            
+            self.settings['clipping_enabled'] = self.clipping_enabled.get()
+            self.settings['clipping_thresh'] = self.clipping_thresh.get()
+            
+            self.settings['bitcrush_enabled'] = self.bitcrush_enabled.get()
+            self.settings['bitcrush_depth'] = self.bitcrush_depth.get()
+            
+            self.settings['gsm_enabled'] = self.gsm_enabled.get()
+            
+            self.settings['highpass_enabled'] = self.highpass_enabled.get()
+            self.settings['highpass_freq'] = self.highpass_freq.get()
+            
+            self.settings['lowpass_enabled'] = self.lowpass_enabled.get()
+            self.settings['lowpass_freq'] = self.lowpass_freq.get()
+            
+            self.settings['delay_enabled'] = self.delay_enabled.get()
+            self.settings['delay_time'] = self.delay_time.get()
+            self.settings['delay_feedback'] = self.delay_feedback.get()
+            self.settings['delay_mix'] = self.delay_mix.get()
+            
+            self.settings['pitch_shift_enabled'] = self.pitch_shift_enabled.get()
+            self.settings['pitch_shift_semitones'] = self.pitch_shift_semitones.get()
+            
+            self.settings['limiter_enabled'] = self.limiter_enabled.get()
+            self.settings['limiter_threshold'] = self.limiter_threshold.get()
+            self.settings['limiter_release'] = self.limiter_release.get()
+            
+            self.settings['gain_enabled'] = self.gain_enabled.get()
+            self.settings['gain_db'] = self.gain_db.get()
 
         try:
             with open(CONFIG_FILE, "w") as f:
@@ -261,7 +453,10 @@ class TTSApp(ctk.CTk):
                 "pitch": self.pitch_var.get(),
                 "split_pattern": self.split_pattern_var.get(),
                 "normalize": self.normalize_audio.get(),
-                "trim": self.trim_silence.get()
+                "trim": self.trim_silence.get(),
+                "format": self.output_format_var.get(),
+                "apply_fx": self.apply_fx_var.get(),
+                "fx_preset": self.gen_fx_combo.get()
             }
             
             fpath = os.path.join(PRESETS_DIR, f"{name}.json")
@@ -290,7 +485,16 @@ class TTSApp(ctk.CTk):
                 if "split_pattern" in data: self.split_pattern_var.set(data["split_pattern"])
                 if "normalize" in data: self.normalize_audio.set(data["normalize"])
                 if "trim" in data: self.trim_silence.set(data["trim"])
+                if "format" in data: self.output_format_var.set(data["format"])
+                if "apply_fx" in data: self.apply_fx_var.set(data["apply_fx"])
                 
+                if "fx_preset" in data:
+                    fx_name = data["fx_preset"]
+                    if fx_name and fx_name != "Select FX Preset...":
+                        self.load_fx_preset(fx_name)
+                        # Ensure combo is updated (load_fx_preset does this, but being safe)
+                        if hasattr(self, 'gen_fx_combo'): self.gen_fx_combo.set(fx_name)
+
                 # Update UI labels manually since setting var triggers trace but maybe not UI update logic dependent on callbacks
                 self.update_audio_labels(0)
                 self.update_speed_label(self.speed_var.get())
@@ -304,6 +508,164 @@ class TTSApp(ctk.CTk):
 
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load preset: {e}")
+
+    # --- FX Preset Management ---
+
+    def refresh_fx_presets(self):
+        presets = ["Select FX Preset..."]
+        if os.path.exists(FX_PRESETS_DIR):
+            files = [f for f in os.listdir(FX_PRESETS_DIR) if f.endswith(".json")]
+            presets.extend([f[:-5] for f in files]) # Remove .json
+        
+        # Update FX Tab Combo
+        if hasattr(self, 'fx_preset_combo'):
+            self.fx_preset_combo.configure(values=presets)
+            self.fx_preset_combo.set("Select FX Preset...")
+            
+        # Update Gen Tab Combo
+        if hasattr(self, 'gen_fx_combo'):
+            self.gen_fx_combo.configure(values=presets)
+            self.gen_fx_combo.set("Select FX Preset...")
+
+    def save_fx_preset_dialog(self):
+        dialog = ctk.CTkInputDialog(text="Enter FX preset name:", title="Save FX Preset")
+        name = dialog.get_input()
+        if name:
+            name = re.sub(r'[<>:"/\\|?*]', '', name).strip()
+            if not name: return
+            
+            data = {
+                "reverb_enabled": self.reverb_enabled.get(),
+                "reverb_room_size": self.reverb_room_size.get(),
+                "reverb_wet_level": self.reverb_wet_level.get(),
+                "reverb_damping": self.reverb_damping.get(),
+                "reverb_dry_level": self.reverb_dry_level.get(),
+                "reverb_width": self.reverb_width.get(),
+                "eq_bass": self.eq_bass.get(),
+                "eq_treble": self.eq_treble.get(),
+                "comp_enabled": self.comp_enabled.get(),
+                "comp_threshold": self.comp_threshold.get(),
+                "comp_ratio": self.comp_ratio.get(),
+                "comp_attack": self.comp_attack.get(),
+                "comp_release": self.comp_release.get(),
+                "distortion_enabled": self.distortion_enabled.get(),
+                "distortion_drive": self.distortion_drive.get(),
+                "chorus_enabled": self.chorus_enabled.get(),
+                "chorus_rate": self.chorus_rate.get(),
+                "chorus_depth": self.chorus_depth.get(),
+                "chorus_mix": self.chorus_mix.get(),
+                "phaser_enabled": self.phaser_enabled.get(),
+                "phaser_rate": self.phaser_rate.get(),
+                "phaser_depth": self.phaser_depth.get(),
+                "phaser_mix": self.phaser_mix.get(),
+                "clipping_enabled": self.clipping_enabled.get(),
+                "clipping_thresh": self.clipping_thresh.get(),
+                "bitcrush_enabled": self.bitcrush_enabled.get(),
+                "bitcrush_depth": self.bitcrush_depth.get(),
+                "gsm_enabled": self.gsm_enabled.get(),
+                "highpass_enabled": self.highpass_enabled.get(),
+                "highpass_freq": self.highpass_freq.get(),
+                "lowpass_enabled": self.lowpass_enabled.get(),
+                "lowpass_freq": self.lowpass_freq.get(),
+                "delay_enabled": self.delay_enabled.get(),
+                "delay_time": self.delay_time.get(),
+                "delay_feedback": self.delay_feedback.get(),
+                "delay_mix": self.delay_mix.get(),
+                "pitch_shift_enabled": self.pitch_shift_enabled.get(),
+                "pitch_shift_semitones": self.pitch_shift_semitones.get(),
+                "limiter_enabled": self.limiter_enabled.get(),
+                "limiter_threshold": self.limiter_threshold.get(),
+                "limiter_release": self.limiter_release.get(),
+                "gain_enabled": self.gain_enabled.get(),
+                "gain_db": self.gain_db.get()
+            }
+            
+            fpath = os.path.join(FX_PRESETS_DIR, f"{name}.json")
+            try:
+                with open(fpath, "w") as f:
+                    json.dump(data, f, indent=4)
+                messagebox.showinfo("Saved", f"FX Preset '{name}' saved.")
+                self.refresh_fx_presets()
+                if hasattr(self, 'fx_preset_combo'): self.fx_preset_combo.set(name)
+                if hasattr(self, 'gen_fx_combo'): self.gen_fx_combo.set(name)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save FX preset: {e}")
+
+    def load_fx_preset(self, name):
+        if name == "Select FX Preset...": return
+        
+        fpath = os.path.join(FX_PRESETS_DIR, f"{name}.json")
+        if os.path.exists(fpath):
+            try:
+                with open(fpath, "r") as f:
+                    data = json.load(f)
+                
+                if "reverb_enabled" in data: self.reverb_enabled.set(data["reverb_enabled"])
+                if "reverb_room_size" in data: self.reverb_room_size.set(data["reverb_room_size"])
+                if "reverb_wet_level" in data: self.reverb_wet_level.set(data["reverb_wet_level"])
+                if "reverb_damping" in data: self.reverb_damping.set(data["reverb_damping"])
+                if "reverb_dry_level" in data: self.reverb_dry_level.set(data["reverb_dry_level"])
+                if "reverb_width" in data: self.reverb_width.set(data["reverb_width"])
+                
+                if "eq_bass" in data: self.eq_bass.set(data["eq_bass"])
+                if "eq_treble" in data: self.eq_treble.set(data["eq_treble"])
+                
+                if "comp_enabled" in data: self.comp_enabled.set(data["comp_enabled"])
+                if "comp_threshold" in data: self.comp_threshold.set(data["comp_threshold"])
+                if "comp_ratio" in data: self.comp_ratio.set(data["comp_ratio"])
+                if "comp_attack" in data: self.comp_attack.set(data["comp_attack"])
+                if "comp_release" in data: self.comp_release.set(data["comp_release"])
+
+                if "distortion_enabled" in data: self.distortion_enabled.set(data["distortion_enabled"])
+                if "distortion_drive" in data: self.distortion_drive.set(data["distortion_drive"])
+                
+                if "chorus_enabled" in data: self.chorus_enabled.set(data["chorus_enabled"])
+                if "chorus_rate" in data: self.chorus_rate.set(data["chorus_rate"])
+                if "chorus_depth" in data: self.chorus_depth.set(data["chorus_depth"])
+                if "chorus_mix" in data: self.chorus_mix.set(data["chorus_mix"])
+                
+                if "phaser_enabled" in data: self.phaser_enabled.set(data["phaser_enabled"])
+                if "phaser_rate" in data: self.phaser_rate.set(data["phaser_rate"])
+                if "phaser_depth" in data: self.phaser_depth.set(data["phaser_depth"])
+                if "phaser_mix" in data: self.phaser_mix.set(data["phaser_mix"])
+                
+                if "clipping_enabled" in data: self.clipping_enabled.set(data["clipping_enabled"])
+                if "clipping_thresh" in data: self.clipping_thresh.set(data["clipping_thresh"])
+                
+                if "bitcrush_enabled" in data: self.bitcrush_enabled.set(data["bitcrush_enabled"])
+                if "bitcrush_depth" in data: self.bitcrush_depth.set(data["bitcrush_depth"])
+                
+                if "gsm_enabled" in data: self.gsm_enabled.set(data["gsm_enabled"])
+                
+                if "highpass_enabled" in data: self.highpass_enabled.set(data["highpass_enabled"])
+                if "highpass_freq" in data: self.highpass_freq.set(data["highpass_freq"])
+                
+                if "lowpass_enabled" in data: self.lowpass_enabled.set(data["lowpass_enabled"])
+                if "lowpass_freq" in data: self.lowpass_freq.set(data["lowpass_freq"])
+                
+                if "delay_enabled" in data: self.delay_enabled.set(data["delay_enabled"])
+                if "delay_time" in data: self.delay_time.set(data["delay_time"])
+                if "delay_feedback" in data: self.delay_feedback.set(data["delay_feedback"])
+                if "delay_mix" in data: self.delay_mix.set(data["delay_mix"])
+                
+                if "pitch_shift_enabled" in data: self.pitch_shift_enabled.set(data["pitch_shift_enabled"])
+                if "pitch_shift_semitones" in data: self.pitch_shift_semitones.set(data["pitch_shift_semitones"])
+                
+                if "limiter_enabled" in data: self.limiter_enabled.set(data["limiter_enabled"])
+                if "limiter_threshold" in data: self.limiter_threshold.set(data["limiter_threshold"])
+                if "limiter_release" in data: self.limiter_release.set(data["limiter_release"])
+                
+                if "gain_enabled" in data: self.gain_enabled.set(data["gain_enabled"])
+                if "gain_db" in data: self.gain_db.set(data["gain_db"])
+                
+                self.update_fx_labels()
+                
+                # Sync Combos
+                if hasattr(self, 'fx_preset_combo'): self.fx_preset_combo.set(name)
+                if hasattr(self, 'gen_fx_combo'): self.gen_fx_combo.set(name)
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load FX preset: {e}")
 
     def refresh_voice_lists(self):
         # Update Gen Tab Combo
@@ -506,6 +868,167 @@ class TTSApp(ctk.CTk):
         
         self.refresh_voice_lists()
 
+    def build_fx_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        
+        # --- Preset Controls ---
+        pre_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        pre_frame.pack(fill="x", padx=10, pady=(10,5))
+        
+        self.fx_preset_combo = ctk.CTkComboBox(pre_frame, values=["Select FX Preset..."], command=self.load_fx_preset, width=200)
+        self.fx_preset_combo.pack(side="left", padx=(0,5))
+        
+        ctk.CTkButton(pre_frame, text="💾 Save", width=60, command=self.save_fx_preset_dialog).pack(side="left", padx=2)
+        ctk.CTkButton(pre_frame, text="🔄", width=30, command=self.refresh_fx_presets).pack(side="left", padx=2)
+        
+        scroll = ctk.CTkScrollableFrame(parent)
+        scroll.pack(fill="both", expand=True, padx=5, pady=5)
+        scroll.grid_columnconfigure(0, weight=1)
+
+        # Helper to create rows
+        def _create_slider(parent, label_text, variable, from_, to_, steps=100, label_attr=None):
+            row = ctk.CTkFrame(parent, fg_color="transparent")
+            row.pack(fill="x", padx=5, pady=2)
+            lbl = ctk.CTkLabel(row, text=label_text, width=120, anchor="w")
+            lbl.pack(side="left")
+            if label_attr: setattr(self, label_attr, lbl)
+            
+            ctk.CTkSlider(row, from_=from_, to=to_, number_of_steps=steps, variable=variable, 
+                          command=lambda v: self.update_fx_labels()).pack(side="left", fill="x", expand=True, padx=5)
+
+        # --- 1. Dynamics ---
+        dyn_frame = ctk.CTkFrame(scroll)
+        dyn_frame.pack(fill="x", padx=5, pady=5)
+        
+        ctk.CTkLabel(dyn_frame, text="Dynamics", font=("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
+        
+        # Compressor
+        c_head = ctk.CTkFrame(dyn_frame, fg_color="transparent")
+        c_head.pack(fill="x", padx=5)
+        ctk.CTkCheckBox(c_head, text="Compressor", variable=self.comp_enabled, font=("Roboto", 12, "bold")).pack(side="left")
+        
+        c_body = ctk.CTkFrame(dyn_frame)
+        c_body.pack(fill="x", padx=10, pady=2)
+        _create_slider(c_body, "Threshold", self.comp_threshold, -60, 0, 60, 'comp_thresh_label')
+        _create_slider(c_body, "Ratio", self.comp_ratio, 1, 20, 19, 'comp_ratio_label')
+        
+        # Limiter
+        l_head = ctk.CTkFrame(dyn_frame, fg_color="transparent")
+        l_head.pack(fill="x", padx=5, pady=(5,0))
+        ctk.CTkCheckBox(l_head, text="Limiter", variable=self.limiter_enabled, font=("Roboto", 12, "bold")).pack(side="left")
+        
+        l_body = ctk.CTkFrame(dyn_frame)
+        l_body.pack(fill="x", padx=10, pady=2)
+        _create_slider(l_body, "Threshold", self.limiter_threshold, -12, 0, 24, 'lim_thresh_label')
+        
+        # Gain
+        g_head = ctk.CTkFrame(dyn_frame, fg_color="transparent")
+        g_head.pack(fill="x", padx=5, pady=(5,0))
+        ctk.CTkCheckBox(g_head, text="Gain", variable=self.gain_enabled, font=("Roboto", 12, "bold")).pack(side="left")
+        _create_slider(dyn_frame, "dB", self.gain_db, -20, 20, 80, 'gain_label')
+
+        # --- 2. EQ & Filters ---
+        eq_frame = ctk.CTkFrame(scroll)
+        eq_frame.pack(fill="x", padx=5, pady=5)
+        ctk.CTkLabel(eq_frame, text="EQ & Filters", font=("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
+        
+        _create_slider(eq_frame, "Bass (LowShelf)", self.eq_bass, -20, 20, 40, 'bass_label')
+        _create_slider(eq_frame, "Treble (HighShelf)", self.eq_treble, -20, 20, 40, 'treble_label')
+        
+        # HPF
+        h_head = ctk.CTkFrame(eq_frame, fg_color="transparent")
+        h_head.pack(fill="x", padx=5, pady=(5,0))
+        ctk.CTkCheckBox(h_head, text="HighPass Filter", variable=self.highpass_enabled).pack(side="left")
+        _create_slider(eq_frame, "Freq (Hz)", self.highpass_freq, 20, 1000, 100, 'hpf_label')
+        
+        # LPF
+        lpf_head = ctk.CTkFrame(eq_frame, fg_color="transparent")
+        lpf_head.pack(fill="x", padx=5, pady=(5,0))
+        ctk.CTkCheckBox(lpf_head, text="LowPass Filter", variable=self.lowpass_enabled).pack(side="left")
+        _create_slider(eq_frame, "Freq (Hz)", self.lowpass_freq, 1000, 20000, 100, 'lpf_label')
+
+        # --- 3. Spatial & Time ---
+        sp_frame = ctk.CTkFrame(scroll)
+        sp_frame.pack(fill="x", padx=5, pady=5)
+        ctk.CTkLabel(sp_frame, text="Spatial & Time", font=("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
+        
+        # Reverb
+        r_head = ctk.CTkFrame(sp_frame, fg_color="transparent")
+        r_head.pack(fill="x", padx=5)
+        ctk.CTkCheckBox(r_head, text="Reverb", variable=self.reverb_enabled, font=("Roboto", 12, "bold")).pack(side="left")
+        
+        r_body = ctk.CTkFrame(sp_frame)
+        r_body.pack(fill="x", padx=10, pady=2)
+        _create_slider(r_body, "Room Size", self.reverb_room_size, 0, 1, 100, 'rev_room_label')
+        _create_slider(r_body, "Wet Level", self.reverb_wet_level, 0, 1, 100, 'rev_wet_label')
+        _create_slider(r_body, "Damping", self.reverb_damping, 0, 1, 100, None)
+        _create_slider(r_body, "Width", self.reverb_width, 0, 1, 100, None)
+
+        # Delay
+        d_head = ctk.CTkFrame(sp_frame, fg_color="transparent")
+        d_head.pack(fill="x", padx=5, pady=(5,0))
+        ctk.CTkCheckBox(d_head, text="Delay", variable=self.delay_enabled, font=("Roboto", 12, "bold")).pack(side="left")
+        
+        d_body = ctk.CTkFrame(sp_frame)
+        d_body.pack(fill="x", padx=10, pady=2)
+        _create_slider(d_body, "Time (s)", self.delay_time, 0, 2, 100, 'dly_time_label')
+        _create_slider(d_body, "Feedback", self.delay_feedback, 0, 1, 100, None)
+        _create_slider(d_body, "Mix", self.delay_mix, 0, 1, 100, 'dly_mix_label')
+
+        # --- 4. Guitar / Modulation ---
+        mod_frame = ctk.CTkFrame(scroll)
+        mod_frame.pack(fill="x", padx=5, pady=5)
+        ctk.CTkLabel(mod_frame, text="Guitar / Modulation", font=("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
+
+        # Chorus
+        ch_head = ctk.CTkFrame(mod_frame, fg_color="transparent")
+        ch_head.pack(fill="x", padx=5)
+        ctk.CTkCheckBox(ch_head, text="Chorus", variable=self.chorus_enabled).pack(side="left")
+        _create_slider(mod_frame, "Rate (Hz)", self.chorus_rate, 0.1, 10, 50, 'chorus_rate_label')
+        _create_slider(mod_frame, "Depth", self.chorus_depth, 0, 1, 50, None)
+        
+        # Distortion
+        di_head = ctk.CTkFrame(mod_frame, fg_color="transparent")
+        di_head.pack(fill="x", padx=5, pady=(5,0))
+        ctk.CTkCheckBox(di_head, text="Distortion", variable=self.distortion_enabled).pack(side="left")
+        _create_slider(mod_frame, "Drive (dB)", self.distortion_drive, 0, 60, 60, 'dist_drive_label')
+        
+        # Phaser
+        ph_head = ctk.CTkFrame(mod_frame, fg_color="transparent")
+        ph_head.pack(fill="x", padx=5, pady=(5,0))
+        ctk.CTkCheckBox(ph_head, text="Phaser", variable=self.phaser_enabled).pack(side="left")
+        _create_slider(mod_frame, "Rate (Hz)", self.phaser_rate, 0.1, 10, 50, 'phaser_rate_label')
+        
+        # Clipping
+        cl_head = ctk.CTkFrame(mod_frame, fg_color="transparent")
+        cl_head.pack(fill="x", padx=5, pady=(5,0))
+        ctk.CTkCheckBox(cl_head, text="Clipping", variable=self.clipping_enabled).pack(side="left")
+        _create_slider(mod_frame, "Threshold (dB)", self.clipping_thresh, -20, 0, 40, 'clip_thresh_label')
+
+        # --- 5. Quality & Pitch ---
+        q_frame = ctk.CTkFrame(scroll)
+        q_frame.pack(fill="x", padx=5, pady=5)
+        ctk.CTkLabel(q_frame, text="Quality / Pitch", font=("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
+        
+        # Pitch Shift
+        ps_head = ctk.CTkFrame(q_frame, fg_color="transparent")
+        ps_head.pack(fill="x", padx=5)
+        ctk.CTkCheckBox(ps_head, text="Pitch Shift (High Quality)", variable=self.pitch_shift_enabled).pack(side="left")
+        _create_slider(q_frame, "Semitones", self.pitch_shift_semitones, -12, 12, 48, 'pitch_shift_label')
+        
+        # Bitcrush
+        bc_head = ctk.CTkFrame(q_frame, fg_color="transparent")
+        bc_head.pack(fill="x", padx=5, pady=(5,0))
+        ctk.CTkCheckBox(bc_head, text="Bitcrush", variable=self.bitcrush_enabled).pack(side="left")
+        _create_slider(q_frame, "Bit Depth", self.bitcrush_depth, 2, 16, 28, 'bit_depth_label')
+        
+        # GSM
+        ctk.CTkCheckBox(q_frame, text="GSM Compressor (Phone Quality)", variable=self.gsm_enabled).pack(anchor="w", padx=10, pady=5)
+        
+        # Init labels
+        self.update_fx_labels()
+        self.refresh_fx_presets()
+
     def build_generation_tab(self, parent):
         parent.grid_columnconfigure(0, weight=1)
         
@@ -594,7 +1117,15 @@ class TTSApp(ctk.CTk):
 
         # Filename
         ctk.CTkLabel(config_frame, text="Base Filename:").grid(row=4, column=0, sticky="w", padx=10, pady=5)
-        ctk.CTkEntry(config_frame, textvariable=self.filename_var).grid(row=4, column=1, sticky="ew", padx=10)
+        
+        file_row = ctk.CTkFrame(config_frame, fg_color="transparent")
+        file_row.grid(row=4, column=1, sticky="ew", padx=10)
+        file_row.grid_columnconfigure(0, weight=1)
+        
+        ctk.CTkEntry(file_row, textvariable=self.filename_var).grid(row=0, column=0, sticky="ew", padx=(0,5))
+        
+        self.format_combo = ctk.CTkComboBox(file_row, values=["wav", "flac", "mp3", "ogg"], width=70, variable=self.output_format_var)
+        self.format_combo.grid(row=0, column=1)
 
         # Speed
         self.speed_label = ctk.CTkLabel(config_frame, text="Speed: 1.0x")
@@ -641,9 +1172,21 @@ class TTSApp(ctk.CTk):
         self.pitch_slider = ctk.CTkSlider(audio_frame, from_=-12, to=12, number_of_steps=24, variable=self.pitch_var, command=self.update_audio_labels)
         self.pitch_slider.grid(row=2, column=1, sticky="ew", padx=10)
 
+        # FX Preset
+        ctk.CTkLabel(audio_frame, text="FX Preset:").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+        fx_row = ctk.CTkFrame(audio_frame, fg_color="transparent")
+        fx_row.grid(row=3, column=1, sticky="ew", padx=10)
+        fx_row.grid_columnconfigure(0, weight=1)
+        
+        self.gen_fx_combo = ctk.CTkComboBox(fx_row, values=["Select FX Preset..."], command=self.load_fx_preset)
+        self.gen_fx_combo.pack(side="left", fill="x", expand=True)
+        ctk.CTkCheckBox(fx_row, text="Apply", variable=self.apply_fx_var, width=60).pack(side="left", padx=5)
+        
+        self.refresh_fx_presets() # Ensure values are populated
+
         # Toggles
         toggle_frame = ctk.CTkFrame(audio_frame, fg_color="transparent")
-        toggle_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
+        toggle_frame.grid(row=4, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
         
         ctk.CTkCheckBox(toggle_frame, text="Normalize", variable=self.normalize_audio).pack(side="left", padx=5)
         ctk.CTkCheckBox(toggle_frame, text="Trim Silence", variable=self.trim_silence).pack(side="left", padx=5)
@@ -769,6 +1312,9 @@ class TTSApp(ctk.CTk):
         mix_tab = self.main_tabs.add("Custom Voice")
         self.build_mixing_tab(mix_tab)
 
+        fx_tab = self.main_tabs.add("Audio FX")
+        self.build_fx_tab(fx_tab)
+
         lex_tab = self.main_tabs.add("Lexicon")
         self.build_lexicon_tab(lex_tab)
 
@@ -851,6 +1397,37 @@ class TTSApp(ctk.CTk):
 
     def update_speed_label(self, value):
         self.speed_label.configure(text=f"Speed: {value:.1f}x")
+
+    def update_fx_labels(self):
+        # EQ
+        if hasattr(self, 'bass_label'): self.bass_label.configure(text=f"Bass: {self.eq_bass.get():.1f} dB")
+        if hasattr(self, 'treble_label'): self.treble_label.configure(text=f"Treble: {self.eq_treble.get():.1f} dB")
+        if hasattr(self, 'hpf_label'): self.hpf_label.configure(text=f"Freq: {int(self.highpass_freq.get())} Hz")
+        if hasattr(self, 'lpf_label'): self.lpf_label.configure(text=f"Freq: {int(self.lowpass_freq.get())} Hz")
+        
+        # Comp / Dynamics
+        if hasattr(self, 'comp_thresh_label'): self.comp_thresh_label.configure(text=f"Thresh: {self.comp_threshold.get():.1f} dB")
+        if hasattr(self, 'comp_ratio_label'): self.comp_ratio_label.configure(text=f"Ratio: {self.comp_ratio.get():.1f}:1")
+        if hasattr(self, 'lim_thresh_label'): self.lim_thresh_label.configure(text=f"Thresh: {self.limiter_threshold.get():.1f} dB")
+        if hasattr(self, 'gain_label'): self.gain_label.configure(text=f"Gain: {self.gain_db.get():.1f} dB")
+        
+        # Reverb
+        if hasattr(self, 'rev_room_label'): self.rev_room_label.configure(text=f"Size: {self.reverb_room_size.get():.2f}")
+        if hasattr(self, 'rev_wet_label'): self.rev_wet_label.configure(text=f"Wet: {self.reverb_wet_level.get():.2f}")
+        
+        # Delay
+        if hasattr(self, 'dly_time_label'): self.dly_time_label.configure(text=f"Time: {self.delay_time.get():.2f} s")
+        if hasattr(self, 'dly_mix_label'): self.dly_mix_label.configure(text=f"Mix: {self.delay_mix.get():.2f}")
+        
+        # Guitar
+        if hasattr(self, 'dist_drive_label'): self.dist_drive_label.configure(text=f"Drive: {self.distortion_drive.get():.1f} dB")
+        if hasattr(self, 'chorus_rate_label'): self.chorus_rate_label.configure(text=f"Rate: {self.chorus_rate.get():.1f} Hz")
+        if hasattr(self, 'phaser_rate_label'): self.phaser_rate_label.configure(text=f"Rate: {self.phaser_rate.get():.1f} Hz")
+        if hasattr(self, 'clip_thresh_label'): self.clip_thresh_label.configure(text=f"Thresh: {self.clipping_thresh.get():.1f} dB")
+        
+        # Quality / Pitch
+        if hasattr(self, 'bit_depth_label'): self.bit_depth_label.configure(text=f"Depth: {self.bitcrush_depth.get():.1f}")
+        if hasattr(self, 'pitch_shift_label'): self.pitch_shift_label.configure(text=f"Shift: {self.pitch_shift_semitones.get():.1f} st")
 
     def change_threads(self, delta):
         try:
@@ -941,6 +1518,53 @@ class TTSApp(ctk.CTk):
             'lexicon': self.settings.get('lexicon', {})
         }
         
+        if self.apply_fx_var.get():
+            extra_config.update({
+                'reverb_enabled': self.reverb_enabled.get(),
+                'reverb_room_size': self.reverb_room_size.get(),
+                'reverb_wet_level': self.reverb_wet_level.get(),
+                'reverb_damping': self.reverb_damping.get(),
+                'reverb_dry_level': self.reverb_dry_level.get(),
+                'reverb_width': self.reverb_width.get(),
+                'eq_bass': self.eq_bass.get(),
+                'eq_treble': self.eq_treble.get(),
+                'comp_enabled': self.comp_enabled.get(),
+                'comp_threshold': self.comp_threshold.get(),
+                'comp_ratio': self.comp_ratio.get(),
+                'comp_attack': self.comp_attack.get(),
+                'comp_release': self.comp_release.get(),
+                'distortion_enabled': self.distortion_enabled.get(),
+                'distortion_drive': self.distortion_drive.get(),
+                'chorus_enabled': self.chorus_enabled.get(),
+                'chorus_rate': self.chorus_rate.get(),
+                'chorus_depth': self.chorus_depth.get(),
+                'chorus_mix': self.chorus_mix.get(),
+                'phaser_enabled': self.phaser_enabled.get(),
+                'phaser_rate': self.phaser_rate.get(),
+                'phaser_depth': self.phaser_depth.get(),
+                'phaser_mix': self.phaser_mix.get(),
+                'clipping_enabled': self.clipping_enabled.get(),
+                'clipping_thresh': self.clipping_thresh.get(),
+                'bitcrush_enabled': self.bitcrush_enabled.get(),
+                'bitcrush_depth': self.bitcrush_depth.get(),
+                'gsm_enabled': self.gsm_enabled.get(),
+                'highpass_enabled': self.highpass_enabled.get(),
+                'highpass_freq': self.highpass_freq.get(),
+                'lowpass_enabled': self.lowpass_enabled.get(),
+                'lowpass_freq': self.lowpass_freq.get(),
+                'delay_enabled': self.delay_enabled.get(),
+                'delay_time': self.delay_time.get(),
+                'delay_feedback': self.delay_feedback.get(),
+                'delay_mix': self.delay_mix.get(),
+                'pitch_shift_enabled': self.pitch_shift_enabled.get(),
+                'pitch_shift_semitones': self.pitch_shift_semitones.get(),
+                'limiter_enabled': self.limiter_enabled.get(),
+                'limiter_threshold': self.limiter_threshold.get(),
+                'limiter_release': self.limiter_release.get(),
+                'gain_enabled': self.gain_enabled.get(),
+                'gain_db': self.gain_db.get()
+            })
+        
         # Temp file
         import tempfile
         tmp_path = os.path.join(tempfile.gettempdir(), "kokoro_preview.wav")
@@ -1006,6 +1630,7 @@ class TTSApp(ctk.CTk):
             'speed': self.speed_var.get(),
             'split_pattern': self.split_pattern_var.get(),
             'filename': self.filename_var.get(),
+            'format': self.output_format_var.get(),
             'out_dir': self.output_dir_var.get(),
             'separate': self.separate_files.get(),
             'combine': self.combine_post.get(),
@@ -1018,6 +1643,53 @@ class TTSApp(ctk.CTk):
             'trim_silence': self.trim_silence.get(),
             'lexicon': self.settings.get('lexicon', {})
         }
+        
+        if self.apply_fx_var.get():
+            config.update({
+                'reverb_enabled': self.reverb_enabled.get(),
+                'reverb_room_size': self.reverb_room_size.get(),
+                'reverb_wet_level': self.reverb_wet_level.get(),
+                'reverb_damping': self.reverb_damping.get(),
+                'reverb_dry_level': self.reverb_dry_level.get(),
+                'reverb_width': self.reverb_width.get(),
+                'eq_bass': self.eq_bass.get(),
+                'eq_treble': self.eq_treble.get(),
+                'comp_enabled': self.comp_enabled.get(),
+                'comp_threshold': self.comp_threshold.get(),
+                'comp_ratio': self.comp_ratio.get(),
+                'comp_attack': self.comp_attack.get(),
+                'comp_release': self.comp_release.get(),
+                'distortion_enabled': self.distortion_enabled.get(),
+                'distortion_drive': self.distortion_drive.get(),
+                'chorus_enabled': self.chorus_enabled.get(),
+                'chorus_rate': self.chorus_rate.get(),
+                'chorus_depth': self.chorus_depth.get(),
+                'chorus_mix': self.chorus_mix.get(),
+                'phaser_enabled': self.phaser_enabled.get(),
+                'phaser_rate': self.phaser_rate.get(),
+                'phaser_depth': self.phaser_depth.get(),
+                'phaser_mix': self.phaser_mix.get(),
+                'clipping_enabled': self.clipping_enabled.get(),
+                'clipping_thresh': self.clipping_thresh.get(),
+                'bitcrush_enabled': self.bitcrush_enabled.get(),
+                'bitcrush_depth': self.bitcrush_depth.get(),
+                'gsm_enabled': self.gsm_enabled.get(),
+                'highpass_enabled': self.highpass_enabled.get(),
+                'highpass_freq': self.highpass_freq.get(),
+                'lowpass_enabled': self.lowpass_enabled.get(),
+                'lowpass_freq': self.lowpass_freq.get(),
+                'delay_enabled': self.delay_enabled.get(),
+                'delay_time': self.delay_time.get(),
+                'delay_feedback': self.delay_feedback.get(),
+                'delay_mix': self.delay_mix.get(),
+                'pitch_shift_enabled': self.pitch_shift_enabled.get(),
+                'pitch_shift_semitones': self.pitch_shift_semitones.get(),
+                'limiter_enabled': self.limiter_enabled.get(),
+                'limiter_threshold': self.limiter_threshold.get(),
+                'limiter_release': self.limiter_release.get(),
+                'gain_enabled': self.gain_enabled.get(),
+                'gain_db': self.gain_db.get()
+            })
 
         # 3. Start
         self.set_ui_state(True)
