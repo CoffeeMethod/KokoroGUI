@@ -88,6 +88,7 @@ class TTSApp(ctk.CTk):
         self.separate_files = ctk.BooleanVar(value=self.settings.get("separate", True))
         self.combine_post = ctk.BooleanVar(value=self.settings.get("combine", True))
         self.export_subtitles = ctk.BooleanVar(value=self.settings.get("export_subtitles", False))
+        self.caching_enabled = ctk.BooleanVar(value=self.settings.get("caching", True))
         self.normalize_audio = ctk.BooleanVar(value=self.settings.get("normalize", False))
         self.trim_silence = ctk.BooleanVar(value=self.settings.get("trim", False))
         self.apply_fx_var = ctk.BooleanVar(value=self.settings.get("apply_fx", True))
@@ -197,7 +198,7 @@ class TTSApp(ctk.CTk):
             self.voice_var, self.filename_var, self.output_format_var, self.output_dir_var,
             self.speed_var, self.volume_var, self.pitch_var,
             self.num_threads_var, self.split_pattern_var,
-            self.separate_files, self.combine_post, self.export_subtitles,
+            self.separate_files, self.combine_post, self.export_subtitles, self.caching_enabled,
             self.normalize_audio, self.trim_silence, self.apply_fx_var,
             self.reverb_enabled, self.reverb_room_size, self.reverb_wet_level, self.reverb_damping, self.reverb_dry_level, self.reverb_width,
             self.eq_bass, self.eq_treble,
@@ -275,6 +276,7 @@ class TTSApp(ctk.CTk):
             "separate": True,
             "combine": True,
             "export_subtitles": False,
+            "caching": True,
             "normalize": False,
             "trim": False,
             "apply_fx": True,
@@ -350,6 +352,7 @@ class TTSApp(ctk.CTk):
             self.settings['separate'] = self.separate_files.get()
             self.settings['combine'] = self.combine_post.get()
             self.settings['export_subtitles'] = self.export_subtitles.get()
+            self.settings['caching'] = self.caching_enabled.get()
             self.settings['normalize'] = self.normalize_audio.get()
             self.settings['trim'] = self.trim_silence.get()
             self.settings['apply_fx'] = self.apply_fx_var.get()
@@ -1374,6 +1377,10 @@ class TTSApp(ctk.CTk):
         scale_menu.set(self.settings["scaling"])
         scale_menu.pack(fill="x", pady=5)
         
+        # Caching
+        ctk.CTkLabel(frame, text="Generation Cache:", font=("Roboto", 14, "bold")).pack(anchor="w", pady=(15, 5))
+        ctk.CTkCheckBox(frame, text="Enable Generation Caching", variable=self.caching_enabled).pack(anchor="w", pady=5)
+        
         ctk.CTkLabel(frame, text="Note: Restart may be required for optimal scaling.", text_color="gray", font=("Arial", 10)).pack(pady=20)
 
         ctk.CTkButton(frame, text="Close", command=toplevel.destroy).pack(side="bottom", pady=10)
@@ -1635,6 +1642,7 @@ class TTSApp(ctk.CTk):
             'separate': self.separate_files.get(),
             'combine': self.combine_post.get(),
             'export_subtitles': self.export_subtitles.get(),
+            'caching': self.caching_enabled.get(),
             'time_id': time.strftime(self.timecode_format),
             'num_threads': self.num_threads_var.get(),
             'volume': self.volume_var.get(),
