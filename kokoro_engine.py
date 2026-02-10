@@ -266,7 +266,7 @@ class KokoroEngine:
             if self.on_status: self.on_status(msg, True)
             return False
 
-    async def mix_voices(self, v1_name, v2_name, ratio, new_name):
+    async def mix_voices(self, v1_name, v2_name, ratio, new_name, op='mix'):
         def _mix():
             try:
                 # Ensure we have a pipeline to load voices
@@ -298,10 +298,21 @@ class KokoroEngine:
                     # If different, we might fail or warn.
                     print(f"Warning: Voice shapes differ {t1.shape} vs {t2.shape}. Mixing might fail or produce garbage.")
                 
-                # Linear Interpolation
-                # mixed = v1 * (1 - ratio) + v2 * ratio
-                # ratio is mix of B. If ratio 0, full A. If ratio 1, full B.
-                mixed = t1 * (1.0 - ratio) + t2 * ratio
+                # Apply operation
+                if op == 'add':
+                    mixed = t1 + t2 * ratio
+                elif op == 'subtract':
+                    mixed = t1 - t2 * ratio
+                elif op == 'multiply':
+                    # Lerp between t1 and t1*t2
+                    mixed = t1 * (1.0 - ratio) + (t1 * t2) * ratio
+                elif op == 'divide':
+                    # Lerp between t1 and t1/t2
+                    mixed = t1 * (1.0 - ratio) + (t1 / (t2 + 1e-6)) * ratio
+                else: # Default: mix (Linear Interpolation)
+                    # mixed = v1 * (1 - ratio) + v2 * ratio
+                    # ratio is mix of B. If ratio 0, full A. If ratio 1, full B.
+                    mixed = t1 * (1.0 - ratio) + t2 * ratio
                 
                 # Save
                 out_path = os.path.join(CUSTOM_VOICES_DIR, f"{new_name}.pt")

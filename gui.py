@@ -170,6 +170,7 @@ class TTSApp(ctk.CTk):
         self.mix_voice_a_var = ctk.StringVar(value=self.VOICE_DB["a"][0])
         self.mix_voice_b_var = ctk.StringVar(value=self.VOICE_DB["a"][1])
         self.mix_ratio_var = ctk.DoubleVar(value=0.5)
+        self.mix_op_var = ctk.StringVar(value="mix")
         self.mix_name_var = ctk.StringVar()
 
         # Setup Auto-save Traces
@@ -709,6 +710,7 @@ class TTSApp(ctk.CTk):
         v1 = self.mix_voice_a_var.get()
         v2 = self.mix_voice_b_var.get()
         ratio = self.mix_ratio_var.get()
+        op = self.mix_op_var.get()
         preview_lang = self.preview_lang_var.get()
         
         preview_text = "This is a preview of your custom mixed voice."
@@ -728,7 +730,7 @@ class TTSApp(ctk.CTk):
         
         async def _run_preview():
             # 1. Mix to a temporary file (we ignore the file for preview, use tensor)
-            success, msg, tensor = await self.engine.mix_voices(v1, v2, ratio, tmp_voice_name)
+            success, msg, tensor = await self.engine.mix_voices(v1, v2, ratio, tmp_voice_name, op=op)
             if not success:
                 return False, msg
             
@@ -761,6 +763,7 @@ class TTSApp(ctk.CTk):
         v1 = self.mix_voice_a_var.get()
         v2 = self.mix_voice_b_var.get()
         ratio = self.mix_ratio_var.get()
+        op = self.mix_op_var.get()
         name = self.mix_name_var.get().strip()
         
         if not name:
@@ -790,7 +793,7 @@ class TTSApp(ctk.CTk):
             except Exception as e:
                 self.after(0, lambda: self.mix_status_label.configure(text=f"Error: {e}", text_color="red"))
 
-        future = self.engine.worker.run_coro(self.engine.mix_voices(v1, v2, ratio, name))
+        future = self.engine.worker.run_coro(self.engine.mix_voices(v1, v2, ratio, name, op=op))
         future.add_done_callback(_done)
 
     def build_mixing_tab(self, parent):
@@ -826,19 +829,34 @@ class TTSApp(ctk.CTk):
         self.mix_combo_b = ctk.CTkComboBox(sel_frame, variable=self.mix_voice_b_var)
         self.mix_combo_b.grid(row=1, column=2, sticky="ew", padx=5, pady=5)
         
-        # 2. Ratio
+        # 2. Ratio & Operation
         ratio_frame = ctk.CTkFrame(parent)
         ratio_frame.pack(fill="x", padx=10, pady=10)
         
+        op_frame = ctk.CTkFrame(ratio_frame, fg_color="transparent")
+        op_frame.pack(fill="x", padx=20, pady=(10, 0))
+        ctk.CTkLabel(op_frame, text="Operation:").pack(side="left", padx=5)
+        
+        def update_ratio_label(val=None):
+            if val is None: val = self.mix_ratio_var.get()
+            p = int(float(val) * 100)
+            op = self.mix_op_var.get()
+            if op == 'mix':
+                self.ratio_label.configure(text=f"Mix: {100-p}% A / {p}% B", text_color=("black", "white"))
+            elif op == 'divide':
+                self.ratio_label.configure(text=f"Op: Divide | Influence: {p}%\n(Results are more likely to be unstable and VERY LOUD)", text_color="#E57373")
+            else:
+                self.ratio_label.configure(text=f"Op: {op.capitalize()} | Influence: {p}%", text_color=("black", "white"))
+
+        ctk.CTkComboBox(op_frame, values=["mix", "add", "subtract", "multiply", "divide"], variable=self.mix_op_var, command=lambda _: update_ratio_label()).pack(side="left", padx=5)
+
         self.ratio_label = ctk.CTkLabel(ratio_frame, text="Mix: 50% A / 50% B")
         self.ratio_label.pack(pady=5)
         
-        def update_ratio_label(val):
-            p = int(val * 100)
-            self.ratio_label.configure(text=f"Mix: {100-p}% A / {p}% B")
-            
         slider = ctk.CTkSlider(ratio_frame, from_=0.0, to=1.0, number_of_steps=100, variable=self.mix_ratio_var, command=update_ratio_label)
         slider.pack(fill="x", padx=20, pady=10)
+        
+        update_ratio_label()
         
         # 3. Preview Lang & Actions
         act_frame = ctk.CTkFrame(parent)
