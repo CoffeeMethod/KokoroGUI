@@ -89,6 +89,7 @@ class TTSApp(ctk.CTk):
         self.combine_post = ctk.BooleanVar(value=self.settings.get("combine", True))
         self.export_subtitles = ctk.BooleanVar(value=self.settings.get("export_subtitles", False))
         self.caching_enabled = ctk.BooleanVar(value=self.settings.get("caching", True))
+        self.jit_enabled = ctk.BooleanVar(value=self.settings.get("jit_enabled", False))
         self.normalize_audio = ctk.BooleanVar(value=self.settings.get("normalize", False))
         self.trim_silence = ctk.BooleanVar(value=self.settings.get("trim", False))
         self.apply_fx_var = ctk.BooleanVar(value=self.settings.get("apply_fx", True))
@@ -278,6 +279,7 @@ class TTSApp(ctk.CTk):
             "combine": True,
             "export_subtitles": False,
             "caching": True,
+            "jit_enabled": False,
             "normalize": False,
             "trim": False,
             "apply_fx": True,
@@ -354,6 +356,7 @@ class TTSApp(ctk.CTk):
             self.settings['combine'] = self.combine_post.get()
             self.settings['export_subtitles'] = self.export_subtitles.get()
             self.settings['caching'] = self.caching_enabled.get()
+            self.settings['jit_enabled'] = self.jit_enabled.get()
             self.settings['normalize'] = self.normalize_audio.get()
             self.settings['trim'] = self.trim_silence.get()
             self.settings['apply_fx'] = self.apply_fx_var.get()
@@ -1362,7 +1365,8 @@ class TTSApp(ctk.CTk):
         self.preview_btn = ctk.CTkButton(btn_frame, text="Preview Audio", command=self.preview_conversion, height=40, fg_color="#2B719E", hover_color="#205578")
         self.preview_btn.pack(side="left", fill="x", expand=True, padx=5)
         
-        self.start_btn = ctk.CTkButton(btn_frame, text="Start Generation", command=self.start_conversion, height=40, font=("Roboto", 14, "bold"))
+        btn_txt = "Start Real-time JIT" if self.jit_enabled.get() else "Start Generation"
+        self.start_btn = ctk.CTkButton(btn_frame, text=btn_txt, command=self.start_conversion, height=40, font=("Roboto", 14, "bold"))
         self.start_btn.pack(side="left", fill="x", expand=True, padx=5)
         
         self.cancel_btn = ctk.CTkButton(btn_frame, text="Cancel", command=self.cancel_conversion, height=40, fg_color="#c42b1c", hover_color="#8a1f14", state="disabled")
@@ -1399,6 +1403,10 @@ class TTSApp(ctk.CTk):
         ctk.CTkLabel(frame, text="Generation Cache:", font=("Roboto", 14, "bold")).pack(anchor="w", pady=(15, 5))
         ctk.CTkCheckBox(frame, text="Enable Generation Caching", variable=self.caching_enabled).pack(anchor="w", pady=5)
         
+        # JIT
+        ctk.CTkLabel(frame, text="Real-time / JIT:", font=("Roboto", 14, "bold")).pack(anchor="w", pady=(15, 5))
+        ctk.CTkCheckBox(frame, text="Enable JIT Generation (Streaming)", variable=self.jit_enabled, command=self.on_jit_toggle).pack(anchor="w", pady=5)
+        
         ctk.CTkLabel(frame, text="Note: Restart may be required for optimal scaling.", text_color="gray", font=("Arial", 10)).pack(pady=20)
 
         ctk.CTkButton(frame, text="Close", command=toplevel.destroy).pack(side="bottom", pady=10)
@@ -1412,6 +1420,13 @@ class TTSApp(ctk.CTk):
         self.settings["scaling"] = new_val
         scale_float = float(new_val.replace("%", "")) / 100
         ctk.set_widget_scaling(scale_float)
+        self.save_settings()
+
+    def on_jit_toggle(self):
+        if self.jit_enabled.get():
+            self.start_btn.configure(text="Start Real-time JIT")
+        else:
+            self.start_btn.configure(text="Start Generation")
         self.save_settings()
 
     # --- Logic ---
@@ -1720,7 +1735,11 @@ class TTSApp(ctk.CTk):
         # 3. Start
         self.set_ui_state(True)
         self.progress_bar.set(0)
-        self.engine.start_conversion(text_data, config)
+        
+        if self.jit_enabled.get():
+            self.engine.start_jit_conversion(text_data, config)
+        else:
+            self.engine.start_conversion(text_data, config)
 
     def cancel_conversion(self):
         self.engine.cancel()
