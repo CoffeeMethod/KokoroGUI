@@ -146,94 +146,95 @@ class KokoroEngine:
         # 4. Pedalboard FX
         fx_chain = []
         
-        # --- Guitar / Modulation ---
-        if config.get('distortion_enabled', False):
-            drive = config.get('distortion_drive', 25.0)
-            fx_chain.append(Distortion(drive_db=drive))
-            
-        if config.get('chorus_enabled', False):
-            fx_chain.append(Chorus(
-                rate_hz=config.get('chorus_rate', 1.0),
-                depth=config.get('chorus_depth', 0.25),
-                mix=config.get('chorus_mix', 0.5)
-            ))
-            
-        if config.get('phaser_enabled', False):
-            fx_chain.append(Phaser(
-                rate_hz=config.get('phaser_rate', 1.0),
-                depth=config.get('phaser_depth', 0.5),
-                mix=config.get('phaser_mix', 0.5)
-            ))
-            
-        if config.get('clipping_enabled', False):
-            fx_chain.append(Clipping(threshold_db=config.get('clipping_thresh', -6.0)))
+        if config.get('apply_fx', True):
+            # --- Guitar / Modulation ---
+            if config.get('distortion_enabled', False):
+                drive = config.get('distortion_drive', 25.0)
+                fx_chain.append(Distortion(drive_db=drive))
+                
+            if config.get('chorus_enabled', False):
+                fx_chain.append(Chorus(
+                    rate_hz=config.get('chorus_rate', 1.0),
+                    depth=config.get('chorus_depth', 0.25),
+                    mix=config.get('chorus_mix', 0.5)
+                ))
+                
+            if config.get('phaser_enabled', False):
+                fx_chain.append(Phaser(
+                    rate_hz=config.get('phaser_rate', 1.0),
+                    depth=config.get('phaser_depth', 0.5),
+                    mix=config.get('phaser_mix', 0.5)
+                ))
+                
+            if config.get('clipping_enabled', False):
+                fx_chain.append(Clipping(threshold_db=config.get('clipping_thresh', -6.0)))
 
-        if config.get('bitcrush_enabled', False):
-            fx_chain.append(Bitcrush(bit_depth=config.get('bitcrush_depth', 8.0)))
-            
-        if config.get('gsm_enabled', False):
-            fx_chain.append(GSMFullRateCompressor())
+            if config.get('bitcrush_enabled', False):
+                fx_chain.append(Bitcrush(bit_depth=config.get('bitcrush_depth', 8.0)))
+                
+            if config.get('gsm_enabled', False):
+                fx_chain.append(GSMFullRateCompressor())
 
-        # --- Filters / EQ ---
-        # HighPass
-        if config.get('highpass_enabled', False):
-            fx_chain.append(HighpassFilter(cutoff_frequency_hz=config.get('highpass_freq', 50.0)))
+            # --- Filters / EQ ---
+            # HighPass
+            if config.get('highpass_enabled', False):
+                fx_chain.append(HighpassFilter(cutoff_frequency_hz=config.get('highpass_freq', 50.0)))
 
-        # LowPass
-        if config.get('lowpass_enabled', False):
-            fx_chain.append(LowpassFilter(cutoff_frequency_hz=config.get('lowpass_freq', 10000.0)))
-            
-        # Shelves (Bass/Treble) - Simple EQ
-        bass_db = config.get('eq_bass', 0.0)
-        if bass_db != 0.0:
-            fx_chain.append(LowShelfFilter(cutoff_frequency_hz=250, gain_db=bass_db))
-            
-        treble_db = config.get('eq_treble', 0.0)
-        if treble_db != 0.0:
-            fx_chain.append(HighShelfFilter(cutoff_frequency_hz=4000, gain_db=treble_db))
+            # LowPass
+            if config.get('lowpass_enabled', False):
+                fx_chain.append(LowpassFilter(cutoff_frequency_hz=config.get('lowpass_freq', 10000.0)))
+                
+            # Shelves (Bass/Treble) - Simple EQ
+            bass_db = config.get('eq_bass', 0.0)
+            if bass_db != 0.0:
+                fx_chain.append(LowShelfFilter(cutoff_frequency_hz=250, gain_db=bass_db))
+                
+            treble_db = config.get('eq_treble', 0.0)
+            if treble_db != 0.0:
+                fx_chain.append(HighShelfFilter(cutoff_frequency_hz=4000, gain_db=treble_db))
 
-        # --- Spatial / Time ---
-        if config.get('pitch_shift_enabled', False):
-            # High quality pitch shifting without duration change
-            semitones = config.get('pitch_shift_semitones', 0.0)
-            if semitones != 0:
-                fx_chain.append(PitchShift(semitones=semitones))
+            # --- Spatial / Time ---
+            if config.get('pitch_shift_enabled', False):
+                # High quality pitch shifting without duration change
+                semitones = config.get('pitch_shift_semitones', 0.0)
+                if semitones != 0:
+                    fx_chain.append(PitchShift(semitones=semitones))
 
-        if config.get('delay_enabled', False):
-            fx_chain.append(Delay(
-                delay_seconds=config.get('delay_time', 0.5),
-                feedback=config.get('delay_feedback', 0.0),
-                mix=config.get('delay_mix', 0.5)
-            ))
+            if config.get('delay_enabled', False):
+                fx_chain.append(Delay(
+                    delay_seconds=config.get('delay_time', 0.5),
+                    feedback=config.get('delay_feedback', 0.0),
+                    mix=config.get('delay_mix', 0.5)
+                ))
 
-        if config.get('reverb_enabled', False):
-            fx_chain.append(Reverb(
-                room_size=config.get('reverb_room_size', 0.5),
-                damping=config.get('reverb_damping', 0.5),
-                wet_level=config.get('reverb_wet_level', 0.3),
-                dry_level=config.get('reverb_dry_level', 1.0),
-                width=config.get('reverb_width', 1.0)
-            ))
+            if config.get('reverb_enabled', False):
+                fx_chain.append(Reverb(
+                    room_size=config.get('reverb_room_size', 0.5),
+                    damping=config.get('reverb_damping', 0.5),
+                    wet_level=config.get('reverb_wet_level', 0.3),
+                    dry_level=config.get('reverb_dry_level', 1.0),
+                    width=config.get('reverb_width', 1.0)
+                ))
 
-        # --- Dynamics ---
-        if config.get('comp_enabled', False):
-            fx_chain.append(Compressor(
-                threshold_db=config.get('comp_threshold', -20),
-                ratio=config.get('comp_ratio', 4),
-                attack_ms=config.get('comp_attack', 1.0),
-                release_ms=config.get('comp_release', 100.0)
-            ))
-            
-        if config.get('limiter_enabled', False):
-            fx_chain.append(Limiter(
-                threshold_db=config.get('limiter_threshold', -1.0),
-                release_ms=config.get('limiter_release', 100.0)
-            ))
-            
-        if config.get('gain_enabled', False):
-            db = config.get('gain_db', 0.0)
-            if db != 0.0:
-                fx_chain.append(Gain(gain_db=db))
+            # --- Dynamics ---
+            if config.get('comp_enabled', False):
+                fx_chain.append(Compressor(
+                    threshold_db=config.get('comp_threshold', -20),
+                    ratio=config.get('comp_ratio', 4),
+                    attack_ms=config.get('comp_attack', 1.0),
+                    release_ms=config.get('comp_release', 100.0)
+                ))
+                
+            if config.get('limiter_enabled', False):
+                fx_chain.append(Limiter(
+                    threshold_db=config.get('limiter_threshold', -1.0),
+                    release_ms=config.get('limiter_release', 100.0)
+                ))
+                
+            if config.get('gain_enabled', False):
+                db = config.get('gain_db', 0.0)
+                if db != 0.0:
+                    fx_chain.append(Gain(gain_db=db))
 
         if fx_chain:
             try:
@@ -339,7 +340,7 @@ class KokoroEngine:
                 
                 all_pieces = []
 
-                for speaker_name, segment_text in ms_segments:
+                for speaker_name, fx_name, segment_text in ms_segments:
                     # Apply Lexicon if provided in extra_config
                     if extra_config and 'lexicon' in extra_config:
                         segment_text = self.apply_lexicon(segment_text, extra_config['lexicon'])
@@ -361,6 +362,18 @@ class KokoroEngine:
                             if 'pitch' in preset: target_extra['pitch'] = preset['pitch']
                             if 'normalize' in preset: target_extra['normalize'] = preset['normalize']
                             if 'trim' in preset: target_extra['trim_silence'] = preset['trim']
+                            # If speaker preset has an FX preset, it can be overridden by the colon syntax
+                            if 'fx_preset' in preset:
+                                target_extra['fx_preset'] = preset['fx_preset']
+                            if 'apply_fx' in preset:
+                                target_extra['apply_fx'] = preset['apply_fx']
+
+                    if fx_name:
+                        fx_preset = self.load_fx_preset(fx_name)
+                        if fx_preset:
+                            target_extra.update(fx_preset)
+                            target_extra['apply_fx'] = True
+                            target_extra['fx_preset'] = fx_name
                     
                     # Resolve voice
                     if voice_tensor is not None and not speaker_name:
@@ -435,25 +448,32 @@ class KokoroEngine:
 
     def parse_multispeaker_text(self, text):
         """
-        Parses text for [PresetName]: syntax.
-        Returns a list of (preset_name, text_segment)
+        Parses text for [PresetName]: or [PresetName:FXPresetName]: syntax.
+        Returns a list of (speaker_name, fx_name, text_segment)
         """
-        # Regex to find [Name]:
-        # Matches [Something]: followed by text until the next [Something]: or end of string
+        # Regex to find [Name]: or [Name:FX]:
         pattern = r"\[([^\]]+)\]:\s*"
         matches = list(re.finditer(pattern, text))
         
         if not matches:
-            return [(None, text)]
+            return [(None, None, text)]
             
         segments = []
         for i in range(len(matches)):
-            name = matches[i].group(1)
+            raw_name = matches[i].group(1)
+            speaker_name = raw_name
+            fx_name = None
+            
+            if ":" in raw_name:
+                parts = raw_name.split(":", 1)
+                speaker_name = parts[0].strip()
+                fx_name = parts[1].strip()
+
             start = matches[i].end()
             end = matches[i+1].start() if i+1 < len(matches) else len(text)
             segment_text = text[start:end].strip()
             if segment_text:
-                segments.append((name, segment_text))
+                segments.append((speaker_name, fx_name, segment_text))
         
         return segments
 
@@ -466,6 +486,17 @@ class KokoroEngine:
                     return json.load(f)
             except Exception as e:
                 print(f"Error loading preset {name}: {e}")
+        return None
+
+    def load_fx_preset(self, name):
+        """Loads an FX preset from the presets/fx directory."""
+        fx_path = os.path.join("presets", "fx", f"{name}.json")
+        if os.path.exists(fx_path):
+            try:
+                with open(fx_path, "r") as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"Error loading FX preset {name}: {e}")
         return None
 
     def smart_split(self, text, chunk_size=3000):
@@ -715,7 +746,7 @@ class KokoroEngine:
             all_text_segments = []
             lexicon = config.get('lexicon', {})
             
-            for speaker_name, segment_text in ms_segments:
+            for speaker_name, fx_name, segment_text in ms_segments:
                 segment_text = self.apply_lexicon(segment_text, lexicon)
                 seg_config = config.copy()
                 seg_config['format'] = 'wav' # Force wav for JIT playback compatibility
@@ -723,8 +754,17 @@ class KokoroEngine:
                     preset = self.load_preset(speaker_name)
                     if preset:
                         seg_config.update(preset)
+                        if 'trim' in preset:
+                            seg_config['trim_silence'] = preset['trim']
                         seg_config['format'] = 'wav' # Ensure preset doesn't override format to non-wav
                         seg_config['voice'] = self.resolve_voice_path(seg_config['voice'])
+                
+                if fx_name:
+                    fx_preset = self.load_fx_preset(fx_name)
+                    if fx_preset:
+                        seg_config.update(fx_preset)
+                        seg_config['apply_fx'] = True
+                        seg_config['fx_preset'] = fx_name
                 
                 # Split into smaller chunks for JIT (sentences/short paragraphs)
                 chunks = self.smart_split(segment_text, chunk_size=500) # Small chunks for fast start
@@ -865,7 +905,7 @@ class KokoroEngine:
             
             lexicon = config.get('lexicon', {})
 
-            for speaker_name, segment_text in ms_segments:
+            for speaker_name, fx_name, segment_text in ms_segments:
                 # Apply Lexicon
                 segment_text = self.apply_lexicon(segment_text, lexicon)
 
@@ -880,6 +920,15 @@ class KokoroEngine:
                         seg_config['voice'] = self.resolve_voice_path(seg_config['voice'])
                     else:
                         if self.on_status: self.on_status(f"Warning: Preset '{speaker_name}' not found.", False)
+
+                if fx_name:
+                    fx_preset = self.load_fx_preset(fx_name)
+                    if fx_preset:
+                        seg_config.update(fx_preset)
+                        seg_config['apply_fx'] = True
+                        seg_config['fx_preset'] = fx_name
+                    else:
+                        if self.on_status: self.on_status(f"Warning: FX Preset '{fx_name}' not found.", False)
 
                 # Split this segment into sub-chunks for parallel processing
                 # Use same character limit as original
