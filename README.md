@@ -9,36 +9,40 @@ A modern, high-quality Text-to-Speech (TTS) application built with Python, featu
 
 https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
+## New in 3.1.0
 
-
-## Overview
-
-Kokoro TTS GUI provides a convenient way to convert large amounts of text or entire books into natural-sounding speech. It leverages the power of the Kokoro TTS engine and provides advanced features like parallel processing, document parsing (PDF, EPUB, TXT), and customizable audio output.
+-   **JIT (Just-In-Time) Generation:** Real-time audio streaming. Start listening to your text immediately as it's being generated.
+-   **Audio FX Pipeline:** Integrated [Pedalboard](https://github.com/spotify/pedalboard) support for Reverb, Compression, and EQ.
+-   **Pronunciation Lexicon:** Create a custom dictionary to override how specific words or acronyms are pronounced.
+-   **Advanced Voice Mixing:** Create unique custom voices by mixing existing ones with precise control.
+-   **Scripted Multi-Speaker & FX:** Use a simple syntax `[Speaker:FX]: Text` to switch voices and audio effects on the fly.
+-   **Intelligent Caching:** Automatically caches generated segments to speed up repeated tasks.
+-   **Windows Quick Start:** New `run.bat` for easy one-click startup on Windows.
 
 ## Features
 
 -   **Multi-Source Input:**
     -   **Direct Text:** Paste text directly into the application.
     -   **File Support:** Load and process `.txt`, `.pdf`, and `.epub` files. Ideal for converting e-books to audiobooks.
--   **High-Quality Voices:** Choose from a wide variety of American English voices.
--   **Advanced Configuration:**
-    -   **Parallel Processing:** Utilize multiple threads to speed up generation (configurable number of processes).
-    -   **Audio Speed:** Adjust playback speed from 0.5x to 2.0x.
-    -   **Audio Control:** Fine-tune Volume and Pitch.
-    -   **Post-Processing:** Options to Normalize audio and Trim silence.
-    -   **Smart Splitting:** Split text by newlines, paragraphs, or sentences for optimal prosody.
+-   **High-Quality Voices & Languages:** 
+    -   Supports American English, British English, Spanish, French, Italian, Portuguese, Japanese, and Chinese.
+    -   Wide variety of base voices plus custom voice mixing.
+-   **Generation Modes:**
+    -   **Standard:** High-speed parallel processing for batch conversion.
+    -   **JIT (Real-time):** Sequential generation with immediate playback and buffer management.
+-   **Audio FX & Post-Processing:**
+    -   **Live FX:** Reverb, Compressor, Low/High Shelf filters.
+    -   **Traditional:** Adjust Speed (0.5x to 2.0x), Volume, and Pitch.
+    -   **Cleanup:** Normalize audio and Trim silence.
+-   **Smart Splitting:** Split text by newlines, paragraphs, or sentences for optimal prosody.
 -   **Flexible Output:**
-    -   **Automatic Merging:** Automatically combine all segments into a single high-quality `.wav` audio file.
-    -   **Subtitle Export:** Generate `.srt` subtitle files synchronized with the audio.
-    -   **Chunking:** Option to keep individual speech segments as separate files.
+    -   **Automatic Merging:** Combine all segments into a single high-quality `.wav`.
+    -   **Subtitle Export:** Generate `.srt` files synchronized with the audio.
     -   **Custom Naming:** Define base filenames and output directories.
 -   **User Experience:**
-    -   **Presets:** Save and load your favorite voice and audio settings.
-    -   **Audio Preview:** Quickly test voice and speed settings with a short preview.
+    -   **Presets:** Save and load your favorite configurations (including FX).
+    -   **Lexicon:** User-defined pronunciation overrides.
     -   **UI Customization:** Adjustable interface scaling and theme (Dark/Light/System).
--   **Robust Processing:**
-    -   **Text Cleaning:** Automatically strips HTML and formatting from EPUBs for clean reading.
-    -   **Real-time Feedback:** Live progress tracking, time estimation, and status updates.
 
 ## Prerequisites
 
@@ -48,7 +52,7 @@ Kokoro TTS GUI provides a convenient way to convert large amounts of text or ent
 
 1.  **Clone the repository:**
     ```bash
-    git https://github.com/CoffeeMethod/KokoroGUI.git
+    git clone https://github.com/CoffeeMethod/KokoroGUI.git
     cd KokoroGUI
     ```
 
@@ -71,27 +75,26 @@ Kokoro TTS GUI provides a convenient way to convert large amounts of text or ent
 ## Usage
 
 1.  **Run the application:**
-    ```bash
-    python main.py
-    ```
+    -   **Windows:** Double-click `run.bat` or run `python main.py`
+    -   **Other:** Run `python main.py`
 
 2.  **Configure your conversion:**
     -   Choose your input method (Direct Text or Load File).
-    -   Select a voice from the dropdown menu.
-    -   (Optional) Adjust speed, volume, and pitch.
-    -   (Optional) Use **Presets** to save or load configurations.
-    -   Set your desired output directory and filename.
-    -   Choose whether to keep separate chunks or merge them into one file.
+    -   Select a voice and language from the dropdown menus.
+    -   (Optional) Enable **JIT Generation** in Settings for real-time playback.
+    -   (Optional) Use the **Lexicon** tab to add pronunciation overrides.
+    -   (Optional) Use the **Custom Voice** tab to mix new voices.
+    -   (Optional) Use the **FX** settings to add Reverb or Compression.
 
 3.  **Preview & Convert:**
-    -   Click "Preview Audio" to hear a short sample of the current settings.
-    -   Click "Start Conversion" to begin the full process. You can monitor progress via the status label and progress bar.
+    -   Click "Preview Audio" to hear a short sample.
+    -   Click "Start Generation" (or "Start Real-time JIT") to begin.
 
 ## Technologies Used
 
 -   **[Kokoro](https://github.com/hexgrad/kokoro):** The core TTS engine.
+-   **[Pedalboard](https://github.com/spotify/pedalboard):** Audio effects processing.
 -   **Customtkinter:** For the graphical user interface.
--   **PyTorch:** Deep learning backend for the TTS model.
--   **SoundFile:** For writing high-quality WAV files.
--   **PyPDF & EbookLib:** For parsing PDF and EPUB documents.
--   **BeautifulSoup4:** For cleaning text from EPUB/HTML sources.
+-   **PyTorch:** Deep learning backend.
+-   **SoundFile:** For writing high-quality audio files.
+-   **PyPDF & EbookLib:** For parsing documents.
