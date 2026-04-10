@@ -2,7 +2,7 @@ beautifulsoup4==4.14.3
 EbookLib==0.20
 kokoro==0.9.4
 numpy==2.4.1
-pypdf==6.9.2
+pypdf==6.10.0
 packaging
 scipy
 pedalboard
