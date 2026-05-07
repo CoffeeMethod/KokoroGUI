@@ -240,21 +240,20 @@ class TTSApp(ctk.CTk):
             if self.VOICE_DB.get(code, []):
                 self.voice_var.set(self.VOICE_DB[code][0])
 
-    def on_mix_lang_a_change(self, *args):
-        code = self.mix_lang_a_var.get()
-        if hasattr(self, 'mix_combo_a'):
+    def _update_mix_voice_list(self, lang_var, combo_attr, voice_var):
+        code = lang_var.get()
+        if hasattr(self, combo_attr):
+            combo = getattr(self, combo_attr)
             voices = self.get_all_voices(code)
-            self.mix_combo_a.configure(values=voices)
-            if self.mix_voice_a_var.get() not in voices:
-                self.mix_voice_a_var.set(voices[0])
+            combo.configure(values=voices)
+            if voice_var.get() not in voices:
+                voice_var.set(voices[0])
+
+    def on_mix_lang_a_change(self, *args):
+        self._update_mix_voice_list(self.mix_lang_a_var, 'mix_combo_a', self.mix_voice_a_var)
 
     def on_mix_lang_b_change(self, *args):
-        code = self.mix_lang_b_var.get()
-        if hasattr(self, 'mix_combo_b'):
-            voices = self.get_all_voices(code)
-            self.mix_combo_b.configure(values=voices)
-            if self.mix_voice_b_var.get() not in voices:
-                self.mix_voice_b_var.set(voices[0])
+        self._update_mix_voice_list(self.mix_lang_b_var, 'mix_combo_b', self.mix_voice_b_var)
 
     def schedule_save(self, *args):
         if self.save_timer:
