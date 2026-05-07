@@ -434,7 +434,7 @@ class KokoroEngine:
                     text_data += extracted + "\n\n"
         
         elif lower_path.endswith(".epub"):
-            book = epub.read_epub(fpath)
+            book = epub.read_epub(fpath, options={'ignore_ncx': True})
             for item in book.get_items():
                 if item.get_type() == ebooklib.ITEM_DOCUMENT:
                     soup = BeautifulSoup(item.get_content(), 'html.parser')
