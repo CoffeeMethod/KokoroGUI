@@ -1,0 +1,3 @@
+## 2023-10-27 - Regex Compilation in Loops
+**Learning:** In `kokoro_engine.py`, the `apply_lexicon` method was recompiling the regex pattern for every lexicon entry on every call. Since this method is called within text processing loops (especially for multispeaker scenarios and chunk processing), the repeated compilation created significant overhead.
+**Action:** When regular expressions are used inside frequently called methods or loops, compile them once and cache the compiled pattern. In `apply_lexicon`, caching the `re.compile(re.escape(src), re.IGNORECASE)` pattern in an instance variable (`self._lexicon_cache`) prevents this redundant work.
