@@ -1,0 +1,4 @@
+## 2024-05-08 - [CRITICAL] Path Traversal in Voice and Preset Loading
+**Vulnerability:** User-controlled strings for voices (`voice_name`), custom mix generation (`new_name`), and presets (`name`) in `kokoro_engine.py` were passed directly to `os.path.join()` without sanitization. This allowed attackers or malicious inputs to break out of intended directories (`custom_voices`, `presets`, `presets/fx`) using path traversal (`../`) to read or overwrite arbitrary files.
+**Learning:** In desktop TTS/Audio apps, strings from UI elements (like comboboxes or text entries for "New Voice Name") are often passed down to the engine layer and used as filenames. The engine must treat these as untrusted inputs.
+**Prevention:** Always sanitize filenames using `os.path.basename()` before combining them with root directories using `os.path.join()`.
