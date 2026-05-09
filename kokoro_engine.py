@@ -71,6 +71,9 @@ class KokoroEngine:
         self.cancel_event = threading.Event()
         self.pipeline = None # Main pipeline for single thread check or init
         
+        # Cache for compiled lexicon regex patterns to avoid recompilation overhead
+        self._lexicon_cache = {}
+
         if not os.path.exists(CUSTOM_VOICES_DIR):
             os.makedirs(CUSTOM_VOICES_DIR)
             
@@ -93,8 +96,12 @@ class KokoroEngine:
         for src, dest in lexicon.items():
             if not src: continue
             try:
-                # Escape the search term to treat it as literal text
-                pattern = re.compile(re.escape(src), re.IGNORECASE)
+                # Check cache for compiled pattern
+                if src not in self._lexicon_cache:
+                    # Escape the search term to treat it as literal text
+                    self._lexicon_cache[src] = re.compile(re.escape(src), re.IGNORECASE)
+
+                pattern = self._lexicon_cache[src]
                 text = pattern.sub(dest, text)
             except Exception as e:
                 print(f"Lexicon error for '{src}': {e}")
