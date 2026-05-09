@@ -1,0 +1,4 @@
+## 2024-05-09 - Fix Path Traversal in File Loaders
+**Vulnerability:** Path Traversal vulnerability found in `kokoro_engine.py` where user-controlled variables (`voice_name`, `new_name`, `name`) were passed directly to `os.path.join()` when resolving paths for custom voices and presets. This could allow an attacker to read or write arbitrary files on the system by passing inputs like `../../etc/passwd` or `../../malicious_payload`.
+**Learning:** In desktop applications where configuration or presets are loaded from user input, combining directory paths with user input without sanitization creates severe directory traversal risks.
+**Prevention:** Always sanitize user-provided file names by extracting only the base name using `os.path.basename()` before combining them with directories via `os.path.join()`.
