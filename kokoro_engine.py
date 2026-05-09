@@ -106,6 +106,9 @@ class KokoroEngine:
         Returns the absolute path if it's a custom voice, 
         otherwise returns the name as-is (for standard voices).
         """
+        # Sanitize to prevent path traversal
+        voice_name = os.path.basename(voice_name)
+
         # Check if it's a custom voice file
         custom_path = os.path.join(CUSTOM_VOICES_DIR, f"{voice_name}.pt")
         if os.path.exists(custom_path):
@@ -318,7 +321,8 @@ class KokoroEngine:
                     mixed = t1 * (1.0 - ratio) + t2 * ratio
                 
                 # Save
-                out_path = os.path.join(CUSTOM_VOICES_DIR, f"{new_name}.pt")
+                new_name_clean = os.path.basename(new_name)
+                out_path = os.path.join(CUSTOM_VOICES_DIR, f"{new_name_clean}.pt")
                 torch.save(mixed, out_path)
                 return True, out_path, mixed
             except Exception as e:
@@ -479,6 +483,8 @@ class KokoroEngine:
 
     def load_preset(self, name):
         """Loads a preset from the presets directory."""
+        # Sanitize name to prevent path traversal
+        name = os.path.basename(name)
         preset_path = os.path.join("presets", f"{name}.json")
         if os.path.exists(preset_path):
             try:
@@ -490,6 +496,8 @@ class KokoroEngine:
 
     def load_fx_preset(self, name):
         """Loads an FX preset from the presets/fx directory."""
+        # Sanitize name to prevent path traversal
+        name = os.path.basename(name)
         fx_path = os.path.join("presets", "fx", f"{name}.json")
         if os.path.exists(fx_path):
             try:
