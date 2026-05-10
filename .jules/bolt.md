@@ -1,0 +1,3 @@
+## 2025-02-13 - Regex recompilation inside loop
+**Learning:** In `kokoro_engine.py`, `apply_lexicon` was compiling regex patterns dynamically for every replacement in every segment of text. This caused significant performance overhead. Python internal regex cache (`re._cache`) was likely being thrashed during large document processing due to dynamic user-supplied lexicons.
+**Action:** Always maintain an explicit regex cache dictionary (`self._lexicon_cache`) in instances that repeatedly invoke regex operations against bounded sets of user-configured keys (like a lexicon), to avoid hitting system cache limits and re-parsing overhead.

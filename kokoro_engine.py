@@ -82,6 +82,9 @@ class KokoroEngine:
         self.on_status = None   # func(msg, is_error)
         self.on_finish = None   # func()
 
+        # Cache for compiled regex patterns in lexicon
+        self._lexicon_cache = {}
+
     def apply_lexicon(self, text, lexicon):
         """
         Applies a dictionary of replacements to the text.
@@ -93,9 +96,10 @@ class KokoroEngine:
         for src, dest in lexicon.items():
             if not src: continue
             try:
-                # Escape the search term to treat it as literal text
-                pattern = re.compile(re.escape(src), re.IGNORECASE)
-                text = pattern.sub(dest, text)
+                if src not in self._lexicon_cache:
+                    # Escape the search term to treat it as literal text
+                    self._lexicon_cache[src] = re.compile(re.escape(src), re.IGNORECASE)
+                text = self._lexicon_cache[src].sub(dest, text)
             except Exception as e:
                 print(f"Lexicon error for '{src}': {e}")
                 
