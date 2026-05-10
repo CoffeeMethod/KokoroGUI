@@ -77,6 +77,8 @@ class KokoroEngine:
         if not os.path.exists(CACHE_DIR):
             os.makedirs(CACHE_DIR)
         
+        self._lexicon_cache = {}  # Cache for compiled regex patterns
+
         # Callbacks
         self.on_progress = None # func(percentage, time_elapsed, eta, detail_text)
         self.on_status = None   # func(msg, is_error)
@@ -93,8 +95,10 @@ class KokoroEngine:
         for src, dest in lexicon.items():
             if not src: continue
             try:
-                # Escape the search term to treat it as literal text
-                pattern = re.compile(re.escape(src), re.IGNORECASE)
+                if src not in self._lexicon_cache:
+                    # Escape the search term to treat it as literal text
+                    self._lexicon_cache[src] = re.compile(re.escape(src), re.IGNORECASE)
+                pattern = self._lexicon_cache[src]
                 text = pattern.sub(dest, text)
             except Exception as e:
                 print(f"Lexicon error for '{src}': {e}")
