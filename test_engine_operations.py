@@ -195,8 +195,12 @@ async def main():
     # A small sleep to let threads close cleanly
     await asyncio.sleep(0.5)
 
-if __name__ == "__main__":
-    # Ensure event loop runs nicely
+def test_engine_operations():
+    """Pytest entrypoint"""
     if os.name == 'nt':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())
+
+if __name__ == "__main__":
+    # Ensure event loop runs nicely
+    test_engine_operations()
