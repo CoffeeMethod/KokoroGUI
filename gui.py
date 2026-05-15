@@ -450,6 +450,7 @@ class TTSApp(ctk.CTk):
         name = dialog.get_input()
         if name:
             name = re.sub(r'[<>:"/\\|?*]', '', name).strip() # Sanitize
+            name = os.path.basename(name)
             if not name: return
             
             data = {
@@ -478,7 +479,8 @@ class TTSApp(ctk.CTk):
     def load_preset(self, name):
         if name == "Select Preset...": return
         
-        fpath = os.path.join(PRESETS_DIR, f"{name}.json")
+        safe_name = os.path.basename(name)
+        fpath = os.path.join(PRESETS_DIR, f"{safe_name}.json")
         if os.path.exists(fpath):
             try:
                 with open(fpath, "r") as f:
@@ -538,6 +540,7 @@ class TTSApp(ctk.CTk):
         name = dialog.get_input()
         if name:
             name = re.sub(r'[<>:"/\\|?*]', '', name).strip()
+            name = os.path.basename(name)
             if not name: return
             
             data = {
@@ -600,7 +603,8 @@ class TTSApp(ctk.CTk):
     def load_fx_preset(self, name):
         if name == "Select FX Preset...": return
         
-        fpath = os.path.join(FX_PRESETS_DIR, f"{name}.json")
+        safe_name = os.path.basename(name)
+        fpath = os.path.join(FX_PRESETS_DIR, f"{safe_name}.json")
         if os.path.exists(fpath):
             try:
                 with open(fpath, "r") as f:
@@ -701,7 +705,8 @@ class TTSApp(ctk.CTk):
     def delete_custom_voice(self, name):
         if messagebox.askyesno("Confirm", f"Delete voice '{name}'?"):
             try:
-                path = os.path.join("custom_voices", f"{name}.pt")
+                safe_name = os.path.basename(name)
+                path = os.path.join("custom_voices", f"{safe_name}.pt")
                 if os.path.exists(path):
                     os.remove(path)
                     self.refresh_voice_lists()
