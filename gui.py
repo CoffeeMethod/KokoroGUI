@@ -465,7 +465,7 @@ class TTSApp(ctk.CTk):
                 "fx_preset": self.gen_fx_combo.get()
             }
             
-            fpath = os.path.join(PRESETS_DIR, f"{name}.json")
+            fpath = os.path.join(PRESETS_DIR, f"{os.path.basename(name)}.json")
             try:
                 with open(fpath, "w") as f:
                     json.dump(data, f, indent=4)
@@ -478,7 +478,7 @@ class TTSApp(ctk.CTk):
     def load_preset(self, name):
         if name == "Select Preset...": return
         
-        fpath = os.path.join(PRESETS_DIR, f"{name}.json")
+        fpath = os.path.join(PRESETS_DIR, f"{os.path.basename(name)}.json")
         if os.path.exists(fpath):
             try:
                 with open(fpath, "r") as f:
@@ -586,7 +586,7 @@ class TTSApp(ctk.CTk):
                 "gain_db": self.gain_db.get()
             }
             
-            fpath = os.path.join(FX_PRESETS_DIR, f"{name}.json")
+            fpath = os.path.join(FX_PRESETS_DIR, f"{os.path.basename(name)}.json")
             try:
                 with open(fpath, "w") as f:
                     json.dump(data, f, indent=4)
@@ -600,7 +600,7 @@ class TTSApp(ctk.CTk):
     def load_fx_preset(self, name):
         if name == "Select FX Preset...": return
         
-        fpath = os.path.join(FX_PRESETS_DIR, f"{name}.json")
+        fpath = os.path.join(FX_PRESETS_DIR, f"{os.path.basename(name)}.json")
         if os.path.exists(fpath):
             try:
                 with open(fpath, "r") as f:
@@ -701,7 +701,7 @@ class TTSApp(ctk.CTk):
     def delete_custom_voice(self, name):
         if messagebox.askyesno("Confirm", f"Delete voice '{name}'?"):
             try:
-                path = os.path.join("custom_voices", f"{name}.pt")
+                path = os.path.join("custom_voices", f"{os.path.basename(name)}.pt")
                 if os.path.exists(path):
                     os.remove(path)
                     self.refresh_voice_lists()
