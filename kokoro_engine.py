@@ -433,7 +433,10 @@ class KokoroEngine:
         if not os.path.exists(fpath):
             raise FileNotFoundError("File does not exist.")
         
-        text_data = ""
+        # Performance optimization: Replace O(N^2) string concatenation inside loops
+        # with O(N) list accumulation and .join() to significantly speed up processing
+        # of large documents (PDFs, EPUBs).
+        text_data_list = []
         lower_path = fpath.lower()
         
         if lower_path.endswith(".pdf"):
@@ -441,14 +444,16 @@ class KokoroEngine:
             for page in reader.pages:
                 extracted = page.extract_text()
                 if extracted:
-                    text_data += extracted + "\n\n"
+                    text_data_list.append(extracted + "\n\n")
+            text_data = "".join(text_data_list)
         
         elif lower_path.endswith(".epub"):
             book = epub.read_epub(fpath, options={'ignore_ncx': True})
             for item in book.get_items():
                 if item.get_type() == ebooklib.ITEM_DOCUMENT:
                     soup = BeautifulSoup(item.get_content(), 'html.parser')
-                    text_data += soup.get_text(separator='\n\n') + "\n\n"
+                    text_data_list.append(soup.get_text(separator='\n\n') + "\n\n")
+            text_data = "".join(text_data_list)
         else:
             # Assume text based
             with open(fpath, "r", encoding="utf-8") as f:
@@ -890,9 +895,12 @@ class KokoroEngine:
             else:
                 first_remaining_idx = 0
             
-            remaining_text = ""
+            # Performance optimization: Avoid O(N^2) string building for JIT remaining_text.
+            remaining_text_list = []
             for i in range(first_remaining_idx, total_segments):
-                remaining_text += all_text_segments[i][0] + "\n\n"
+                remaining_text_list.append(all_text_segments[i][0] + "\n\n")
+
+            remaining_text = "".join(remaining_text_list)
             
             if remaining_text:
                 rem_path = os.path.join(config['out_dir'], f"{config['filename']}_{config['time_id']}_remaining.txt")
