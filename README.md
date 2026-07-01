@@ -47,6 +47,7 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 ## Prerequisites
 
 -   **Python 3.11+**
+-   **[eSpeak NG](https://github.com/espeak-ng/espeak-ng)**
 
 ## Installation
 
