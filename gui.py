@@ -329,9 +329,9 @@ class TTSApp(ctk.CTk):
         }
         if os.path.exists(CONFIG_FILE):
             try:
-                with open(CONFIG_FILE, "r") as f:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                     return {**defaults, **json.load(f)}
-            except:
+            except Exception:
                 pass
         return defaults
 
@@ -418,7 +418,7 @@ class TTSApp(ctk.CTk):
             self.settings['gain_db'] = self.gain_db.get()
 
         try:
-            with open(CONFIG_FILE, "w") as f:
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.settings, f, indent=4)
         except Exception as e:
             print(f"Failed to save settings: {e}")
@@ -431,7 +431,7 @@ class TTSApp(ctk.CTk):
         try:
             scale_float = float(scale_str) / 100
             ctk.set_widget_scaling(scale_float)
-        except:
+        except Exception:
             ctk.set_widget_scaling(1.0)
 
     # --- Preset Management ---
@@ -467,7 +467,7 @@ class TTSApp(ctk.CTk):
             
             fpath = os.path.join(PRESETS_DIR, f"{name}.json")
             try:
-                with open(fpath, "w") as f:
+                with open(fpath, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=4)
                 messagebox.showinfo("Saved", f"Preset '{name}' saved successfully.")
                 self.refresh_presets()
@@ -481,9 +481,9 @@ class TTSApp(ctk.CTk):
         fpath = os.path.join(PRESETS_DIR, f"{name}.json")
         if os.path.exists(fpath):
             try:
-                with open(fpath, "r") as f:
+                with open(fpath, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    
+
                 if "voice" in data: self.voice_var.set(data["voice"])
                 if "speed" in data: self.speed_var.set(data["speed"])
                 if "volume" in data: self.volume_var.set(data["volume"])
@@ -588,7 +588,7 @@ class TTSApp(ctk.CTk):
             
             fpath = os.path.join(FX_PRESETS_DIR, f"{name}.json")
             try:
-                with open(fpath, "w") as f:
+                with open(fpath, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=4)
                 messagebox.showinfo("Saved", f"FX Preset '{name}' saved.")
                 self.refresh_fx_presets()
@@ -603,9 +603,9 @@ class TTSApp(ctk.CTk):
         fpath = os.path.join(FX_PRESETS_DIR, f"{name}.json")
         if os.path.exists(fpath):
             try:
-                with open(fpath, "r") as f:
+                with open(fpath, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                
+
                 if "reverb_enabled" in data: self.reverb_enabled.set(data["reverb_enabled"])
                 if "reverb_room_size" in data: self.reverb_room_size.set(data["reverb_room_size"])
                 if "reverb_wet_level" in data: self.reverb_wet_level.set(data["reverb_wet_level"])
@@ -743,7 +743,7 @@ class TTSApp(ctk.CTk):
             try:
                 p = os.path.join("custom_voices", f"{tmp_voice_name}.pt")
                 if os.path.exists(p): os.remove(p)
-            except: pass
+            except Exception: pass
             
             return success, ""
 
@@ -1471,7 +1471,7 @@ class TTSApp(ctk.CTk):
     def change_threads(self, delta):
         try:
             current = int(self.num_threads_var.get())
-        except:
+        except Exception:
             current = 1
         new_val = max(1, min(16, current + delta))
         self.num_threads_var.set(new_val)
@@ -1524,6 +1524,10 @@ class TTSApp(ctk.CTk):
             self.progress_bar.set(0 if self.engine.cancel_event.is_set() else 1)
 
     def preview_conversion(self):
+        if not self.engine.pipeline:
+            messagebox.showinfo("Wait", "Engine is initializing... please wait 2 seconds and try again.")
+            return
+
         # 1. Get Text
         current_tab = self.tab_view.get()
         text_data = ""
@@ -1535,7 +1539,7 @@ class TTSApp(ctk.CTk):
             if os.path.exists(fpath):
                 try:
                     text_data = self.engine.extract_text_from_file(fpath)
-                except:
+                except Exception:
                     pass
         
         if not text_data:
@@ -1634,7 +1638,7 @@ class TTSApp(ctk.CTk):
             val = int(self.num_threads_var.get())
             if val < 1: val = 1
             self.num_threads_var.set(val)
-        except:
+        except Exception:
             self.num_threads_var.set(1)
 
         # 1. Get Text

@@ -494,7 +494,7 @@ class KokoroEngine:
         preset_path = os.path.join("presets", f"{safe_name}.json")
         if os.path.exists(preset_path):
             try:
-                with open(preset_path, "r") as f:
+                with open(preset_path, "r", encoding="utf-8") as f:
                     return json.load(f)
             except Exception as e:
                 print(f"Error loading preset {name}: {e}")
@@ -507,7 +507,7 @@ class KokoroEngine:
         fx_path = os.path.join("presets", "fx", f"{safe_name}.json")
         if os.path.exists(fx_path):
             try:
-                with open(fx_path, "r") as f:
+                with open(fx_path, "r", encoding="utf-8") as f:
                     return json.load(f)
             except Exception as e:
                 print(f"Error loading FX preset {name}: {e}")
@@ -630,7 +630,7 @@ class KokoroEngine:
 
         chunk_files = []
         sub_idx = 0
-        base_name = f"{config['filename']}_{config['time_id']}_part{index}"
+        base_name = f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_part{index}"
 
         # Function to process raw audio (from cache or gen) into final output
         def process_and_save(graphemes, raw_audio):
@@ -734,7 +734,7 @@ class KokoroEngine:
         try:
             # Stop any current winsound playback immediately
             winsound.PlaySound(None, winsound.SND_PURGE)
-        except:
+        except Exception:
             pass
 
     def start_jit_conversion(self, text, config):
@@ -878,7 +878,7 @@ class KokoroEngine:
             # Combine what was played/generated so far
             all_work_so_far = played_segments + generated_but_unplayed
             if all_work_so_far:
-                combined_path = os.path.join(config['out_dir'], f"{config['filename']}_{config['time_id']}_jit_output.wav")
+                combined_path = os.path.join(config['out_dir'], f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_jit_output.wav")
                 await self.smart_combine([s['path'] for s in all_work_so_far], combined_path, None)
                 if self.on_status: self.on_status(f"JIT Output saved: {combined_path}", False)
 
@@ -895,7 +895,7 @@ class KokoroEngine:
                 remaining_text += all_text_segments[i][0] + "\n\n"
             
             if remaining_text:
-                rem_path = os.path.join(config['out_dir'], f"{config['filename']}_{config['time_id']}_remaining.txt")
+                rem_path = os.path.join(config['out_dir'], f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_remaining.txt")
                 with open(rem_path, "w", encoding="utf-8") as f:
                     f.write(remaining_text)
                 if self.on_status: self.on_status(f"Remaining text saved: {rem_path}", False)
@@ -960,7 +960,7 @@ class KokoroEngine:
             total_chars = sum(len(d[1]) for d in tasks_data)
             processed_chars = 0
             start_time = time.time()
-            phase_weight = 0.9 if config['combine'] else 1.0
+            phase_weight = 0.9 if config.get('combine', True) else 1.0
             
             if self.on_status: self.on_status(f"Queued {total_chunks} blocks. Starting {num_workers} workers...", False)
             
@@ -1023,15 +1023,15 @@ class KokoroEngine:
             
             if self.on_status: self.on_status(f"Generated {len(final_segment_list)} segments. Processing outputs...", False)
 
-            if config['export_subtitles'] and final_segment_list:
-                srt_path = os.path.join(config['out_dir'], f"{config['filename']}_{config['time_id']}_combined.srt")
+            if config.get('export_subtitles', False) and final_segment_list:
+                srt_path = os.path.join(config['out_dir'], f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_combined.srt")
                 self.generate_srt(final_segment_list, srt_path)
 
-            if config['combine'] and final_file_paths:
+            if config.get('combine', True) and final_file_paths:
                 if self.on_status: self.on_status("Merging audio files...", False)
-                
+
                 fmt = config.get('format', 'wav').lower()
-                combine_path = os.path.join(config['out_dir'], f"{config['filename']}_{config['time_id']}_combined.{fmt}")
+                combine_path = os.path.join(config['out_dir'], f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_combined.{fmt}")
                 
                 def on_merge_progress(frac):
                     total_fraction = (1.0 * phase_weight) + (frac * (1.0 - phase_weight))
@@ -1041,10 +1041,10 @@ class KokoroEngine:
                 
                 await self.smart_combine(final_file_paths, combine_path, on_merge_progress)
                 
-                if not config['separate']:
+                if not config.get('separate', True):
                     for p in final_file_paths:
                         try: os.remove(p)
-                        except: pass
+                        except Exception: pass
                 
                 if self.on_status: self.on_status(f"Done! Saved: {combine_path}", False)
             else:
