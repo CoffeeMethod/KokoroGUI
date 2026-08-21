@@ -2,11 +2,11 @@ beautifulsoup4==4.14.3
 EbookLib==0.20
 kokoro==0.9.4
 numpy==2.4.1
-pypdf==6.13.3
+pypdf==6.15.0
 packaging
 scipy
 pedalboard
 soundfile==0.13.1
-torch==2.10.0
+torch==2.13.0
 customtkinter
 packaging
