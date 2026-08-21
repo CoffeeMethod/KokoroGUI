@@ -599,8 +599,10 @@ class TTSApp(ctk.CTk):
 
     def load_fx_preset(self, name):
         if name == "Select FX Preset...": return
-        
-        fpath = os.path.join(FX_PRESETS_DIR, f"{name}.json")
+
+        safe_name = os.path.basename(name)
+        if not safe_name: return
+        fpath = os.path.join(FX_PRESETS_DIR, f"{safe_name}.json")
         if os.path.exists(fpath):
             try:
                 with open(fpath, "r") as f:

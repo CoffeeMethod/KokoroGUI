@@ -462,7 +462,8 @@ class KokoroEngine:
         Returns a list of (speaker_name, fx_name, text_segment)
         """
         # Regex to find [Name]: or [Name:FX]:
-        pattern = r"\[([^\]]+)\]:\s*"
+
+        pattern = r"\[([^\]\n]{1,100})\]:\s*"
         matches = list(re.finditer(pattern, text))
         
         if not matches:
