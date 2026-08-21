@@ -1,0 +1,31 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # kokoro_engine.py imports the Windows-only `winsound` module
+    # unconditionally, so the suite can only run on Windows.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-test.txt
+
+      - name: Run fast test suite
+        run: pytest
+        # Runs the mocked-pipeline suite only (pytest.ini already sets
+        # `-m "not integration"` by default). No eSpeak NG or model
+        # download needed. The real-synthesis integration suite
+        # (`pytest -m integration tests/integration`) is intentionally
+        # left out of CI - it's slow and pulls model weights.
