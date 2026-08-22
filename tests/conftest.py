@@ -62,7 +62,7 @@ def isolated_dirs(tmp_path, monkeypatch):
 @pytest.fixture
 def engine(isolated_dirs, monkeypatch):
     # Never touch the real audio device from a test.
-    monkeypatch.setattr(kokoro_engine, "winsound", MagicMock())
+    monkeypatch.setattr(kokoro_engine, "playback", MagicMock())
     e = KokoroEngine()
     yield e
     e.worker.stop()
@@ -72,10 +72,10 @@ def engine(isolated_dirs, monkeypatch):
 def real_engine(isolated_dirs, monkeypatch):
     """Real, unmocked KokoroEngine for tests/integration's opt-in real-pipeline
     tests. Identical to `engine` (isolated custom_voices/cache dirs, mocked
-    winsound so playback never touches the real audio device) but never
+    playback so audio never touches the real audio device) but never
     combined with `fake_pipeline` - get_thread_pipeline/KPipeline resolve to
     the real kokoro.KPipeline, so synthesis actually runs torch + espeak-ng."""
-    monkeypatch.setattr(kokoro_engine, "winsound", MagicMock())
+    monkeypatch.setattr(kokoro_engine, "playback", MagicMock())
     e = KokoroEngine()
     yield e
     e.worker.stop()

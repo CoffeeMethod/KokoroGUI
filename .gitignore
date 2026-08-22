@@ -171,3 +171,5 @@ cython_debug/
 .pypirc
 /audio_output/
 /ROADMAP.md
+/CLAUDE.md
+/tests/output/

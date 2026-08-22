@@ -7,6 +7,7 @@ packaging
 scipy
 pedalboard
 soundfile==0.13.1
+sounddevice
 torch==2.13.0
 customtkinter
 packaging
