@@ -47,6 +47,19 @@ def test_start_conversion_assembles_full_key_set(tts_app):
     assert re.fullmatch(r"\d{14}", config["time_id"])
 
 
+def test_assembled_config_covers_active_backend_schema_keys(tts_app):
+    """PLAN_qt_and_engine_abstraction.md workstream 1: every field the active
+    backend's schema declares (kokoro_gui/engines/kokoro.py) must actually be
+    assembled into the config dict start_conversion sends the engine - the
+    schema is meant to describe that dict, not drift from it."""
+    _set_text(tts_app, "Hello world.")
+    tts_app.start_conversion()
+
+    _, config = tts_app.engine.start_conversion.call_args[0]
+    schema_keys = {f.key for f in tts_app.backend.get_config_schema()}
+    assert schema_keys <= config.keys()
+
+
 def test_start_conversion_apply_fx_false_omits_fx_keys(tts_app):
     _set_text(tts_app, "Hello world.")
     tts_app.apply_fx_var.set(False)

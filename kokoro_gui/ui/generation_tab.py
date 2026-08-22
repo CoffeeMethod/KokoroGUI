@@ -98,6 +98,14 @@ class GenerationTabMixin:
     def build_generation_tab(self, parent):
         parent.grid_columnconfigure(0, weight=1)
 
+        # Schema-driven fields (PLAN_qt_and_engine_abstraction.md workstream
+        # 1): split-pattern presets, output-format choices, and the speed
+        # slider's bounds come from the active backend's config schema
+        # (kokoro_gui/engines/kokoro.py) instead of being hard-coded a
+        # second time here. "voice"/"lang_code" stay GUI-resolved below -
+        # see that schema's docstring for why.
+        schema_fields = {f.key: f for f in self.backend.get_config_schema()}
+
         # Move existing logic here
         main_frame = ctk.CTkScrollableFrame(parent)
         main_frame.pack(fill="both", expand=True, padx=5, pady=5)
@@ -190,22 +198,24 @@ class GenerationTabMixin:
 
         ctk.CTkEntry(file_row, textvariable=self.filename_var).grid(row=0, column=0, sticky="ew", padx=(0,5))
 
-        self.format_combo = ctk.CTkComboBox(file_row, values=["wav", "flac", "mp3", "ogg"], width=70, variable=self.output_format_var)
+        format_field = schema_fields["format"]
+        self.format_combo = ctk.CTkComboBox(file_row, values=[label for label, _ in format_field.choices], width=70, variable=self.output_format_var)
         self.format_combo.grid(row=0, column=1)
 
         # Speed
+        speed_field = schema_fields["speed"]
         self.speed_label = ctk.CTkLabel(config_frame, text="Speed: 1.0x")
         self.speed_label.grid(row=5, column=0, sticky="w", padx=10, pady=5)
-        self.speed_slider = ctk.CTkSlider(config_frame, from_=0.5, to=2.0, number_of_steps=15, variable=self.speed_var, command=self.update_speed_label)
+        self.speed_slider = ctk.CTkSlider(
+            config_frame, from_=speed_field.min, to=speed_field.max,
+            number_of_steps=round((speed_field.max - speed_field.min) / speed_field.step),
+            variable=self.speed_var, command=self.update_speed_label,
+        )
         self.speed_slider.grid(row=5, column=1, sticky="ew", padx=10)
 
         # Split Pattern
         ctk.CTkLabel(config_frame, text="Split By:").grid(row=6, column=0, sticky="w", padx=10, pady=5)
-        self.split_map = {
-            "Natural (Newlines)": r"\n+",
-            "Paragraphs (Double Newline)": r"\n\n+",
-            "Sentences (.!?)": r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|\!)\s"
-        }
+        self.split_map = dict(schema_fields["split_pattern"].choices)
         self.split_combo = ctk.CTkComboBox(config_frame, values=list(self.split_map.keys()), command=self.update_split_pattern)
 
         # Determine initial selection based on loaded variable

@@ -7,6 +7,7 @@ from tkinter import filedialog, messagebox
 import threading
 from kokoro_engine import KokoroEngine
 
+from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.ui import FXTabMixin, GenerationTabMixin, LexiconTabMixin, MixingTabMixin
 
 # Set Default Appearance (will be overridden by settings)
@@ -40,6 +41,13 @@ class TTSApp(FXTabMixin, GenerationTabMixin, LexiconTabMixin, MixingTabMixin, ct
         self.engine.on_progress = self.on_engine_progress
         self.engine.on_status = self.on_engine_status
         self.engine.on_finish = self.on_engine_finish
+
+        # Backend abstraction (PLAN_qt_and_engine_abstraction.md workstream 1):
+        # a thin, engine-agnostic wrapper around self.engine used for its
+        # config schema and capability flags. It doesn't yet replace any of
+        # the direct self.engine.* calls below - those keep talking to
+        # KokoroEngine exactly as before.
+        self.backend = engine_registry.get_engine("kokoro", engine=self.engine)
         
         # Auto-save timer
         self.save_timer = None
@@ -438,9 +446,14 @@ class TTSApp(FXTabMixin, GenerationTabMixin, LexiconTabMixin, MixingTabMixin, ct
         
         gen_tab = self.main_tabs.add("Generate Audio")
         self.build_generation_tab(gen_tab)
-        
-        mix_tab = self.main_tabs.add("Custom Voice")
-        self.build_mixing_tab(mix_tab)
+
+        # Mixing is an optional, Kokoro-shaped capability (raw voice-tensor
+        # math - see kokoro_gui/engine/voices.py) - gate the whole tab on it
+        # instead of always showing it, so a future backend without local
+        # voice tensors doesn't get an unusable "Custom Voice" tab.
+        if self.backend.capabilities.supports_voice_mixing:
+            mix_tab = self.main_tabs.add("Custom Voice")
+            self.build_mixing_tab(mix_tab)
 
         fx_tab = self.main_tabs.add("Audio FX")
         self.build_fx_tab(fx_tab)

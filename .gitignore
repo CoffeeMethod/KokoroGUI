@@ -176,3 +176,4 @@ cython_debug/
 /custom_voices/
 /cache/
 /presets/
+/PLAN_qt_and_engine_abstraction.md
