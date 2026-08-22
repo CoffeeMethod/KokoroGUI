@@ -13,7 +13,7 @@ import re
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox,
+    QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
     QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -148,16 +148,6 @@ class GenerationDock(QDockWidget):
         chk_row.addWidget(self.combine_check)
         chk_row.addWidget(self.subtitles_check)
         proc_layout.addLayout(chk_row)
-
-        thread_row = QHBoxLayout()
-        thread_row.addWidget(QLabel("Parallel Threads:"))
-        self.threads_spin = QSpinBox()
-        self.threads_spin.setRange(1, 16)
-        self.threads_spin.setValue(self.app.settings.get("num_threads", 1))
-        thread_row.addWidget(self.threads_spin)
-        thread_row.addWidget(QLabel("(More threads = High RAM usage)"))
-        thread_row.addStretch(1)
-        proc_layout.addLayout(thread_row)
         layout.addWidget(proc_group)
 
         layout.addStretch(1)
@@ -165,7 +155,7 @@ class GenerationDock(QDockWidget):
 
         for w in (self.out_dir_edit, self.filename_edit):
             w.textChanged.connect(lambda _v: self.app.schedule_save())
-        for w in (self.volume_spin, self.pitch_spin, self.threads_spin):
+        for w in (self.volume_spin, self.pitch_spin):
             w.valueChanged.connect(lambda _v: self.app.schedule_save())
         for w in (self.apply_fx_check, self.normalize_check, self.trim_check,
                   self.separate_check, self.combine_check, self.subtitles_check):

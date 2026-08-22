@@ -329,7 +329,9 @@ class QtTTSApp(QMainWindow):
         self.start_btn.setEnabled(not is_running)
         self.preview_btn.setEnabled(not is_running)
         self.cancel_btn.setEnabled(is_running)
-        self.generation_dock.threads_spin.setEnabled(not is_running)
+        threads_widget = self.generation_dock.schema_form.widget_for("num_threads")
+        if threads_widget is not None:
+            threads_widget.setEnabled(not is_running)
         self.generation_dock.volume_spin.setEnabled(not is_running)
         self.generation_dock.pitch_spin.setEnabled(not is_running)
         if not is_running:
@@ -391,10 +393,6 @@ class QtTTSApp(QMainWindow):
     # --- start/cancel ------------------------------
 
     def start_conversion(self) -> None:
-        threads = self.generation_dock.threads_spin.value()
-        if threads < 1:
-            self.generation_dock.threads_spin.setValue(1)
-
         if self.generation_dock.using_file_tab():
             fpath = self.generation_dock.get_file_path()
             if not os.path.exists(fpath):
