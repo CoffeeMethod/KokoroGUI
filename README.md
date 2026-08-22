@@ -11,6 +11,7 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 ## New in Beta 3.2.0
 
+-   **Experimental Qt frontend:** `python main_qt.py` launches a PySide6-based dockable-panel shell alongside the existing CustomTkinter app (`python main.py`/`run.bat`, still the default). Optional install: `pip install -r requirements-qt.txt`. Presets (`presets/*.json`, `presets/fx/*.json`) are shared between both frontends; app settings are not (`config_qt.json` vs. `config.json`). See [PLAN_qt_and_engine_abstraction.md](PLAN_qt_and_engine_abstraction.md) for the roadmap this is part of.
 -   **Modular codebase:** `gui.py` and `kokoro_engine.py` are now split into a `kokoro_gui/engine/` and `kokoro_gui/ui/` package by feature area (text extraction, caching, lexicon, presets, voice mixing, per-tab UI builders), making the codebase easier to navigate and extend. No user-facing behavior change.
 -   **Cross-Platform Audio Playback:** Preview and JIT playback now go through `sounddevice`/`soundfile` instead of the Windows-only `winsound` module, removing a hard Windows dependency from `kokoro_engine.py`/`gui.py`.
 

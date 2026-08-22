@@ -35,17 +35,30 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install -r requirements-test.txt
+          pip install -r requirements-qt.txt
+          pip install -r requirements-qt-test.txt
+        # requirements-qt*.txt (PySide6/pytest-qt) are optional for a local
+        # dev/user who only wants the Tk app (tests/gui_qt/conftest.py
+        # self-skips via pytest.importorskip when they're absent), but CI
+        # always installs them so the Qt suite (workstream 3a of
+        # PLAN_qt_and_engine_abstraction.md) actually runs on every PR.
 
       - name: Run fast test suite (Linux)
         if: runner.os == 'Linux'
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: xvfb-run -a pytest
         # Runs the mocked-pipeline suite only (pytest.ini already sets
         # `-m "not integration"` by default). No eSpeak NG or model
         # download needed. The real-synthesis integration suite
         # (`pytest -m integration tests/integration`) is intentionally
         # left out of CI - it's slow and pulls model weights. Wrapped in
-        # xvfb-run so the Tk-based GUI tests have a display to attach to.
+        # xvfb-run so the Tk-based GUI tests have a display to attach to;
+        # QT_QPA_PLATFORM=offscreen makes the Qt suite not need one (Qt's
+        # offscreen platform plugin works with or without Xvfb present).
 
       - name: Run fast test suite (Windows)
         if: runner.os != 'Linux'
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: pytest
