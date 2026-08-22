@@ -173,3 +173,6 @@ cython_debug/
 /ROADMAP.md
 /CLAUDE.md
 /tests/output/
+/custom_voices/
+/cache/
+/presets/

@@ -9,8 +9,9 @@ A modern, high-quality Text-to-Speech (TTS) application built with Python, featu
 
 https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
-## New in 3.2.0 
+## New in Beta 3.2.0
 
+-   **Modular codebase:** `gui.py` and `kokoro_engine.py` are now split into a `kokoro_gui/engine/` and `kokoro_gui/ui/` package by feature area (text extraction, caching, lexicon, presets, voice mixing, per-tab UI builders), making the codebase easier to navigate and extend. No user-facing behavior change.
 -   **Cross-Platform Audio Playback:** Preview and JIT playback now go through `sounddevice`/`soundfile` instead of the Windows-only `winsound` module, removing a hard Windows dependency from `kokoro_engine.py`/`gui.py`.
 
 ## New in 3.1.0
