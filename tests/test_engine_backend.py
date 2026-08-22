@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import gui
 from kokoro_gui.engines import registry
 from kokoro_gui.engines.base import ConfigField, EngineCapabilities, VoiceInfo
 from kokoro_gui.engines.dummy import DummyBackendAdapter, DummyEngine
@@ -131,39 +130,7 @@ def test_dummy_engine_produces_real_nonsilent_audio(tmp_path):
         engine.worker.stop()
 
 
-def test_switch_engine_to_dummy_updates_engine_backend_and_mixing_tab(tts_app):
-    assert tts_app.backend.id == "kokoro"
-    assert tts_app._mixing_tab_built is True
-
-    tts_app.switch_engine("dummy")
-
-    assert tts_app.backend.id == "dummy"
-    assert isinstance(tts_app.engine, DummyEngine)
-    assert tts_app.engine.on_progress == tts_app.on_engine_progress
-    assert tts_app.engine.on_status == tts_app.on_engine_status
-    assert tts_app.engine.on_finish == tts_app.on_engine_finish
-    assert tts_app._mixing_tab_built is False
-
-
-def test_on_engine_picker_change_maps_display_name_to_id(tts_app):
-    tts_app.on_engine_picker_change("Dummy (offline test tone)")
-    assert tts_app.backend.id == "dummy"
-
-
-def test_switch_engine_refuses_while_a_job_is_running(tts_app):
-    tts_app.cancel_btn.configure(state="normal")  # simulate an in-flight job
-
-    tts_app.switch_engine("dummy")
-
-    assert tts_app.backend.id == "kokoro"
-    assert gui.messagebox.showwarning.called
-
-
-def test_tts_app_wires_a_backend_and_shows_mixing_tab_when_capable(tts_app):
-    """Mixing tab in create_widgets (gui.py) is gated on
-    backend.capabilities.supports_voice_mixing - kokoro supports it, so the
-    tab and its widgets (mixing_tab.py's build_mixing_tab) must still exist."""
-    assert tts_app.backend.id == "kokoro"
-    assert tts_app.backend.capabilities.supports_voice_mixing is True
-    assert hasattr(tts_app, "mix_combo_a")
-    assert hasattr(tts_app, "mix_combo_b")
+# Engine-picker switch behavior (switch to dummy, mixing-dock visibility,
+# refuse-while-job-running, etc.) is covered by
+# tests/gui_qt/test_qt_engine_backend.py now that the Tk frontend has been
+# retired - see PLAN_qt_and_engine_abstraction.md.

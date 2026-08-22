@@ -3,7 +3,7 @@
 
 Composition, not rewrite: `KokoroBackendAdapter` wraps a `KokoroEngine`
 instance built and driven exactly as before - `kokoro_engine.py`'s
-`AsyncLoopThread`/thread-pool internals, and `gui.py`'s callback wiring
+`AsyncLoopThread`/thread-pool internals and the GUI's callback wiring
 (`on_progress`/`on_status`/`on_finish`) are untouched. This module changes no
 behavior; it only describes that existing surface through the schema/
 capabilities contract so a schema-driven GUI panel and, eventually, a second
@@ -45,13 +45,13 @@ class KokoroBackendAdapter:
         adapter wraps rather than constructing its own (used by the GUI at
         startup and by tests). When omitted, the adapter builds a fresh
         `KokoroEngine()` itself - used when switching the GUI's active
-        backend at runtime (see `gui.py`'s `switch_engine`), where nothing
-        already owns an engine instance to hand in."""
+        backend at runtime (see the Qt frontend's `switch_engine`), where
+        nothing already owns an engine instance to hand in."""
         self._engine = engine if engine is not None else kokoro_engine.KokoroEngine()
 
     @property
     def engine(self):
-        """The wrapped `KokoroEngine` instance - `gui.py` re-points
+        """The wrapped `KokoroEngine` instance - the GUI re-points
         `self.engine` at this on every backend switch so the many existing
         `self.engine.*` call sites keep working unchanged."""
         return self._engine

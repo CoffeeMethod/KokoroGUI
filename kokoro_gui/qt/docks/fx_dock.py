@@ -1,11 +1,9 @@
 """Audio FX dock: builds the FX controls from `kokoro_gui.qt.spec.FX_FIELD_SPECS`
-and loads/saves FX presets under `presets/fx/` (shared with the Tk frontend).
-Mirrors kokoro_gui/ui/fx_tab.py.
+and loads/saves FX presets under `presets/fx/`.
 
 Seven FX_PRESET_KEYS fields have no widget here (see spec.py's docstring) -
 their values are tracked in `self._hidden_values` and only ever change via
-preset load, exactly matching the Tk frontend's real behavior (those fields
-have no `_create_slider` call in fx_tab.py either).
+preset load.
 """
 from __future__ import annotations
 

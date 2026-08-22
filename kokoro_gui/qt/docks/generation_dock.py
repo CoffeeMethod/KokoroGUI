@@ -1,11 +1,8 @@
 """Generation dock: input source, voice/speed/output config, and the speaker
-presets (`presets/*.json`, shared with the Tk frontend) that snapshot that
-config. Mirrors kokoro_gui/ui/generation_tab.py + the relevant slice of
-gui.py's `start_conversion`/`preview_conversion` config assembly.
+presets (`presets/*.json`) that snapshot that config.
 
 Reads `kokoro_gui.qt.app.PRESETS_DIR` qualified at call time (not imported by
-name) so tests can monkeypatch it into a tmp_path, same convention
-generation_tab.py already uses for `gui.PRESETS_DIR`.
+name) so tests can monkeypatch it into a tmp_path.
 """
 from __future__ import annotations
 
@@ -82,7 +79,7 @@ class GenerationDock(QDockWidget):
         layout.addWidget(self.schema_group)
         self._build_schema_form()
 
-        # --- Output (not schema-covered, hand-built same as gui.py/generation_tab.py) ---
+        # --- Output (not schema-covered, hand-built) ---
         out_group = QGroupBox("Output")
         out_form = QFormLayout(out_group)
         dir_row = QWidget()
@@ -99,7 +96,7 @@ class GenerationDock(QDockWidget):
         out_form.addRow("Base Filename:", self.filename_edit)
         layout.addWidget(out_group)
 
-        # --- Audio control (volume/pitch - not schema-covered, matches gui.py) ---
+        # --- Audio control (volume/pitch - not schema-covered) ---
         audio_group = QGroupBox("Audio Control")
         audio_form = QFormLayout(audio_group)
         self.volume_spin = QDoubleSpinBox()
@@ -207,8 +204,7 @@ class GenerationDock(QDockWidget):
 
     def rebuild_schema_form(self) -> None:
         """Called by app.py's switch_engine - re-renders this dock's schema
-        fields for the newly-active backend. This is the fix for gui.py's
-        own switch_engine docstring gap (see gui.py:530-538)."""
+        fields for the newly-active backend."""
         self._build_schema_form()
 
     def refresh_voice_choices(self) -> None:

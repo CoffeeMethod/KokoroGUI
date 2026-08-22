@@ -34,13 +34,6 @@ def qt_app(tmp_path, monkeypatch, qtbot):
     monkeypatch.setattr(qt_app_module, "PRESETS_DIR", str(tmp_path / "presets"))
     monkeypatch.setattr(qt_app_module, "FX_PRESETS_DIR", str(tmp_path / "presets" / "fx"))
     monkeypatch.setattr(qt_app_module, "KokoroEngine", StubEngine)
-    # exist_ok: a test combining this fixture with tests/conftest.py's
-    # tts_app fixture shares the same tmp_path (pytest's tmp_path is
-    # function-scoped, so both fixtures see the identical directory) and
-    # tts_app also creates this dir - whichever fixture runs second must not
-    # fail on it already existing. That existing fixture can't be edited
-    # (see the plan's "zero edits to any existing test file"), so this side
-    # tolerates it instead.
     (tmp_path / "custom_voices").mkdir(exist_ok=True)
 
     # Modal dialogs (QMessageBox.exec/QInputDialog.exec/...) block on the

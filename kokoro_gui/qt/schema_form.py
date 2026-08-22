@@ -7,7 +7,7 @@ format/num_threads/caching) are built by walking whatever
 `backend.get_config_schema()` returns, not hard-coded per engine. Rebuilding
 this widget from a new backend's schema is what makes engine-switching
 actually swap the visible fields (see docks/generation_dock.py and app.py's
-`switch_engine`), fixing the gap gui.py's own `switch_engine` docstring names.
+`switch_engine`).
 """
 from __future__ import annotations
 

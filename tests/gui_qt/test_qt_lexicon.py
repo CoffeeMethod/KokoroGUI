@@ -1,5 +1,5 @@
 """Lexicon CRUD roundtrips into settings["lexicon"] with eager save (bypasses
-the debounced autosave, same as kokoro_gui/ui/lexicon_tab.py)."""
+the debounced autosave)."""
 import json
 
 

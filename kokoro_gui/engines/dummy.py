@@ -16,8 +16,9 @@ backend simply never touches the shared cache rather than needing that fix
 early).
 
 No `VoiceMixingMixin` - `capabilities.supports_voice_mixing=False`, so the
-Mixing tab is not shown while this backend is active (see gui.py's
-`create_widgets` gating), demonstrating that gate actually works.
+Mixing dock is not shown while this backend is active (see the Qt frontend's
+`kokoro_gui/qt/app.py`'s `_sync_mixing_dock`), demonstrating that gate
+actually works.
 """
 from __future__ import annotations
 
@@ -81,7 +82,7 @@ class DummyEngine(
     AudioFXMixin, ConversionMixin, JITMixin, LexiconMixin, PresetsMixin,
     SrtMixin, TextExtractionMixin,
 ):
-    """KokoroEngine-shaped enough for gui.py to drive directly (same
+    """KokoroEngine-shaped enough for the GUI to drive directly (same
     `worker`/`cancel_event`/`pipeline`/`on_progress`/`on_status`/`on_finish`/
     `start_conversion`/`start_jit_conversion`/`generate_preview`/`cancel`
     surface), but with no real synthesis or caching underneath."""

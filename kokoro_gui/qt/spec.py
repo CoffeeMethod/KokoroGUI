@@ -1,31 +1,20 @@
-"""Pure-data constants mirroring the Tk frontend's hard-coded field lists.
+"""Pure-data constants for the Qt frontend's field lists (generation config
+keys, FX preset keys/slider specs, language/voice tables, settings defaults).
 
-Deliberately **mirrored**, not imported from `gui.py`/`kokoro_gui/ui/*.py` —
-see the workstream 3a plan's "Zero edits to gui.py" note. This module has no
-Tk or Qt imports so both `kokoro_gui/qt/*` and the test suite can import it
-standalone, and `tests/gui_qt/test_qt_config_assembly.py` cross-checks these
-constants against what the Tk `StubEngine`/`tts_app` fixture actually
-captures at runtime, so drift between the two frontends is caught by a test
-rather than prevented by shared code (safer than refactoring working Tk
-internals just for this).
+This module has no Qt imports so both `kokoro_gui/qt/*` and the test suite can
+import it standalone.
 
-Source of truth for each constant, as of this module's creation:
-- GENERATION_BASE_KEYS: gui.py's `start_conversion` config dict (gui.py:828-848).
-- FX_PRESET_KEYS: kokoro_gui/ui/fx_tab.py's `save_fx_preset_dialog` (fx_tab.py:204-248) —
-  the same 43 keys are merged into both `start_conversion` (gui.py:851-895) and
-  `preview_conversion`'s extra_config (gui.py:722-767) when FX is applied.
-- FX_FIELD_SPECS: kokoro_gui/ui/fx_tab.py's `_create_slider(...)` call sites
-  (fx_tab.py:61-172). Seven FX_PRESET_KEYS fields have no matching entry here
-  because the Tk UI itself never built a widget for them (reverb_dry_level,
-  chorus_mix, phaser_depth, phaser_mix, comp_attack, comp_release,
-  limiter_release) — they
-  still round-trip through settings/presets/config assembly, just not via any
-  user-facing control in either frontend. That's an existing Tk gap, not
-  something workstream 3a is scoped to fix (see the plan's "preserve every
-  existing behavior 1:1" note).
-- LANGUAGES / VOICE_DB: gui.py:58-78.
-- SETTINGS_DEFAULTS: gui.py's `load_settings` defaults dict (gui.py:258-323),
-  minus "appearance"/"scaling" (Tk-specific CTk theming, no Qt equivalent).
+These constants originated as a mirror of the now-retired Tk frontend's
+(`gui.py`, `kokoro_gui/ui/*.py`) hard-coded field lists, kept in sync via
+`tests/gui_qt/test_qt_config_assembly.py`'s cross-frontend check during the
+migration (see PLAN_qt_and_engine_abstraction.md, workstream 3a). Now that Tk
+has been removed, this module is simply the canonical source of truth for the
+Qt frontend.
+
+- FX_FIELD_SPECS has no widget for seven FX_PRESET_KEYS fields
+  (reverb_dry_level, chorus_mix, phaser_depth, phaser_mix, comp_attack,
+  comp_release, limiter_release) — a pre-existing gap inherited from Tk, not
+  yet closed (see ROADMAP.md).
 """
 from dataclasses import dataclass
 from typing import Optional
@@ -154,8 +143,6 @@ MIX_PREVIEW_TEXT = {
 MIX_PREVIEW_TEXT_DEFAULT = "This is a preview of your custom mixed voice."
 
 # --- App-settings defaults (config_qt.json) --------------------------------
-# Mirrors gui.py's load_settings() defaults minus "appearance"/"scaling"
-# (CTk-specific theming with no Qt equivalent here).
 
 SETTINGS_DEFAULTS = {
     "lang_code": "a",

@@ -8,11 +8,11 @@ on:
 jobs:
   test:
     # Playback goes through playback.py (sounddevice/PortAudio) instead of
-    # the Windows-only `winsound` module, so kokoro_engine.py/gui.py no
-    # longer force Windows-only. ubuntu-latest additionally needs:
-    #   - libportaudio2 (system PortAudio lib `sounddevice` dlopens)
-    #   - Xvfb (the GUI suite builds real Tk windows - tests/conftest.py's
-    #     `tts_app` fixture - which needs a display on headless Linux)
+    # the Windows-only `winsound` module, so kokoro_engine.py no longer
+    # forces Windows-only. ubuntu-latest additionally needs libportaudio2
+    # (system PortAudio lib `sounddevice` dlopens). The GUI suite is Qt-only
+    # now (kokoro_gui/qt/) and runs headless via QT_QPA_PLATFORM=offscreen,
+    # so no Xvfb/virtual display is needed on either OS.
     # macos-latest is left out for now (unverified) - see ROADMAP.md's
     # "CI expansion" item.
     strategy:
@@ -27,38 +27,23 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install PortAudio + Xvfb (Linux)
+      - name: Install PortAudio (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libportaudio2 xvfb
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2
 
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
           pip install -r requirements-test.txt
-          pip install -r requirements-qt.txt
-          pip install -r requirements-qt-test.txt
-        # requirements-qt*.txt (PySide6/pytest-qt) are optional for a local
-        # dev/user who only wants the Tk app (tests/gui_qt/conftest.py
-        # self-skips via pytest.importorskip when they're absent), but CI
-        # always installs them so the Qt suite (workstream 3a of
-        # PLAN_qt_and_engine_abstraction.md) actually runs on every PR.
 
-      - name: Run fast test suite (Linux)
-        if: runner.os == 'Linux'
+      - name: Run fast test suite
         env:
           QT_QPA_PLATFORM: offscreen
-        run: xvfb-run -a pytest
+        run: pytest
         # Runs the mocked-pipeline suite only (pytest.ini already sets
         # `-m "not integration"` by default). No eSpeak NG or model
         # download needed. The real-synthesis integration suite
         # (`pytest -m integration tests/integration`) is intentionally
-        # left out of CI - it's slow and pulls model weights. Wrapped in
-        # xvfb-run so the Tk-based GUI tests have a display to attach to;
-        # QT_QPA_PLATFORM=offscreen makes the Qt suite not need one (Qt's
-        # offscreen platform plugin works with or without Xvfb present).
-
-      - name: Run fast test suite (Windows)
-        if: runner.os != 'Linux'
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: pytest
+        # left out of CI - it's slow and pulls model weights.
+        # QT_QPA_PLATFORM=offscreen lets the Qt suite (tests/gui_qt/) build
+        # real widgets with no display attached.

@@ -11,9 +11,9 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 ## New in Beta 3.2.0
 
--   **Experimental Qt frontend:** `python main_qt.py` launches a PySide6-based dockable-panel shell alongside the existing CustomTkinter app (`python main.py`/`run.bat`, still the default). Optional install: `pip install -r requirements-qt.txt`. Presets (`presets/*.json`, `presets/fx/*.json`) are shared between both frontends; app settings are not (`config_qt.json` vs. `config.json`). See [PLAN_qt_and_engine_abstraction.md](PLAN_qt_and_engine_abstraction.md) for the roadmap this is part of.
--   **Modular codebase:** `gui.py` and `kokoro_engine.py` are now split into a `kokoro_gui/engine/` and `kokoro_gui/ui/` package by feature area (text extraction, caching, lexicon, presets, voice mixing, per-tab UI builders), making the codebase easier to navigate and extend. No user-facing behavior change.
--   **Cross-Platform Audio Playback:** Preview and JIT playback now go through `sounddevice`/`soundfile` instead of the Windows-only `winsound` module, removing a hard Windows dependency from `kokoro_engine.py`/`gui.py`.
+-   **Qt frontend, now the only frontend:** `python main.py`/`run.bat` launches a PySide6-based dockable-panel shell (`kokoro_gui/qt/`). The previous CustomTkinter app (`gui.py`) has been retired now that Qt reached parity — see [PLAN_qt_and_engine_abstraction.md](PLAN_qt_and_engine_abstraction.md) for the migration this completed. PySide6 is a regular dependency in `requirements.txt`.
+-   **Modular codebase:** `kokoro_engine.py` is a slim core module backed by a `kokoro_gui/engine/` package split out by feature area (text extraction, caching, lexicon, presets, voice mixing), making the codebase easier to navigate and extend.
+-   **Cross-Platform Audio Playback:** Preview and JIT playback now go through `sounddevice`/`soundfile` instead of the Windows-only `winsound` module, removing a hard Windows dependency from `kokoro_engine.py`.
 
 ## New in 3.1.0
 
@@ -85,6 +85,8 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
     -   **Windows:** Double-click `run.bat` or run `python main.py`
     -   **Other:** Run `python main.py`
 
+    This launches the PySide6 (Qt) frontend — a dockable-panel shell with a Generation, FX, Mixing, and Lexicon dock, plus an engine picker in the toolbar.
+
 2.  **Configure your conversion:**
     -   Choose your input method (Direct Text or Load File).
     -   Select a voice and language from the dropdown menus.
@@ -99,7 +101,7 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 ## Running Tests
 
-The project has a `pytest` suite under `tests/` covering both `gui.py` and `kokoro_engine.py`. Playback no longer forces Windows-only (see [`playback.py`](playback.py)), and CI (`.github/workflows/tests.yml`) now runs the suite on both `windows-latest` and `ubuntu-latest` (the Linux leg installs `libportaudio2` for `sounddevice` and runs under `xvfb-run` since the GUI tests build real Tk windows). `macos-latest` isn't set up yet.
+The project has a `pytest` suite under `tests/` covering both the Qt frontend (`tests/gui_qt/`) and `kokoro_engine.py`. Playback no longer forces Windows-only (see [`playback.py`](playback.py)), and CI (`.github/workflows/tests.yml`) now runs the suite on both `windows-latest` and `ubuntu-latest` (the Linux leg installs `libportaudio2` for `sounddevice`; the Qt suite runs headless via `QT_QPA_PLATFORM=offscreen`, no virtual display needed). `macos-latest` isn't set up yet.
 
 1.  **Install test dependencies** (on top of `requirements.txt`):
     ```bash
@@ -120,13 +122,13 @@ The project has a `pytest` suite under `tests/` covering both `gui.py` and `koko
 
 ### CI
 
-[.github/workflows/tests.yml](.github/workflows/tests.yml) runs step 2 above (`pytest`) on push/PR against `windows-latest` and `ubuntu-latest` (the Linux leg additionally installs `libportaudio2` and runs under `xvfb-run`, as noted above) after installing `requirements.txt` + `requirements-test.txt`. The fast suite needs no eSpeak NG or model download, so it's safe to run on every push/PR. The integration suite is slow and pulls model weights, so it's intentionally left out as a manual/opt-in run rather than part of the default pipeline.
+[.github/workflows/tests.yml](.github/workflows/tests.yml) runs step 2 above (`pytest`) on push/PR against `windows-latest` and `ubuntu-latest` (the Linux leg additionally installs `libportaudio2`, as noted above) after installing `requirements.txt` + `requirements-test.txt`. The fast suite needs no eSpeak NG or model download, so it's safe to run on every push/PR. The integration suite is slow and pulls model weights, so it's intentionally left out as a manual/opt-in run rather than part of the default pipeline.
 
 ## Technologies Used
 
 -   **[Kokoro](https://github.com/hexgrad/kokoro):** The core TTS engine.
 -   **[Pedalboard](https://github.com/spotify/pedalboard):** Audio effects processing.
--   **Customtkinter:** For the graphical user interface.
+-   **[PySide6](https://doc.qt.io/qtforpython/):** For the graphical user interface.
 -   **PyTorch:** Deep learning backend.
 -   **SoundFile:** For writing high-quality audio files.
 -   **PyPDF & EbookLib:** For parsing documents.

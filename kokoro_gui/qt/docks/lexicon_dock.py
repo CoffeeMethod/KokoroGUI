@@ -1,6 +1,5 @@
 """Lexicon dock: find/replace rules stored in `self.app.settings["lexicon"]`.
-Mirrors kokoro_gui/ui/lexicon_tab.py, including its eager-save behavior
-(bypasses the debounced autosave every other field uses)."""
+Saves eagerly (bypasses the debounced autosave every other field uses)."""
 from __future__ import annotations
 
 from PySide6.QtWidgets import (

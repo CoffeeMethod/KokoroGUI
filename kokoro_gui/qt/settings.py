@@ -1,10 +1,9 @@
-"""Load/save `config_qt.json` (the Qt frontend's own app-settings file - see
-spec.py's module docstring for why it's separate from Tk's `config.json`),
-plus `QMainWindow` dock-layout persistence.
+"""Load/save `config_qt.json` (the Qt frontend's app-settings file), plus
+`QMainWindow` dock-layout persistence.
 
 Pure functions (no `QMainWindow`/app-instance state held here) so they're
 easy to unit test in isolation - `app.py` calls these and owns the debounce
-timer (`QTimer.singleShot`, mirroring gui.py's `schedule_save`/`after(1000, ...)`).
+timer (`QTimer.singleShot`).
 """
 from __future__ import annotations
 

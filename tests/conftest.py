@@ -9,7 +9,6 @@ without every test having to remember to pass it explicitly.
 """
 import os
 import re
-import sys
 import time
 import threading
 import concurrent.futures
@@ -25,20 +24,8 @@ import torch
 import kokoro_engine
 from kokoro_engine import KokoroEngine
 
-# On some Windows Store ("WindowsApps") Python installs, Tcl/Tk's own
-# init.tcl discovery intermittently fails against the package-virtualized
-# path when many Tk() roots are created/destroyed across a test session
-# (each GUI test builds a real TTSApp). Pointing TCL_LIBRARY/TK_LIBRARY at
-# the known-good path once avoids repeated, occasionally-flaky rediscovery.
-_tcl_dir = os.path.join(sys.base_prefix, "tcl", "tcl8.6")
-_tk_dir = os.path.join(sys.base_prefix, "tcl", "tk8.6")
-if os.path.isdir(_tcl_dir):
-    os.environ.setdefault("TCL_LIBRARY", _tcl_dir)
-if os.path.isdir(_tk_dir):
-    os.environ.setdefault("TK_LIBRARY", _tk_dir)
-
-# One shared timestamp per pytest invocation, mirroring gui.py's
-# self.timecode_format = "%Y%m%d%H%M%S" convention (gui.py:96).
+# One shared timestamp per pytest invocation, mirroring the Qt frontend's
+# "%Y%m%d%H%M%S" timecode convention (kokoro_gui/qt/app.py).
 _RUN_TS = time.strftime("%Y%m%d%H%M%S")
 
 
@@ -185,6 +172,11 @@ def espeak_available():
 # ---------------------------------------------------------------------------
 # GUI-level fixtures
 # ---------------------------------------------------------------------------
+#
+# The Tk frontend (gui.py, kokoro_gui/ui/) has been retired now that the Qt
+# frontend (kokoro_gui/qt/) reached parity - see PLAN_qt_and_engine_abstraction.md.
+# StubEngine stays here (not moved into tests/gui_qt/) because it's imported
+# by tests/gui_qt/conftest.py's `qt_app` fixture too.
 
 class StubEngine:
     """Drop-in replacement for KokoroEngine used by GUI tests - never touches
@@ -204,36 +196,3 @@ class StubEngine:
         self.mix_voices = MagicMock()
         self.extract_text_from_file = MagicMock(return_value="")
         self.cancel = MagicMock()
-
-
-@pytest.fixture
-def tts_app(tmp_path, monkeypatch):
-    import gui
-    import tkinter
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(gui, "CONFIG_FILE", str(tmp_path / "config.json"))
-    monkeypatch.setattr(gui, "PRESETS_DIR", str(tmp_path / "presets"))
-    monkeypatch.setattr(gui, "FX_PRESETS_DIR", str(tmp_path / "presets" / "fx"))
-    monkeypatch.setattr(gui, "KokoroEngine", StubEngine)
-    monkeypatch.setattr(gui, "messagebox", MagicMock())
-    monkeypatch.setattr(gui, "filedialog", MagicMock())
-    (tmp_path / "custom_voices").mkdir()
-
-    # Creating many real Tk() interpreters across a test session intermittently
-    # hits the same WindowsApps init.tcl read glitch as above - retry a few
-    # times rather than failing the whole test on a transient hiccup.
-    app = None
-    last_err = None
-    for _ in range(5):
-        try:
-            app = gui.TTSApp()
-            break
-        except tkinter.TclError as e:
-            last_err = e
-            time.sleep(0.2)
-    if app is None:
-        raise last_err
-
-    yield app
-    app.destroy()

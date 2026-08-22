@@ -1,6 +1,6 @@
-"""Engine-picker switch behavior - including the fix for gui.py's known gap
-(gui.py:530-538: switch_engine doesn't re-render the Generation tab's
-schema-driven fields). See app.py's `switch_engine` docstring."""
+"""Engine-picker switch behavior, including re-rendering the Generation
+dock's schema-driven fields for the newly-active backend. See app.py's
+`switch_engine` docstring."""
 from kokoro_gui.engines import registry as engine_registry
 
 
@@ -27,9 +27,9 @@ def test_switch_back_to_kokoro_shows_mixing_dock_again(qt_app):
 
 
 def test_switch_engine_rebuilds_schema_form_for_new_backend(qt_app):
-    """The actual Qt-specific improvement over Tk: the Generation dock's
-    schema-driven fields must reflect the newly-active backend's schema, not
-    stay frozen at whatever the first backend built (gui.py's own gap)."""
+    """The Generation dock's schema-driven fields must reflect the
+    newly-active backend's schema, not stay frozen at whatever the first
+    backend built."""
     original_form = qt_app.generation_dock.schema_form
     qt_app.switch_engine("dummy")
     assert qt_app.generation_dock.schema_form is not original_form

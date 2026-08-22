@@ -1,21 +1,18 @@
-"""QtTTSApp: the PySide6 shell (workstream 3a of PLAN_qt_and_engine_abstraction.md).
+"""QtTTSApp: the PySide6 shell (workstream 3a of PLAN_qt_and_engine_abstraction.md),
+now the sole GUI frontend - the former CustomTkinter app (`gui.py`,
+`kokoro_gui/ui/*.py`) was retired once this reached parity.
 
-Mirrors gui.py's `TTSApp` behavior 1:1 (engine/backend construction, config
-assembly, preview/start/cancel lifecycle, autosave) but as a `QMainWindow` +
-`QDockWidget` shell instead of a `CTkTabview`. Talks to `KokoroEngine` and the
-`kokoro_gui.engines` registry through the exact same interface gui.py uses -
-nothing here imports from gui.py or kokoro_gui/ui/*.py, and nothing there
-imports from here (see this package's `__init__.py`).
+A `QMainWindow` + `QDockWidget` shell. Talks to `KokoroEngine` and the
+`kokoro_gui.engines` registry the same way the retired Tk frontend did.
 
 `CONFIG_FILE`/`PRESETS_DIR`/`FX_PRESETS_DIR` are defined here, at module
 level, before the `kokoro_gui.qt.docks` import below - the dock modules do
 `import kokoro_gui.qt.app as qt_app_module` and read `qt_app_module.PRESETS_DIR`
-etc. qualified at call time (same convention kokoro_gui/ui/*.py uses for
-`gui.PRESETS_DIR`), which makes this a circular import; defining these names
-before triggering that import keeps it safe (Python binds the dock modules'
-`qt_app_module` name to this already-partially-initialized module, and by the
-time any dock function actually reads `qt_app_module.PRESETS_DIR` the whole
-package has finished importing anyway).
+etc. qualified at call time, which makes this a circular import; defining
+these names before triggering that import keeps it safe (Python binds the
+dock modules' `qt_app_module` name to this already-partially-initialized
+module, and by the time any dock function actually reads
+`qt_app_module.PRESETS_DIR` the whole package has finished importing anyway).
 """
 from __future__ import annotations
 
@@ -65,7 +62,7 @@ class QtTTSApp(QMainWindow):
         self.mixing_dock: MixingDock | None = None
         self.generation_dock: GenerationDock | None = None
 
-        # --- Engine / backend (mirrors gui.py:40-50) ---
+        # --- Engine / backend ---
         self.engine = KokoroEngine()
         self.bridge = EngineSignalBridge()
         wire_engine(self.engine, self.bridge)
@@ -167,7 +164,7 @@ class QtTTSApp(QMainWindow):
         layout.addStretch(1)
         self.setCentralWidget(central)
 
-    # --- voice listing (mirrors gui.py:195-203, hardcoded relative path) --
+    # --- voice listing (hardcoded relative path) --
 
     def get_all_voices(self, lang_code: str | None = None) -> list:
         if lang_code is None:
@@ -178,7 +175,7 @@ class QtTTSApp(QMainWindow):
             custom = [f[:-3] for f in os.listdir("custom_voices") if f.endswith(".pt")]
         return sorted(standard + custom)
 
-    # --- settings persistence (mirrors gui.py's schedule_save/save_settings) -
+    # --- settings persistence -
 
     def schedule_save(self) -> None:
         self._save_timer.start(1000)
@@ -212,7 +209,7 @@ class QtTTSApp(QMainWindow):
 
         qt_settings.save_settings(CONFIG_FILE, self.settings)
 
-    # --- config assembly (mirrors gui.py:828-895 / 714-767) ----------------
+    # --- config assembly ----------------
 
     def _assemble_config(self) -> dict:
         gen_state = self.generation_dock.get_state()
@@ -241,7 +238,7 @@ class QtTTSApp(QMainWindow):
             config.update(self.fx_dock.get_state())
         return config
 
-    # --- engine picker / switch (mirrors gui.py:524-561) --------------------
+    # --- engine picker / switch --------------------
 
     def on_engine_picker_change(self, display_name: str) -> None:
         engine_id = self._engine_ids_by_display_name.get(display_name)
@@ -269,8 +266,7 @@ class QtTTSApp(QMainWindow):
         self.bridge = new_bridge
 
         # Rebuild the Generation dock's schema-driven fields for the new
-        # backend and show/hide the Mixing dock - this is the fix for
-        # gui.py's own switch_engine docstring gap (gui.py:530-538).
+        # backend and show/hide the Mixing dock.
         self.generation_dock.rebuild_schema_form()
         self._sync_mixing_dock()
 
@@ -294,7 +290,7 @@ class QtTTSApp(QMainWindow):
             self.mixing_dock.deleteLater()
             self.mixing_dock = None
 
-    # --- settings dialog (mirrors gui.py:563-618, minus CTk-only appearance/scaling) -
+    # --- settings dialog -
 
     def open_settings_dialog(self) -> None:
         dialog = QDialog(self)
@@ -339,7 +335,7 @@ class QtTTSApp(QMainWindow):
         if not is_running:
             self.progress_bar.setValue(0 if self.engine.cancel_event.is_set() else 100)
 
-    # --- preview (mirrors gui.py:684-791) -----------------------------------
+    # --- preview -----------------------------------
 
     def preview_conversion(self) -> None:
         if not self.engine.pipeline:
@@ -392,7 +388,7 @@ class QtTTSApp(QMainWindow):
             self.status_label.setText(payload)
             self.status_label.setStyleSheet("color: red;")
 
-    # --- start/cancel (mirrors gui.py:793-908) ------------------------------
+    # --- start/cancel ------------------------------
 
     def start_conversion(self) -> None:
         threads = self.generation_dock.threads_spin.value()

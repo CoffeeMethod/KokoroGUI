@@ -1,11 +1,11 @@
 """Custom Voice (mixing) dock: blends two voice tensors via
 `self.app.engine.mix_voices` and previews/saves the result. Shown only when
 `app.backend.capabilities.supports_voice_mixing` is true - see app.py's
-`_sync_mixing_dock`. Mirrors kokoro_gui/ui/mixing_tab.py.
+`_sync_mixing_dock`.
 
-Uses the literal relative "custom_voices" path, same as mixing_tab.py/gui.py
-(not `kokoro_engine.CUSTOM_VOICES_DIR`) - both frontends rely on the process
-cwd for this, which is why the test fixtures `monkeypatch.chdir(tmp_path)`.
+Uses the literal relative "custom_voices" path (not
+`kokoro_engine.CUSTOM_VOICES_DIR`) - relies on the process cwd for this,
+which is why the test fixtures `monkeypatch.chdir(tmp_path)`.
 """
 from __future__ import annotations
 
