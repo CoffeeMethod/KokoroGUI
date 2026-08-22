@@ -172,3 +172,4 @@ cython_debug/
 /audio_output/
 /ROADMAP.md
 /CLAUDE.md
+/tests/output/
