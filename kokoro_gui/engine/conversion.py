@@ -30,6 +30,11 @@ class ConversionMixin:
             p = self.get_thread_pipeline(lang_code)
             if not p: return False
 
+            # Kokoro/Dummy both output 24000Hz; a backend whose model outputs a
+            # different rate (e.g. Audio8Engine's 44100Hz) sets an instance
+            # `SAMPLE_RATE` attribute to override this default.
+            sr = getattr(self, "SAMPLE_RATE", 24000)
+
             try:
                 ms_segments = self.parse_multispeaker_text(text)
                 # Truncate to first 2 segments for preview if many
@@ -94,7 +99,7 @@ class ConversionMixin:
                         if isinstance(audio, torch.Tensor):
                             audio = audio.cpu().numpy()
                         # Post Process
-                        audio = self.process_audio(audio, 24000, target_extra)
+                        audio = self.process_audio(audio, sr, target_extra)
                         all_pieces.append(audio)
 
                 if not all_pieces:
@@ -103,13 +108,13 @@ class ConversionMixin:
                 full_audio = np.concatenate(all_pieces)
 
                 try:
-                    with AudioFile(output_path, 'w', samplerate=24000, num_channels=1) as f:
+                    with AudioFile(output_path, 'w', samplerate=sr, num_channels=1) as f:
                         f.write(full_audio)
                     return True
                 except Exception as e:
                     print(f"Preview write error: {e}")
                     # Fallback
-                    sf.write(output_path, full_audio, 24000)
+                    sf.write(output_path, full_audio, sr)
                     return True
             except Exception as e:
                 print(f"Preview error: {e}")
@@ -120,9 +125,10 @@ class ConversionMixin:
     async def smart_combine(self, file_paths, output_path, update_callback):
         def combine_worker():
             total_files = len(file_paths)
+            sr = getattr(self, "SAMPLE_RATE", 24000)
             try:
                 # Use Pedalboard AudioFile
-                with AudioFile(output_path, 'w', samplerate=24000, num_channels=1) as out_f:
+                with AudioFile(output_path, 'w', samplerate=sr, num_channels=1) as out_f:
                     for i, fp in enumerate(file_paths):
                         if self.cancel_event.is_set(): break
                         try:

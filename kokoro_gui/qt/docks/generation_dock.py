@@ -174,7 +174,6 @@ class GenerationDock(QDockWidget):
         schema = self.app.backend.get_config_schema()
         lang_code = self.app.settings.get("lang_code", "a")
         voice_choices = [(v, v) for v in self.app.get_all_voices(lang_code)]
-        lang_choices = [(label, code) for label, code in spec.LANGUAGES.items()]
         values = {
             "lang_code": self.app.settings.get("lang_code", "a"),
             "voice": self.app.settings.get("voice", "af_heart"),
@@ -184,9 +183,20 @@ class GenerationDock(QDockWidget):
             "num_threads": self.app.settings.get("num_threads", 1),
             "caching": self.app.settings.get("caching", True),
         }
+        # "voice" is always GUI-resolved (app.get_all_voices, above) since no
+        # backend's schema declares a fixed voice list. "lang_code" is only
+        # GUI-resolved for a backend that leaves it choices=None (today:
+        # Kokoro/Dummy, whose language table - spec.LANGUAGES - is display
+        # data owned by this frontend, not engine data); a backend whose
+        # schema already declares its own lang_code choices (e.g. Audio8's
+        # 11-language list) keeps those instead of being overridden here.
+        overrides = {"voice": voice_choices}
+        lang_field = next((f for f in schema if f.key == "lang_code"), None)
+        if lang_field is not None and lang_field.choices is None:
+            overrides["lang_code"] = [(label, code) for label, code in spec.LANGUAGES.items()]
         self.schema_form = SchemaFormWidget(
             schema, values,
-            choices_overrides={"voice": voice_choices, "lang_code": lang_choices},
+            choices_overrides=overrides,
             skip_keys={"lexicon"},
             on_change=self._on_schema_field_changed,
         )

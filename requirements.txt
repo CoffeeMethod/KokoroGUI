@@ -10,3 +10,6 @@ soundfile==0.13.1
 sounddevice
 torch==2.13.0
 PySide6==6.11.2
+transformers>=4.57.0,<5
+torchaudio>=2.5.0
+safetensors>=0.4

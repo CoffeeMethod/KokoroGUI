@@ -65,7 +65,7 @@ def voice_fingerprint(voice_ref):
     the difference. The content hash is cached per-file-mtime so a batch run
     doesn't re-read/re-hash the same file for every chunk.
     """
-    if not (os.path.isabs(voice_ref) and os.path.isfile(voice_ref)):
+    if not voice_ref or not (os.path.isabs(voice_ref) and os.path.isfile(voice_ref)):
         return voice_ref
 
     try:
@@ -87,11 +87,13 @@ def voice_fingerprint(voice_ref):
     return fp
 
 
-def compute_cache_key(text, voice, eff_speed, lang_code, engine_id="kokoro", engine_version=None):
+def compute_cache_key(text, voice, eff_speed, lang_code, engine_id="kokoro", engine_version=None, extra=None):
     """The segment-cache hash: schema_version, engine identity/version, text,
-    voice (name + content fingerprint), effective speed, and language code.
+    voice (name + content fingerprint), effective speed, language code, and
+    an optional `extra` dict of engine-specific inputs that also affect what
+    gets generated.
 
-    Takes exactly those five inputs, not a whole config dict - a config dict
+    Takes exactly those inputs, not a whole config dict - a config dict
     also carries `out_dir`/`filename`/`format`/`normalize`/`trim_silence`/the
     FX chain/`num_threads`/etc., none of which affect what gets cached (they
     apply in `process_and_save` *after* cache read/generation, to the same
@@ -102,6 +104,16 @@ def compute_cache_key(text, voice, eff_speed, lang_code, engine_id="kokoro", eng
     for the same reason: only the text used to generate a segment determines
     its content - splitting is an internal detail of how a chunk gets
     divided for parallel processing.
+
+    `extra` exists for a backend whose "voice" isn't fully described by a
+    name + resolved-file fingerprint alone - e.g. Audio8Engine's zero-shot
+    voice cloning also takes a reference *transcript*, which changes what
+    gets generated even when the reference wav and its name are unchanged.
+    Left as `None` (the default), it's omitted from `cache_key_parts`
+    entirely rather than hashed as an empty/`None` value, so Kokoro's and
+    the dummy backend's existing call sites - and every cache key they've
+    already written to disk - are byte-for-byte unaffected by this
+    parameter's addition.
     """
     if engine_version is None:
         engine_version = get_engine_version(engine_id)
@@ -116,6 +128,9 @@ def compute_cache_key(text, voice, eff_speed, lang_code, engine_id="kokoro", eng
         "speed": eff_speed,
         "lang_code": lang_code,
     }
+    if extra:
+        for k in sorted(extra):
+            cache_key_parts[f"extra_{k}"] = extra[k]
     to_hash = "|".join(f"{k}={v}" for k, v in cache_key_parts.items())
     return hashlib.sha256(to_hash.encode("utf-8")).hexdigest()
 

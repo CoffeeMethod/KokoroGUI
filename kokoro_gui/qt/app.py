@@ -37,7 +37,7 @@ CONFIG_FILE = "config_qt.json"
 PRESETS_DIR = "presets"
 FX_PRESETS_DIR = os.path.join(PRESETS_DIR, "fx")
 
-from kokoro_gui.qt.docks import FXDock, GenerationDock, LexiconDock, MixingDock  # noqa: E402
+from kokoro_gui.qt.docks import FXDock, GenerationDock, LexiconDock, MixingDock, VoiceCloneDock  # noqa: E402
 
 
 class QtTTSApp(QMainWindow):
@@ -60,6 +60,7 @@ class QtTTSApp(QMainWindow):
         self._save_timer.timeout.connect(self.save_settings)
 
         self.mixing_dock: MixingDock | None = None
+        self.voice_clone_dock: VoiceCloneDock | None = None
         self.generation_dock: GenerationDock | None = None
 
         # --- Engine / backend ---
@@ -126,6 +127,7 @@ class QtTTSApp(QMainWindow):
         self.tabifyDockWidget(self.fx_dock, self.lexicon_dock)
 
         self._sync_mixing_dock()
+        self._sync_voice_clone_dock()
 
     def _build_action_bar(self) -> None:
         central = QWidget()
@@ -151,8 +153,9 @@ class QtTTSApp(QMainWindow):
         btn_row = QHBoxLayout()
         self.preview_btn = QPushButton("Preview Audio")
         self.preview_btn.clicked.connect(self.preview_conversion)
-        self.start_btn = QPushButton("Start Real-time JIT" if self.jit_enabled else "Start Generation")
+        self.start_btn = QPushButton("Start Generation")
         self.start_btn.clicked.connect(self.start_conversion)
+        self._update_start_btn_text()
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self.cancel_conversion)
         self.cancel_btn.setEnabled(False)
@@ -164,16 +167,21 @@ class QtTTSApp(QMainWindow):
         layout.addStretch(1)
         self.setCentralWidget(central)
 
-    # --- voice listing (hardcoded relative path) --
+    # --- voice listing --
 
     def get_all_voices(self, lang_code: str | None = None) -> list:
+        """`spec.VOICE_DB` is Kokoro's built-in named-voice table specifically
+        (empty for any lang_code Kokoro doesn't define, e.g. Audio8's
+        language names) - the "custom"/backend-provided half comes from
+        `self.backend.get_voices(...)` generically, so this works for
+        whichever engine is active rather than always scanning Kokoro's
+        `.pt` directory (see `Audio8BackendAdapter.get_voices`, which lists
+        saved wav+transcript references instead)."""
         if lang_code is None:
             lang_code = self.settings.get("lang_code", "a")
         standard = spec.VOICE_DB.get(lang_code, [])
-        custom = []
-        if os.path.exists("custom_voices"):
-            custom = [f[:-3] for f in os.listdir("custom_voices") if f.endswith(".pt")]
-        return sorted(standard + custom)
+        custom = [v.id for v in self.backend.get_voices(lang_code)]
+        return sorted(set(standard + custom))
 
     # --- settings persistence -
 
@@ -269,6 +277,8 @@ class QtTTSApp(QMainWindow):
         # backend and show/hide the Mixing dock.
         self.generation_dock.rebuild_schema_form()
         self._sync_mixing_dock()
+        self._sync_voice_clone_dock()
+        self._update_start_btn_text()
 
         try:
             old_engine.worker.stop()
@@ -278,6 +288,10 @@ class QtTTSApp(QMainWindow):
         self.status_label.setText(f"Switched engine to {new_backend.display_name}. Initializing...")
         self.status_label.setStyleSheet("color: gray;")
         self.engine.worker.run_coro(self.engine.init_pipeline_async(self.settings.get("lang_code", "a")))
+
+    def _update_start_btn_text(self) -> None:
+        will_stream = self.jit_enabled and self.backend.capabilities.supports_jit_streaming
+        self.start_btn.setText("Start Real-time JIT" if will_stream else "Start Generation")
 
     def _sync_mixing_dock(self) -> None:
         wants = self.backend.capabilities.supports_voice_mixing
@@ -290,6 +304,17 @@ class QtTTSApp(QMainWindow):
             self.mixing_dock.deleteLater()
             self.mixing_dock = None
 
+    def _sync_voice_clone_dock(self) -> None:
+        wants = self.backend.capabilities.supports_voice_cloning
+        if wants and self.voice_clone_dock is None:
+            self.voice_clone_dock = VoiceCloneDock(self)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.voice_clone_dock)
+            self.tabifyDockWidget(self.fx_dock, self.voice_clone_dock)
+        elif not wants and self.voice_clone_dock is not None:
+            self.removeDockWidget(self.voice_clone_dock)
+            self.voice_clone_dock.deleteLater()
+            self.voice_clone_dock = None
+
     # --- settings dialog -
 
     def open_settings_dialog(self) -> None:
@@ -298,6 +323,9 @@ class QtTTSApp(QMainWindow):
         layout = QVBoxLayout(dialog)
         jit_check = QCheckBox("Enable JIT Generation (Streaming)")
         jit_check.setChecked(self.jit_enabled)
+        if not self.backend.capabilities.supports_jit_streaming:
+            jit_check.setEnabled(False)
+            layout.addWidget(QLabel(f"({self.backend.display_name} doesn't support streaming - runs as Standard.)"))
         layout.addWidget(jit_check)
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(dialog.accept)
@@ -305,7 +333,7 @@ class QtTTSApp(QMainWindow):
         dialog.exec()
 
         self.jit_enabled = jit_check.isChecked()
-        self.start_btn.setText("Start Real-time JIT" if self.jit_enabled else "Start Generation")
+        self._update_start_btn_text()
         self.save_settings()
 
     # --- engine callbacks (queued automatically across threads - see signals.py) -
@@ -419,7 +447,7 @@ class QtTTSApp(QMainWindow):
         self.set_ui_state(True)
         self.progress_bar.setValue(0)
 
-        if self.jit_enabled:
+        if self.jit_enabled and self.backend.capabilities.supports_jit_streaming:
             self.engine.start_jit_conversion(text_data, config)
         else:
             self.engine.start_conversion(text_data, config)
