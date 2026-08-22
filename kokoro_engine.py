@@ -22,7 +22,7 @@ from bs4 import BeautifulSoup
 import warnings
 import re
 import json
-import winsound
+import playback
 import tempfile
 from kokoro import KPipeline
 
@@ -733,8 +733,8 @@ class KokoroEngine:
     def cancel(self):
         self.cancel_event.set()
         try:
-            # Stop any current winsound playback immediately
-            winsound.PlaySound(None, winsound.SND_PURGE)
+            # Stop any current playback immediately
+            playback.stop()
         except Exception:
             pass
 
@@ -853,7 +853,7 @@ class KokoroEngine:
                             self.on_progress(percent, elapsed, "--:--", f"Playing: {clean_snip}")
 
                         # Play audio (Synchronously in thread)
-                        await asyncio.to_thread(winsound.PlaySound, item['path'], winsound.SND_FILENAME)
+                        await asyncio.to_thread(playback.play, item['path'], True)
                         
                         played_segments.append(item)
                         if item in generated_but_unplayed:

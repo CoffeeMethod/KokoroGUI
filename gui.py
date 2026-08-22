@@ -2,7 +2,7 @@ import os
 import time
 import json
 import re
-import winsound
+import playback
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import threading
@@ -754,7 +754,7 @@ class TTSApp(ctk.CTk):
                 success, err = future.result()
                 if success:
                     self.after(0, lambda: self.mix_status_label.configure(text="Playing preview...", text_color="green"))
-                    winsound.PlaySound(tmp_audio_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                    playback.play(tmp_audio_path)
                 else:
                     self.after(0, lambda: self.mix_status_label.configure(text=f"Preview failed: {err}", text_color="red"))
             except Exception as e:
@@ -1622,7 +1622,7 @@ class TTSApp(ctk.CTk):
                     success = future.result()
                     if success:
                         self.status_label.configure(text="Playing preview...", text_color="green")
-                        winsound.PlaySound(tmp_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                        playback.play(tmp_path)
                         self.after(3000, lambda: self.status_label.configure(text="Ready", text_color="gray"))
                     else:
                         self.status_label.configure(text="Preview failed.", text_color="red")

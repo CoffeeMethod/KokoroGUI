@@ -9,6 +9,10 @@ A modern, high-quality Text-to-Speech (TTS) application built with Python, featu
 
 https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
+## New in 3.2.0 
+
+-   **Cross-Platform Audio Playback:** Preview and JIT playback now go through `sounddevice`/`soundfile` instead of the Windows-only `winsound` module, removing a hard Windows dependency from `kokoro_engine.py`/`gui.py`.
+
 ## New in 3.1.0
 
 -   **JIT (Just-In-Time) Generation:** Real-time audio streaming. Start listening to your text immediately as it's being generated.
@@ -93,7 +97,7 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 ## Running Tests
 
-The project has a `pytest` suite under `tests/` covering both `gui.py` and `kokoro_engine.py`. Because `kokoro_engine.py` imports the Windows-only `winsound` module unconditionally, **the suite only runs on Windows.**
+The project has a `pytest` suite under `tests/` covering both `gui.py` and `kokoro_engine.py`. Playback no longer forces Windows-only (see [`playback.py`](playback.py)), and CI (`.github/workflows/tests.yml`) now runs the suite on both `windows-latest` and `ubuntu-latest` (the Linux leg installs `libportaudio2` for `sounddevice` and runs under `xvfb-run` since the GUI tests build real Tk windows). `macos-latest` isn't set up yet.
 
 1.  **Install test dependencies** (on top of `requirements.txt`):
     ```bash
@@ -114,7 +118,7 @@ The project has a `pytest` suite under `tests/` covering both `gui.py` and `koko
 
 ### CI
 
-There's no CI workflow configured in this repo yet. A minimal one only needs to run step 2 above (`pytest`) on a `windows-latest` runner after installing `requirements.txt` + `requirements-test.txt` — the fast suite needs no eSpeak NG or model download, so it's safe to run on every push/PR. The integration suite is slow and pulls model weights, so it's better left as a manual/opt-in job rather than part of the default pipeline.
+[.github/workflows/tests.yml](.github/workflows/tests.yml) runs step 2 above (`pytest`) on push/PR against `windows-latest` and `ubuntu-latest` (the Linux leg additionally installs `libportaudio2` and runs under `xvfb-run`, as noted above) after installing `requirements.txt` + `requirements-test.txt`. The fast suite needs no eSpeak NG or model download, so it's safe to run on every push/PR. The integration suite is slow and pulls model weights, so it's intentionally left out as a manual/opt-in run rather than part of the default pipeline.
 
 ## Technologies Used
 
