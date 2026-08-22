@@ -436,24 +436,41 @@ class TTSApp(FXTabMixin, GenerationTabMixin, LexiconTabMixin, MixingTabMixin, ct
 
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10,0))
-        
+
         ctk.CTkLabel(header_frame, text="Kokoro TTS", font=("Roboto", 20, "bold")).pack(side="left", padx=5)
         ctk.CTkButton(header_frame, text="⚙ Settings", width=80, height=28, command=self.open_settings).pack(side="right")
+
+        # Engine picker (PLAN_qt_and_engine_abstraction.md workstream 1) -
+        # lists every backend registered in kokoro_gui/engines/registry.py
+        # (built-in: "kokoro", "dummy") and swaps the active self.engine/
+        # self.backend on selection. Mainly a testing aid for now, ahead of
+        # the Qt migration's real per-engine settings panels.
+        engine_picker_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
+        engine_picker_frame.pack(side="right", padx=10)
+        ctk.CTkLabel(engine_picker_frame, text="Engine:").pack(side="left", padx=(0, 5))
+        self._engine_ids_by_display_name = {
+            engine_registry.get_display_name(eid): eid for eid in engine_registry.list_engines()
+        }
+        self.engine_picker = ctk.CTkComboBox(
+            engine_picker_frame, values=list(self._engine_ids_by_display_name.keys()),
+            width=200, command=self.on_engine_picker_change,
+        )
+        self.engine_picker.set(engine_registry.get_display_name(self.backend.id))
+        self.engine_picker.pack(side="left")
 
         # Main Tabs
         self.main_tabs = ctk.CTkTabview(self)
         self.main_tabs.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
-        
+
         gen_tab = self.main_tabs.add("Generate Audio")
         self.build_generation_tab(gen_tab)
 
         # Mixing is an optional, Kokoro-shaped capability (raw voice-tensor
         # math - see kokoro_gui/engine/voices.py) - gate the whole tab on it
-        # instead of always showing it, so a future backend without local
-        # voice tensors doesn't get an unusable "Custom Voice" tab.
-        if self.backend.capabilities.supports_voice_mixing:
-            mix_tab = self.main_tabs.add("Custom Voice")
-            self.build_mixing_tab(mix_tab)
+        # instead of always showing it, so a backend without local voice
+        # tensors (e.g. "dummy") doesn't get an unusable "Custom Voice" tab.
+        self._mixing_tab_built = False
+        self._sync_mixing_tab()
 
         fx_tab = self.main_tabs.add("Audio FX")
         self.build_fx_tab(fx_tab)
@@ -490,6 +507,58 @@ class TTSApp(FXTabMixin, GenerationTabMixin, LexiconTabMixin, MixingTabMixin, ct
         
         self.cancel_btn = ctk.CTkButton(btn_frame, text="Cancel", command=self.cancel_conversion, height=40, fg_color="#c42b1c", hover_color="#8a1f14", state="disabled")
         self.cancel_btn.pack(side="left", fill="x", expand=True, padx=5)
+
+    def _sync_mixing_tab(self):
+        """Add/remove the "Custom Voice" tab to match the active backend's
+        `capabilities.supports_voice_mixing`. Called once from create_widgets
+        and again from switch_engine whenever the flag changes."""
+        wants_mixing = self.backend.capabilities.supports_voice_mixing
+        if wants_mixing and not self._mixing_tab_built:
+            mix_tab = self.main_tabs.add("Custom Voice")
+            self.build_mixing_tab(mix_tab)
+            self._mixing_tab_built = True
+        elif not wants_mixing and self._mixing_tab_built:
+            self.main_tabs.delete("Custom Voice")
+            self._mixing_tab_built = False
+
+    def on_engine_picker_change(self, display_name):
+        engine_id = self._engine_ids_by_display_name.get(display_name)
+        if engine_id is None or engine_id == self.backend.id:
+            return
+        self.switch_engine(engine_id)
+
+    def switch_engine(self, engine_id):
+        """Swap the active self.engine/self.backend to a freshly-constructed
+        instance of the backend registered under `engine_id` (kokoro_gui/
+        engines/registry.py), rewiring callbacks and re-syncing the Mixing
+        tab. Mainly a testing aid for the engine abstraction (workstream 1)
+        ahead of the Qt migration's real per-engine settings panels - it does
+        NOT re-render the Generation tab's schema-driven fields (split
+        pattern/format/speed bounds) for the new backend's schema; those stay
+        whatever they were built from at startup."""
+        if self.cancel_btn.cget("state") == "normal":
+            messagebox.showwarning("Busy", "Cancel the current job before switching engines.")
+            self.engine_picker.set(engine_registry.get_display_name(self.backend.id))
+            return
+
+        old_engine = self.engine
+        new_backend = engine_registry.get_engine(engine_id)
+        new_engine = new_backend.engine
+        new_engine.on_progress = self.on_engine_progress
+        new_engine.on_status = self.on_engine_status
+        new_engine.on_finish = self.on_engine_finish
+
+        self.engine = new_engine
+        self.backend = new_backend
+        self._sync_mixing_tab()
+
+        try:
+            old_engine.worker.stop()
+        except Exception:
+            pass
+
+        self.status_label.configure(text=f"Switched engine to {new_backend.display_name}. Initializing...", text_color="gray")
+        self.engine.worker.run_coro(self.engine.init_pipeline_async(self.lang_var.get()))
 
     def open_settings(self):
         toplevel = ctk.CTkToplevel(self)

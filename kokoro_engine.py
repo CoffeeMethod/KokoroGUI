@@ -75,6 +75,18 @@ class KokoroEngine(
 
         self._lexicon_cache = {} # Cache for compiled regexes
 
+    def get_thread_pipeline(self, lang_code="a"):
+        """Instance-method indirection to the module-level thread-local
+        KPipeline getter, so the generic mixins (caching.py, conversion.py)
+        can call `self.get_thread_pipeline(...)` polymorphically instead of
+        hard-coding `kokoro_engine.get_thread_pipeline` - the one piece of
+        that shared pipeline that's genuinely Kokoro-specific (see
+        kokoro_gui/engines/dummy.py for a from-scratch, non-Kokoro backend
+        built on the same generic mixins). Calls the free function by name
+        (not a direct reference) so `monkeypatch.setattr(kokoro_engine,
+        "get_thread_pipeline", ...)` in tests still takes effect."""
+        return get_thread_pipeline(lang_code)
+
     async def init_pipeline_async(self, lang_code="a"):
         try:
             self.pipeline = await asyncio.to_thread(KPipeline, lang_code=lang_code)

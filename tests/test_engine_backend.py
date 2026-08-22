@@ -5,8 +5,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import gui
 from kokoro_gui.engines import registry
 from kokoro_gui.engines.base import ConfigField, EngineCapabilities, VoiceInfo
+from kokoro_gui.engines.dummy import DummyBackendAdapter, DummyEngine
 from kokoro_gui.engines.kokoro import KokoroBackendAdapter, OUTPUT_FORMAT_CHOICES, SPLIT_PATTERN_CHOICES
 
 
@@ -91,6 +93,70 @@ def test_cancel_delegates_to_wrapped_engine(engine):
     backend.cancel()
 
     engine.cancel.assert_called_once_with()
+
+
+def test_dummy_registered_and_shaped_like_a_real_backend():
+    assert "dummy" in registry.list_engines()
+    assert DummyBackendAdapter.capabilities.supports_voice_mixing is False
+
+    backend = registry.get_engine("dummy")
+    keys = {f.key for f in backend.get_config_schema()}
+    assert keys == {
+        "lang_code", "voice", "speed", "pitch", "split_pattern",
+        "format", "num_threads", "caching",
+    }
+    assert backend.get_voices() == [VoiceInfo(id="dummy", display_name="Dummy Tone", lang_code=None, is_custom=False)]
+
+
+def test_dummy_engine_produces_real_nonsilent_audio(tmp_path):
+    """Sanity check that DummyEngine's fake pipeline actually writes audible
+    (non-silent) audio through the same process_chunk_task shape as
+    CachingMixin, exercising the generic FX/write path with no cache."""
+    import numpy as np
+    import soundfile as sf
+
+    engine = DummyEngine()
+    try:
+        config = {
+            "lang_code": "a", "voice": "dummy", "speed": 1.0, "split_pattern": r"\n+",
+            "filename": "out", "time_id": "1", "out_dir": str(tmp_path), "format": "wav",
+            "apply_fx": False,
+        }
+        files = engine.process_chunk_task((0, "Hello there.", config), None)
+        assert len(files) == 1
+        data, sr = sf.read(files[0]["path"])
+        assert sr == 24000
+        assert np.max(np.abs(data)) > 0.01
+    finally:
+        engine.worker.stop()
+
+
+def test_switch_engine_to_dummy_updates_engine_backend_and_mixing_tab(tts_app):
+    assert tts_app.backend.id == "kokoro"
+    assert tts_app._mixing_tab_built is True
+
+    tts_app.switch_engine("dummy")
+
+    assert tts_app.backend.id == "dummy"
+    assert isinstance(tts_app.engine, DummyEngine)
+    assert tts_app.engine.on_progress == tts_app.on_engine_progress
+    assert tts_app.engine.on_status == tts_app.on_engine_status
+    assert tts_app.engine.on_finish == tts_app.on_engine_finish
+    assert tts_app._mixing_tab_built is False
+
+
+def test_on_engine_picker_change_maps_display_name_to_id(tts_app):
+    tts_app.on_engine_picker_change("Dummy (offline test tone)")
+    assert tts_app.backend.id == "dummy"
+
+
+def test_switch_engine_refuses_while_a_job_is_running(tts_app):
+    tts_app.cancel_btn.configure(state="normal")  # simulate an in-flight job
+
+    tts_app.switch_engine("dummy")
+
+    assert tts_app.backend.id == "kokoro"
+    assert gui.messagebox.showwarning.called
 
 
 def test_tts_app_wires_a_backend_and_shows_mixing_tab_when_capable(tts_app):

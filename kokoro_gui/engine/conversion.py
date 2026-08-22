@@ -2,8 +2,14 @@
 chunked "Standard" batch pipeline (`start_conversion` -> `_process_text_async`),
 and the WAV-segment combiner shared with JIT mode.
 
-`generate_preview` calls `kokoro_engine.get_thread_pipeline` qualified, at call
-time, so tests can keep monkeypatching that name on the `kokoro_engine` module.
+`generate_preview` calls `self.get_thread_pipeline(lang_code)` rather than
+`kokoro_engine.get_thread_pipeline` directly - that's the one genuinely
+model-specific piece of this otherwise-generic mixin, and going through
+`self` lets a non-Kokoro backend (kokoro_gui/engines/dummy.py) reuse this
+whole mixin by supplying its own `get_thread_pipeline`. `KokoroEngine.get_thread_pipeline`
+(kokoro_engine.py) itself still calls the module-level thread-local getter by
+name, so `monkeypatch.setattr(kokoro_engine, "get_thread_pipeline", ...)` in
+tests still takes effect.
 """
 import asyncio
 import concurrent.futures
@@ -16,14 +22,12 @@ import soundfile as sf
 import torch
 from pedalboard.io import AudioFile
 
-import kokoro_engine
-
 
 class ConversionMixin:
     async def generate_preview(self, text, voice, speed, output_path, extra_config=None, voice_tensor=None, lang_code='a'):
         def _gen():
             # Use specific lang code for preview
-            p = kokoro_engine.get_thread_pipeline(lang_code)
+            p = self.get_thread_pipeline(lang_code)
             if not p: return False
 
             try:

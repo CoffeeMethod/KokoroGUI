@@ -38,6 +38,12 @@ def list_engines() -> list:
     return sorted(_registry)
 
 
+def get_display_name(engine_id: str) -> str:
+    """Human-readable name for `engine_id`, falling back to the id itself if
+    none was given at registration time."""
+    return _display_names.get(engine_id, engine_id)
+
+
 def unregister_engine(engine_id: str) -> None:
     """Remove a registered engine id (mainly for test teardown)."""
     _registry.pop(engine_id, None)

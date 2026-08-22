@@ -1,9 +1,14 @@
 """Per-chunk generation with WAV segment caching, keyed on text|voice|speed|lang_code.
 
-Reads `kokoro_engine.CACHE_DIR` and calls `kokoro_engine.get_thread_pipeline`
-qualified, at call time, so tests can keep monkeypatching those names on the
-`kokoro_engine` module (e.g. the `isolated_dirs`/`make_config` fixtures and the
-`_boom` sentinel used in `test_caching.py`/`test_mix_voices.py`).
+Reads `kokoro_engine.CACHE_DIR` qualified, at call time, so tests can keep
+monkeypatching that name on the `kokoro_engine` module (e.g. the
+`isolated_dirs`/`make_config` fixtures and the `_boom` sentinel used in
+`test_caching.py`/`test_mix_voices.py`). The actual synthesis call goes
+through `self.get_thread_pipeline(lang_code)` rather than
+`kokoro_engine.get_thread_pipeline` directly - that's the one genuinely
+model-specific piece of this otherwise-generic pipeline, and going through
+`self` lets a non-Kokoro backend (kokoro_gui/engines/dummy.py) reuse this
+whole mixin by supplying its own `get_thread_pipeline`.
 """
 import hashlib
 import os
@@ -125,7 +130,7 @@ class CachingMixin:
                 sub_idx += 1
         else:
             # Generate
-            pipeline = kokoro_engine.get_thread_pipeline(lang_code)
+            pipeline = self.get_thread_pipeline(lang_code)
             if not pipeline: raise RuntimeError(f"Failed to initialize pipeline ({lang_code}) in thread.")
 
             generator = pipeline(text, voice=config['voice'], speed=eff_speed, split_pattern=config['split_pattern'])

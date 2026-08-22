@@ -69,6 +69,20 @@ class EngineCapabilities:
     supports_jit_streaming: bool = True
 
 
+# Choice presets for schema fields whose *meaning* isn't actually
+# model-specific, just conventionally offered by more than one backend: how
+# raw input text gets split into chunks before parallel processing, and
+# which container formats get written to disk. Backends are free to ignore
+# these or offer their own instead - they're shared defaults, not part of
+# the Protocol.
+COMMON_SPLIT_PATTERN_CHOICES = [
+    ("Natural (Newlines)", r"\n+"),
+    ("Paragraphs (Double Newline)", r"\n\n+"),
+    ("Sentences (.!?)", r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|\!)\s"),
+]
+COMMON_OUTPUT_FORMAT_CHOICES = [("wav", "wav"), ("flac", "flac"), ("mp3", "mp3"), ("ogg", "ogg")]
+
+
 @dataclass(frozen=True)
 class VoiceInfo:
     """One selectable voice, as reported by a backend's `get_voices()`."""

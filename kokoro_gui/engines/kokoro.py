@@ -21,21 +21,12 @@ import os
 from typing import Optional
 
 import kokoro_engine
-from kokoro_gui.engines.base import ConfigField, ConfigFieldType, EngineCapabilities, VoiceInfo
+from kokoro_gui.engines.base import (
+    ConfigField, ConfigFieldType, EngineCapabilities, VoiceInfo,
+    COMMON_SPLIT_PATTERN_CHOICES as SPLIT_PATTERN_CHOICES,
+    COMMON_OUTPUT_FORMAT_CHOICES as OUTPUT_FORMAT_CHOICES,
+)
 from kokoro_gui.engines.registry import register_engine
-
-# Single source of truth for the split-pattern presets the Generation tab
-# offers - moved here (out of kokoro_gui/ui/generation_tab.py's widget-
-# building code) so the GUI consumes it from the schema instead of hard-
-# coding it a second time. Keys are what the GUI shows; values are what
-# KokoroEngine actually splits on.
-SPLIT_PATTERN_CHOICES = [
-    ("Natural (Newlines)", r"\n+"),
-    ("Paragraphs (Double Newline)", r"\n\n+"),
-    ("Sentences (.!?)", r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|\!)\s"),
-]
-
-OUTPUT_FORMAT_CHOICES = [("wav", "wav"), ("flac", "flac"), ("mp3", "mp3"), ("ogg", "ogg")]
 
 
 class KokoroBackendAdapter:
@@ -49,11 +40,21 @@ class KokoroBackendAdapter:
         supports_jit_streaming=True,
     )
 
-    def __init__(self, engine):
-        """`engine` is an existing `KokoroEngine` instance - the adapter
-        never constructs its own; it wraps whichever one the caller (GUI or
-        test) already owns and drives."""
-        self._engine = engine
+    def __init__(self, engine=None):
+        """`engine`, when given, is an existing `KokoroEngine` instance the
+        adapter wraps rather than constructing its own (used by the GUI at
+        startup and by tests). When omitted, the adapter builds a fresh
+        `KokoroEngine()` itself - used when switching the GUI's active
+        backend at runtime (see `gui.py`'s `switch_engine`), where nothing
+        already owns an engine instance to hand in."""
+        self._engine = engine if engine is not None else kokoro_engine.KokoroEngine()
+
+    @property
+    def engine(self):
+        """The wrapped `KokoroEngine` instance - `gui.py` re-points
+        `self.engine` at this on every backend switch so the many existing
+        `self.engine.*` call sites keep working unchanged."""
+        return self._engine
 
     def get_config_schema(self) -> list:
         """Reflects today's actual KokoroEngine config-dict fields (per
