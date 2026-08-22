@@ -91,6 +91,31 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
     -   Click "Preview Audio" to hear a short sample.
     -   Click "Start Generation" (or "Start Real-time JIT") to begin.
 
+## Running Tests
+
+The project has a `pytest` suite under `tests/` covering both `gui.py` and `kokoro_engine.py`. Because `kokoro_engine.py` imports the Windows-only `winsound` module unconditionally, **the suite only runs on Windows.**
+
+1.  **Install test dependencies** (on top of `requirements.txt`):
+    ```bash
+    pip install -r requirements-test.txt
+    ```
+
+2.  **Run the fast suite** (default):
+    ```bash
+    pytest
+    ```
+    This mocks the Kokoro pipeline, so it runs in seconds with no model download and no eSpeak NG required. Caching is disabled by default in every test except `tests/test_caching.py`.
+
+3.  **Run the integration suite** (opt-in, real synthesis):
+    ```bash
+    pytest -m integration tests/integration -s
+    ```
+    Uses the real Kokoro pipeline, so it needs eSpeak NG on `PATH` (see Prerequisites) and downloads model weights on first use. It skips automatically if `espeak-ng` isn't found. Since real synthesis can't be verified automatically, each test speaks a short, self-describing sample naming the voice/mode and writes it to `tests/output/<timestamp>/.../*_transcript.txt` next to the generated `.wav` — listen to the audio and compare against the transcript to confirm it sounds right. The `-s` flag also prints the same text to the terminal as each test runs.
+
+### CI
+
+There's no CI workflow configured in this repo yet. A minimal one only needs to run step 2 above (`pytest`) on a `windows-latest` runner after installing `requirements.txt` + `requirements-test.txt` — the fast suite needs no eSpeak NG or model download, so it's safe to run on every push/PR. The integration suite is slow and pulls model weights, so it's better left as a manual/opt-in job rather than part of the default pipeline.
+
 ## Technologies Used
 
 -   **[Kokoro](https://github.com/hexgrad/kokoro):** The core TTS engine.
