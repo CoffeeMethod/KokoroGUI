@@ -1,16 +1,19 @@
-"""Per-chunk generation with WAV segment caching, keyed on text|voice|speed|lang_code.
+"""Per-chunk generation with WAV segment caching, keyed on
+schema_version|engine_id|engine_version|text|voice|voice_fingerprint|speed|lang_code
+(see `compute_cache_key` - PLAN_qt_and_engine_abstraction.md workstream 2).
 
-Reads `kokoro_engine.CACHE_DIR` qualified, at call time, so tests can keep
-monkeypatching that name on the `kokoro_engine` module (e.g. the
-`isolated_dirs`/`make_config` fixtures and the `_boom` sentinel used in
-`test_caching.py`/`test_mix_voices.py`). The actual synthesis call goes
-through `self.get_thread_pipeline(lang_code)` rather than
-`kokoro_engine.get_thread_pipeline` directly - that's the one genuinely
-model-specific piece of this otherwise-generic pipeline, and going through
-`self` lets a non-Kokoro backend (kokoro_gui/engines/dummy.py) reuse this
-whole mixin by supplying its own `get_thread_pipeline`.
+Reads `kokoro_engine.CACHE_DIR`/`kokoro_engine.CUSTOM_VOICES_DIR` qualified, at
+call time, so tests can keep monkeypatching those names on the
+`kokoro_engine` module (e.g. the `isolated_dirs`/`make_config` fixtures and
+the `_boom` sentinel used in `test_caching.py`/`test_mix_voices.py`). The
+actual synthesis call goes through `self.get_thread_pipeline(lang_code)`
+rather than `kokoro_engine.get_thread_pipeline` directly - that's the one
+genuinely model-specific piece of this otherwise-generic pipeline, and going
+through `self` lets a non-Kokoro backend (kokoro_gui/engines/dummy.py) reuse
+this whole mixin by supplying its own `get_thread_pipeline`.
 """
 import hashlib
+import importlib.metadata
 import os
 import re
 
@@ -19,6 +22,102 @@ import torch
 from pedalboard.io import AudioFile
 
 import kokoro_engine
+
+# Bump whenever compute_cache_key's composition or logic changes. Old cache
+# entries simply stop matching (new hash algorithm -> new filenames) and
+# become dead weight for whatever eventually implements cache eviction
+# (ROADMAP Phase 2) - no explicit migration/cleanup needed, but a bump does
+# mean the first run after upgrading regenerates the whole cache.
+CACHE_SCHEMA_VERSION = 2
+
+# path -> (mtime, fingerprint): avoids re-hashing the same custom-voice file
+# on every chunk in a batch run. Mirrors the `self._lexicon_cache` compiled-
+# regex cache pattern (the lexicon perf fix) but keyed on filesystem content
+# rather than an engine instance, since voice files are process-wide state.
+_voice_fingerprint_cache = {}
+
+
+def get_engine_version(engine_id="kokoro"):
+    """Best-effort version/identity string for `engine_id`, folded into the
+    cache key so an upgrade that changes model output invalidates stale
+    entries instead of silently serving old audio under it. Only "kokoro"
+    has a concrete answer today (the installed `kokoro` package version) -
+    any other engine_id (e.g. a future cloud backend, or "dummy") falls back
+    to a constant so its cache entries are at least self-consistent."""
+    if engine_id == "kokoro":
+        try:
+            return importlib.metadata.version("kokoro")
+        except importlib.metadata.PackageNotFoundError:
+            return "unknown"
+    return "unknown"
+
+
+def voice_fingerprint(voice_ref):
+    """Identity string for `voice_ref` (already resolved by
+    `resolve_voice_path` - a bare name for a standard voice, or an absolute
+    path for a custom one).
+
+    Standard voices are fingerprinted by name alone - they're built into the
+    model and don't change. Custom voices are fingerprinted by *content*:
+    remixing and re-saving a `.pt` file under the same name (a real
+    workflow - see `VoiceMixingMixin.mix_voices`) changes what the voice
+    sounds like without changing its name, and a name-only key can't tell
+    the difference. The content hash is cached per-file-mtime so a batch run
+    doesn't re-read/re-hash the same file for every chunk.
+    """
+    if not (os.path.isabs(voice_ref) and os.path.isfile(voice_ref)):
+        return voice_ref
+
+    try:
+        mtime = os.path.getmtime(voice_ref)
+    except OSError:
+        return voice_ref
+
+    cached = _voice_fingerprint_cache.get(voice_ref)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+
+    try:
+        with open(voice_ref, "rb") as f:
+            fp = hashlib.sha256(f.read()).hexdigest()[:16]
+    except OSError:
+        return voice_ref
+
+    _voice_fingerprint_cache[voice_ref] = (mtime, fp)
+    return fp
+
+
+def compute_cache_key(text, voice, eff_speed, lang_code, engine_id="kokoro", engine_version=None):
+    """The segment-cache hash: schema_version, engine identity/version, text,
+    voice (name + content fingerprint), effective speed, and language code.
+
+    Takes exactly those five inputs, not a whole config dict - a config dict
+    also carries `out_dir`/`filename`/`format`/`normalize`/`trim_silence`/the
+    FX chain/`num_threads`/etc., none of which affect what gets cached (they
+    apply in `process_and_save` *after* cache read/generation, to the same
+    raw segment - that's the whole point of caching pre-FX audio). Keeping
+    those out of the signature, not just out of the hash, makes that
+    boundary the type checker/reader can see rather than something you have
+    to trust the implementation not to violate. `split_pattern` is excluded
+    for the same reason: only the text used to generate a segment determines
+    its content - splitting is an internal detail of how a chunk gets
+    divided for parallel processing.
+    """
+    if engine_version is None:
+        engine_version = get_engine_version(engine_id)
+
+    cache_key_parts = {
+        "schema_version": CACHE_SCHEMA_VERSION,
+        "engine_id": engine_id,
+        "engine_version": engine_version,
+        "text": text,
+        "voice": voice,
+        "voice_fingerprint": voice_fingerprint(voice),
+        "speed": eff_speed,
+        "lang_code": lang_code,
+    }
+    to_hash = "|".join(f"{k}={v}" for k, v in cache_key_parts.items())
+    return hashlib.sha256(to_hash.encode("utf-8")).hexdigest()
 
 
 class CachingMixin:
@@ -42,8 +141,8 @@ class CachingMixin:
         cached_segments = []
 
         if use_cache:
-            to_hash = f"{text}|{config['voice']}|{eff_speed}|{lang_code}"
-            cache_hash = hashlib.md5(to_hash.encode('utf-8')).hexdigest()
+            engine_id = config.get('engine_id', 'kokoro')
+            cache_hash = compute_cache_key(text, config['voice'], eff_speed, lang_code, engine_id)
 
             # Predict segments to verify cache integrity
             try:

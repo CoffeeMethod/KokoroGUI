@@ -826,6 +826,7 @@ class TTSApp(FXTabMixin, GenerationTabMixin, LexiconTabMixin, MixingTabMixin, ct
 
         # 2. Config
         config = {
+            'engine_id': self.backend.id,
             'lang_code': self.lang_var.get(),
             'voice': self.voice_var.get(),
             'speed': self.speed_var.get(),

@@ -11,7 +11,7 @@ def _set_text(app, text):
 
 
 BASE_KEYS = {
-    "lang_code", "voice", "speed", "split_pattern", "filename", "format",
+    "engine_id", "lang_code", "voice", "speed", "split_pattern", "filename", "format",
     "out_dir", "separate", "combine", "export_subtitles", "caching",
     "time_id", "num_threads", "volume", "pitch", "normalize",
     "trim_silence", "lexicon",
