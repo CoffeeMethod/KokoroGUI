@@ -272,6 +272,19 @@ class Audio8Engine(
         # `process_chunk_task` (e.g. calling `generate_segment` directly).
         self.cache_reference_codes = True
 
+        # `ArkttsModel.generate`/`generate_audio` sampling knobs, exposed as
+        # config fields (Audio8BackendAdapter.get_config_schema, "Generation"
+        # group) rather than hardcoded - `process_chunk_task` overwrites
+        # these from `config` each run, same pattern as `cache_reference_codes`
+        # above. Defaults match this engine's original hardcoded values,
+        # except `max_new_tokens` (was 4096, clamped internally to whatever
+        # room is left under the model's `max_seq_len=2048` anyway - 1024
+        # is a more honest default that still leaves prompt room).
+        self.max_new_tokens = 1024
+        self.temperature = 0.8
+        self.top_p = 0.95
+        self.top_k = 50
+
         self._lexicon_cache = {}
 
         os.makedirs(AUDIO8_REFS_DIR, exist_ok=True)
@@ -441,7 +454,8 @@ class Audio8Engine(
                     return_tensors="pt",
                 )
             waveforms, lengths, _codes = model.generate_audio(
-                **inputs, max_new_tokens=4096, temperature=0.7, top_p=0.9, top_k=50,
+                **inputs, max_new_tokens=self.max_new_tokens, temperature=self.temperature,
+                top_p=self.top_p, top_k=self.top_k,
             )
             audio = waveforms[0, : lengths[0]].detach().cpu().numpy()
 
@@ -472,6 +486,14 @@ class Audio8Engine(
         # See `_reference_codes_path`/module docstring - independent of the
         # per-segment WAV cache below (`use_cache`/`caching`).
         self.cache_reference_codes = config.get('cache_reference_codes', True)
+        # `ArkttsModel.generate` sampling knobs - see `__init__`'s docstring
+        # on these same attributes. Read into `extra` below too: they change
+        # what gets generated, so a stale segment cached under old values
+        # must miss rather than silently keep serving old audio.
+        self.max_new_tokens = config.get('max_new_tokens', 1024)
+        self.temperature = config.get('temperature', 0.8)
+        self.top_p = config.get('top_p', 0.95)
+        self.top_k = config.get('top_k', 50)
 
         use_cache = config.get('caching', False)
         cache_hash = None
@@ -480,7 +502,11 @@ class Audio8Engine(
         if use_cache:
             cache_hash = compute_cache_key(
                 text, ref_wav, eff_speed, lang_code, engine_id="audio8",
-                extra={"ref_transcript": ref_transcript},
+                extra={
+                    "ref_transcript": ref_transcript,
+                    "max_new_tokens": self.max_new_tokens, "temperature": self.temperature,
+                    "top_p": self.top_p, "top_k": self.top_k,
+                },
             )
             try:
                 predicted_texts = [t.strip() for t in re.split(split_pattern, text) if t.strip()]
@@ -597,6 +623,22 @@ class Audio8BackendAdapter:
                         default=True, group="Advanced"),
             ConfigField("cache_reference_codes", "Cache Reference Encoding", ConfigFieldType.BOOL,
                         default=True, group="Advanced"),
+            # `ArkttsModel.generate`/`generate_audio` sampling knobs (see
+            # `Audio8Engine.__init__`/`process_chunk_task`/`generate_segment`)
+            # - model-specific, unlike everything above, so broken out into
+            # their own group rather than folded into "Generation"/"Advanced".
+            # `max_new_tokens` above `max_seq_len - <prompt length>` (2048
+            # total, per the model's config) is clamped internally by
+            # `ArkttsModel.generate` - the 2048 ceiling here just matches
+            # that reality instead of offering a value that's silently capped.
+            ConfigField("max_new_tokens", "Max New Tokens", ConfigFieldType.INT,
+                        default=1024, min=64, max=2048, step=64, group="Model"),
+            ConfigField("temperature", "Temperature", ConfigFieldType.SLIDER,
+                        default=0.8, min=0.1, max=2.0, step=0.05, group="Model"),
+            ConfigField("top_p", "Top P", ConfigFieldType.SLIDER,
+                        default=0.95, min=0.0, max=1.0, step=0.01, group="Model"),
+            ConfigField("top_k", "Top K", ConfigFieldType.INT,
+                        default=50, min=0, max=200, step=1, group="Model"),
         ]
 
     def get_voices(self, lang_code: Optional[str] = None) -> list:

@@ -302,6 +302,47 @@ def test_audio8_process_chunk_task_caching_keys_on_transcript(isolated_dirs, tmp
         engine.worker.stop()
 
 
+def test_audio8_process_chunk_task_caching_keys_on_sampling_knobs(isolated_dirs, tmp_path, monkeypatch):
+    """Changing a sampling knob (temperature/top_p/top_k/max_new_tokens)
+    changes what the model would generate, so it must be a cache miss too -
+    same reasoning as the transcript test above, folded into `extra` the
+    same way."""
+    import numpy as np
+
+    monkeypatch.setattr(audio8_tts, "AUDIO8_REFS_DIR", str(tmp_path / "audio8_refs"))
+
+    wav_path = tmp_path / "ref.wav"
+    ref_audio = (0.1 * np.sin(2 * np.pi * 220 * np.arange(1600) / 16000)).astype(np.float32)
+    sf.write(str(wav_path), ref_audio, 16000)
+    Audio8ReferenceStore.save_reference("Faye", str(wav_path), "Faye's reference line.")
+
+    engine = Audio8Engine()
+    try:
+        def _fake_segment(text, ref_wav_path, ref_transcript, speed, lang_code):
+            t = np.arange(2200) / 44100
+            return (0.1 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+        monkeypatch.setattr(engine, "generate_segment", _fake_segment)
+
+        voice_path = engine.resolve_voice_path("Faye")
+        config = {
+            "lang_code": "English", "voice": voice_path, "speed": 1.0, "split_pattern": r"\n+",
+            "filename": "out", "time_id": "1", "out_dir": str(isolated_dirs.out_dir),
+            "format": "wav", "caching": True, "apply_fx": False, "temperature": 0.8,
+        }
+        engine.process_chunk_task((0, "Hello there.", config), None)
+        first_cache_files = set(isolated_dirs.cache_dir.glob("*_0.wav"))
+        assert len(first_cache_files) == 1
+
+        config["temperature"] = 1.2  # only the sampling knob changes
+        engine.process_chunk_task((0, "Hello there.", config), None)
+        second_cache_files = set(isolated_dirs.cache_dir.glob("*_0.wav"))
+
+        assert len(second_cache_files) == 2
+        assert first_cache_files < second_cache_files
+    finally:
+        engine.worker.stop()
+
+
 def test_audio8_process_chunk_task_caches_every_segment_in_a_multi_segment_chunk(isolated_dirs, tmp_path, monkeypatch):
     """A chunk that splits into more than one segment (split_pattern
     matching within one chunk's text, e.g. two newline-separated lines) must

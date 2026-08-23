@@ -74,6 +74,7 @@ def test_config_schema_shape(audio8_engine):
     assert keys == {
         "lang_code", "voice", "speed", "split_pattern", "format", "num_threads",
         "caching", "cache_reference_codes",
+        "max_new_tokens", "temperature", "top_p", "top_k",
     }
 
     by_key = {f.key: f for f in schema}
@@ -84,6 +85,11 @@ def test_config_schema_shape(audio8_engine):
     assert by_key["voice"].choices is None
     # Parallelism is capped low - see module docstring on the shared model lock.
     assert by_key["num_threads"].max == 4
+    # Model-specific sampling knobs get their own group, not Generation/Advanced.
+    assert by_key["max_new_tokens"].group == "Model"
+    assert by_key["temperature"].group == "Model"
+    assert by_key["top_p"].group == "Model"
+    assert by_key["top_k"].group == "Model"
 
 
 def test_importing_module_does_not_load_the_model():
@@ -209,7 +215,7 @@ def test_process_chunk_task_writes_44100hz_audio(audio8_engine, isolated_audio8_
 def _make_fake_model_and_processor(monkeypatch):
     import torch
 
-    calls = {"processor": [], "encode_audio": 0}
+    calls = {"processor": [], "encode_audio": 0, "generate_audio": []}
 
     def fake_processor(text, reference_audio=None, reference_text=None,
                         reference_codes=None, return_tensors="pt"):
@@ -234,6 +240,7 @@ def _make_fake_model_and_processor(monkeypatch):
         return torch.arange(30, dtype=torch.long).reshape(1, 10, 3), torch.tensor([3])
 
     def fake_generate_audio(**kwargs):
+        calls["generate_audio"].append(kwargs)
         return torch.zeros((1, 100)), torch.tensor([100]), None
 
     fake_model = types.SimpleNamespace(encode_audio=fake_encode_audio, generate_audio=fake_generate_audio)
@@ -302,6 +309,42 @@ def test_generate_segment_uses_raw_reference_audio_when_cache_disabled(audio8_en
     gen_call = calls["processor"][-1]
     assert gen_call["reference_audio"] == a_wav
     assert gen_call["reference_codes"] is None
+
+
+def test_generate_segment_forwards_sampling_knob_defaults(audio8_engine, isolated_audio8_refs, a_wav, monkeypatch):
+    calls = _make_fake_model_and_processor(monkeypatch)
+
+    audio8_engine.generate_segment("Hello.", a_wav, "A reference transcript.", 1.0, "English")
+
+    assert len(calls["generate_audio"]) == 1
+    kwargs = calls["generate_audio"][0]
+    assert kwargs["max_new_tokens"] == 1024
+    assert kwargs["temperature"] == 0.8
+    assert kwargs["top_p"] == 0.95
+    assert kwargs["top_k"] == 50
+
+
+def test_process_chunk_task_reads_sampling_knobs_from_config(audio8_engine, isolated_audio8_refs, isolated_dirs, a_wav, monkeypatch):
+    Audio8ReferenceStore.save_reference("Dana", a_wav, "Dana's reference line.")
+    calls = _make_fake_model_and_processor(monkeypatch)
+
+    config = {
+        "lang_code": "English", "voice": audio8_engine.resolve_voice_path("Dana"),
+        "speed": 1.0, "split_pattern": r"\n+", "filename": "out", "time_id": "1",
+        "out_dir": str(isolated_dirs.out_dir), "format": "wav", "caching": False,
+        "apply_fx": False, "max_new_tokens": 256, "temperature": 1.1, "top_p": 0.5, "top_k": 10,
+    }
+    audio8_engine.process_chunk_task((0, "Hello there.", config), None)
+
+    assert audio8_engine.max_new_tokens == 256
+    assert audio8_engine.temperature == 1.1
+    assert audio8_engine.top_p == 0.5
+    assert audio8_engine.top_k == 10
+    kwargs = calls["generate_audio"][0]
+    assert kwargs["max_new_tokens"] == 256
+    assert kwargs["temperature"] == 1.1
+    assert kwargs["top_p"] == 0.5
+    assert kwargs["top_k"] == 10
 
 
 def test_process_chunk_task_reads_cache_reference_codes_from_config(audio8_engine, isolated_audio8_refs, isolated_dirs, a_wav, monkeypatch):
