@@ -43,6 +43,11 @@ def isolated_dirs(tmp_path, monkeypatch):
         d.mkdir()
     monkeypatch.setattr(kokoro_engine, "CUSTOM_VOICES_DIR", str(custom_voices))
     monkeypatch.setattr(kokoro_engine, "CACHE_DIR", str(cache_dir))
+    # generation_stats.py reads/writes this qualified through kokoro_engine
+    # (same convention as CACHE_DIR above) - redirect it too, or every real
+    # _process_text_async run in the suite would write a real
+    # generation_stats.json into the repo working directory.
+    monkeypatch.setattr(kokoro_engine, "STATS_FILE", str(tmp_path / "generation_stats.json"))
     return SimpleNamespace(custom_voices=custom_voices, cache_dir=cache_dir, out_dir=out_dir)
 
 

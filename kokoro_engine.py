@@ -20,6 +20,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, module='ebooklib')
 
 CUSTOM_VOICES_DIR = "custom_voices"
 CACHE_DIR = "cache"
+STATS_FILE = "generation_stats.json"  # per-engine generation-history, see kokoro_gui/engine/stats.py
 
 # --- Thread Local Storage ---
 thread_local = threading.local()

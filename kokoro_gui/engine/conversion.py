@@ -22,6 +22,15 @@ import soundfile as sf
 import torch
 from pedalboard.io import AudioFile
 
+from kokoro_gui.engine import stats as generation_stats
+from kokoro_gui.engine.time_utils import format_duration
+
+# Below this fraction of the *current* run's own chars processed, the
+# observed-this-run rate is too noisy (one slow/fast chunk dominates it) to
+# trust on its own - blend it with the historical per-engine rate instead of
+# switching to it outright. See `on_chunk_progress` below.
+_OBSERVED_RATE_TRUST_FRACTION = 0.15
+
 
 class ConversionMixin:
     async def generate_preview(self, text, voice, speed, output_path, extra_config=None, voice_tensor=None, lang_code='a'):
@@ -150,6 +159,16 @@ class ConversionMixin:
         self.worker.run_coro(self._process_text_async(text, config))
 
     async def _process_text_async(self, text, config):
+        # Bound outside the try so the `finally` below can always report a
+        # completed (or partially-completed, e.g. cancelled) generation to
+        # generation_stats - even a run that dies before `start_time` is set
+        # leaves these at their no-op defaults (record_generation skips
+        # zero/negative input).
+        engine_id = config.get('engine_id', 'unknown')
+        start_time = None
+        total_chars = 0
+        total_words = 0
+        processed_chars = 0
         try:
             if self.on_status: self.on_status("Preparing text...", False)
             os.makedirs(config['out_dir'], exist_ok=True)
@@ -201,11 +220,23 @@ class ConversionMixin:
                 return
 
             total_chars = sum(len(d[1]) for d in tasks_data)
-            processed_chars = 0
+            total_words = sum(len(d[1].split()) for d in tasks_data)
             start_time = time.time()
             phase_weight = 0.9 if config.get('combine', True) else 1.0
 
+            # Seed the ETA from this engine's own generation history (see
+            # kokoro_gui/engine/stats.py) so there's a real estimate from the
+            # very first progress tick instead of "--:--" until enough of
+            # *this* run has completed to extrapolate from. Kept separate per
+            # engine_id since e.g. Audio8's single-lock throughput is nowhere
+            # near Kokoro's per-thread pipelines.
+            historical_rate = generation_stats.estimate_chars_per_sec(engine_id)
+
             if self.on_status: self.on_status(f"Queued {total_chunks} blocks. Starting {num_workers} workers...", False)
+
+            if historical_rate and total_chars > 0 and self.on_progress:
+                initial_eta = format_duration(total_chars / (historical_rate * phase_weight))
+                self.on_progress(0, 0.0, initial_eta, "Estimating from past runs...")
 
             # Progress tracker
             progress_lock = threading.Lock()
@@ -220,12 +251,29 @@ class ConversionMixin:
                 gen_fraction = min(processed_chars / total_chars, 1.0)
                 total_fraction = gen_fraction * phase_weight
 
-                # Estimate ETA
+                # Estimate ETA. Blend this run's own observed rate with the
+                # historical per-engine rate, trusting the observed rate more
+                # as more of *this* run's chars have actually gone through -
+                # early on, one slow or fast chunk would otherwise swing a
+                # purely-observed estimate wildly.
                 eta_str = "--:--"
-                if total_fraction > 0.01:
-                    total_est = elapsed / total_fraction
-                    rem = max(0, total_est - elapsed)
-                    eta_str = time.strftime('%M:%S', time.gmtime(rem))
+                observed_rate = (processed_chars / elapsed) if elapsed > 0 else 0.0
+                if historical_rate:
+                    confidence = min(gen_fraction / _OBSERVED_RATE_TRUST_FRACTION, 1.0)
+                    rate = confidence * observed_rate + (1 - confidence) * historical_rate
+                elif gen_fraction > 0.01:
+                    # No history for this engine yet - fall back to the
+                    # original behavior of extrapolating from this run alone,
+                    # gated to a sliver of progress so one noisy first chunk
+                    # can't produce a wild estimate.
+                    rate = observed_rate
+                else:
+                    rate = 0.0
+
+                if rate > 0:
+                    total_est = total_chars / (rate * phase_weight)
+                    rem = max(0.0, total_est - elapsed)
+                    eta_str = format_duration(rem)
 
                 clean_snip = snippet.replace("\n", " ").strip()
                 if len(clean_snip) > 40: clean_snip = clean_snip[:37] + "..."
@@ -300,4 +348,14 @@ class ConversionMixin:
             print(e)
             if self.on_status: self.on_status(f"Critical Error: {e}", True)
         finally:
+            # Feed this run's actual throughput back into the per-engine
+            # history, whether it finished, errored, or was cancelled
+            # partway - `processed_chars`/`start_time` reflect however much
+            # actually got generated, and record_generation() itself skips
+            # storing anything if that turned out to be zero/nothing timed.
+            if start_time is not None:
+                elapsed_total = time.time() - start_time
+                chars_for_stats = min(processed_chars, total_chars) if total_chars else processed_chars
+                words_for_stats = int(total_words * (chars_for_stats / total_chars)) if total_chars else 0
+                generation_stats.record_generation(engine_id, chars_for_stats, words_for_stats, elapsed_total)
             if self.on_finish: self.on_finish()

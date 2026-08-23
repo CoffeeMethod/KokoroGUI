@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_engine import KokoroEngine
+from kokoro_gui.engine.time_utils import format_duration
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.qt import spec
 from kokoro_gui.qt import settings as qt_settings
@@ -360,7 +361,11 @@ class QtTTSApp(QMainWindow):
 
     def on_engine_progress(self, percent: float, elapsed: float, eta: str, detail: str) -> None:
         self.progress_bar.setValue(int(percent))
-        elapsed_str = time.strftime("%M:%S", time.gmtime(elapsed))
+        # format_duration, not time.strftime("%M:%S", time.gmtime(elapsed)):
+        # gmtime's %M is minutes-mod-60 with no %H alongside it, so a run
+        # past the one-hour mark looked like it "reset" back to 00:00/59:59
+        # instead of counting into a second hour.
+        elapsed_str = format_duration(elapsed)
         self.info_label.setText(f"Time: {elapsed_str} / ETA: {eta} | {int(percent)}%")
         self.detail_label.setText(detail)
 
