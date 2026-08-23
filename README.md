@@ -9,14 +9,14 @@ A modern, high-quality Text-to-Speech (TTS) application built with Python, featu
 
 https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
-## New in Beta 3.3.0
+## New in Beta 4.0.0
 
 -   **Second TTS engine — Audio8 (voice cloning):** [Audio8-TTS-Preview-0.6b](https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b), a zero-shot voice-cloning model, is now selectable from the engine picker alongside Kokoro. Unlike Kokoro's named voices, it clones a voice from a **reference WAV + a transcript of what's said in it** — a new "Voice Reference" dock (shown only for engines that support this) lets you browse a WAV, auto-transcribe it via [Audio8-ASR-0.1B](https://huggingface.co/Audio8/Audio8-ASR-0.1B) (`kokoro_gui/engine/asr.py`, also runnable standalone as `python -m kokoro_gui.engine.asr <wav>`), edit the transcript, and save it under a name that then shows up in the normal Voice dropdown. Both models pull in `transformers`/`torchaudio` (new `requirements.txt` entries) and load with `trust_remote_code=True`; the ASR model is CC-BY-NC-4.0 (non-commercial) — worth knowing if you build on this fork commercially. First use of either model downloads it from Hugging Face.
+-   **Qt frontend, now the only frontend:** `python main.py`/`run.bat` launches a PySide6-based dockable-panel shell (`kokoro_gui/qt/`). The previous CustomTkinter app (`gui.py`) has been retired now that Qt reached parity — see [PLAN_qt_and_engine_abstraction.md](Claude/PLAN_qt_and_engine_abstraction.md) for the migration this completed. PySide6 is a regular dependency in `requirements.txt`.
+-   **Modular codebase:** `kokoro_engine.py` is a slim core module backed by a `kokoro_gui/engine/` package split out by feature area (text extraction, caching, lexicon, presets, voice mixing), making the codebase easier to navigate and extend.
 
 ## New in Beta 3.2.0
 
--   **Qt frontend, now the only frontend:** `python main.py`/`run.bat` launches a PySide6-based dockable-panel shell (`kokoro_gui/qt/`). The previous CustomTkinter app (`gui.py`) has been retired now that Qt reached parity — see [PLAN_qt_and_engine_abstraction.md](PLAN_qt_and_engine_abstraction.md) for the migration this completed. PySide6 is a regular dependency in `requirements.txt`.
--   **Modular codebase:** `kokoro_engine.py` is a slim core module backed by a `kokoro_gui/engine/` package split out by feature area (text extraction, caching, lexicon, presets, voice mixing), making the codebase easier to navigate and extend.
 -   **Cross-Platform Audio Playback:** Preview and JIT playback now go through `sounddevice`/`soundfile` instead of the Windows-only `winsound` module, removing a hard Windows dependency from `kokoro_engine.py`.
 
 ## New in 3.1.0
