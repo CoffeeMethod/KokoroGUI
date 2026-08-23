@@ -7,12 +7,21 @@ it's headed.
 
 ## Where it stands today
 
-One self-contained page: `docs/index.html`, no build step, no dependencies beyond a Google Fonts
-link. It covers the hero pitch, the five Qt docks, the Kokoro/Audio8 engine comparison, the
-audio-processing signal chain, generation modes, a feature strip, and an install guide. Content was
-pulled from `README.md` and `CLAUDE.md` as of Beta 3.3.0. It will drift as the app gains features,
-so treat "New in X.Y.Z" entries in the README as the trigger to revisit this page, the same way
-CLAUDE.md already asks for ROADMAP.md.
+Three pages, still no build step: `docs/index.html` (the pitch), `docs/scripting.html` (the
+`[Preset:FXPreset]: Text` inline syntax, worked example included), and `docs/settings.html` (every
+field in every dock, including the two Audio8 fields that are silently inert and why JIT streaming
+only exists for engines that can generate faster than real time). Shared tokens, nav, and
+components live in `docs/assets/site.css` and `docs/assets/site.js` so the three pages stay visually
+consistent without copy-pasting a few hundred lines of CSS into each one.
+
+Content was pulled from the actual code, not just `README.md`/`CLAUDE.md`, since a couple of things
+those docs claim turned out to be stale (the FX chain has five groups and seventeen sliders now, not
+the "Reverb/Compressor/shelf" subset CLAUDE.md still describes; the actual post-FX processing order
+is Trim → Volume → Pitch → FX → Normalize, not the order this site originally shipped with; and the
+README's "adjustable interface scaling and theme" line doesn't match anything in `kokoro_gui/qt/`
+today, that control doesn't exist in the Qt frontend). Treat "New in X.Y.Z" entries in the README as
+the trigger to revisit all three pages, the same way CLAUDE.md already asks for ROADMAP.md, but
+don't assume the README's older feature-list prose is still accurate either; check the code.
 
 ## Turning the repo on for Pages
 
@@ -64,15 +73,18 @@ Still static-hostable, no server required:
 
 ## Phase 3: multi-page docs site
 
-Only worth doing once the single-page pitch stops being enough to onboard a new contributor:
+Partially done: `scripting.html` and `settings.html` already cover the inline-syntax walkthrough and
+the full settings breakdown, as flat files next to `index.html` rather than a `docs/guide/`
+subdirectory (not worth the extra nesting at three pages). What's left:
 
-- Split into `docs/index.html` (pitch/marketing) and `docs/guide/` (actual user documentation):
-  installation troubleshooting, the `[Speaker:FX]: Text` scripting syntax with real examples, a
-  lexicon cookbook, preset-sharing conventions.
+- Installation troubleshooting (common eSpeak NG / PyTorch setup failures and their fixes).
+- A lexicon cookbook (real find-and-replace examples for acronyms, names, numbers).
+- Preset-sharing conventions, if the project ever wants people to exchange `presets/*.json` files.
 - Move to a static-site generator only once hand-written HTML becomes the bottleneck, not before
-  (Eleventy, or plain Jekyll, which ships free on GitHub Pages with zero extra config). The
-  current single-file page is easier to keep in sync with the app than a generator would be at this
-  size.
+  (Eleventy, or plain Jekyll, which ships free on GitHub Pages with zero extra config). Three pages
+  sharing `assets/site.css` is still easier to keep in sync with the app than a generator would be
+  at this size; revisit this once there are enough pages that the shared-CSS-file approach itself
+  starts to strain.
 - Versioned docs, if and when the config schema or engine abstraction changes in
   backwards-incompatible ways between releases.
 

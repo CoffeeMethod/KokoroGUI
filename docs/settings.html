@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Kokoro GUI · Settings reference</title>
+<meta name="description" content="Every field in every dock, what it actually does, which settings Audio8 silently ignores, and why JIT streaming only exists for engines that can generate faster than real time." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2335e6c6'/%3E%3Cstop offset='.55' stop-color='%239d7bff'/%3E%3Cstop offset='1' stop-color='%23ff7a59'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='%230a0d14'/%3E%3Cg fill='url(%23g)'%3E%3Crect x='10' y='26' width='7' height='12' rx='2'/%3E%3Crect x='21' y='16' width='7' height='32' rx='2'/%3E%3Crect x='32' y='22' width='7' height='20' rx='2'/%3E%3Crect x='43' y='10' width='7' height='44' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/site.css" />
+<style>
+  .prose{ max-width: 760px; display:flex; flex-direction:column; gap: 1.1rem; margin-bottom: 1.4rem; }
+  .prose p{ font-size: 1rem; }
+  .doc-section{ padding: clamp(2.2rem, 5vw, 3.5rem) 0; border-top: 1px solid var(--border); }
+  .doc-section:first-of-type{ border-top: none; }
+  .doc-section h2{ font-size: 1.6rem; }
+  .doc-section h2 .idx{ font-family: var(--font-mono); font-size: .75rem; color: var(--text-muted); display:block; letter-spacing:.08em; text-transform:uppercase; margin-bottom:.4rem; font-weight: 500; }
+  .doc-section > .wrap > p.dek{ color: var(--text-muted); font-size: .95rem; max-width: 720px; margin-top: .6rem; margin-bottom: 1.4rem; }
+  .engine-note{ display:inline-flex; align-items:center; gap:.4em; font-family: var(--font-mono); font-size:.72rem; padding:.25em .6em; border-radius:999px; border:1px solid var(--border); background:var(--surface); color: var(--text-muted); }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <nav class="wrap">
+    <a class="brand" href="index.html">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect width="64" height="64" rx="16" fill="var(--bg)" stroke="var(--border)"/>
+        <g fill="url(#navgrad)">
+          <rect x="10" y="26" width="7" height="12" rx="2"/>
+          <rect x="21" y="16" width="7" height="32" rx="2"/>
+          <rect x="32" y="22" width="7" height="20" rx="2"/>
+          <rect x="43" y="10" width="7" height="44" rx="2"/>
+        </g>
+        <defs>
+          <linearGradient id="navgrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#35E6C6"/>
+            <stop offset=".55" stop-color="#9D7BFF"/>
+            <stop offset="1" stop-color="#FF7A59"/>
+          </linearGradient>
+        </defs>
+      </svg>
+      <span class="brand-word">Kokoro GUI<span class="beta">BETA 3.3.0</span></span>
+    </a>
+    <div class="navlinks">
+      <a href="index.html#features">Docks</a>
+      <a href="index.html#engines">Engines</a>
+      <a href="scripting.html">Scripting</a>
+      <a href="settings.html" aria-current="page">Settings</a>
+      <a href="index.html#install">Install</a>
+    </div>
+    <div class="navctas">
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle color theme" title="Toggle color theme">
+        <svg id="iconSun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg id="iconMoon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
+      </button>
+      <a class="btn btn-ghost" href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </nav>
+</header>
+
+<main>
+  <section class="page-head">
+    <div class="wrap">
+      <span class="eyebrow">Reference</span>
+      <h1>What every setting actually does</h1>
+      <p class="lede">Every field in every dock, grouped the way they're grouped in the app, with the parts that aren't obvious from the label alone called out. Two things are worth reading before the rest: Audio8 quietly ignores two of its own Generation fields, and JIT streaming isn't a checkbox every engine gets.</p>
+      <div class="toc">
+        <a href="#engine-picker">Engine picker</a>
+        <a href="#generation">Generation</a>
+        <a href="#audio-control">Audio control</a>
+        <a href="#processing">Processing options</a>
+        <a href="#fx">FX</a>
+        <a href="#lexicon">Lexicon</a>
+        <a href="#mixing">Mixing</a>
+        <a href="#voice-reference">Voice reference</a>
+        <a href="#presets">Presets</a>
+        <a href="#jit">JIT streaming</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="engine-picker">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">Toolbar</span>The engine picker</h2>
+        <p>A dropdown in the toolbar, not a dock. It's the one setting that changes what every other setting on this page looks like: switching it rebuilds the Generation dock's fields from the new engine's schema and shows or hides the Mixing and Voice Reference docks based on what the new engine supports. Everything below is written per-engine where the two differ.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="generation">
+    <div class="wrap">
+      <h2><span class="idx">Generation dock</span>Generation</h2>
+      <p class="dek">Schema-driven: the fields below are what both real engines currently declare. Rows marked Audio8 only or Kokoro only don't exist on the other engine's dock at all.</p>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>Generation</caption>
+          <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Language</td><td>For Kokoro, picks which phonemization pipeline runs; each language uses its own <code>KPipeline</code> and voice list. For Audio8 it's one of eleven labels from the model card. See the callout below: it currently isn't sent to the model at all.</td></tr>
+            <tr><td>Voice</td><td>Kokoro: a named base voice (<code>af_heart</code>, <code>bm_daniel</code>, ...) or a saved custom mix from the Mixing dock. Audio8: a saved Voice Reference (WAV + transcript pair) from the Voice Reference dock.</td></tr>
+            <tr><td>Speed</td><td>Kokoro: 0.5x-2.0x, passed straight to the pipeline as a native generation parameter. Audio8: shown in the same range, but see the callout below, it's currently not forwarded to the model either.</td></tr>
+            <tr><td>Split by</td><td>Natural (newlines), Paragraphs (double newline), or Sentences (splits on <code>.</code>/<code>!</code>/<code>?</code>, with a regex guard against splitting mid-abbreviation). Controls where a long input gets cut into chunks before generation.</td></tr>
+            <tr><td>Output format</td><td><code>wav</code>, <code>flac</code>, <code>mp3</code>, or <code>ogg</code>. Same four choices on both engines.</td></tr>
+            <tr><td>Parallel threads</td><td>Kokoro: 1-32, each worker thread gets its own <code>KPipeline</code>, so raising this genuinely parallelizes generation. Audio8: capped at 1-4 in the schema, and since every segment is serialized through one shared, locked model, raising it doesn't parallelize the model calls themselves.</td></tr>
+            <tr><td>Enable segment cache</td><td>Caches each generated segment as a <code>.wav</code> under <code>cache/</code>, keyed by a hash of the settings that affect what gets generated. Re-running with unchanged settings skips regenerating that segment.</td></tr>
+            <tr><td>Cache reference encoding <span class="engine-note">Audio8 only</span></td><td>A second, separate cache that stores the model's encoded reference audio, keyed by the reference file's contents. Repeated segments against the same voice reference skip re-running the audio encoder, independent of the segment cache above.</td></tr>
+            <tr><td>Max new tokens <span class="engine-note">Audio8 only</span></td><td>Caps how many tokens the model can generate per segment. Default 1024, hard-capped at 2048 to match the model's real <code>max_seq_len</code>; anything higher gets silently clamped by the model anyway.</td></tr>
+            <tr><td>Temperature <span class="engine-note">Audio8 only</span></td><td>Sampling temperature, default 0.8. Higher values add more variation between takes of the same text.</td></tr>
+            <tr><td>Top P / Top K <span class="engine-note">Audio8 only</span></td><td>Nucleus and top-k sampling cutoffs, default 0.95 and 50. Standard token-sampling controls for the model's decoder.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout warn reveal" style="max-width:760px; margin-top:1.4rem;">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2.5 17.5a1.7 1.7 0 0 0 1.5 2.5h16a1.7 1.7 0 0 0 1.5-2.5L13.7 3.9a1.7 1.7 0 0 0-3.4 0Z"/></svg>
+        <div>
+          <p><strong>Language and Speed do nothing on Audio8, currently.</strong> The model's own processor doesn't accept a <code>language</code> or <code>speed</code> argument at all; passing either raises a hard error. So <code>audio8_tts.py</code> keeps both in its internal function signature only to match the shape shared with the other engines, and never forwards them to the model. Audio8 infers the spoken language from the reference clip and text, and always generates at its own pace. The two fields still show up in the dock because the schema doesn't currently distinguish "displayed" from "functional." Worth knowing before you spend time chasing a Speed slider that isn't moving anything.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="audio-control">
+    <div class="wrap">
+      <h2><span class="idx">Generation dock</span>Audio control</h2>
+      <p class="dek">Hand-coded, not schema-driven, so every engine gets the same fields here. These are the post-processing steps from the <a href="index.html#signal-chain" style="color:var(--violet); font-weight:600;">signal chain</a> on the home page.</p>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>Audio control</caption>
+          <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Volume</td><td>0.1x-2.0x. A plain multiply on the waveform, applied second in the chain, after Trim and before Pitch.</td></tr>
+            <tr><td>Pitch (st)</td><td>-12 to +12 semitones, shifted by resampling to a new length. This changes duration along with pitch, the classic "chipmunk" effect: raise the pitch and playback gets faster, lower it and playback gets slower. For pitch without a duration change, use the FX dock's separate Pitch Shift effect instead.</td></tr>
+            <tr><td>FX preset / Apply</td><td>Loads a saved FX preset into the FX dock's sliders. The Apply checkbox is the master switch for the whole FX chain below; unchecked, none of the FX dock's effects run even if individually enabled.</td></tr>
+            <tr><td>Normalize</td><td>Scales the segment so its loudest peak sits at 98% of full scale. A simple peak normalize, not a loudness (LUFS) normalize. Runs last in the chain, after FX.</td></tr>
+            <tr><td>Trim silence</td><td>Strips leading and trailing audio below a fixed amplitude threshold. Runs first in the chain, before Volume.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="processing">
+    <div class="wrap">
+      <h2><span class="idx">Generation dock</span>Processing options</h2>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>Processing options</caption>
+          <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Keep segments</td><td>Keeps each generated chunk as its own file in the output folder, alongside the combined file if Combine Output is also on.</td></tr>
+            <tr><td>Combine output</td><td>Merges every segment into one final audio file in your chosen output format.</td></tr>
+            <tr><td>Export subtitles (.srt)</td><td>Writes an <code>.srt</code> file timed to the actual duration of each generated segment.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="fx">
+    <div class="wrap">
+      <h2><span class="idx">FX dock</span>FX</h2>
+      <p class="dek">Five groups, each section gated behind its own enable checkbox except EQ, which is always live (a slider left at 0 dB is simply a no-op). All of it runs through one Pedalboard chain together as step 4 of the signal chain.</p>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>Dynamics</caption>
+          <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Compressor</td><td>Threshold (dB) and Ratio. Standard dynamic-range compression.</td></tr>
+            <tr><td>Limiter</td><td>Threshold (dB). A hard ceiling on peak level, separate from the Compressor.</td></tr>
+            <tr><td>Gain</td><td>A flat gain change in dB, applied within the FX chain, on top of the separate Volume control above.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="table-wrap reveal" style="margin-top:1rem;">
+        <table class="ref">
+          <caption>EQ &amp; filters</caption>
+          <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Bass (low shelf)</td><td>&plusmn;20 dB shelf below 250 Hz. No separate enable toggle; 0 dB does nothing.</td></tr>
+            <tr><td>Treble (high shelf)</td><td>&plusmn;20 dB shelf above 4000 Hz. Same, no toggle needed.</td></tr>
+            <tr><td>High-pass filter</td><td>Cutoff frequency, 20-1000 Hz. Removes content below the cutoff.</td></tr>
+            <tr><td>Low-pass filter</td><td>Cutoff frequency, 1000-20000 Hz. Removes content above the cutoff.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="table-wrap reveal" style="margin-top:1rem;">
+        <table class="ref">
+          <caption>Spatial &amp; time</caption>
+          <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Reverb</td><td>Room Size, Wet Level, Damping, Width. Standard algorithmic reverb.</td></tr>
+            <tr><td>Delay</td><td>Time (seconds), Feedback, Mix. Echo/repeat effect.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="table-wrap reveal" style="margin-top:1rem;">
+        <table class="ref">
+          <caption>Guitar / modulation</caption>
+          <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Chorus</td><td>Rate (Hz), Depth. Layers a detuned, delayed copy of the signal.</td></tr>
+            <tr><td>Distortion</td><td>Drive (dB). Harmonic distortion.</td></tr>
+            <tr><td>Phaser</td><td>Rate (Hz). Sweeping comb-filter effect.</td></tr>
+            <tr><td>Clipping</td><td>Threshold (dB). Hard-clips the waveform above the threshold.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="table-wrap reveal" style="margin-top:1rem;">
+        <table class="ref">
+          <caption>Quality / pitch</caption>
+          <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Pitch Shift (High Quality)</td><td>&plusmn;12 semitones. The formant-aware shift mentioned above: changes pitch without the duration side effect the plain Pitch control has.</td></tr>
+            <tr><td>Bitcrush</td><td>Bit depth, 2-16. Reduces sample resolution for a lo-fi, digital-artifact sound.</td></tr>
+            <tr><td>GSM Compressor</td><td>A single checkbox, no slider. Runs the audio through a simulated GSM phone-call codec.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="lexicon">
+    <div class="wrap">
+      <h2><span class="idx">Lexicon dock</span>Lexicon</h2>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>Lexicon</caption>
+          <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Original text / Replacement</td><td>A list of literal find-and-replace rules, applied case-insensitively to every segment's text before synthesis. Useful for acronyms, names, or jargon a voice mispronounces.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="dek">Rules apply regardless of which preset or FX preset an <a href="scripting.html" style="color:var(--violet); font-weight:600;">inline script tag</a> switches to; Lexicon is global, not per-speaker.</p>
+    </div>
+  </section>
+
+  <section class="doc-section" id="mixing">
+    <div class="wrap">
+      <h2><span class="idx">Mixing dock</span>Mixing <span class="engine-note">supports_voice_mixing engines only</span></h2>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>Mixing</caption>
+          <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Voice A / Voice B</td><td>Each has its own language and voice picker; the two voices being combined.</td></tr>
+            <tr><td>Operation</td><td>Mix, Add, Subtract, Multiply, or Divide, applied directly to the two voices' underlying tensors.</td></tr>
+            <tr><td>Mix slider</td><td>0-100%. For Mix, a straight blend: 0% is all Voice A, 100% is all Voice B. For the other four operations it's an influence amount, not a blend ratio, and the app's own label warns that Divide is "unstable and VERY LOUD."</td></tr>
+            <tr><td>Preview language / Preview</td><td>Speaks a short preview line in the chosen language using the in-progress mix, before you commit to saving it.</td></tr>
+            <tr><td>New voice name / Create &amp; Save</td><td>Saves the result as a custom voice, which then shows up in the normal Voice dropdown alongside the built-in voices.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="voice-reference">
+    <div class="wrap">
+      <h2><span class="idx">Voice Reference dock</span>Voice reference <span class="engine-note">supports_voice_cloning engines only</span></h2>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>Voice reference</caption>
+          <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Reference audio</td><td>Browse to a WAV file of the voice to clone.</td></tr>
+            <tr><td>Transcript</td><td>What's actually said in that WAV, word for word. The cloning model uses this alongside the audio itself.</td></tr>
+            <tr><td>Auto-transcribe</td><td>Runs the reference clip through the bundled ASR model to pre-fill the transcript, off the Qt main thread so the UI doesn't freeze. Always worth proofreading the result before saving.</td></tr>
+            <tr><td>Save as / Saved references</td><td>Saves the WAV and transcript as a named pair, which then shows up in the Voice dropdown like any other voice.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="presets">
+    <div class="wrap">
+      <h2><span class="idx">Presets</span>Presets, and how they relate to inline scripting</h2>
+      <div class="prose reveal">
+        <p>Two independent preset systems, both plain JSON on disk: "Save Preset..." at the top of the Generation dock snapshots the entire current generation config (voice, speed, split pattern, and the rest) under a name. "Save FX Preset..." in the FX dock snapshots just the FX sliders.</p>
+        <p>These aren't a separate feature from <a href="scripting.html" style="color:var(--violet); font-weight:600;">inline scripting</a>, they're the same thing. A <code>[Name]:</code> tag in the text box looks up exactly the preset you saved here, by exactly that name.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="jit">
+    <div class="wrap">
+      <h2><span class="idx">App settings</span>JIT streaming needs speed to spare</h2>
+      <div class="prose reveal">
+        <p>JIT mode plays audio back while it's still being generated: a generation thread fills a queue, a playback thread drains it. For that to work at all, generation has to outrun playback, producing more than one second of audio for every second of wall-clock time it spends generating, with enough margin that playback never catches up and stalls waiting on the next chunk. An engine that can only generate at, or slower than, real time simply can't stream: there'd be nothing queued up by the time playback needs it.</p>
+        <p>This is exactly what the <code>supports_jit_streaming</code> capability flag encodes, per engine, not measured live, just declared:</p>
+      </div>
+      <div class="table-wrap reveal" style="max-width:760px;">
+        <table class="ref">
+          <caption>JIT support by engine</caption>
+          <thead><tr><th>Engine</th><th><code>supports_jit_streaming</code></th></tr></thead>
+          <tbody>
+            <tr><td>Kokoro (local)</td><td>True</td></tr>
+            <tr><td>Audio8 TTS (voice cloning)</td><td>False</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose reveal" style="margin-top:1.4rem;">
+        <p>Audio8 is a 0.6B-parameter model running through one shared, lock-serialized instance rather than a pipeline per thread, so there's no way to overlap generation the way Kokoro does. Rather than offer a JIT toggle that would just stall constantly, the app disables it outright: open Settings with Audio8 active and the "Enable JIT Generation (Streaming)" checkbox is greyed out, with a line underneath reading <code>(Audio8 TTS (voice cloning) doesn't support streaming - runs as Standard.)</code>. Every run on that engine falls back to Standard batch generation, automatically, no separate setting to change.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span class="fine">Apache-2.0 licensed. Not affiliated with the Kokoro or Audio8 model authors.</span>
+    <div class="fl">
+      <a href="index.html">Home</a>
+      <a href="scripting.html">Scripting guide</a>
+      <a href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">Repository ↗</a>
+      <a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/README.md" target="_blank" rel="noopener">README ↗</a>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

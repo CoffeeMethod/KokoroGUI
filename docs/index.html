@@ -9,158 +9,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/site.css" />
 <style>
-  /* ===================== Tokens ===================== */
-  :root{
-    --bg: #F1F2F7;
-    --surface: #FFFFFF;
-    --surface-2: #E8EAF2;
-    --border: #D7DAE6;
-    --text: #14161F;
-    --text-muted: #565C72;
-    --teal: #0EA98C;
-    --violet: #7C4DFF;
-    --coral: #E0562F;
-    --gradient: linear-gradient(120deg, var(--teal), var(--violet) 55%, var(--coral));
-    --shadow: 0 1px 2px rgba(20,22,31,.06), 0 8px 24px rgba(20,22,31,.06);
-    --radius: 14px;
-    --font-display: 'Unbounded', 'Segoe UI', sans-serif;
-    --font-body: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
-    --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Code', 'Courier New', monospace;
-    --maxw: 1180px;
-  }
-  @media (prefers-color-scheme: dark){
-    :root:not([data-theme="light"]){
-      --bg: #0A0D14;
-      --surface: #12151F;
-      --surface-2: #1A1E2C;
-      --border: #262B3D;
-      --text: #EDEFF6;
-      --text-muted: #939AB5;
-      --teal: #35E6C6;
-      --violet: #9D7BFF;
-      --coral: #FF7A59;
-      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 32px rgba(0,0,0,.35);
-    }
-  }
-  :root[data-theme="dark"]{
-    --bg: #0A0D14;
-    --surface: #12151F;
-    --surface-2: #1A1E2C;
-    --border: #262B3D;
-    --text: #EDEFF6;
-    --text-muted: #939AB5;
-    --teal: #35E6C6;
-    --violet: #9D7BFF;
-    --coral: #FF7A59;
-    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 32px rgba(0,0,0,.35);
-  }
-
-  /* ===================== Reset ===================== */
-  *,*::before,*::after{ box-sizing: border-box; }
-  html{ scroll-behavior: smooth; }
-  body{
-    margin:0;
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--font-body);
-    font-size: 1.05rem;
-    line-height: 1.65;
-    -webkit-font-smoothing: antialiased;
-  }
-  img{ max-width:100%; display:block; }
-  a{ color: inherit; }
-  h1,h2,h3,h4{ font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.12; }
-  p{ margin: 0; }
-  .wrap{ max-width: var(--maxw); margin: 0 auto; padding: 0 clamp(1.25rem, 4vw, 2.5rem); }
-  section{ padding: clamp(3.5rem, 8vw, 6.5rem) 0; }
-  .eyebrow{
-    font-family: var(--font-mono);
-    font-size: .78rem;
-    letter-spacing: .12em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    display:inline-flex;
-    align-items:center;
-    gap:.5em;
-  }
-  .eyebrow::before{
-    content:"";
-    width: 1.3em; height: 2px;
-    background: var(--gradient);
-    display:inline-block;
-    border-radius: 2px;
-  }
-  .grad-text{
-    background: var(--gradient);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-  .btn{
-    font-family: var(--font-body);
-    font-weight: 600;
-    font-size: .95rem;
-    padding: .8em 1.4em;
-    border-radius: 999px;
-    border: 1px solid transparent;
-    display:inline-flex;
-    align-items:center;
-    gap:.5em;
-    cursor:pointer;
-    text-decoration:none;
-    transition: transform .15s ease, box-shadow .15s ease, background .15s ease, border-color .15s ease;
-    white-space: nowrap;
-  }
-  .btn:hover{ transform: translateY(-2px); }
-  .btn:focus-visible{ outline: 2px solid var(--violet); outline-offset: 2px; }
-  .btn-primary{
-    background: var(--gradient);
-    color: #08090D;
-    box-shadow: var(--shadow);
-  }
-  .btn-ghost{
-    background: var(--surface);
-    color: var(--text);
-    border-color: var(--border);
-  }
-  .btn-ghost:hover{ border-color: var(--violet); }
-  code, .mono{ font-family: var(--font-mono); }
-  ::selection{ background: var(--violet); color: #fff; }
-  @media (prefers-reduced-motion: reduce){
-    html{ scroll-behavior:auto; }
-    *{ animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
-  }
-
-  /* ===================== Nav ===================== */
-  header.site{
-    position: sticky; top:0; z-index: 40;
-    backdrop-filter: blur(10px) saturate(1.3);
-    background: color-mix(in srgb, var(--bg) 78%, transparent);
-    border-bottom: 1px solid var(--border);
-  }
-  nav.wrap{
-    display:flex; align-items:center; justify-content:space-between;
-    padding-top: .85rem; padding-bottom: .85rem;
-    gap: 1rem;
-  }
-  .brand{ display:flex; align-items:center; gap:.65rem; text-decoration:none; }
-  .brand-mark{ width: 30px; height: 30px; border-radius: 8px; flex: none; }
-  .brand-word{ font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; letter-spacing: -.01em; }
-  .brand-word .beta{ font-family: var(--font-mono); font-size:.62rem; font-weight:500; color: var(--text-muted); letter-spacing: .06em; margin-left:.4rem; border:1px solid var(--border); padding: .15em .5em; border-radius: 999px; vertical-align: 2px; }
-  .navlinks{ display:flex; align-items:center; gap: 1.6rem; }
-  .navlinks a{ text-decoration:none; font-size:.92rem; color: var(--text-muted); font-weight:500; }
-  .navlinks a:hover{ color: var(--text); }
-  .navctas{ display:flex; align-items:center; gap:.6rem; }
-  .theme-toggle{
-    width: 38px; height: 38px; border-radius: 999px;
-    border: 1px solid var(--border); background: var(--surface);
-    display:flex; align-items:center; justify-content:center; cursor:pointer;
-    color: var(--text); flex: none;
-  }
-  .theme-toggle:hover{ border-color: var(--violet); }
-  @media (max-width: 860px){ .navlinks{ display:none; } }
-
   /* ===================== Hero ===================== */
   .hero{ position: relative; overflow: hidden; padding-top: clamp(3rem,7vw,5rem); }
   .hero-canvas-wrap{
@@ -175,12 +25,6 @@
   .hero p.lede{ font-size: 1.18rem; color: var(--text-muted); max-width: 56ch; }
   .hero-ctas{ display:flex; gap: .8rem; flex-wrap: wrap; margin-top:.4rem; }
   .hero-badges{ display:flex; gap:.6rem; flex-wrap:wrap; margin-top: .6rem; }
-  .chip{
-    font-family: var(--font-mono); font-size: .76rem; letter-spacing:.03em;
-    color: var(--text-muted); border: 1px solid var(--border); background: var(--surface);
-    padding: .4em .8em; border-radius: 999px;
-  }
-  .chip b{ color: var(--text); font-weight: 600; }
 
   /* ===================== Screenshot frame ===================== */
   .console-frame{
@@ -199,11 +43,6 @@
   .console-frame .dot{ width:10px; height:10px; border-radius:50%; background: var(--border); }
   .console-frame .bar .path{ margin-left: .5rem; font-family: var(--font-mono); font-size: .75rem; color: var(--text-muted); }
   .console-frame img{ width:100%; }
-
-  /* ===================== Section headers ===================== */
-  .sec-head{ display:flex; flex-direction:column; gap:.9rem; margin-bottom: clamp(2rem,4vw,3rem); max-width: 640px; }
-  .sec-head h2{ font-size: clamp(1.9rem, 3.4vw, 2.6rem); }
-  .sec-head p{ color: var(--text-muted); font-size: 1.05rem; }
 
   /* ===================== Dock grid ===================== */
   .dock-grid{ display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.1rem; }
@@ -228,6 +67,7 @@
   .dock-card h3{ font-size: 1.15rem; font-weight: 600; }
   .dock-card p{ color: var(--text-muted); font-size: .95rem; }
   .dock-card ul{ margin:0; padding-left: 1.1rem; color: var(--text-muted); font-size: .92rem; display:flex; flex-direction:column; gap:.3rem; }
+  .dock-card .more{ margin-top: auto; padding-top: .3rem; font-size: .86rem; font-weight: 600; text-decoration:none; color: var(--violet); }
 
   /* ===================== Engine compare ===================== */
   .engine-grid{ display:grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
@@ -271,38 +111,27 @@
   .strip-item h4{ font-size: .98rem; font-weight:600; }
   .strip-item p{ font-size: .86rem; color: var(--text-muted); }
 
-  /* ===================== Tech badges ===================== */
-  .badges{ display:flex; flex-wrap:wrap; gap:.6rem; }
-  .badge{ font-family: var(--font-mono); font-size:.82rem; padding:.5em 1em; border-radius:8px; background: var(--surface); border:1px solid var(--border); }
-
   /* ===================== Install ===================== */
   .install-grid{ display:grid; grid-template-columns: 1.1fr .9fr; gap: 2rem; align-items:start; }
   @media (max-width: 900px){ .install-grid{ grid-template-columns: 1fr; } }
-  .code-block{
-    background: var(--surface); border:1px solid var(--border); border-radius: var(--radius);
-    overflow:hidden; box-shadow: var(--shadow);
-  }
-  .code-block .head{ padding: .6rem 1rem; border-bottom:1px solid var(--border); font-family: var(--font-mono); font-size:.72rem; color: var(--text-muted); text-transform:uppercase; letter-spacing:.08em; background: var(--surface-2); }
-  .code-block pre{ margin:0; padding: 1.1rem 1.2rem; overflow-x:auto; font-family: var(--font-mono); font-size:.86rem; line-height:1.7; }
-  .code-block .c1{ color: var(--text-muted); }
-  .code-block .c2{ color: var(--teal); }
   .req-list{ display:flex; flex-direction:column; gap: .9rem; }
   .req-list li{ list-style:none; display:flex; gap:.8rem; align-items:flex-start; }
   .req-list .dot2{ width:8px;height:8px;border-radius:50%; background: var(--gradient); margin-top: .5em; flex:none; }
   .req-list h4{ font-size:.98rem; font-weight:600; margin-bottom:.15rem; }
   .req-list p{ font-size:.86rem; color: var(--text-muted); }
 
-  /* ===================== Footer ===================== */
-  footer.site{ border-top: 1px solid var(--border); padding: 2.4rem 0; }
-  footer .wrap{ display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap: 1rem; }
-  footer .fl{ display:flex; gap: 1.4rem; flex-wrap:wrap; }
-  footer a{ text-decoration:none; color: var(--text-muted); font-size: .88rem; }
-  footer a:hover{ color: var(--text); }
-  footer .fine{ font-size: .8rem; color: var(--text-muted); }
-
-  /* entrance animation: pure CSS, always completes, never depends on scroll/JS */
-  @keyframes revealUp{ from{ opacity: 0; transform: translateY(14px); } to{ opacity: 1; transform: none; } }
-  .reveal{ animation: revealUp .6s ease both; }
+  /* ===================== Guides teaser ===================== */
+  .guide-grid{ display:grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+  @media (max-width: 760px){ .guide-grid{ grid-template-columns: 1fr; } }
+  .guide-card{
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 1.8rem; text-decoration:none; color: var(--text); display:flex; flex-direction:column; gap:.6rem;
+    transition: transform .18s ease, border-color .18s ease;
+  }
+  .guide-card:hover{ transform: translateY(-4px); border-color: color-mix(in srgb, var(--violet) 40%, var(--border)); }
+  .guide-card h3{ font-size: 1.25rem; }
+  .guide-card p{ color: var(--text-muted); font-size: .94rem; }
+  .guide-card .arrow{ margin-top: auto; font-family: var(--font-mono); font-size: .8rem; color: var(--violet); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -331,7 +160,8 @@
     <div class="navlinks">
       <a href="#features">Docks</a>
       <a href="#engines">Engines</a>
-      <a href="#signal-chain">Signal chain</a>
+      <a href="scripting.html">Scripting</a>
+      <a href="settings.html">Settings</a>
       <a href="#install">Install</a>
     </div>
     <div class="navctas">
@@ -399,6 +229,7 @@
             <li>Segment caching toggle</li>
             <li>Standard batch or real-time JIT mode</li>
           </ul>
+          <a class="more" href="settings.html#generation">Every field, explained →</a>
         </div>
 
         <div class="dock-card reveal">
@@ -409,12 +240,14 @@
             <span class="dock-tag core">Always on</span>
           </div>
           <h3>FX</h3>
-          <p>Live audio post-processing, built on Pedalboard.</p>
+          <p>Live audio post-processing, built on Pedalboard: five groups, seventeen sliders.</p>
           <ul>
-            <li>Reverb, Compressor, Low/High Shelf</li>
-            <li>Speed 0.5×–2.0×, volume, pitch</li>
-            <li>Normalize &amp; silence trim</li>
+            <li>Dynamics: Compressor, Limiter, Gain</li>
+            <li>EQ &amp; Filters: shelf EQ, high-pass, low-pass</li>
+            <li>Spatial &amp; Time: Reverb, Delay</li>
+            <li>Modulation: Chorus, Distortion, Phaser, Clipping, Bitcrush, GSM</li>
           </ul>
+          <a class="more" href="settings.html#fx">Every field, explained →</a>
         </div>
 
         <div class="dock-card reveal">
@@ -431,6 +264,7 @@
             <li>Fixes acronyms, names, jargon</li>
             <li>Compiled patterns are cached, not rebuilt per call</li>
           </ul>
+          <a class="more" href="settings.html#lexicon">Every field, explained →</a>
         </div>
 
         <div class="dock-card reveal">
@@ -446,6 +280,7 @@
             <li>Shown only when <code>supports_voice_mixing</code></li>
             <li>Saved mixes appear in the normal voice list</li>
           </ul>
+          <a class="more" href="settings.html#mixing">Every field, explained →</a>
         </div>
 
         <div class="dock-card reveal">
@@ -462,6 +297,7 @@
             <li>Auto-transcribe via the bundled ASR model</li>
             <li>Edit the transcript, save under a name</li>
           </ul>
+          <a class="more" href="settings.html#voice-reference">Every field, explained →</a>
         </div>
 
       </div>
@@ -498,9 +334,9 @@
             <dt>Languages</dt><dd>Whatever the reference clip speaks</dd>
             <dt>Sample rate</dt><dd class="mono">44,100 Hz</dd>
             <dt>Threading</dt><dd>One shared, lock-serialized model, since a 0.6B model per thread isn't worth it</dd>
-            <dt>JIT streaming</dt><dd>Not yet supported</dd>
+            <dt>JIT streaming</dt><dd>Not supported</dd>
           </dl>
-          <p class="note">Auto-transcription is handled by a companion ASR model. That ASR model ships under CC-BY-NC-4.0 (non-commercial), worth knowing before shipping this fork commercially.</p>
+          <p class="note">Auto-transcription is handled by a companion ASR model. That ASR model ships under CC-BY-NC-4.0 (non-commercial), worth knowing before shipping this fork commercially. See the <a href="settings.html#jit" style="color:var(--violet); font-weight:600;">settings reference</a> for why JIT is off the table here.</p>
         </div>
 
       </div>
@@ -512,18 +348,18 @@
       <div class="sec-head reveal">
         <span class="eyebrow">Post-processing order</span>
         <h2>Every segment runs the same signal chain</h2>
-        <p>Generated audio is processed in a fixed order before it ever hits disk. This is the real pipeline, not a marketing simplification.</p>
+        <p>Generated audio is processed in a fixed order before it ever hits disk. This is the real order from <code>process_audio</code>, not a marketing simplification.</p>
       </div>
       <div class="chain reveal">
-        <div class="chain-node"><span class="n">01</span><h4>Pitch</h4><p>Shifted via resampling</p></div>
+        <div class="chain-node"><span class="n">01</span><h4>Trim</h4><p>Leading/trailing silence removed first, if enabled</p></div>
         <div class="chain-arrow">→</div>
         <div class="chain-node"><span class="n">02</span><h4>Volume</h4><p>Gain applied to the segment</p></div>
         <div class="chain-arrow">→</div>
-        <div class="chain-node"><span class="n">03</span><h4>FX chain</h4><p>Reverb → Compressor → Shelf EQ (Pedalboard)</p></div>
+        <div class="chain-node"><span class="n">03</span><h4>Pitch</h4><p>Shifted via resampling</p></div>
         <div class="chain-arrow">→</div>
-        <div class="chain-node"><span class="n">04</span><h4>Normalize</h4><p>Levels evened out</p></div>
+        <div class="chain-node"><span class="n">04</span><h4>FX chain</h4><p>All enabled Pedalboard effects, applied together</p></div>
         <div class="chain-arrow">→</div>
-        <div class="chain-node"><span class="n">05</span><h4>Trim</h4><p>Leading/trailing silence removed</p></div>
+        <div class="chain-node"><span class="n">05</span><h4>Normalize</h4><p>Peak levels evened out last</p></div>
       </div>
     </div>
   </section>
@@ -541,7 +377,7 @@
         </div>
         <div class="mode-card reveal">
           <h3>JIT (real-time)</h3>
-          <p>A generation thread fills a playback queue while a second thread drains it with buffer management, so you start listening before the rest of the text has even finished rendering.</p>
+          <p>A generation thread fills a playback queue while a second thread drains it with buffer management, so you start listening before the rest of the text has even finished rendering. Only available on engines that can generate faster than you can listen.</p>
         </div>
       </div>
     </div>
@@ -555,18 +391,39 @@
       </div>
       <div class="strip reveal">
         <div class="strip-item"><h4>Multi-source input</h4><p>Paste text, or load <code>.txt</code>, <code>.pdf</code>, or <code>.epub</code>. Turn a whole ebook into an audiobook.</p></div>
-        <div class="strip-item"><h4>Scripted multi-speaker</h4><p><code>[Speaker:FX]: Text</code> switches voice and FX mid-document, no re-running the app.</p></div>
+        <div class="strip-item"><h4>Scripted multi-speaker</h4><p><code>[Preset:FXPreset]: Text</code> switches voice and FX mid-document. See the <a href="scripting.html" style="color:var(--violet); font-weight:600;">scripting guide</a>.</p></div>
         <div class="strip-item"><h4>Smart splitting</h4><p>Split by newline, paragraph, or sentence for better prosody at the seams.</p></div>
         <div class="strip-item"><h4>SRT export</h4><p>Subtitles generated in sync with actual segment durations.</p></div>
         <div class="strip-item"><h4>Presets</h4><p>Save and reload full configurations, FX chains included.</p></div>
         <div class="strip-item"><h4>Intelligent caching</h4><p>Segments are hashed and cached. Change a generation-affecting setting and it gets caught automatically.</p></div>
         <div class="strip-item"><h4>Cross-platform audio</h4><p>Playback runs on <code>sounddevice</code>/<code>soundfile</code>, not a Windows-only API.</p></div>
-        <div class="strip-item"><h4>UI customization</h4><p>Adjustable interface scale, dark / light / system theme.</p></div>
+        <div class="strip-item"><h4>Persistent layout</h4><p>Dock positions and window geometry autosave to <code>config_qt.json</code>.</p></div>
       </div>
     </div>
   </section>
 
-  <section id="install" style="background: var(--surface-2); border-top:1px solid var(--border);">
+  <section id="guides" style="background: var(--surface-2); border-top:1px solid var(--border); border-bottom:1px solid var(--border);">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">Go deeper</span>
+        <h2>Two reference pages, for when the panels aren't enough</h2>
+      </div>
+      <div class="guide-grid">
+        <a class="guide-card reveal" href="scripting.html">
+          <h3>Inline scripting</h3>
+          <p>How to mix multiple speakers and FX presets in one block of text, what the <code>[Name:FX]:</code> tags actually look up, and what happens when one doesn't match anything saved.</p>
+          <span class="arrow">Read the guide →</span>
+        </a>
+        <a class="guide-card reveal" href="settings.html">
+          <h3>Settings reference</h3>
+          <p>Every field in every dock, what it actually does, and the non-obvious cases: which settings Audio8 silently ignores, and why JIT only exists for engines that outrun playback.</p>
+          <span class="arrow">Read the reference →</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
     <div class="wrap">
       <div class="sec-head reveal">
         <span class="eyebrow">Get running</span>
@@ -592,10 +449,28 @@ pip install -r requirements.txt
         </div>
         <ul class="req-list reveal">
           <li><span class="dot2"></span><div><h4>Python 3.11+</h4><p>The only hard language-version requirement.</p></div></li>
-          <li><span class="dot2"></span><div><h4>eSpeak NG</h4><p>Needed for Kokoro's phonemization step.</p></div></li>
+          <li><span class="dot2"></span><div><h4>eSpeak NG</h4><p>A system-level dependency Kokoro's phonemization step needs at runtime. Install it before your first run, see below.</p></div></li>
           <li><span class="dot2"></span><div><h4>A GPU is optional</h4><p>Both models run on CPU; PyTorch will use a GPU automatically if one's available.</p></div></li>
           <li><span class="dot2"></span><div><h4>First run downloads weights</h4><p>Both TTS models pull from Hugging Face the first time you select them.</p></div></li>
         </ul>
+      </div>
+
+      <div class="code-block reveal" style="margin-top:1.25rem;">
+        <div class="head">Install eSpeak NG (system dependency)</div>
+        <pre><span class="c1"># Windows: download the installer from the releases page and run it</span>
+<span class="c2">https://github.com/espeak-ng/espeak-ng/releases</span>
+
+<span class="c1"># macOS (Homebrew)</span>
+<span class="c1">$</span> <span class="c2">brew install espeak-ng</span>
+
+<span class="c1"># Debian / Ubuntu</span>
+<span class="c1">$</span> <span class="c2">sudo apt install espeak-ng</span>
+
+<span class="c1"># Fedora</span>
+<span class="c1">$</span> <span class="c2">sudo dnf install espeak-ng</span>
+
+<span class="c1"># Arch</span>
+<span class="c1">$</span> <span class="c2">sudo pacman -S espeak-ng</span></pre>
       </div>
     </div>
   </section>
@@ -625,45 +500,23 @@ pip install -r requirements.txt
   <div class="wrap">
     <span class="fine">Apache-2.0 licensed. Not affiliated with the Kokoro or Audio8 model authors.</span>
     <div class="fl">
+      <a href="scripting.html">Scripting guide</a>
+      <a href="settings.html">Settings reference</a>
       <a href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">Repository ↗</a>
       <a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/README.md" target="_blank" rel="noopener">README ↗</a>
       <a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/LICENSE" target="_blank" rel="noopener">License ↗</a>
-      <a href="https://github.com/hexgrad/kokoro" target="_blank" rel="noopener">Kokoro model ↗</a>
     </div>
   </div>
 </footer>
 
+<script src="assets/site.js"></script>
 <script>
-  // ---- Theme toggle ----
-  (function(){
-    var root = document.documentElement;
-    var stored = localStorage.getItem('kg-theme');
-    if (stored) root.setAttribute('data-theme', stored);
-    function syncIcons(){
-      var dark = getComputedStyle(root).getPropertyValue('--bg').trim().toLowerCase();
-      var isDark = root.getAttribute('data-theme') === 'dark' ||
-        (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
-      document.getElementById('iconSun').style.display = isDark ? 'none' : 'block';
-      document.getElementById('iconMoon').style.display = isDark ? 'block' : 'none';
-    }
-    syncIcons();
-    document.getElementById('themeToggle').addEventListener('click', function(){
-      var isDark = root.getAttribute('data-theme') === 'dark' ||
-        (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
-      var next = isDark ? 'light' : 'dark';
-      root.setAttribute('data-theme', next);
-      localStorage.setItem('kg-theme', next);
-      syncIcons();
-    });
-  })();
-
   // ---- Hero spectrum canvas ----
   (function(){
     var canvas = document.getElementById('spectrum');
     var ctx = canvas.getContext('2d');
     var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     var bars = 64, heights = [], targets = [];
-    var raf = null;
 
     function resize(){
       var wrap = canvas.parentElement;
@@ -699,7 +552,7 @@ pip install -r requirements.txt
       var bw = gap * .5;
       for (var i=0;i<bars;i++){
         if (!reduced){
-          heights[i] += (targets[i]-heights[i]) * 0.08;
+          heights[i] += (targets[i]-heights[i]) * 0.03;
           if (Math.abs(targets[i]-heights[i]) < 0.02) targets[i] = Math.random();
         }
         var bh = 0.08*h + heights[i]*0.62*h;
@@ -709,7 +562,7 @@ pip install -r requirements.txt
         ctx.globalAlpha = 0.85;
         ctx.fillRect(x, y, bw, bh);
       }
-      if (!reduced) raf = requestAnimationFrame(draw);
+      if (!reduced) requestAnimationFrame(draw);
     }
 
     window.addEventListener('resize', function(){ resize(); });
