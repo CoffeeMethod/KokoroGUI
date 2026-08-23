@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Kokoro GUI · Studio-grade text to speech</title>
+<meta name="description" content="A dockable, engine-agnostic desktop TTS console: named Kokoro voices or zero-shot Audio8 voice cloning, a live FX chain, JIT streaming, and segment-level caching." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2335e6c6'/%3E%3Cstop offset='.55' stop-color='%239d7bff'/%3E%3Cstop offset='1' stop-color='%23ff7a59'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='%230a0d14'/%3E%3Cg fill='url(%23g)'%3E%3Crect x='10' y='26' width='7' height='12' rx='2'/%3E%3Crect x='21' y='16' width='7' height='32' rx='2'/%3E%3Crect x='32' y='22' width='7' height='20' rx='2'/%3E%3Crect x='43' y='10' width='7' height='44' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  /* ===================== Tokens ===================== */
+  :root{
+    --bg: #F1F2F7;
+    --surface: #FFFFFF;
+    --surface-2: #E8EAF2;
+    --border: #D7DAE6;
+    --text: #14161F;
+    --text-muted: #565C72;
+    --teal: #0EA98C;
+    --violet: #7C4DFF;
+    --coral: #E0562F;
+    --gradient: linear-gradient(120deg, var(--teal), var(--violet) 55%, var(--coral));
+    --shadow: 0 1px 2px rgba(20,22,31,.06), 0 8px 24px rgba(20,22,31,.06);
+    --radius: 14px;
+    --font-display: 'Unbounded', 'Segoe UI', sans-serif;
+    --font-body: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Code', 'Courier New', monospace;
+    --maxw: 1180px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg: #0A0D14;
+      --surface: #12151F;
+      --surface-2: #1A1E2C;
+      --border: #262B3D;
+      --text: #EDEFF6;
+      --text-muted: #939AB5;
+      --teal: #35E6C6;
+      --violet: #9D7BFF;
+      --coral: #FF7A59;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 32px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg: #0A0D14;
+    --surface: #12151F;
+    --surface-2: #1A1E2C;
+    --border: #262B3D;
+    --text: #EDEFF6;
+    --text-muted: #939AB5;
+    --teal: #35E6C6;
+    --violet: #9D7BFF;
+    --coral: #FF7A59;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 32px rgba(0,0,0,.35);
+  }
+
+  /* ===================== Reset ===================== */
+  *,*::before,*::after{ box-sizing: border-box; }
+  html{ scroll-behavior: smooth; }
+  body{
+    margin:0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 1.05rem;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  img{ max-width:100%; display:block; }
+  a{ color: inherit; }
+  h1,h2,h3,h4{ font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.12; }
+  p{ margin: 0; }
+  .wrap{ max-width: var(--maxw); margin: 0 auto; padding: 0 clamp(1.25rem, 4vw, 2.5rem); }
+  section{ padding: clamp(3.5rem, 8vw, 6.5rem) 0; }
+  .eyebrow{
+    font-family: var(--font-mono);
+    font-size: .78rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    display:inline-flex;
+    align-items:center;
+    gap:.5em;
+  }
+  .eyebrow::before{
+    content:"";
+    width: 1.3em; height: 2px;
+    background: var(--gradient);
+    display:inline-block;
+    border-radius: 2px;
+  }
+  .grad-text{
+    background: var(--gradient);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .btn{
+    font-family: var(--font-body);
+    font-weight: 600;
+    font-size: .95rem;
+    padding: .8em 1.4em;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    display:inline-flex;
+    align-items:center;
+    gap:.5em;
+    cursor:pointer;
+    text-decoration:none;
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease, border-color .15s ease;
+    white-space: nowrap;
+  }
+  .btn:hover{ transform: translateY(-2px); }
+  .btn:focus-visible{ outline: 2px solid var(--violet); outline-offset: 2px; }
+  .btn-primary{
+    background: var(--gradient);
+    color: #08090D;
+    box-shadow: var(--shadow);
+  }
+  .btn-ghost{
+    background: var(--surface);
+    color: var(--text);
+    border-color: var(--border);
+  }
+  .btn-ghost:hover{ border-color: var(--violet); }
+  code, .mono{ font-family: var(--font-mono); }
+  ::selection{ background: var(--violet); color: #fff; }
+  @media (prefers-reduced-motion: reduce){
+    html{ scroll-behavior:auto; }
+    *{ animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+  }
+
+  /* ===================== Nav ===================== */
+  header.site{
+    position: sticky; top:0; z-index: 40;
+    backdrop-filter: blur(10px) saturate(1.3);
+    background: color-mix(in srgb, var(--bg) 78%, transparent);
+    border-bottom: 1px solid var(--border);
+  }
+  nav.wrap{
+    display:flex; align-items:center; justify-content:space-between;
+    padding-top: .85rem; padding-bottom: .85rem;
+    gap: 1rem;
+  }
+  .brand{ display:flex; align-items:center; gap:.65rem; text-decoration:none; }
+  .brand-mark{ width: 30px; height: 30px; border-radius: 8px; flex: none; }
+  .brand-word{ font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; letter-spacing: -.01em; }
+  .brand-word .beta{ font-family: var(--font-mono); font-size:.62rem; font-weight:500; color: var(--text-muted); letter-spacing: .06em; margin-left:.4rem; border:1px solid var(--border); padding: .15em .5em; border-radius: 999px; vertical-align: 2px; }
+  .navlinks{ display:flex; align-items:center; gap: 1.6rem; }
+  .navlinks a{ text-decoration:none; font-size:.92rem; color: var(--text-muted); font-weight:500; }
+  .navlinks a:hover{ color: var(--text); }
+  .navctas{ display:flex; align-items:center; gap:.6rem; }
+  .theme-toggle{
+    width: 38px; height: 38px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface);
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+    color: var(--text); flex: none;
+  }
+  .theme-toggle:hover{ border-color: var(--violet); }
+  @media (max-width: 860px){ .navlinks{ display:none; } }
+
+  /* ===================== Hero ===================== */
+  .hero{ position: relative; overflow: hidden; padding-top: clamp(3rem,7vw,5rem); }
+  .hero-canvas-wrap{
+    position: absolute; inset: 0; z-index: 0;
+    mask-image: linear-gradient(to bottom, black, transparent 92%);
+    opacity: .55;
+  }
+  #spectrum{ width:100%; height:100%; display:block; }
+  .hero .wrap{ position: relative; z-index: 1; }
+  .hero-inner{ max-width: 760px; display:flex; flex-direction:column; gap: 1.4rem; }
+  .hero h1{ font-size: clamp(2.5rem, 5.2vw, 4.1rem); font-weight: 700; }
+  .hero p.lede{ font-size: 1.18rem; color: var(--text-muted); max-width: 56ch; }
+  .hero-ctas{ display:flex; gap: .8rem; flex-wrap: wrap; margin-top:.4rem; }
+  .hero-badges{ display:flex; gap:.6rem; flex-wrap:wrap; margin-top: .6rem; }
+  .chip{
+    font-family: var(--font-mono); font-size: .76rem; letter-spacing:.03em;
+    color: var(--text-muted); border: 1px solid var(--border); background: var(--surface);
+    padding: .4em .8em; border-radius: 999px;
+  }
+  .chip b{ color: var(--text); font-weight: 600; }
+
+  /* ===================== Screenshot frame ===================== */
+  .console-frame{
+    margin-top: clamp(2.5rem, 6vw, 4rem);
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .console-frame .bar{
+    display:flex; align-items:center; gap: .5rem;
+    padding: .7rem 1rem; border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+  .console-frame .dot{ width:10px; height:10px; border-radius:50%; background: var(--border); }
+  .console-frame .bar .path{ margin-left: .5rem; font-family: var(--font-mono); font-size: .75rem; color: var(--text-muted); }
+  .console-frame img{ width:100%; }
+
+  /* ===================== Section headers ===================== */
+  .sec-head{ display:flex; flex-direction:column; gap:.9rem; margin-bottom: clamp(2rem,4vw,3rem); max-width: 640px; }
+  .sec-head h2{ font-size: clamp(1.9rem, 3.4vw, 2.6rem); }
+  .sec-head p{ color: var(--text-muted); font-size: 1.05rem; }
+
+  /* ===================== Dock grid ===================== */
+  .dock-grid{ display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.1rem; }
+  .dock-card{
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 1.5rem; display:flex; flex-direction:column; gap: .8rem;
+    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+  }
+  .dock-card:hover{ transform: translateY(-4px); box-shadow: var(--shadow); border-color: color-mix(in srgb, var(--violet) 40%, var(--border)); }
+  .dock-card .top{ display:flex; align-items:flex-start; justify-content:space-between; gap: .6rem; }
+  .dock-icon{
+    width: 40px; height: 40px; border-radius: 10px; flex: none;
+    display:flex; align-items:center; justify-content:center;
+    background: var(--surface-2); border: 1px solid var(--border);
+  }
+  .dock-tag{
+    font-family: var(--font-mono); font-size: .66rem; letter-spacing: .06em; text-transform: uppercase;
+    padding: .3em .6em; border-radius: 999px; white-space:nowrap; flex: none;
+  }
+  .dock-tag.core{ color: var(--teal); background: color-mix(in srgb, var(--teal) 14%, transparent); border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent); }
+  .dock-tag.gated{ color: var(--violet); background: color-mix(in srgb, var(--violet) 14%, transparent); border: 1px solid color-mix(in srgb, var(--violet) 35%, transparent); }
+  .dock-card h3{ font-size: 1.15rem; font-weight: 600; }
+  .dock-card p{ color: var(--text-muted); font-size: .95rem; }
+  .dock-card ul{ margin:0; padding-left: 1.1rem; color: var(--text-muted); font-size: .92rem; display:flex; flex-direction:column; gap:.3rem; }
+
+  /* ===================== Engine compare ===================== */
+  .engine-grid{ display:grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+  @media (max-width: 760px){ .engine-grid{ grid-template-columns: 1fr; } }
+  .engine-card{
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 1.8rem; position:relative; overflow:hidden;
+  }
+  .engine-card::before{
+    content:""; position:absolute; inset: 0 0 auto 0; height: 3px; background: var(--gradient);
+  }
+  .engine-card h3{ font-size: 1.35rem; margin-bottom:.3rem; }
+  .engine-card .sub{ font-family: var(--font-mono); font-size: .8rem; color: var(--text-muted); margin-bottom: 1.1rem; display:block; }
+  .engine-card dl{ display:grid; grid-template-columns: auto 1fr; gap: .55rem 1rem; margin: 0; }
+  .engine-card dt{ font-family: var(--font-mono); font-size: .74rem; letter-spacing:.04em; text-transform:uppercase; color: var(--text-muted); align-self:start; padding-top:.15rem; }
+  .engine-card dd{ margin:0; font-size: .92rem; }
+  .engine-card .note{ margin-top: 1.1rem; padding-top: 1rem; border-top: 1px dashed var(--border); color: var(--text-muted); font-size: .85rem; }
+
+  /* ===================== Signal chain ===================== */
+  .chain{ display:flex; align-items:stretch; gap: .4rem; overflow-x:auto; padding-bottom: .5rem; }
+  .chain-node{
+    background: var(--surface); border:1px solid var(--border); border-radius: 12px;
+    padding: 1.1rem 1.2rem; min-width: 168px; flex: 1 0 168px;
+    display:flex; flex-direction:column; gap:.35rem;
+  }
+  .chain-node .n{ font-family: var(--font-mono); font-size: .7rem; color: var(--text-muted); text-transform:uppercase; letter-spacing:.06em; }
+  .chain-node h4{ font-size: 1rem; font-weight:600; }
+  .chain-node p{ font-size: .82rem; color: var(--text-muted); }
+  .chain-arrow{ flex:none; display:flex; align-items:center; color: var(--text-muted); font-size:1.3rem; padding: 0 .1rem; }
+
+  /* ===================== Modes ===================== */
+  .modes{ display:grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+  @media (max-width: 760px){ .modes{ grid-template-columns: 1fr; } }
+  .mode-card{ background: var(--surface-2); border:1px solid var(--border); border-radius: var(--radius); padding: 1.7rem; }
+  .mode-card h3{ font-size:1.2rem; margin-bottom:.5rem; }
+  .mode-card p{ color: var(--text-muted); font-size:.94rem; }
+
+  /* ===================== Feature strip ===================== */
+  .strip{ display:grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 1px; background: var(--border); border:1px solid var(--border); border-radius: var(--radius); overflow:hidden; }
+  .strip-item{ background: var(--surface); padding: 1.4rem; display:flex; flex-direction:column; gap:.4rem; }
+  .strip-item h4{ font-size: .98rem; font-weight:600; }
+  .strip-item p{ font-size: .86rem; color: var(--text-muted); }
+
+  /* ===================== Tech badges ===================== */
+  .badges{ display:flex; flex-wrap:wrap; gap:.6rem; }
+  .badge{ font-family: var(--font-mono); font-size:.82rem; padding:.5em 1em; border-radius:8px; background: var(--surface); border:1px solid var(--border); }
+
+  /* ===================== Install ===================== */
+  .install-grid{ display:grid; grid-template-columns: 1.1fr .9fr; gap: 2rem; align-items:start; }
+  @media (max-width: 900px){ .install-grid{ grid-template-columns: 1fr; } }
+  .code-block{
+    background: var(--surface); border:1px solid var(--border); border-radius: var(--radius);
+    overflow:hidden; box-shadow: var(--shadow);
+  }
+  .code-block .head{ padding: .6rem 1rem; border-bottom:1px solid var(--border); font-family: var(--font-mono); font-size:.72rem; color: var(--text-muted); text-transform:uppercase; letter-spacing:.08em; background: var(--surface-2); }
+  .code-block pre{ margin:0; padding: 1.1rem 1.2rem; overflow-x:auto; font-family: var(--font-mono); font-size:.86rem; line-height:1.7; }
+  .code-block .c1{ color: var(--text-muted); }
+  .code-block .c2{ color: var(--teal); }
+  .req-list{ display:flex; flex-direction:column; gap: .9rem; }
+  .req-list li{ list-style:none; display:flex; gap:.8rem; align-items:flex-start; }
+  .req-list .dot2{ width:8px;height:8px;border-radius:50%; background: var(--gradient); margin-top: .5em; flex:none; }
+  .req-list h4{ font-size:.98rem; font-weight:600; margin-bottom:.15rem; }
+  .req-list p{ font-size:.86rem; color: var(--text-muted); }
+
+  /* ===================== Footer ===================== */
+  footer.site{ border-top: 1px solid var(--border); padding: 2.4rem 0; }
+  footer .wrap{ display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap: 1rem; }
+  footer .fl{ display:flex; gap: 1.4rem; flex-wrap:wrap; }
+  footer a{ text-decoration:none; color: var(--text-muted); font-size: .88rem; }
+  footer a:hover{ color: var(--text); }
+  footer .fine{ font-size: .8rem; color: var(--text-muted); }
+
+  /* entrance animation: pure CSS, always completes, never depends on scroll/JS */
+  @keyframes revealUp{ from{ opacity: 0; transform: translateY(14px); } to{ opacity: 1; transform: none; } }
+  .reveal{ animation: revealUp .6s ease both; }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <nav class="wrap">
+    <a class="brand" href="#top">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect width="64" height="64" rx="16" fill="var(--bg)" stroke="var(--border)"/>
+        <g fill="url(#navgrad)">
+          <rect x="10" y="26" width="7" height="12" rx="2"/>
+          <rect x="21" y="16" width="7" height="32" rx="2"/>
+          <rect x="32" y="22" width="7" height="20" rx="2"/>
+          <rect x="43" y="10" width="7" height="44" rx="2"/>
+        </g>
+        <defs>
+          <linearGradient id="navgrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#35E6C6"/>
+            <stop offset=".55" stop-color="#9D7BFF"/>
+            <stop offset="1" stop-color="#FF7A59"/>
+          </linearGradient>
+        </defs>
+      </svg>
+      <span class="brand-word">Kokoro GUI<span class="beta">BETA 3.3.0</span></span>
+    </a>
+    <div class="navlinks">
+      <a href="#features">Docks</a>
+      <a href="#engines">Engines</a>
+      <a href="#signal-chain">Signal chain</a>
+      <a href="#install">Install</a>
+    </div>
+    <div class="navctas">
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle color theme" title="Toggle color theme">
+        <svg id="iconSun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg id="iconMoon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
+      </button>
+      <a class="btn btn-ghost" href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </nav>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <div class="hero-canvas-wrap"><canvas id="spectrum"></canvas></div>
+    <div class="wrap">
+      <div class="hero-inner">
+        <span class="eyebrow">Desktop TTS console · PySide6</span>
+        <h1>Text to speech, <span class="grad-text">engineered like a studio.</span></h1>
+        <p class="lede">Kokoro GUI is a dockable desktop console for turning text, or whole ebooks, into audio. Pick a named voice or clone one from a reference clip, run it through a live FX chain, and stream it back in real time.</p>
+        <div class="hero-ctas">
+          <a class="btn btn-primary" href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">Get the source</a>
+          <a class="btn btn-ghost" href="#install">Quick start</a>
+        </div>
+        <div class="hero-badges">
+          <span class="chip"><b>2</b> synthesis engines</span>
+          <span class="chip"><b>8</b> languages</span>
+          <span class="chip">Standard <b>+</b> JIT streaming</span>
+          <span class="chip">Windows · macOS · Linux</span>
+          <span class="chip">Apache-2.0</span>
+        </div>
+      </div>
+
+      <div class="console-frame reveal">
+        <div class="bar">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span class="path">kokoro_gui · Generation dock</span>
+        </div>
+        <img src="https://github.com/user-attachments/assets/a6ec3d30-e837-4815-a0e1-1ff69d1e31be" alt="Kokoro GUI dockable Qt interface showing the Generation panel, voice picker, and FX controls" loading="lazy" width="933" height="1787" style="max-height: 640px; width:100%; object-fit: cover; object-position: top;" />
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">The panels</span>
+        <h2>Five docks, rearranged to how you work</h2>
+        <p>The whole app is dockable Qt panels. Three ship with every engine, two appear only when the active engine actually supports them. No dead tabs, no engine-specific special-casing in the UI.</p>
+      </div>
+      <div class="dock-grid">
+
+        <div class="dock-card reveal">
+          <div class="top">
+            <div class="dock-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h13"/></svg>
+            </div>
+            <span class="dock-tag core">Always on</span>
+          </div>
+          <h3>Generation</h3>
+          <p>The core dock, schema-driven so it rebuilds itself per engine.</p>
+          <ul>
+            <li>Language, voice, speed, split pattern</li>
+            <li>Output format &amp; thread count</li>
+            <li>Segment caching toggle</li>
+            <li>Standard batch or real-time JIT mode</li>
+          </ul>
+        </div>
+
+        <div class="dock-card reveal">
+          <div class="top">
+            <div class="dock-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+            </div>
+            <span class="dock-tag core">Always on</span>
+          </div>
+          <h3>FX</h3>
+          <p>Live audio post-processing, built on Pedalboard.</p>
+          <ul>
+            <li>Reverb, Compressor, Low/High Shelf</li>
+            <li>Speed 0.5×–2.0×, volume, pitch</li>
+            <li>Normalize &amp; silence trim</li>
+          </ul>
+        </div>
+
+        <div class="dock-card reveal">
+          <div class="top">
+            <div class="dock-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="2"><path d="M4 19h4l10-10-4-4L4 15v4Z"/></svg>
+            </div>
+            <span class="dock-tag core">Always on</span>
+          </div>
+          <h3>Lexicon</h3>
+          <p>A pronunciation dictionary the engine consults before synthesis.</p>
+          <ul>
+            <li>Case-insensitive literal overrides</li>
+            <li>Fixes acronyms, names, jargon</li>
+            <li>Compiled patterns are cached, not rebuilt per call</li>
+          </ul>
+        </div>
+
+        <div class="dock-card reveal">
+          <div class="top">
+            <div class="dock-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--violet)" stroke-width="2"><circle cx="8" cy="8" r="3"/><circle cx="16" cy="16" r="3"/><path d="M11 8h5M8 11v5"/></svg>
+            </div>
+            <span class="dock-tag gated">Engine-gated</span>
+          </div>
+          <h3>Mixing</h3>
+          <p>Blend existing named voices into a new one, with precise weighting.</p>
+          <ul>
+            <li>Shown only when <code>supports_voice_mixing</code></li>
+            <li>Saved mixes appear in the normal voice list</li>
+          </ul>
+        </div>
+
+        <div class="dock-card reveal">
+          <div class="top">
+            <div class="dock-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--violet)" stroke-width="2"><rect x="6" y="4" width="12" height="16" rx="2"/><path d="M10 20h4"/></svg>
+            </div>
+            <span class="dock-tag gated">Engine-gated</span>
+          </div>
+          <h3>Voice Reference</h3>
+          <p>Clone a voice from a WAV instead of picking one off a list.</p>
+          <ul>
+            <li>Shown only when <code>supports_voice_cloning</code></li>
+            <li>Auto-transcribe via the bundled ASR model</li>
+            <li>Edit the transcript, save under a name</li>
+          </ul>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <section id="engines" style="background: var(--surface-2); border-top:1px solid var(--border); border-bottom:1px solid var(--border);">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">Pick a backend</span>
+        <h2>Two real synthesis engines, one interface</h2>
+        <p>Both are registered behind the same <code>TTSEngineBackend</code> abstraction, so switching in the toolbar swaps voices, sample rate, and available docks. Nothing else about the app changes.</p>
+      </div>
+      <div class="engine-grid">
+
+        <div class="engine-card reveal">
+          <h3>Kokoro</h3>
+          <span class="sub">the default backend</span>
+          <dl>
+            <dt>Voices</dt><dd>Named base voices, plus custom mixes</dd>
+            <dt>Languages</dt><dd>English (US/UK), Spanish, French, Italian, Portuguese, Japanese, Chinese</dd>
+            <dt>Sample rate</dt><dd class="mono">24,000 Hz</dd>
+            <dt>Threading</dt><dd>One <code>KPipeline</code> per worker thread, so chunks render in true parallel</dd>
+            <dt>JIT streaming</dt><dd>Supported</dd>
+          </dl>
+          <p class="note">The original engine this project was built around, and still the fastest path from text to audio.</p>
+        </div>
+
+        <div class="engine-card reveal">
+          <h3>Audio8</h3>
+          <span class="sub">Audio8-TTS-Preview-0.6b</span>
+          <dl>
+            <dt>Voices</dt><dd>Zero-shot cloning from a reference WAV + transcript</dd>
+            <dt>Languages</dt><dd>Whatever the reference clip speaks</dd>
+            <dt>Sample rate</dt><dd class="mono">44,100 Hz</dd>
+            <dt>Threading</dt><dd>One shared, lock-serialized model, since a 0.6B model per thread isn't worth it</dd>
+            <dt>JIT streaming</dt><dd>Not yet supported</dd>
+          </dl>
+          <p class="note">Auto-transcription is handled by a companion ASR model. That ASR model ships under CC-BY-NC-4.0 (non-commercial), worth knowing before shipping this fork commercially.</p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <section id="signal-chain">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">Post-processing order</span>
+        <h2>Every segment runs the same signal chain</h2>
+        <p>Generated audio is processed in a fixed order before it ever hits disk. This is the real pipeline, not a marketing simplification.</p>
+      </div>
+      <div class="chain reveal">
+        <div class="chain-node"><span class="n">01</span><h4>Pitch</h4><p>Shifted via resampling</p></div>
+        <div class="chain-arrow">→</div>
+        <div class="chain-node"><span class="n">02</span><h4>Volume</h4><p>Gain applied to the segment</p></div>
+        <div class="chain-arrow">→</div>
+        <div class="chain-node"><span class="n">03</span><h4>FX chain</h4><p>Reverb → Compressor → Shelf EQ (Pedalboard)</p></div>
+        <div class="chain-arrow">→</div>
+        <div class="chain-node"><span class="n">04</span><h4>Normalize</h4><p>Levels evened out</p></div>
+        <div class="chain-arrow">→</div>
+        <div class="chain-node"><span class="n">05</span><h4>Trim</h4><p>Leading/trailing silence removed</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section style="background: var(--surface-2); border-top:1px solid var(--border); border-bottom:1px solid var(--border);">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">Generation modes</span>
+        <h2>Batch it, or hear it as it's built</h2>
+      </div>
+      <div class="modes">
+        <div class="mode-card reveal">
+          <h3>Standard</h3>
+          <p>Text is split into chunks and rendered in parallel across a thread pool sized by <code class="mono">num_threads</code>. Fastest path for turning a whole file into one finished audiobook.</p>
+        </div>
+        <div class="mode-card reveal">
+          <h3>JIT (real-time)</h3>
+          <p>A generation thread fills a playback queue while a second thread drains it with buffer management, so you start listening before the rest of the text has even finished rendering.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">Everything else</span>
+        <h2>The rest of the console</h2>
+      </div>
+      <div class="strip reveal">
+        <div class="strip-item"><h4>Multi-source input</h4><p>Paste text, or load <code>.txt</code>, <code>.pdf</code>, or <code>.epub</code>. Turn a whole ebook into an audiobook.</p></div>
+        <div class="strip-item"><h4>Scripted multi-speaker</h4><p><code>[Speaker:FX]: Text</code> switches voice and FX mid-document, no re-running the app.</p></div>
+        <div class="strip-item"><h4>Smart splitting</h4><p>Split by newline, paragraph, or sentence for better prosody at the seams.</p></div>
+        <div class="strip-item"><h4>SRT export</h4><p>Subtitles generated in sync with actual segment durations.</p></div>
+        <div class="strip-item"><h4>Presets</h4><p>Save and reload full configurations, FX chains included.</p></div>
+        <div class="strip-item"><h4>Intelligent caching</h4><p>Segments are hashed and cached. Change a generation-affecting setting and it gets caught automatically.</p></div>
+        <div class="strip-item"><h4>Cross-platform audio</h4><p>Playback runs on <code>sounddevice</code>/<code>soundfile</code>, not a Windows-only API.</p></div>
+        <div class="strip-item"><h4>UI customization</h4><p>Adjustable interface scale, dark / light / system theme.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install" style="background: var(--surface-2); border-top:1px solid var(--border);">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">Get running</span>
+        <h2>From clone to first sample in five commands</h2>
+      </div>
+      <div class="install-grid">
+        <div class="code-block reveal">
+          <div class="head">Terminal</div>
+          <pre><span class="c1"># 1. clone</span>
+git clone https://github.com/CoffeeMethod/KokoroGUI.git
+<span class="c1">$</span> cd KokoroGUI
+
+<span class="c1"># 2. virtual environment</span>
+python -m venv .venv
+<span class="c1">$</span> .venv\Scripts\activate<span class="c1">  # Windows</span>
+<span class="c1">$</span> source .venv/bin/activate<span class="c1">  # macOS / Linux</span>
+
+<span class="c1"># 3. install</span>
+pip install -r requirements.txt
+
+<span class="c1"># 4. run</span>
+<span class="c2">python main.py</span>       <span class="c1"># or run.bat on Windows</span></pre>
+        </div>
+        <ul class="req-list reveal">
+          <li><span class="dot2"></span><div><h4>Python 3.11+</h4><p>The only hard language-version requirement.</p></div></li>
+          <li><span class="dot2"></span><div><h4>eSpeak NG</h4><p>Needed for Kokoro's phonemization step.</p></div></li>
+          <li><span class="dot2"></span><div><h4>A GPU is optional</h4><p>Both models run on CPU; PyTorch will use a GPU automatically if one's available.</p></div></li>
+          <li><span class="dot2"></span><div><h4>First run downloads weights</h4><p>Both TTS models pull from Hugging Face the first time you select them.</p></div></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section style="padding-top: 0;">
+    <div class="wrap">
+      <div class="sec-head reveal" style="margin-bottom: 1.5rem;">
+        <span class="eyebrow">Built on</span>
+      </div>
+      <div class="badges reveal">
+        <span class="badge">Kokoro</span>
+        <span class="badge">Audio8-TTS-Preview-0.6b</span>
+        <span class="badge">Audio8-ASR-0.1B</span>
+        <span class="badge">PySide6</span>
+        <span class="badge">Pedalboard</span>
+        <span class="badge">PyTorch</span>
+        <span class="badge">SoundFile</span>
+        <span class="badge">sounddevice</span>
+        <span class="badge">PyPDF</span>
+        <span class="badge">EbookLib</span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span class="fine">Apache-2.0 licensed. Not affiliated with the Kokoro or Audio8 model authors.</span>
+    <div class="fl">
+      <a href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">Repository ↗</a>
+      <a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/README.md" target="_blank" rel="noopener">README ↗</a>
+      <a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/LICENSE" target="_blank" rel="noopener">License ↗</a>
+      <a href="https://github.com/hexgrad/kokoro" target="_blank" rel="noopener">Kokoro model ↗</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // ---- Theme toggle ----
+  (function(){
+    var root = document.documentElement;
+    var stored = localStorage.getItem('kg-theme');
+    if (stored) root.setAttribute('data-theme', stored);
+    function syncIcons(){
+      var dark = getComputedStyle(root).getPropertyValue('--bg').trim().toLowerCase();
+      var isDark = root.getAttribute('data-theme') === 'dark' ||
+        (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.getElementById('iconSun').style.display = isDark ? 'none' : 'block';
+      document.getElementById('iconMoon').style.display = isDark ? 'block' : 'none';
+    }
+    syncIcons();
+    document.getElementById('themeToggle').addEventListener('click', function(){
+      var isDark = root.getAttribute('data-theme') === 'dark' ||
+        (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      var next = isDark ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      localStorage.setItem('kg-theme', next);
+      syncIcons();
+    });
+  })();
+
+  // ---- Hero spectrum canvas ----
+  (function(){
+    var canvas = document.getElementById('spectrum');
+    var ctx = canvas.getContext('2d');
+    var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var bars = 64, heights = [], targets = [];
+    var raf = null;
+
+    function resize(){
+      var wrap = canvas.parentElement;
+      canvas.width = wrap.clientWidth * devicePixelRatio;
+      canvas.height = wrap.clientHeight * devicePixelRatio;
+    }
+
+    function seed(){
+      heights = []; targets = [];
+      for (var i=0;i<bars;i++){
+        var v = Math.random();
+        heights.push(v);
+        targets.push(v);
+      }
+    }
+
+    function colorFor(t){
+      // interpolate teal -> violet -> coral across bar index t (0..1)
+      var stops = [[53,230,198],[157,123,255],[255,122,89]];
+      var seg = t < .5 ? 0 : 1;
+      var lt = t < .5 ? t/.5 : (t-.5)/.5;
+      var a = stops[seg], b = stops[seg+1];
+      var r = Math.round(a[0]+(b[0]-a[0])*lt);
+      var g = Math.round(a[1]+(b[1]-a[1])*lt);
+      var bl= Math.round(a[2]+(b[2]-a[2])*lt);
+      return 'rgb('+r+','+g+','+bl+')';
+    }
+
+    function draw(){
+      var w = canvas.width, h = canvas.height;
+      ctx.clearRect(0,0,w,h);
+      var gap = w / bars;
+      var bw = gap * .5;
+      for (var i=0;i<bars;i++){
+        if (!reduced){
+          heights[i] += (targets[i]-heights[i]) * 0.08;
+          if (Math.abs(targets[i]-heights[i]) < 0.02) targets[i] = Math.random();
+        }
+        var bh = 0.08*h + heights[i]*0.62*h;
+        var x = i*gap + (gap-bw)/2;
+        var y = h - bh;
+        ctx.fillStyle = colorFor(i/(bars-1));
+        ctx.globalAlpha = 0.85;
+        ctx.fillRect(x, y, bw, bh);
+      }
+      if (!reduced) raf = requestAnimationFrame(draw);
+    }
+
+    window.addEventListener('resize', function(){ resize(); });
+    resize(); seed(); draw();
+  })();
+</script>
+
+</body>
+</html>
