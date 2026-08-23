@@ -22,6 +22,7 @@ import torch
 from pedalboard.io import AudioFile
 
 import kokoro_engine
+from kokoro_gui.engine.audio_fx import clamp_pitch_semitones
 
 # Bump whenever compute_cache_key's composition or logic changes. Old cache
 # entries simply stop matching (new hash algorithm -> new filenames) and
@@ -145,7 +146,7 @@ class CachingMixin:
 
         # Speed Adjustment for Pitch Compensation
         eff_speed = config['speed']
-        pitch_semitones = config.get('pitch', 0.0)
+        pitch_semitones = clamp_pitch_semitones(config.get('pitch', 0.0))
         if pitch_semitones != 0.0:
             factor = 2 ** (pitch_semitones / 12.0)
             eff_speed = eff_speed / factor

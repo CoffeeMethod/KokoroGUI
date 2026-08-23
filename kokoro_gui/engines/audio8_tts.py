@@ -329,7 +329,14 @@ class Audio8Engine(
             return os.path.abspath(saved_path)
         if os.path.isabs(voice_name) and os.path.isfile(voice_name):
             return voice_name
-        return voice_name
+        # Neither a saved reference nor an existing absolute file: return the
+        # sanitized basename, not the raw string, so a preset-supplied
+        # relative/UNC path can't be used as a literal path downstream (same
+        # traversal fix as VoiceMixingMixin.resolve_voice_path - see
+        # Claude/SECURITY_AUDIT.md). This still "fails clearly at generation
+        # time" per the docstring above, just without ever touching the
+        # unsanitized string first.
+        return safe_name
 
     def resolve_voice_transcript(self, resolved_voice_path: str) -> str:
         """Given an already-*resolved* reference wav path (see

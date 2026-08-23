@@ -237,7 +237,12 @@ class QtTTSApp(QMainWindow):
             "voice": gen_state["voice"],
             "speed": gen_state["speed"],
             "split_pattern": gen_state["split_pattern"],
-            "filename": gen_state["filename"],
+            # Sanitize the free-text filename field the same way voice/preset
+            # names are sanitized elsewhere - it flows unvalidated into an
+            # os.path.join sink in caching.py otherwise (see
+            # Claude/SECURITY_AUDIT.md). No-op for a normal base filename
+            # (no path separators).
+            "filename": os.path.basename(gen_state["filename"]),
             "format": gen_state["format"],
             "out_dir": gen_state["out_dir"],
             "separate": gen_state["separate"],

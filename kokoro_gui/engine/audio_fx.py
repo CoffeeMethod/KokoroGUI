@@ -8,6 +8,28 @@ from pedalboard import (
     GSMFullRateCompressor, Bitcrush
 )
 
+# Pitch range the Generation dock's spinbox allows (see pitch_spin.setRange
+# in kokoro_gui/qt/docks/generation_dock.py). A preset's `pitch` bypasses
+# that spinbox entirely (presets are untrusted JSON - see
+# Claude/SECURITY_AUDIT.md), so both places that turn it into a resample
+# factor (here and caching.py's ETA speed compensation) clamp to this range
+# first: `2 ** (pitch/12.0)` is otherwise unbounded and can OverflowError or
+# attempt a multi-GB scipy.signal.resample allocation at extreme values.
+PITCH_SEMITONES_MIN = -12.0
+PITCH_SEMITONES_MAX = 12.0
+
+
+def clamp_pitch_semitones(pitch_semitones):
+    """Coerces `pitch_semitones` to a float and clamps it to the GUI's
+    -12..12 range. Falls back to 0.0 (no pitch shift) for a non-numeric
+    value rather than raising, matching the existing tolerant `config.get`
+    style used throughout this pipeline."""
+    try:
+        pitch_semitones = float(pitch_semitones)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(PITCH_SEMITONES_MIN, min(PITCH_SEMITONES_MAX, pitch_semitones))
+
 
 class AudioFXMixin:
     def process_audio(self, audio, sr, config):
@@ -31,7 +53,7 @@ class AudioFXMixin:
             audio = audio * vol
 
         # 3. Pitch Shift (Resampling)
-        pitch_semitones = config.get('pitch', 0.0)
+        pitch_semitones = clamp_pitch_semitones(config.get('pitch', 0.0))
         if pitch_semitones != 0.0:
             factor = 2 ** (pitch_semitones / 12.0)
             new_len = int(len(audio) / factor)

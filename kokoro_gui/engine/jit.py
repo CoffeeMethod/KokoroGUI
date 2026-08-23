@@ -10,6 +10,7 @@ import os
 import time
 
 import kokoro_engine
+from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, ALLOWED_PRESET_KEYS, filter_allowed_keys
 
 
 class JITMixin:
@@ -43,7 +44,7 @@ class JITMixin:
                 if speaker_name:
                     preset = self.load_preset(speaker_name)
                     if preset:
-                        seg_config.update(preset)
+                        seg_config.update(filter_allowed_keys(preset, ALLOWED_PRESET_KEYS))
                         if 'trim' in preset:
                             seg_config['trim_silence'] = preset['trim']
                         seg_config['format'] = 'wav' # Ensure preset doesn't override format to non-wav
@@ -52,7 +53,7 @@ class JITMixin:
                 if fx_name:
                     fx_preset = self.load_fx_preset(fx_name)
                     if fx_preset:
-                        seg_config.update(fx_preset)
+                        seg_config.update(filter_allowed_keys(fx_preset, ALLOWED_FX_PRESET_KEYS))
                         seg_config['apply_fx'] = True
                         seg_config['fx_preset'] = fx_name
 

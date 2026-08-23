@@ -24,7 +24,12 @@ class VoiceMixingMixin:
         custom_path = os.path.join(kokoro_engine.CUSTOM_VOICES_DIR, f"{safe_voice_name}.pt")
         if os.path.exists(custom_path):
             return os.path.abspath(custom_path)
-        return voice_name
+        # Not a custom voice: return the sanitized name (not the raw
+        # `voice_name`) so a preset-supplied path/UNC string can't reach
+        # `KPipeline`/torch.load as a literal path (see Claude/SECURITY_AUDIT.md).
+        # Standard voice names (e.g. "af_bella") have no path separators, so
+        # this is a no-op for legitimate names.
+        return safe_voice_name
 
     async def mix_voices(self, v1_name, v2_name, ratio, new_name, op='mix'):
         def _mix():

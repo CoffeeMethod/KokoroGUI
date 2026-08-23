@@ -23,6 +23,7 @@ import torch
 from pedalboard.io import AudioFile
 
 from kokoro_gui.engine import stats as generation_stats
+from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, ALLOWED_PRESET_KEYS, filter_allowed_keys
 from kokoro_gui.engine.time_utils import format_duration
 
 # Below this fraction of the *current* run's own chars processed, the
@@ -83,7 +84,7 @@ class ConversionMixin:
                     if fx_name:
                         fx_preset = self.load_fx_preset(fx_name)
                         if fx_preset:
-                            target_extra.update(fx_preset)
+                            target_extra.update(filter_allowed_keys(fx_preset, ALLOWED_FX_PRESET_KEYS))
                             target_extra['apply_fx'] = True
                             target_extra['fx_preset'] = fx_name
 
@@ -189,7 +190,7 @@ class ConversionMixin:
                 if speaker_name:
                     preset = self.load_preset(speaker_name)
                     if preset:
-                        seg_config.update(preset)
+                        seg_config.update(filter_allowed_keys(preset, ALLOWED_PRESET_KEYS))
                         if 'trim' in preset:
                             seg_config['trim_silence'] = preset['trim']
                         # Resolve voice path for the new voice
@@ -200,7 +201,7 @@ class ConversionMixin:
                 if fx_name:
                     fx_preset = self.load_fx_preset(fx_name)
                     if fx_preset:
-                        seg_config.update(fx_preset)
+                        seg_config.update(filter_allowed_keys(fx_preset, ALLOWED_FX_PRESET_KEYS))
                         seg_config['apply_fx'] = True
                         seg_config['fx_preset'] = fx_name
                     else:
