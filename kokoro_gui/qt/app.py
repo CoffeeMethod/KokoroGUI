@@ -79,7 +79,16 @@ class QtTTSApp(QMainWindow):
         qt_settings.restore_window_state(self, self.settings)
 
         self.status_label.setText("Initializing engine...")
-        self.engine.worker.run_coro(self.engine.init_pipeline_async(self.settings.get("lang_code", "a")))
+        # Read back through the Generation dock rather than raw
+        # self.settings["lang_code"]: that setting is shared across engine
+        # backends whose lang_code value spaces don't overlap (Kokoro's
+        # single-letter codes vs. e.g. Audio8's full language names), and a
+        # value saved while a different backend was active would otherwise
+        # be fed straight into this (now-Kokoro) pipeline init unvalidated.
+        # The schema form's combo already reconciled it to a valid default
+        # for the active backend when it was built in _build_docks() above.
+        init_lang_code = self.generation_dock.get_state().get("lang_code", "a")
+        self.engine.worker.run_coro(self.engine.init_pipeline_async(init_lang_code))
 
     # --- construction -----------------------------------------------------
 
@@ -287,7 +296,12 @@ class QtTTSApp(QMainWindow):
 
         self.status_label.setText(f"Switched engine to {new_backend.display_name}. Initializing...")
         self.status_label.setStyleSheet("color: gray;")
-        self.engine.worker.run_coro(self.engine.init_pipeline_async(self.settings.get("lang_code", "a")))
+        # Same reasoning as __init__: read the value rebuild_schema_form()
+        # just reconciled for new_backend, not the raw (possibly
+        # foreign-format, e.g. Audio8's "English") self.settings value.
+        new_lang_code = self.generation_dock.get_state().get("lang_code", "a")
+        self.settings["lang_code"] = new_lang_code
+        self.engine.worker.run_coro(self.engine.init_pipeline_async(new_lang_code))
 
     def _update_start_btn_text(self) -> None:
         will_stream = self.jit_enabled and self.backend.capabilities.supports_jit_streaming

@@ -307,27 +307,40 @@ class Audio8Engine(
         `_model_lock` (see module docstring). Returns mono float32 audio at
         `SAMPLE_RATE`.
 
-        The exact processor/generate call shape below is a best-effort
-        reading of the model card (processor takes text + a reference audio
-        path + a reference transcript; generation takes
-        max_new_tokens/temperature/top_p/top_k) - worth a one-time check
-        against the installed model's actual API on first real run, same as
-        wrapping any new HF model sight-unseen.
+        Checked against the installed model's actual `processing_arktts.py`/
+        `modeling_arktts.py` (the model card guess this originally shipped
+        with was wrong on every point below):
+
+        - The processor's real kwargs are `reference_audio`/`reference_text`,
+          not `ref_audio`/`ref_text`.
+        - Neither `ArkttsProcessor.__call__` nor `ArkttsModel.generate` take
+          a `language` or `speed` argument at all - both raise `TypeError`
+          on any kwarg they don't recognize, which is what surfaced as
+          "Unexpected processor arguments: [...]". `speed`/`lang_code` stay
+          in this method's signature only so it keeps matching
+          `_Audio8Pipeline`/`process_chunk_task`'s generic
+          `(text, voice, speed, lang_code)` shape shared with Kokoro/Dummy -
+          the model always synthesizes at its own pace and infers language
+          from the text itself, so both are accepted here and silently
+          unused rather than forwarded.
+        - `processor.decode(...)` is just `tokenizer.decode` (text token
+          decoding) - it was never how to get audio out. The real path is
+          `model.generate(**inputs)` -> codes -> `model.decode_audio(codes)`,
+          or the combined `model.generate_audio(**inputs, ...)` used below,
+          which returns `(waveforms, lengths, codes)` directly.
         """
         model, processor = _get_model()
         with _model_lock:
             inputs = processor(
                 text=text,
-                ref_audio=ref_wav_path,
-                ref_text=ref_transcript,
-                language=lang_code,
-                speed=speed,
+                reference_audio=ref_wav_path or None,
+                reference_text=ref_transcript or None,
                 return_tensors="pt",
             )
-            output = model.generate(
+            waveforms, lengths, _codes = model.generate_audio(
                 **inputs, max_new_tokens=4096, temperature=0.7, top_p=0.9, top_k=50,
             )
-            audio = processor.decode(output, output_type="audio")
+            audio = waveforms[0, : lengths[0]].detach().cpu().numpy()
 
         audio = np.asarray(audio, dtype=np.float32).reshape(-1)
         return audio
