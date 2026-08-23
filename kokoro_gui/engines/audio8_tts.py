@@ -52,7 +52,7 @@ from kokoro_gui.engine import (
     AudioFXMixin, ConversionMixin, JITMixin, LexiconMixin, PresetsMixin,
     SrtMixin, TextExtractionMixin,
 )
-from kokoro_gui.engine.caching import compute_cache_key
+from kokoro_gui.engine.caching import compute_cache_key, voice_fingerprint
 from kokoro_gui.engines.base import (
     ConfigField, ConfigFieldType, EngineCapabilities, VoiceInfo,
     COMMON_SPLIT_PATTERN_CHOICES, COMMON_OUTPUT_FORMAT_CHOICES,
@@ -70,6 +70,28 @@ SAMPLE_RATE = 44100
 # `kokoro_gui.engines.audio8_tts.AUDIO8_REFS_DIR` the same way
 # `isolated_dirs` monkeypatches `kokoro_engine.CUSTOM_VOICES_DIR`.
 AUDIO8_REFS_DIR = os.path.join("custom_voices", "audio8_refs")
+
+
+def _ref_codes_cache_dir() -> str:
+    """Persisted cache of *encoded* reference audio ("reference codes" - see
+    `Audio8Engine._reference_codes_path`/module docstring below): one `.npy`
+    per distinct reference wav's content, named by its `voice_fingerprint`
+    (sha256-based, mtime-cached) rather than by reference name, so re-saving
+    a reference under a new name (or two references sharing identical
+    audio) reuses the same cache entry, and re-saving one *name* with
+    different audio correctly misses. Gated by the "cache_reference_codes"
+    config field (Audio8BackendAdapter.get_config_schema) - default on. Like
+    `CACHE_DIR`, this grows unbounded; no eviction policy yet (ROADMAP).
+
+    Nested under the *current* `AUDIO8_REFS_DIR`, resolved fresh on every
+    call (not baked in as a module-level constant at import time) so that
+    tests monkeypatching `AUDIO8_REFS_DIR` (see `isolated_audio8_refs` in
+    tests/test_engines_audio8.py) redirect this cache too, the same way
+    they already redirect reference wav/transcript storage - otherwise this
+    would keep writing into the real `custom_voices/audio8_refs/` regardless
+    of that patch.
+    """
+    return os.path.join(AUDIO8_REFS_DIR, ".ref_codes_cache")
 
 # The model's supported languages (per its model card) - passed through as
 # plain strings to whatever `language=` argument the processor expects.
@@ -242,6 +264,14 @@ class Audio8Engine(
         self.on_status = None
         self.on_finish = None
 
+        # Whether `generate_segment` should reuse a persisted, content-keyed
+        # encoding of the reference wav instead of re-running the model's
+        # audio encoder on every segment (see `_reference_codes_path`).
+        # `process_chunk_task` overwrites this from `config['cache_reference_codes']`
+        # each run - the `True` here only matters for callers that skip
+        # `process_chunk_task` (e.g. calling `generate_segment` directly).
+        self.cache_reference_codes = True
+
         self._lexicon_cache = {}
 
         os.makedirs(AUDIO8_REFS_DIR, exist_ok=True)
@@ -301,6 +331,58 @@ class Audio8Engine(
                 return f.read().strip()
         return ""
 
+    def _reference_codes_path(self, ref_wav_path: str, ref_transcript: str) -> Optional[str]:
+        """Returns the path to a persisted `.npy` of `ref_wav_path`'s
+        *encoded* reference ("reference codes" - `ArkttsModel.encode_audio`'s
+        output), computing and caching it on first use under
+        `_ref_codes_cache_dir()`. Returns `None` when caching isn't
+        applicable (no on-disk wav to fingerprint, no transcript to run the
+        one-off encode with) or if the encode itself fails - the caller
+        falls back to passing raw `reference_audio` on every call in that
+        case, exactly like before this cache existed.
+
+        This is the one genuine "reference audio -> tensor" step: the model
+        encodes `reference_audio_values` into `reference_codes` via its own
+        audio codec (`ArkttsModel.encode_audio`, a real forward pass through
+        `ArkttsCodec` - not free) inside `_prepare_prompt` on *every*
+        `generate`/`generate_audio` call that's given raw audio. Passing
+        `reference_codes=` instead (which `ArkttsProcessor.__call__` accepts
+        as a path it `np.load`s itself, per `processing_arktts.py`) skips
+        that re-encode entirely - the same reference wav produces identical
+        codes every time, so encoding it once and reusing the codes across
+        every segment/chunk that shares a voice reference is a correctness-
+        preserving cache, not an approximation.
+        """
+        if not ref_wav_path:
+            return None
+        fp = voice_fingerprint(ref_wav_path)
+        if fp == ref_wav_path:
+            return None  # not an existing absolute file - can't fingerprint/cache it
+        cache_dir = _ref_codes_cache_dir()
+        cache_path = os.path.join(cache_dir, f"{fp}.npy")
+        if os.path.isfile(cache_path):
+            return cache_path
+        if not ref_transcript:
+            return None  # a reference-conditioned encode requires reference_text too
+
+        try:
+            model, processor = _get_model()
+            with _model_lock:
+                probe = processor(
+                    text="x", reference_audio=ref_wav_path, reference_text=ref_transcript,
+                    return_tensors="pt",
+                )
+                codes, code_lengths = model.encode_audio(
+                    probe["reference_audio_values"], probe["reference_audio_lengths"],
+                )
+                trimmed = codes[0, :, : int(code_lengths[0])].detach().cpu().numpy().astype(np.int64)
+            os.makedirs(cache_dir, exist_ok=True)
+            np.save(cache_path, trimmed)
+        except Exception as e:
+            print(f"Audio8 reference-codes cache write error: {e}")
+            return None
+        return cache_path
+
     def generate_segment(self, text: str, ref_wav_path: str, ref_transcript: str,
                           speed: float, lang_code: str) -> np.ndarray:
         """Runs one segment through the shared model, serialized via
@@ -328,15 +410,36 @@ class Audio8Engine(
           `model.generate(**inputs)` -> codes -> `model.decode_audio(codes)`,
           or the combined `model.generate_audio(**inputs, ...)` used below,
           which returns `(waveforms, lengths, codes)` directly.
+
+        When `self.cache_reference_codes` is on (see `process_chunk_task`),
+        looks up/populates a persisted reference-codes cache first (see
+        `_reference_codes_path`) and passes `reference_codes=` instead of
+        `reference_audio=`/`reference_text=` on a hit - same output, skips
+        re-encoding the reference wav through the model's audio codec.
         """
         model, processor = _get_model()
+        cached_codes_path = (
+            self._reference_codes_path(ref_wav_path, ref_transcript)
+            if self.cache_reference_codes else None
+        )
         with _model_lock:
-            inputs = processor(
-                text=text,
-                reference_audio=ref_wav_path or None,
-                reference_text=ref_transcript or None,
-                return_tensors="pt",
-            )
+            if cached_codes_path:
+                # `reference_text` isn't only an input to the audio encode -
+                # `ArkttsProcessor._prompt_segments` bakes it into the *text*
+                # prompt tokens whenever `has_reference` is True (set by
+                # either `reference_audio` or `reference_codes`), so it's
+                # still required here even though the audio side is cached.
+                inputs = processor(
+                    text=text, reference_codes=cached_codes_path,
+                    reference_text=ref_transcript or None, return_tensors="pt",
+                )
+            else:
+                inputs = processor(
+                    text=text,
+                    reference_audio=ref_wav_path or None,
+                    reference_text=ref_transcript or None,
+                    return_tensors="pt",
+                )
             waveforms, lengths, _codes = model.generate_audio(
                 **inputs, max_new_tokens=4096, temperature=0.7, top_p=0.9, top_k=50,
             )
@@ -366,6 +469,9 @@ class Audio8Engine(
         ref_wav = config['voice']  # already resolved by ConversionMixin.start_conversion
         ref_transcript = self.resolve_voice_transcript(ref_wav)
         split_pattern = config.get('split_pattern', r"\n+")
+        # See `_reference_codes_path`/module docstring - independent of the
+        # per-segment WAV cache below (`use_cache`/`caching`).
+        self.cache_reference_codes = config.get('cache_reference_codes', True)
 
         use_cache = config.get('caching', False)
         cache_hash = None
@@ -488,6 +594,8 @@ class Audio8BackendAdapter:
             ConfigField("num_threads", "Parallel Threads", ConfigFieldType.INT,
                         default=1, min=1, max=4, step=1, group="Advanced"),
             ConfigField("caching", "Enable Segment Cache", ConfigFieldType.BOOL,
+                        default=True, group="Advanced"),
+            ConfigField("cache_reference_codes", "Cache Reference Encoding", ConfigFieldType.BOOL,
                         default=True, group="Advanced"),
         ]
 

@@ -10,6 +10,7 @@ the real `kokoro.KPipeline`/eSpeak NG.
 import os
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -70,7 +71,10 @@ def test_config_schema_shape(audio8_engine):
     assert all(isinstance(f, ConfigField) for f in schema)
 
     keys = {f.key for f in schema}
-    assert keys == {"lang_code", "voice", "speed", "split_pattern", "format", "num_threads", "caching"}
+    assert keys == {
+        "lang_code", "voice", "speed", "split_pattern", "format", "num_threads",
+        "caching", "cache_reference_codes",
+    }
 
     by_key = {f.key: f for f in schema}
     # Fixed, engine-declared language list - NOT GUI-resolved like Kokoro's.
@@ -193,6 +197,126 @@ def test_process_chunk_task_writes_44100hz_audio(audio8_engine, isolated_audio8_
 # tests/test_caching.py (the only module allowed to enable that setting -
 # see tests/test_meta_caching_policy.py) as
 # test_audio8_process_chunk_task_caching_keys_on_transcript.
+
+
+# --- Audio8Engine: reference-codes cache (_reference_codes_path) ------------
+#
+# `_get_model` is monkeypatched to a lightweight fake model/processor pair,
+# same "never touch the real model" convention as `_fake_segment` above, but
+# one level lower - these tests exercise `_reference_codes_path`/
+# `generate_segment`'s branching itself, not just its caller.
+
+def _make_fake_model_and_processor(monkeypatch):
+    import torch
+
+    calls = {"processor": [], "encode_audio": 0}
+
+    def fake_processor(text, reference_audio=None, reference_text=None,
+                        reference_codes=None, return_tensors="pt"):
+        calls["processor"].append({
+            "text": text, "reference_audio": reference_audio,
+            "reference_text": reference_text, "reference_codes": reference_codes,
+        })
+        # Mirrors the real `ArkttsProcessor._prompt_segments` constraint:
+        # `reference_text` is required whenever *either* reference kwarg is
+        # given - it's baked into the text prompt tokens, not just an audio-
+        # encode input. Enforcing it here is what caught the real bug where
+        # the reference_codes branch dropped reference_text entirely.
+        if (reference_audio is not None or reference_codes is not None) and not reference_text:
+            raise ValueError("reference_text is required when a reference voice is provided")
+        return {
+            "reference_audio_values": torch.zeros((1, 1, 4)),
+            "reference_audio_lengths": torch.tensor([4]),
+        }
+
+    def fake_encode_audio(audio_values, audio_lengths):
+        calls["encode_audio"] += 1
+        return torch.arange(30, dtype=torch.long).reshape(1, 10, 3), torch.tensor([3])
+
+    def fake_generate_audio(**kwargs):
+        return torch.zeros((1, 100)), torch.tensor([100]), None
+
+    fake_model = types.SimpleNamespace(encode_audio=fake_encode_audio, generate_audio=fake_generate_audio)
+    monkeypatch.setattr(audio8_tts, "_get_model", lambda: (fake_model, fake_processor))
+    return calls
+
+
+def test_reference_codes_path_none_without_a_fingerprintable_file(audio8_engine):
+    assert audio8_engine._reference_codes_path("", "some transcript") is None
+    assert audio8_engine._reference_codes_path("not-a-real-path.wav", "some transcript") is None
+
+
+def test_reference_codes_path_none_without_a_transcript(audio8_engine, a_wav):
+    # A fresh (uncached) reference can't be encoded without reference_text -
+    # `ArkttsProcessor._prompt_segments` requires it whenever reference audio
+    # is given (see generate_segment's docstring).
+    assert audio8_engine._reference_codes_path(a_wav, "") is None
+
+
+def test_reference_codes_path_computes_and_persists_on_first_call(audio8_engine, isolated_audio8_refs, a_wav, monkeypatch):
+    calls = _make_fake_model_and_processor(monkeypatch)
+
+    path = audio8_engine._reference_codes_path(a_wav, "A reference transcript.")
+
+    assert path is not None
+    assert os.path.commonpath([path, str(isolated_audio8_refs)]) == str(isolated_audio8_refs)
+    assert calls["encode_audio"] == 1
+    loaded = np.load(path)
+    assert loaded.shape == (10, 3)
+    assert loaded.dtype == np.int64
+
+
+def test_reference_codes_path_reuses_cache_without_recomputing(audio8_engine, isolated_audio8_refs, a_wav, monkeypatch):
+    calls = _make_fake_model_and_processor(monkeypatch)
+    first = audio8_engine._reference_codes_path(a_wav, "A reference transcript.")
+    assert calls["encode_audio"] == 1
+
+    second = audio8_engine._reference_codes_path(a_wav, "A reference transcript.")
+    assert second == first
+    assert calls["encode_audio"] == 1  # not called again - served from disk
+
+
+def test_generate_segment_passes_reference_codes_when_cache_enabled(audio8_engine, isolated_audio8_refs, a_wav, monkeypatch):
+    calls = _make_fake_model_and_processor(monkeypatch)
+    audio8_engine.cache_reference_codes = True
+
+    audio8_engine.generate_segment("Hello.", a_wav, "A reference transcript.", 1.0, "English")
+
+    # First call: the one-off probe encode. Second call: the real generation
+    # call, which must use reference_codes now that the cache is populated.
+    assert len(calls["processor"]) == 2
+    gen_call = calls["processor"][-1]
+    assert gen_call["reference_codes"] is not None
+    assert gen_call["reference_audio"] is None
+    assert gen_call["reference_text"] == "A reference transcript."
+
+
+def test_generate_segment_uses_raw_reference_audio_when_cache_disabled(audio8_engine, isolated_audio8_refs, a_wav, monkeypatch):
+    calls = _make_fake_model_and_processor(monkeypatch)
+    audio8_engine.cache_reference_codes = False
+
+    audio8_engine.generate_segment("Hello.", a_wav, "A reference transcript.", 1.0, "English")
+
+    assert len(calls["processor"]) == 1  # no probe encode - never even fingerprinted
+    assert calls["encode_audio"] == 0
+    gen_call = calls["processor"][-1]
+    assert gen_call["reference_audio"] == a_wav
+    assert gen_call["reference_codes"] is None
+
+
+def test_process_chunk_task_reads_cache_reference_codes_from_config(audio8_engine, isolated_audio8_refs, isolated_dirs, a_wav, monkeypatch):
+    Audio8ReferenceStore.save_reference("Dana", a_wav, "Dana's reference line.")
+    _fake_segment(monkeypatch, audio8_engine)
+    assert audio8_engine.cache_reference_codes is True  # __init__ default
+
+    config = {
+        "lang_code": "English", "voice": audio8_engine.resolve_voice_path("Dana"),
+        "speed": 1.0, "split_pattern": r"\n+", "filename": "out", "time_id": "1",
+        "out_dir": str(isolated_dirs.out_dir), "format": "wav", "caching": False,
+        "apply_fx": False, "cache_reference_codes": False,
+    }
+    audio8_engine.process_chunk_task((0, "Hello there.", config), None)
+    assert audio8_engine.cache_reference_codes is False
 
 
 def test_cancel_sets_cancel_event(audio8_engine):
