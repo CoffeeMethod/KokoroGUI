@@ -223,6 +223,8 @@ class QtTTSApp(QMainWindow):
             self.settings["jit_enabled"] = self.jit_enabled
             self.settings["engine_id"] = self.backend.id
             self.settings.update(self.fx_dock.get_state())
+            if self.voice_clone_dock is not None:
+                self.settings.update(self.voice_clone_dock.get_state())
             qt_settings.save_window_state(self, self.settings)
 
         qt_settings.save_settings(CONFIG_FILE, self.settings)

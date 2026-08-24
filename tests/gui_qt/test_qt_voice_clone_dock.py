@@ -7,6 +7,8 @@ patches `KokoroEngine` -> `StubEngine`), so its model load
 (`kokoro_gui.engines.audio8_tts._get_model`) is monkeypatched to a fast fake
 before every switch - never touches `transformers`/downloads a model.
 """
+import os
+
 import numpy as np
 import soundfile as sf
 
@@ -125,7 +127,7 @@ def test_load_reference_populates_editable_fields(qt_app, monkeypatch, tmp_path)
 
 def test_auto_transcribe_populates_transcript(qt_app, monkeypatch, tmp_path, qtbot):
     _switch_to_audio8(qt_app, monkeypatch)
-    monkeypatch.setattr(_TRANSCRIBE_TARGET, lambda path: "Fake transcript text.")
+    monkeypatch.setattr(_TRANSCRIBE_TARGET, lambda path, **kwargs: "Fake transcript text.")
 
     dock = qt_app.voice_clone_dock
     dock.wav_path_edit.setText(_write_wav(tmp_path / "ref.wav"))
@@ -140,7 +142,7 @@ def test_auto_transcribe_populates_transcript(qt_app, monkeypatch, tmp_path, qtb
 def test_auto_transcribe_failure_shows_status_and_reenables_button(qt_app, monkeypatch, tmp_path, qtbot):
     _switch_to_audio8(qt_app, monkeypatch)
 
-    def _boom(path):
+    def _boom(path, **kwargs):
         raise RuntimeError("model unavailable")
 
     monkeypatch.setattr(_TRANSCRIBE_TARGET, _boom)
@@ -163,3 +165,138 @@ def test_auto_transcribe_without_wav_selected_is_a_noop(qt_app, monkeypatch):
     dock._on_transcribe_clicked()
 
     assert dock.transcript_edit.toPlainText() == ""
+
+
+# --- ASR engine picker ----------------------------------------------------
+
+def test_default_engine_is_audio8_and_vosk_row_hidden(qt_app, monkeypatch):
+    _switch_to_audio8(qt_app, monkeypatch)
+    dock = qt_app.voice_clone_dock
+
+    assert dock.asr_engine_combo.currentData() == "audio8"
+    # isHidden() (not isVisible()) - the dock's never .show()n in this
+    # offscreen test, so isVisible() would be False for everything
+    # regardless of our explicit setVisible() calls.
+    assert dock.vosk_row.isHidden()
+
+
+def test_selecting_vosk_shows_model_row(qt_app, monkeypatch):
+    _switch_to_audio8(qt_app, monkeypatch)
+    dock = qt_app.voice_clone_dock
+
+    idx = dock.asr_engine_combo.findData("vosk")
+    dock.asr_engine_combo.setCurrentIndex(idx)
+
+    assert not dock.vosk_row.isHidden()
+
+
+def test_transcribe_with_vosk_passes_engine_and_typed_model_path(qt_app, monkeypatch, tmp_path, qtbot):
+    monkeypatch.delenv("VOSK_MODEL_PATH", raising=False)
+    _switch_to_audio8(qt_app, monkeypatch)
+    dock = qt_app.voice_clone_dock
+    dock.wav_path_edit.setText(_write_wav(tmp_path / "ref.wav"))
+    dock.asr_engine_combo.setCurrentIndex(dock.asr_engine_combo.findData("vosk"))
+    # Typed but not Saved - transcribing shouldn't require a save first.
+    dock.vosk_model_edit.setText(str(tmp_path / "some-vosk-model"))
+
+    seen = {}
+
+    def _fake_transcribe(path, **kwargs):
+        seen.update(kwargs)
+        return "Vosk transcript."
+
+    monkeypatch.setattr(_TRANSCRIBE_TARGET, _fake_transcribe)
+    dock._on_transcribe_clicked()
+
+    qtbot.waitUntil(lambda: dock.transcript_edit.toPlainText() != "", timeout=5000)
+    assert dock.transcript_edit.toPlainText() == "Vosk transcript."
+    assert seen == {"engine": "vosk", "model_path": str(tmp_path / "some-vosk-model")}
+
+
+def test_transcribe_with_vosk_and_empty_model_field_is_a_noop(qt_app, monkeypatch, tmp_path):
+    monkeypatch.delenv("VOSK_MODEL_PATH", raising=False)
+    _switch_to_audio8(qt_app, monkeypatch)
+    dock = qt_app.voice_clone_dock
+    dock.wav_path_edit.setText(_write_wav(tmp_path / "ref.wav"))
+    dock.asr_engine_combo.setCurrentIndex(dock.asr_engine_combo.findData("vosk"))
+    dock.vosk_model_edit.setText("")
+
+    dock._on_transcribe_clicked()
+
+    assert dock.transcript_edit.toPlainText() == ""
+
+
+def test_vosk_model_field_reflects_env_var_on_open(qt_app, monkeypatch, tmp_path):
+    monkeypatch.setenv("VOSK_MODEL_PATH", str(tmp_path / "my-model"))
+    _switch_to_audio8(qt_app, monkeypatch)
+    dock = qt_app.voice_clone_dock
+
+    assert dock.vosk_model_edit.text() == str(tmp_path / "my-model")
+
+
+def test_vosk_model_field_empty_when_env_var_unset(qt_app, monkeypatch):
+    monkeypatch.delenv("VOSK_MODEL_PATH", raising=False)
+    _switch_to_audio8(qt_app, monkeypatch)
+    dock = qt_app.voice_clone_dock
+
+    assert dock.vosk_model_edit.text() == ""
+
+
+def test_save_writes_typed_path_to_dotenv(qt_app, monkeypatch, tmp_path):
+    monkeypatch.delenv("VOSK_MODEL_PATH", raising=False)
+    monkeypatch.chdir(tmp_path)
+    _switch_to_audio8(qt_app, monkeypatch)
+    dock = qt_app.voice_clone_dock
+    dock.vosk_model_edit.setText(str(tmp_path / "typed-model"))
+
+    dock._save_vosk_model_path()
+
+    assert os.environ["VOSK_MODEL_PATH"] == str(tmp_path / "typed-model")
+    assert "typed-model" in (tmp_path / ".env").read_text()
+    assert "Saved" in dock.status_label.text()
+
+
+def test_browse_sets_field_and_saves(qt_app, monkeypatch, tmp_path):
+    monkeypatch.delenv("VOSK_MODEL_PATH", raising=False)
+    monkeypatch.chdir(tmp_path)
+    _switch_to_audio8(qt_app, monkeypatch)
+    dock = qt_app.voice_clone_dock
+
+    browsed = tmp_path / "browsed-model"
+    monkeypatch.setattr(
+        "kokoro_gui.qt.docks.voice_clone_dock.QFileDialog.getExistingDirectory",
+        lambda *a, **k: str(browsed),
+    )
+    dock._browse_vosk_model()
+
+    assert dock.vosk_model_edit.text() == str(browsed)
+    assert os.environ["VOSK_MODEL_PATH"] == str(browsed)
+    assert "browsed-model" in (tmp_path / ".env").read_text()
+
+
+def test_reload_discards_unsaved_edit_and_rereads_env(qt_app, monkeypatch, tmp_path):
+    # No .env file in this cwd - reload_vosk_model_path() finds nothing to
+    # re-read and leaves os.environ (set below) alone, so this isolates the
+    # test from whatever real .env file the repo root might actually have.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VOSK_MODEL_PATH", str(tmp_path / "saved-model"))
+    _switch_to_audio8(qt_app, monkeypatch)
+    dock = qt_app.voice_clone_dock
+    assert dock.vosk_model_edit.text() == str(tmp_path / "saved-model")
+
+    dock.vosk_model_edit.setText(str(tmp_path / "unsaved-typed-path"))
+
+    dock._reload_vosk_model_path()
+
+    assert dock.vosk_model_edit.text() == str(tmp_path / "saved-model")
+
+
+def test_asr_engine_choice_persists_via_get_state(qt_app, monkeypatch):
+    _switch_to_audio8(qt_app, monkeypatch)
+    dock = qt_app.voice_clone_dock
+    dock.asr_engine_combo.setCurrentIndex(dock.asr_engine_combo.findData("vosk"))
+
+    assert dock.get_state() == {"asr_engine": "vosk"}
+
+    qt_app.save_settings()
+    assert qt_app.settings["asr_engine"] == "vosk"

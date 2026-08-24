@@ -207,6 +207,7 @@ SETTINGS_DEFAULTS = {
     "gain_enabled": False,
     "gain_db": 0.0,
     "engine_id": "kokoro",
+    "asr_engine": "audio8",
     "lexicon": {},
     "dock_state": None,   # base64 QMainWindow.saveState() bytes, set at runtime
     "geometry": None,     # base64 QMainWindow.saveGeometry() bytes, set at runtime

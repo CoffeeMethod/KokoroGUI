@@ -6,6 +6,22 @@ kokoro_gui/engines/audio8_tts.py). Shown only for such a backend - see
 app.py's `_sync_voice_clone_dock`, the same show/hide-on-engine-switch
 pattern `_sync_mixing_dock` uses for the Mixing dock.
 
+The auto-transcribe step itself can run on either of `kokoro_gui.engine.asr`'s
+two registered engines (`ASR_ENGINES`) - the default "Audio8-ASR-0.1B"
+(online, higher quality) or "Vosk" (fully offline, needs a model folder
+downloaded by hand). The engine choice is persisted in `app.settings`
+(`asr_engine`, pulled via `get_state()` the same way `FXDock`/
+`GenerationDock` persist their own widget state) - but Vosk's model folder
+is *not*: it lives in the `VOSK_MODEL_PATH` environment variable, normally
+via a `.env` file at the project root, rather than in `config_qt.json`,
+since it's a one-time deployment detail rather than a per-session GUI
+preference like every other setting this dock/`FXDock`/`GenerationDock`
+persist. It's still editable from here though - Browse or type a path and
+click Save to write it into `.env` (`kokoro_gui.engine.asr.set_vosk_model_path`),
+or Reload to discard an unsaved edit and re-read whatever's actually in
+`.env` right now (picks up a change made by hand while the app was already
+running).
+
 Saving is required before a reference can be used for generation - there is
 no "generate with an unsaved wav" path, deliberately: the Generation dock's
 Voice dropdown is the single source of truth for which reference gets used
@@ -20,11 +36,13 @@ import os
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QDockWidget, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QComboBox, QDockWidget, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from kokoro_gui.engine.asr import transcribe_wav
+from kokoro_gui.engine.asr import (
+    ASR_ENGINES, get_vosk_model_path, reload_vosk_model_path, set_vosk_model_path, transcribe_wav,
+)
 from kokoro_gui.engines import audio8_tts
 from kokoro_gui.engines.audio8_tts import Audio8ReferenceStore
 
@@ -56,6 +74,44 @@ class VoiceCloneDock(QDockWidget):
         self.transcript_edit = QPlainTextEdit()
         self.transcript_edit.setFixedHeight(100)
         layout.addWidget(self.transcript_edit)
+
+        engine_row = QHBoxLayout()
+        engine_row.addWidget(QLabel("ASR Engine:"))
+        self.asr_engine_combo = QComboBox()
+        for info in ASR_ENGINES:
+            self.asr_engine_combo.addItem(info.display_name, info.id)
+        self.asr_engine_combo.setToolTip("\n\n".join(f"{i.display_name}: {i.description}" for i in ASR_ENGINES))
+        saved_engine_idx = self.asr_engine_combo.findData(self.app.settings.get("asr_engine", ASR_ENGINES[0].id))
+        self.asr_engine_combo.setCurrentIndex(saved_engine_idx if saved_engine_idx >= 0 else 0)
+        self.asr_engine_combo.currentIndexChanged.connect(self._on_asr_engine_changed)
+        engine_row.addWidget(self.asr_engine_combo, 1)
+        layout.addLayout(engine_row)
+
+        self.vosk_row = QWidget()
+        vosk_row_layout = QHBoxLayout(self.vosk_row)
+        vosk_row_layout.setContentsMargins(0, 0, 0, 0)
+        vosk_row_layout.addWidget(QLabel("Vosk Model:"))
+        self.vosk_model_edit = QLineEdit()
+        self.vosk_model_edit.setToolTip(
+            "Folder of an unzipped model from https://alphacephei.com/vosk/models.\n"
+            "Save writes this to VOSK_MODEL_PATH in a .env file at the project root."
+        )
+        vosk_row_layout.addWidget(self.vosk_model_edit, 1)
+        vosk_browse_btn = QPushButton("Browse...")
+        vosk_browse_btn.clicked.connect(self._browse_vosk_model)
+        vosk_row_layout.addWidget(vosk_browse_btn)
+        vosk_save_btn = QPushButton("Save")
+        vosk_save_btn.setToolTip("Write this path to VOSK_MODEL_PATH in .env.")
+        vosk_save_btn.clicked.connect(self._save_vosk_model_path)
+        vosk_row_layout.addWidget(vosk_save_btn)
+        vosk_reload_btn = QPushButton("Reload")
+        vosk_reload_btn.setToolTip("Discard unsaved edits and re-read VOSK_MODEL_PATH from .env.")
+        vosk_reload_btn.clicked.connect(self._reload_vosk_model_path)
+        vosk_row_layout.addWidget(vosk_reload_btn)
+        layout.addWidget(self.vosk_row)
+
+        self._sync_vosk_model_edit()
+        self.vosk_row.setVisible(self.asr_engine_combo.currentData() == "vosk")
 
         self.transcribe_btn = QPushButton("\U0001F3A4 Auto-Transcribe")
         self.transcribe_btn.clicked.connect(self._on_transcribe_clicked)
@@ -93,10 +149,49 @@ class VoiceCloneDock(QDockWidget):
         if path:
             self.wav_path_edit.setText(path)
 
+    # --- ASR engine picker -------------------------------------------------
+
+    def _on_asr_engine_changed(self, _index: int) -> None:
+        self.vosk_row.setVisible(self.asr_engine_combo.currentData() == "vosk")
+        self.app.schedule_save()
+
+    def _sync_vosk_model_edit(self) -> None:
+        """Fills the Vosk model field from whatever's currently in
+        `VOSK_MODEL_PATH` - used at dock construction and by Reload, both of
+        which mean "discard any unsaved edit and show what's really there"."""
+        self.vosk_model_edit.setText(get_vosk_model_path())
+
+    def _browse_vosk_model(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Select Vosk model folder")
+        if path:
+            self.vosk_model_edit.setText(path)
+            self._save_vosk_model_path()
+
+    def _save_vosk_model_path(self) -> None:
+        set_vosk_model_path(self.vosk_model_edit.text())
+        self.status_label.setText("Saved VOSK_MODEL_PATH to .env.")
+
+    def _reload_vosk_model_path(self) -> None:
+        reload_vosk_model_path()
+        self._sync_vosk_model_edit()
+
+    def get_state(self) -> dict:
+        """Pulled into `app.settings` by `QtTTSApp.save_settings` so the
+        chosen ASR engine survives a restart, mirroring how
+        `FXDock.get_state()`/`GenerationDock.get_state()` are pulled. The
+        Vosk model path isn't part of this - see this module's docstring."""
+        return {"asr_engine": self.asr_engine_combo.currentData() or ASR_ENGINES[0].id}
+
     def _on_transcribe_clicked(self) -> None:
         wav_path = self.wav_path_edit.text().strip()
         if not wav_path or not os.path.exists(wav_path):
             QMessageBox.warning(self, "Error", "Select a reference audio file first.")
+            return
+
+        engine = self.asr_engine_combo.currentData() or ASR_ENGINES[0].id
+        vosk_model_path = self.vosk_model_edit.text().strip()
+        if engine == "vosk" and not vosk_model_path:
+            QMessageBox.warning(self, "Error", "Enter a Vosk model folder first.")
             return
 
         self.transcribe_btn.setEnabled(False)
@@ -109,7 +204,12 @@ class VoiceCloneDock(QDockWidget):
             except Exception as e:
                 self.transcribeFinished.emit(False, str(e))
 
-        future = self.app.engine.worker.run_coro(asyncio.to_thread(transcribe_wav, wav_path))
+        # Uses whatever's currently typed in the Vosk model field, whether or
+        # not it's been Saved yet - transcribing shouldn't require a save
+        # first, only persisting the path for next run/the standalone CLI does.
+        future = self.app.engine.worker.run_coro(
+            asyncio.to_thread(transcribe_wav, wav_path, engine=engine, model_path=vosk_model_path or None)
+        )
         future.add_done_callback(_done)
 
     def _on_transcribe_finished(self, success: bool, payload: str) -> None:
