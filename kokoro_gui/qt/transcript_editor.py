@@ -135,6 +135,7 @@ class TranscriptEditor(QTextEdit):
         new_text = self.toPlainText()
         self.app.document.apply_text_change(position, chars_removed, chars_added, new_text)
         self.app.schedule_save()
+        self.app.refresh_timeline()
 
     def load_text(self, text: str) -> None:
         """Sets the editor's text without treating it as a user edit -
@@ -176,6 +177,7 @@ class TranscriptEditor(QTextEdit):
         self.app.document.assign_character_to_range(cursor.selectionStart(), cursor.selectionEnd(), character_id)
         self._highlighter.rehighlight()
         self.app.schedule_save()
+        self.app.refresh_timeline()
 
     # -- Copy/paste split-vs-inherit semantics ------------------------------
 
@@ -212,6 +214,7 @@ class TranscriptEditor(QTextEdit):
                 insert_position, insert_position + chars_added, source_character_id
             )
             self._highlighter.rehighlight()
+            self.app.refresh_timeline()
         # Else: apply_text_change's existing "insertion inside an existing
         # clip extends it" behavior already is "silently inherit the
         # destination's formatting" - nothing more to do.

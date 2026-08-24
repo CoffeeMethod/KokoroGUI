@@ -1,0 +1,78 @@
+{
+  "text": "",
+  "clips": [],
+  "tracks": [
+    {
+      "name": "Default",
+      "character_id": "e58f89a8e686442093bb95fce9008f8c",
+      "order_index": 0,
+      "id": "7cb44ef168c84f588e575bd7b7b2f5d9"
+    },
+    {
+      "name": "Speaker 1",
+      "character_id": "c230527e6e8943338f15283f5c37438f",
+      "order_index": 1,
+      "id": "0b682f04289d4e5aaf22486b40a57aae"
+    },
+    {
+      "name": "Speaker 2",
+      "character_id": "16d38090225f441eacc8bef21d777655",
+      "order_index": 2,
+      "id": "ab3cafbf504743f5a60e176fc6afa0c2"
+    }
+  ],
+  "characters": [
+    {
+      "name": "Default",
+      "preset_data": {
+        "voice": "af_heart",
+        "speed": 1.0,
+        "volume": 1.0,
+        "pitch": 0.0,
+        "split_pattern": "\\n+",
+        "normalize": false,
+        "trim": false
+      },
+      "highlight_color": "#f4b400",
+      "backend_id": "kokoro",
+      "id": "e58f89a8e686442093bb95fce9008f8c"
+    },
+    {
+      "name": "Speaker 1",
+      "preset_data": {
+        "voice": "af_heart",
+        "speed": 1.0,
+        "volume": 1.0,
+        "pitch": 0.0,
+        "split_pattern": "\\n+",
+        "normalize": false,
+        "trim": false,
+        "format": "wav",
+        "apply_fx": true,
+        "fx_preset": "Select FX Preset..."
+      },
+      "highlight_color": "#4285f4",
+      "backend_id": "kokoro",
+      "id": "c230527e6e8943338f15283f5c37438f"
+    },
+    {
+      "name": "Speaker 2",
+      "preset_data": {
+        "voice": "test003",
+        "speed": 1.2,
+        "volume": 1.0,
+        "pitch": 1.0,
+        "split_pattern": "\\n+",
+        "normalize": false,
+        "trim": false,
+        "format": "wav",
+        "apply_fx": true,
+        "fx_preset": "Select FX Preset..."
+      },
+      "highlight_color": "#db4437",
+      "backend_id": "kokoro",
+      "id": "16d38090225f441eacc8bef21d777655"
+    }
+  ],
+  "settings": {}
+}

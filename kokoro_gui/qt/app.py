@@ -41,7 +41,9 @@ PRESETS_DIR = "presets"
 FX_PRESETS_DIR = os.path.join(PRESETS_DIR, "fx")
 DOCUMENT_FILE = "document.json"
 
-from kokoro_gui.qt.docks import FXDock, GenerationDock, LexiconDock, MixingDock, VoiceCloneDock  # noqa: E402
+from kokoro_gui.qt.docks import (  # noqa: E402
+    FXDock, GenerationDock, LexiconDock, MixingDock, TimelineDock, VoiceCloneDock,
+)
 
 
 class QtTTSApp(QMainWindow):
@@ -72,6 +74,7 @@ class QtTTSApp(QMainWindow):
         self.mixing_dock: MixingDock | None = None
         self.voice_clone_dock: VoiceCloneDock | None = None
         self.generation_dock: GenerationDock | None = None
+        self.timeline_dock: TimelineDock | None = None
 
         # --- Engine / backend ---
         self.engine = KokoroEngine()
@@ -148,6 +151,14 @@ class QtTTSApp(QMainWindow):
         self._sync_mixing_dock()
         self._sync_voice_clone_dock()
 
+        # Workstream 3 (Claude/PLAN_daw_ui_ux_redesign.md): unconditional,
+        # not capability-gated - renders Document state, which is
+        # engine-independent. Bottom area (no existing dock uses it) since a
+        # timeline is a wide, horizontally-scrolling strip rather than
+        # something to squeeze into the already-tabbed Right column.
+        self.timeline_dock = TimelineDock(self)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.timeline_dock)
+
     def _build_action_bar(self) -> None:
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -206,6 +217,17 @@ class QtTTSApp(QMainWindow):
 
     def schedule_save(self) -> None:
         self._save_timer.start(1000)
+
+    def refresh_timeline(self) -> None:
+        """App-owned cross-dock coordination point (same precedent as the
+        FX-preset-combo mirroring between docks) rather than a signal/event
+        bus - Workstream 4's real sync layer may replace this outright, so
+        nothing more elaborate is built here yet. No-ops if the timeline
+        dock doesn't exist (defensive; it's constructed unconditionally in
+        _build_docks(), same guard style save_settings() already uses for
+        generation_dock)."""
+        if self.timeline_dock is not None:
+            self.timeline_dock.refresh()
 
     def save_settings(self) -> None:
         self._save_timer.stop()
