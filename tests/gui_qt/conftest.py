@@ -33,6 +33,7 @@ def qt_app(tmp_path, monkeypatch, qtbot):
     monkeypatch.setattr(qt_app_module, "CONFIG_FILE", str(tmp_path / "config_qt.json"))
     monkeypatch.setattr(qt_app_module, "PRESETS_DIR", str(tmp_path / "presets"))
     monkeypatch.setattr(qt_app_module, "FX_PRESETS_DIR", str(tmp_path / "presets" / "fx"))
+    monkeypatch.setattr(qt_app_module, "DOCUMENT_FILE", str(tmp_path / "document.json"))
     monkeypatch.setattr(qt_app_module, "KokoroEngine", StubEngine)
     (tmp_path / "custom_voices").mkdir(exist_ok=True)
 

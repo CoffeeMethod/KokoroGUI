@@ -28,8 +28,10 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_engine import KokoroEngine
+from kokoro_gui.daw import serialization as document_serialization
 from kokoro_gui.engine.time_utils import format_duration
 from kokoro_gui.engines import registry as engine_registry
+from kokoro_gui.qt import document_state
 from kokoro_gui.qt import spec
 from kokoro_gui.qt import settings as qt_settings
 from kokoro_gui.qt.signals import EngineSignalBridge, wire_engine
@@ -37,6 +39,7 @@ from kokoro_gui.qt.signals import EngineSignalBridge, wire_engine
 CONFIG_FILE = "config_qt.json"
 PRESETS_DIR = "presets"
 FX_PRESETS_DIR = os.path.join(PRESETS_DIR, "fx")
+DOCUMENT_FILE = "document.json"
 
 from kokoro_gui.qt.docks import FXDock, GenerationDock, LexiconDock, MixingDock, VoiceCloneDock  # noqa: E402
 
@@ -55,6 +58,12 @@ class QtTTSApp(QMainWindow):
         self.settings = qt_settings.load_settings(CONFIG_FILE)
         self.jit_enabled = self.settings.get("jit_enabled", False)
         self.timecode_format = "%Y%m%d%H%M%S"
+
+        # Workstream 2 (Claude/PLAN_daw_ui_ux_redesign.md): the DAW document
+        # model backing the transcript panel. Must exist before
+        # _build_docks() below, since GenerationDock's TranscriptEditor reads
+        # it at construction time.
+        self.document = document_state.load_or_create_document(DOCUMENT_FILE, self.settings, PRESETS_DIR)
 
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -228,6 +237,7 @@ class QtTTSApp(QMainWindow):
             qt_settings.save_window_state(self, self.settings)
 
         qt_settings.save_settings(CONFIG_FILE, self.settings)
+        document_serialization.save_document(self.document, DOCUMENT_FILE)
 
     # --- config assembly ----------------
 
@@ -349,12 +359,18 @@ class QtTTSApp(QMainWindow):
             jit_check.setEnabled(False)
             layout.addWidget(QLabel(f"({self.backend.display_name} doesn't support streaming - runs as Standard.)"))
         layout.addWidget(jit_check)
+
+        paste_split_check = QCheckBox("Paste splits character/FX")
+        paste_split_check.setChecked(self.settings.get("character_fx_paste_splits", True))
+        layout.addWidget(paste_split_check)
+
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(dialog.accept)
         layout.addWidget(close_btn)
         dialog.exec()
 
         self.jit_enabled = jit_check.isChecked()
+        self.settings["character_fx_paste_splits"] = paste_split_check.isChecked()
         self._update_start_btn_text()
         self.save_settings()
 

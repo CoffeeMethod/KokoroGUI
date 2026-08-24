@@ -160,6 +160,7 @@ SETTINGS_DEFAULTS = {
     "export_subtitles": False,
     "caching": True,
     "jit_enabled": False,
+    "character_fx_paste_splits": True,
     "normalize": False,
     "trim": False,
     "apply_fx": True,

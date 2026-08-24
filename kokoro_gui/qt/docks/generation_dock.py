@@ -13,13 +13,14 @@ import re
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
+    QMessageBox, QPushButton, QScrollArea,
     QTabWidget, QVBoxLayout, QWidget,
 )
 
 import kokoro_gui.qt.app as qt_app_module
 from kokoro_gui.qt import spec
 from kokoro_gui.qt.schema_form import SchemaFormWidget
+from kokoro_gui.qt.transcript_editor import TranscriptEditor
 
 
 class GenerationDock(QDockWidget):
@@ -44,7 +45,7 @@ class GenerationDock(QDockWidget):
         self.tabs = QTabWidget()
         input_layout.addWidget(self.tabs)
 
-        self.text_entry = QPlainTextEdit()
+        self.text_entry = TranscriptEditor(self.app)
         self.tabs.addTab(self.text_entry, "Direct Text")
 
         file_tab = QWidget()

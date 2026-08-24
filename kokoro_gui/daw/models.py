@@ -168,6 +168,12 @@ class Document:
     def get_clip(self, clip_id: str) -> Optional[Clip]:
         return next((c for c in self.clips if c.id == clip_id), None)
 
+    def clip_covering(self, position: int) -> Optional[Clip]:
+        """The `Clip` containing text offset `position`, if any (inclusive
+        start, exclusive end - consistent with `start_offset`/`end_offset`
+        slicing elsewhere in this class)."""
+        return next((c for c in self.clips if c.start_offset <= position < c.end_offset), None)
+
     # -- text/config -------------------------------------------------------
 
     def clip_text(self, clip: Clip) -> str:
@@ -198,6 +204,61 @@ class Document:
             for clip in self.clips
             if is_clip_dirty(clip, self.clip_text(clip), self.effective_config_for_clip(clip))
         ]
+
+    # -- UI-driven authoring (Q20): Characters menu / paste-splitting ------
+
+    def assign_character_to_range(self, start: int, end: int, character_id: Optional[str]) -> Clip:
+        """Assigns `character_id` to `self.text[start:end]`, creating a new
+        `Clip` for that exact range and splitting off "leftover" clips for
+        whatever the range partially overlapped - the shared split-or-create
+        primitive behind the transcript panel's Characters menu and
+        paste-splitting, and (later) the timeline's sub-range TTS replacement
+        and auto-split features.
+
+        A clip fully inside `[start, end)` is simply removed (no leftover).
+        A clip only partially overlapping keeps a leftover fragment for the
+        portion outside `[start, end)`, carrying its original character/
+        track/overrides/fx_override - but as a brand-new `Clip` (fresh id,
+        no segments), since a split invalidates whatever was cached for the
+        now-different range. Even an exact range-for-range reassignment goes
+        through remove-then-recreate: identity is independent of content,
+        the same rule `apply_text_change`'s fully-consumed-clip removal
+        already establishes.
+
+        No manual dirty-marking is needed - every clip this method touches
+        ends up with no `segments`, which `dirty.is_clip_dirty` already
+        treats as dirty.
+        """
+        if end <= start:
+            raise ValueError(f"assign_character_to_range requires end > start, got start={start}, end={end}")
+
+        track_id = next((t.id for t in self.tracks if t.character_id == character_id), None)
+
+        overlapping = [c for c in self.clips if c.start_offset < end and c.end_offset > start]
+        leftovers = []
+        for clip in overlapping:
+            if clip.start_offset < start:
+                leftovers.append(Clip(
+                    start_offset=clip.start_offset, end_offset=start,
+                    character_id=clip.character_id, track_id=clip.track_id,
+                    overrides=dict(clip.overrides), fx_override=clip.fx_override,
+                    source=clip.source, original_audio_path=clip.original_audio_path,
+                ))
+            if clip.end_offset > end:
+                leftovers.append(Clip(
+                    start_offset=end, end_offset=clip.end_offset,
+                    character_id=clip.character_id, track_id=clip.track_id,
+                    overrides=dict(clip.overrides), fx_override=clip.fx_override,
+                    source=clip.source, original_audio_path=clip.original_audio_path,
+                ))
+
+        for clip in overlapping:
+            self.clips.remove(clip)
+        self.clips.extend(leftovers)
+
+        new_clip = Clip(start_offset=start, end_offset=end, character_id=character_id, track_id=track_id)
+        self.clips.append(new_clip)
+        return new_clip
 
     # -- incremental offset maintenance (Q16/Q18 dirty-tracking mechanism) --
 

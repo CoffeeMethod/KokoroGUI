@@ -8,10 +8,58 @@ directly, so that tests can keep monkeypatching them on the `kokoro_engine` modu
 """
 import os
 import re
+from typing import NamedTuple, Optional
 
 from bs4 import BeautifulSoup
 
 import kokoro_engine
+
+# Same tag syntax `TextExtractionMixin.parse_multispeaker_text` matches -
+# duplicated here deliberately rather than shared/refactored out of that
+# method, so `find_character_fx_spans` below can never accidentally change
+# what conversion.py/jit.py (parse_multispeaker_text's only callers) see.
+_SPEAKER_FX_TAG_PATTERN = r"\[([^\]\n]{1,100})\]:\s*"
+
+
+class InlineTagSpan(NamedTuple):
+    """One `[Name]:`/`[Name:FX]:`-tagged run, with real (unstripped) offsets
+    into the original text - unlike `parse_multispeaker_text`'s tuples,
+    which discard offsets and strip/filter the segment text. Used by the
+    Qt transcript editor's syntax highlighter (kokoro_gui/qt/transcript_editor.py),
+    which needs exact `QTextDocument` character positions, not cleaned-up text.
+    """
+
+    start: int
+    end: int
+    speaker_name: str
+    fx_name: Optional[str]
+
+
+def find_character_fx_spans(text: str) -> list:
+    """Offset-preserving sibling of `TextExtractionMixin.parse_multispeaker_text`
+    for `[Name]:`/`[Name:FX]:` tags. Returns `[]` for tagless text (not
+    `parse_multispeaker_text`'s `[(None, None, text)]` sentinel - a
+    highlighter has nothing to paint when there's no tag at all). Each
+    `InlineTagSpan` covers from its tag's own start through the character
+    just before the next tag (or end of text) - the whole `[Name]: spoken
+    text` run, unstripped, so it maps 1:1 onto document character positions.
+
+    Module-level rather than a `TextExtractionMixin` method: this is a pure
+    text-in/data-out utility with no need for a live engine instance.
+    """
+    matches = list(re.finditer(_SPEAKER_FX_TAG_PATTERN, text))
+    spans = []
+    for i, match in enumerate(matches):
+        raw_name = match.group(1)
+        speaker_name, fx_name = raw_name, None
+        if ":" in raw_name:
+            parts = raw_name.split(":", 1)
+            speaker_name = parts[0].strip()
+            fx_name = parts[1].strip()
+
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        spans.append(InlineTagSpan(start=match.start(), end=end, speaker_name=speaker_name, fx_name=fx_name))
+    return spans
 
 
 class TextExtractionMixin:
