@@ -1,6 +1,6 @@
 {
-    "lang_code": "a",
-    "voice": "af_heart",
+    "lang_code": "English",
+    "voice": "",
     "filename": "output",
     "format": "wav",
     "out_dir": "audio_output",
@@ -12,8 +12,8 @@
     "separate": false,
     "combine": true,
     "export_subtitles": false,
-    "caching": true,
-    "jit_enabled": false,
+    "caching": false,
+    "jit_enabled": true,
     "normalize": false,
     "trim": false,
     "apply_fx": false,
@@ -60,8 +60,9 @@
     "limiter_release": 100.0,
     "gain_enabled": false,
     "gain_db": 0.0,
-    "engine_id": "kokoro",
+    "engine_id": "audio8",
+    "asr_engine": "audio8",
     "lexicon": {},
-    "dock_state": "AAAA/wAAAAD9AAAAAQAAAAIAAAeAAAADQ/wBAAAAAvsAAAAeAGQAbwBjAGsAXwBnAGUAbgBlAHIAYQB0AGkAbwBuAQAAAAAAAANyAAAAUgD////8AAADdgAABAoAAAF6AP////oAAAAAAgAAAAT7AAAAFgBkAG8AYwBrAF8AbQBpAHgAaQBuAGcBAAAAAP////8AAAHqAP////sAAAAOAGQAbwBjAGsAXwBmAHgBAAAAAP////8AAACEAP////sAAAAYAGQAbwBjAGsAXwBsAGUAeABpAGMAbwBuAQAAAB4AAAMlAAAAmgD////7AAAAIABkAG8AYwBrAF8AdgBvAGkAYwBlAF8AYwBsAG8AbgBlAQAAAAD/////AAAAAAAAAAAAAAeAAAAAjAAAAAQAAAAEAAAACAAAAAj8AAAAAQAAAAIAAAAB/////wEAAAAA/////wAAAAAAAAAA",
+    "dock_state": "AAAA/wAAAAD9AAAAAQAAAAIAAAeAAAADQ/wBAAAAAvsAAAAeAGQAbwBjAGsAXwBnAGUAbgBlAHIAYQB0AGkAbwBuAQAAAAAAAAPFAAAAUgD////8AAADyQAAA7cAAAF6AP////oAAAADAgAAAAT7AAAAFgBkAG8AYwBrAF8AbQBpAHgAaQBuAGcBAAAAAP////8AAAAAAAAAAPsAAAAOAGQAbwBjAGsAXwBmAHgBAAAAAP////8AAACEAP////sAAAAYAGQAbwBjAGsAXwBsAGUAeABpAGMAbwBuAQAAAB4AAAMlAAAAmgD////7AAAAIABkAG8AYwBrAF8AdgBvAGkAYwBlAF8AYwBsAG8AbgBlAQAAAAD/////AAACIAD///8AAAeAAAAAjAAAAAQAAAAEAAAACAAAAAj8AAAAAQAAAAIAAAAB/////wEAAAAA/////wAAAAAAAAAA",
     "geometry": "AdnQywADAAAAAAAA////+AAAB38AAAQHAAABmgAAAHQAAAXlAAADkwAAAAACAAAAB4AAAAAAAAAAFwAAB38AAAQH"
 }
