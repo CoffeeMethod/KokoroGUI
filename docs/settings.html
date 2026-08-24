@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Kokoro GUI · Settings reference</title>
-<meta name="description" content="Every field in every dock, what it actually does, which settings Audio8 silently ignores, and why JIT streaming only exists for engines that can generate faster than real time." />
+<meta name="description" content="Every field in every dock, what it actually does, how the Settings dock's fields scope to a clip or character, which settings Audio8 silently ignores, and why JIT streaming only exists for engines that can generate faster than real time." />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2335e6c6'/%3E%3Cstop offset='.55' stop-color='%239d7bff'/%3E%3Cstop offset='1' stop-color='%23ff7a59'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='%230a0d14'/%3E%3Cg fill='url(%23g)'%3E%3Crect x='10' y='26' width='7' height='12' rx='2'/%3E%3Crect x='21' y='16' width='7' height='32' rx='2'/%3E%3Crect x='32' y='22' width='7' height='20' rx='2'/%3E%3Crect x='43' y='10' width='7' height='44' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -42,7 +42,7 @@
           </linearGradient>
         </defs>
       </svg>
-      <span class="brand-word">Kokoro GUI<span class="beta">BETA 3.3.0</span></span>
+      <span class="brand-word">Kokoro GUI<span class="beta">BETA 4.0.0</span></span>
     </a>
     <div class="navlinks">
       <a href="index.html#features">Docks</a>
@@ -66,17 +66,21 @@
     <div class="wrap">
       <span class="eyebrow">Reference</span>
       <h1>What every setting actually does</h1>
-      <p class="lede">Every field in every dock, grouped the way they're grouped in the app, with the parts that aren't obvious from the label alone called out. Two things are worth reading before the rest: Audio8 quietly ignores two of its own Generation fields, and JIT streaming isn't a checkbox every engine gets.</p>
+      <p class="lede">Every field in every dock, grouped the way they're grouped in the app, with the parts that aren't obvious from the label alone called out. Three things are worth reading before the rest: the Settings dock's fields mean something different depending on what's selected, Audio8 quietly ignores two of its own generation fields, and JIT streaming isn't a checkbox every engine gets.</p>
       <div class="toc">
         <a href="#engine-picker">Engine picker</a>
-        <a href="#generation">Generation</a>
+        <a href="#transcript">Transcript &amp; characters</a>
+        <a href="#settings-dock">Settings dock</a>
         <a href="#audio-control">Audio control</a>
+        <a href="#timeline">Timeline dock</a>
+        <a href="#undo">Undo &amp; redo</a>
+        <a href="#generation">Generation dock</a>
         <a href="#processing">Processing options</a>
         <a href="#fx">FX</a>
         <a href="#lexicon">Lexicon</a>
         <a href="#mixing">Mixing</a>
         <a href="#voice-reference">Voice reference</a>
-        <a href="#presets">Presets</a>
+        <a href="#presets">Presets &amp; characters</a>
         <a href="#jit">JIT streaming</a>
       </div>
     </div>
@@ -86,18 +90,43 @@
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">Toolbar</span>The engine picker</h2>
-        <p>A dropdown in the toolbar, not a dock. It's the one setting that changes what every other setting on this page looks like: switching it rebuilds the Generation dock's fields from the new engine's schema and shows or hides the Mixing and Voice Reference docks based on what the new engine supports. Everything below is written per-engine where the two differ.</p>
+        <p>A dropdown in the toolbar, not a dock. It's the one setting that changes what every other setting on this page looks like: switching it rebuilds the Settings dock's fields from the new engine's schema and shows or hides the Mixing and Voice Reference docks based on what the new engine supports. Everything below is written per-engine where the two differ.</p>
       </div>
     </div>
   </section>
 
-  <section class="doc-section" id="generation">
+  <section class="doc-section" id="transcript">
     <div class="wrap">
-      <h2><span class="idx">Generation dock</span>Generation</h2>
-      <p class="dek">Schema-driven: the fields below are what both real engines currently declare. Rows marked Audio8 only or Kokoro only don't exist on the other engine's dock at all.</p>
+      <div class="prose reveal">
+        <h2><span class="idx">Generation dock</span>The transcript</h2>
+        <p>The Generation dock's text box is a syntax-highlighting editor over the document's canonical text, not a plain input field. Every run of text is colored by its assigned character and FX, so the boundaries between speakers and effects are visible at a glance, without reading the inline <a href="scripting.html" style="color:var(--violet); font-weight:600;"><code>[Speaker:FX]:</code></a> syntax.</p>
+        <p>Selecting a range and opening the Characters menu reassigns that range's character/FX directly. Placing the caret inside an existing run instead shows that run's currently active voice/FX in the Settings dock. Copying a range carries its character/FX metadata with it; pasting into a run belonging to a different character splits the paste into its own run rather than silently overwriting the destination's assignment, unless "character/FX paste splits" is turned off, in which case a paste inherits whatever it lands on.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="settings-dock">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">Settings dock</span>One panel, three scopes</h2>
+        <p>Every field below used to live in the Generation dock and always edited the whole document's defaults. It's the same schema-driven form, now re-scoped to whatever <code>self.app.selection</code> currently points at:</p>
+      </div>
+      <div class="table-wrap reveal" style="max-width:760px; margin-top:1rem;">
+        <table class="ref">
+          <caption>Settings dock scopes</caption>
+          <thead><tr><th>Selection</th><th>Values come from</th><th>Edits write to</th></tr></thead>
+          <tbody>
+            <tr><td>Nothing selected</td><td>The app's whole-document defaults</td><td>App settings (<code>config_qt.json</code>)</td></tr>
+            <tr><td>A clip</td><td>Its character's preset, merged with its own overrides</td><td><code>clip.overrides</code>, never the app defaults</td></tr>
+            <tr><td>A character</td><td>That character's saved preset</td><td>The character's preset directly, so every non-overridden clip using it updates live</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="dek" style="margin-top:1rem;">Only the fields below can vary per clip or character. Everything else (Language, Parallel threads, Enable segment cache, and any engine's own non-preset fields like Audio8's sampling knobs) is rendered disabled, not hidden, while a clip or character is selected, since those settings only make sense at the whole-document level.</p>
+      <p class="dek" style="margin-top:1rem;">Schema-driven: the fields below are what both real engines currently declare. Rows marked Audio8 only or Kokoro only don't exist on the other engine's dock at all.</p>
       <div class="table-wrap reveal">
         <table class="ref">
-          <caption>Generation</caption>
+          <caption>Voice &amp; generation fields</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td>Language</td><td>For Kokoro, picks which phonemization pipeline runs; each language uses its own <code>KPipeline</code> and voice list. For Audio8 it's one of eleven labels from the model card. See the callout below: it currently isn't sent to the model at all.</td></tr>
@@ -125,8 +154,8 @@
 
   <section class="doc-section" id="audio-control">
     <div class="wrap">
-      <h2><span class="idx">Generation dock</span>Audio control</h2>
-      <p class="dek">Hand-coded, not schema-driven, so every engine gets the same fields here. These are the post-processing steps from the <a href="index.html#signal-chain" style="color:var(--violet); font-weight:600;">signal chain</a> on the home page.</p>
+      <h2><span class="idx">Settings dock</span>Audio control</h2>
+      <p class="dek">Hand-coded, not schema-driven, so every engine gets the same fields here, still subject to the same three-scope rules above. These are the post-processing steps from the <a href="index.html#signal-chain" style="color:var(--violet); font-weight:600;">signal chain</a> on the home page.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Audio control</caption>
@@ -137,6 +166,57 @@
             <tr><td>FX preset / Apply</td><td>Loads a saved FX preset into the FX dock's sliders. The Apply checkbox is the master switch for the whole FX chain below; unchecked, none of the FX dock's effects run even if individually enabled.</td></tr>
             <tr><td>Normalize</td><td>Scales the segment so its loudest peak sits at 98% of full scale. A simple peak normalize, not a loudness (LUFS) normalize. Runs last in the chain, after FX.</td></tr>
             <tr><td>Trim silence</td><td>Strips leading and trailing audio below a fixed amplitude threshold. Runs first in the chain, before Volume.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="timeline">
+    <div class="wrap">
+      <h2><span class="idx">Timeline dock</span>Timeline</h2>
+      <p class="dek">One track per character, at the bottom of the window. Unconditional, not engine-gated, it renders the document's own clips/tracks/characters, which don't depend on which backend is active.</p>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>Timeline</caption>
+          <thead><tr><th>Action</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Right-click a clip &gt; Generate</td><td>Renders just that clip's text/settings through the normal cache-aware generation path, populating its segments with real audio.</td></tr>
+            <tr><td>Right-click a clip &gt; Play</td><td>Plays that clip's cached audio.</td></tr>
+            <tr><td>Per-clip FX button</td><td>Opens an FX override for that one clip, applied on top of the FX chain and winning over its character's own FX preset. Button opacity shows state at a glance: 50% means no FX override, 90% means one's active.</td></tr>
+            <tr><td>Drag a clip onto another track</td><td>Reassigns the clip to that track's character (with a confirmation prompt when the characters actually differ) or just repositions it, if dropped on its own track.</td></tr>
+            <tr><td>Drag inside a clip's waveform</td><td>Carves out the selected sub-range and opens an editable transcript for it. Confirming replaces just that sub-range with fresh TTS, under any character, not necessarily the clip's own.</td></tr>
+            <tr><td>Generate (action bar)</td><td>Once the document has clips, this regenerates every dirty clip in one pass instead of the whole document, with bounded concurrency and cancel-safe queuing. A document with no clips yet still falls back to the original whole-document pipeline.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="dek" style="margin-top:1rem;">A clip's rendered width grows to match its real audio duration once generated; ungenerated clips stay a fixed placeholder width. Position always stays anchored to document order, so the timeline and transcript never drift out of sync.</p>
+    </div>
+  </section>
+
+  <section class="doc-section" id="undo">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">Edit menu</span>Undo &amp; redo</h2>
+        <p>The app's first menu bar. Text edits in the transcript and Characters-menu reassignments both push onto a plain-Python undo stack tied to the document, reachable from Edit &gt; Undo/Redo or the standard OS shortcuts. It isn't Qt's own undo framework, the data model stays framework-free so it can be tested without a running GUI.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="generation">
+    <div class="wrap">
+      <h2><span class="idx">Generation dock</span>Input source &amp; output</h2>
+      <p class="dek">What's left in the Generation dock after voice/speed/audio-control moved to the Settings dock above: where the text comes from, and where the audio goes.</p>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>Input source &amp; output</caption>
+          <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Direct Text</td><td>The syntax-highlighted transcript editor described above, typed or pasted straight in.</td></tr>
+            <tr><td>Load File</td><td>A path to a <code>.txt</code>, <code>.pdf</code>, or <code>.epub</code> file, extracted into the transcript instead.</td></tr>
+            <tr><td>Output Directory</td><td>Where finished audio (and, if enabled, SRT/kept segments) gets written.</td></tr>
+            <tr><td>Base Filename</td><td>The stem used for the combined output file and, if Keep Segments is on, each segment file's name.</td></tr>
+            <tr><td>Save Preset / Load Preset</td><td>The legacy <code>presets/*.json</code> combo: snapshots or restores the whole-document ("none" scope) settings. See <a href="#presets" style="color:var(--violet); font-weight:600;">Presets &amp; characters</a> below for how this relates to the newer Characters system.</td></tr>
           </tbody>
         </table>
       </div>
@@ -278,10 +358,11 @@
 
   <section class="doc-section" id="presets">
     <div class="wrap">
-      <h2><span class="idx">Presets</span>Presets, and how they relate to inline scripting</h2>
+      <h2><span class="idx">Presets</span>Presets, characters, and how they relate to inline scripting</h2>
       <div class="prose reveal">
-        <p>Two independent preset systems, both plain JSON on disk: "Save Preset..." at the top of the Generation dock snapshots the entire current generation config (voice, speed, split pattern, and the rest) under a name. "Save FX Preset..." in the FX dock snapshots just the FX sliders.</p>
-        <p>These aren't a separate feature from <a href="scripting.html" style="color:var(--violet); font-weight:600;">inline scripting</a>, they're the same thing. A <code>[Name]:</code> tag in the text box looks up exactly the preset you saved here, by exactly that name.</p>
+        <p>Two independent preset systems, both plain JSON on disk: "Save Preset..." in the Generation dock snapshots the entire current generation config (voice, speed, split pattern, and the rest) under a name, as <code>presets/&lt;name&gt;.json</code>. "Save FX Preset..." in the FX dock snapshots just the FX sliders, as <code>presets/fx/&lt;name&gt;.json</code>.</p>
+        <p>Every file in <code>presets/</code> also becomes a <code>Character</code> on first load, one per file, with a highlight color assigned from a small fixed palette. If you had no presets saved yet, one "Default" character is seeded from your last-used settings instead, so a returning user's config isn't discarded. The preset files themselves are untouched either way, characters are read from them, not a replacement for them.</p>
+        <p>These aren't a separate feature from <a href="scripting.html" style="color:var(--violet); font-weight:600;">inline scripting</a>, they're the same thing. A <code>[Name]:</code> tag in the transcript looks up a character by exactly that name, case-insensitively, and a character's name starts out as whatever the preset file it came from was called.</p>
       </div>
     </div>
   </section>

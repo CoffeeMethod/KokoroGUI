@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Kokoro GUI · Studio-grade text to speech</title>
-<meta name="description" content="A dockable, engine-agnostic desktop TTS console: named Kokoro voices or zero-shot Audio8 voice cloning, a live FX chain, JIT streaming, and segment-level caching." />
+<meta name="description" content="A dockable, engine-agnostic desktop TTS console: a document of text with clips on character tracks, named Kokoro voices or zero-shot Audio8 voice cloning, a live FX chain, JIT streaming, and undo/redo." />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2335e6c6'/%3E%3Cstop offset='.55' stop-color='%239d7bff'/%3E%3Cstop offset='1' stop-color='%23ff7a59'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='%230a0d14'/%3E%3Cg fill='url(%23g)'%3E%3Crect x='10' y='26' width='7' height='12' rx='2'/%3E%3Crect x='21' y='16' width='7' height='32' rx='2'/%3E%3Crect x='32' y='22' width='7' height='20' rx='2'/%3E%3Crect x='43' y='10' width='7' height='44' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -155,10 +155,11 @@
           </linearGradient>
         </defs>
       </svg>
-      <span class="brand-word">Kokoro GUI<span class="beta">BETA 3.3.0</span></span>
+      <span class="brand-word">Kokoro GUI<span class="beta">BETA 4.0.0</span></span>
     </a>
     <div class="navlinks">
       <a href="#features">Docks</a>
+      <a href="#document-model">Document model</a>
       <a href="#engines">Engines</a>
       <a href="scripting.html">Scripting</a>
       <a href="settings.html">Settings</a>
@@ -180,15 +181,16 @@
     <div class="wrap">
       <div class="hero-inner">
         <span class="eyebrow">Desktop TTS console · PySide6</span>
-        <h1>Text to speech, <span class="grad-text">engineered like a studio.</span></h1>
-        <p class="lede">Kokoro GUI is a dockable desktop console for turning text, or whole ebooks, into audio. Pick a named voice or clone one from a reference clip, run it through a live FX chain, and stream it back in real time.</p>
+        <h1>Text to speech, <span class="grad-text">edited like a DAW project.</span></h1>
+        <p class="lede">Kokoro GUI is a dockable desktop console for turning text, or whole ebooks, into audio. Assign characters to a transcript, watch clips land on their own timeline track, and generate only what's changed. Pick a named voice or clone one from a reference clip, run it through a live FX chain, and stream it back in real time.</p>
         <div class="hero-ctas">
           <a class="btn btn-primary" href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">Get the source</a>
           <a class="btn btn-ghost" href="#install">Quick start</a>
         </div>
         <div class="hero-badges">
+          <span class="chip">Multi-track timeline</span>
+          <span class="chip">Undo &amp; redo</span>
           <span class="chip"><b>2</b> synthesis engines</span>
-          <span class="chip"><b>8</b> languages</span>
           <span class="chip">Standard <b>+</b> JIT streaming</span>
           <span class="chip">Windows · macOS · Linux</span>
           <span class="chip">Apache-2.0</span>
@@ -198,7 +200,7 @@
       <div class="console-frame reveal">
         <div class="bar">
           <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-          <span class="path">kokoro_gui · Generation dock</span>
+          <span class="path">kokoro_gui · pre-DAW-redesign Generation dock</span>
         </div>
         <img src="https://github.com/user-attachments/assets/a6ec3d30-e837-4815-a0e1-1ff69d1e31be" alt="Kokoro GUI dockable Qt interface showing the Generation panel, voice picker, and FX controls" loading="lazy" width="933" height="1787" style="max-height: 640px; width:100%; object-fit: cover; object-position: top;" />
       </div>
@@ -209,8 +211,8 @@
     <div class="wrap">
       <div class="sec-head reveal">
         <span class="eyebrow">The panels</span>
-        <h2>Five docks, rearranged to how you work</h2>
-        <p>The whole app is dockable Qt panels. Three ship with every engine, two appear only when the active engine actually supports them. No dead tabs, no engine-specific special-casing in the UI.</p>
+        <h2>Seven docks, rearranged to how you work</h2>
+        <p>The whole app is dockable Qt panels. Five ship with every engine, two appear only when the active engine actually supports them. No dead tabs, no engine-specific special-casing in the UI.</p>
       </div>
       <div class="dock-grid">
 
@@ -222,14 +224,50 @@
             <span class="dock-tag core">Always on</span>
           </div>
           <h3>Generation</h3>
-          <p>The core dock, schema-driven so it rebuilds itself per engine.</p>
+          <p>The transcript editor, input source, output, and processing options.</p>
           <ul>
-            <li>Language, voice, speed, split pattern</li>
-            <li>Output format &amp; thread count</li>
-            <li>Segment caching toggle</li>
+            <li>Direct text or a loaded file, syntax-highlighted by character/FX</li>
+            <li>Output format, combine/keep-segments, SRT export</li>
+            <li>The legacy generation-preset combo</li>
             <li>Standard batch or real-time JIT mode</li>
           </ul>
           <a class="more" href="settings.html#generation">Every field, explained →</a>
+        </div>
+
+        <div class="dock-card reveal">
+          <div class="top">
+            <div class="dock-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="2"><path d="M4 6h9M4 12h16M4 18h9"/></svg>
+            </div>
+            <span class="dock-tag core">Always on</span>
+          </div>
+          <h3>Settings</h3>
+          <p>Voice, speed, and audio-control fields, scoped to whatever's selected.</p>
+          <ul>
+            <li>Nothing selected: the whole document's defaults</li>
+            <li>A clip selected: that clip's overrides</li>
+            <li>A character selected: that character's preset</li>
+            <li>Same schema-driven fields the Generation dock used to hold</li>
+          </ul>
+          <a class="more" href="settings.html#settings-dock">Every field, explained →</a>
+        </div>
+
+        <div class="dock-card reveal">
+          <div class="top">
+            <div class="dock-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="2"><rect x="3" y="5" width="7" height="14" rx="1"/><rect x="14" y="9" width="7" height="10" rx="1"/></svg>
+            </div>
+            <span class="dock-tag core">Always on</span>
+          </div>
+          <h3>Timeline</h3>
+          <p>One track per character. Clips are colored blocks sized to real audio duration.</p>
+          <ul>
+            <li>Right-click a clip to generate or play it</li>
+            <li>Drag a clip onto another track to reassign or move it</li>
+            <li>Drag inside a clip to replace a sub-range with new TTS</li>
+            <li>Per-clip FX button, opacity marks whether FX is active</li>
+          </ul>
+          <a class="more" href="settings.html#timeline">Every field, explained →</a>
         </div>
 
         <div class="dock-card reveal">
@@ -300,6 +338,26 @@
           <a class="more" href="settings.html#voice-reference">Every field, explained →</a>
         </div>
 
+      </div>
+    </div>
+  </section>
+
+  <section id="document-model">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">How editing works</span>
+        <h2>The document is the source of truth, audio is a render of it</h2>
+        <p>Generated audio is never the primary thing you edit. The text is. Everything else, a clip's boundaries, its character, its cached audio, follows from that.</p>
+      </div>
+      <div class="strip reveal">
+        <div class="strip-item"><h4>Document, Clip, Track, Character</h4><p>A <code>Clip</code> is a range of the document's text plus a character and settings overrides. A <code>Track</code> is a lane a clip can be dragged onto, kept separate from <code>Character</code> so a clip can land on a track belonging to a different character than its own.</p></div>
+        <div class="strip-item"><h4>Dirty tracking</h4><p>A clip is dirty whenever its text, character preset, or overrides no longer match what its cached audio was generated from. No manual "mark as changed" step, it falls out of the same content-hash comparison the segment cache already does.</p></div>
+        <div class="strip-item"><h4>Characters menu</h4><p>Select a range in the transcript and reassign its character/FX directly. Coexists with the <code>[Speaker:FX]:</code> inline syntax as a faster typed alternative.</p></div>
+        <div class="strip-item"><h4>Auto-split</h4><p>Turns a tagged script into clips automatically, one per tag (or one per paragraph within a tag, if you ask for the finer split) and generates them in one action.</p></div>
+        <div class="strip-item"><h4>Drag to reassign</h4><p>Drop a clip on a different character's track to reassign it, with a confirmation prompt when the characters actually differ, or drop it on its own track to just move it.</p></div>
+        <div class="strip-item"><h4>Sub-range TTS replace</h4><p>Drag inside a clip's waveform to carve out part of it and regenerate just that part under any character, with an editable transcript before it renders.</p></div>
+        <div class="strip-item"><h4>Undo/redo</h4><p>Text edits and character reassignments both push onto a plain undo stack, reachable from the app's Edit menu or the standard OS shortcuts.</p></div>
+        <div class="strip-item"><h4>document.json</h4><p>The whole project, text, clips, tracks, characters, autosaves here, separate from <code>config_qt.json</code>'s app-level settings.</p></div>
       </div>
     </div>
   </section>
@@ -394,7 +452,7 @@
         <div class="strip-item"><h4>Scripted multi-speaker</h4><p><code>[Preset:FXPreset]: Text</code> switches voice and FX mid-document. See the <a href="scripting.html" style="color:var(--violet); font-weight:600;">scripting guide</a>.</p></div>
         <div class="strip-item"><h4>Smart splitting</h4><p>Split by newline, paragraph, or sentence for better prosody at the seams.</p></div>
         <div class="strip-item"><h4>SRT export</h4><p>Subtitles generated in sync with actual segment durations.</p></div>
-        <div class="strip-item"><h4>Presets</h4><p>Save and reload full configurations, FX chains included.</p></div>
+        <div class="strip-item"><h4>Presets &amp; characters</h4><p>Save and reload full configurations, FX chains included. Existing presets migrate into reusable, color-coded characters on first load.</p></div>
         <div class="strip-item"><h4>Intelligent caching</h4><p>Segments are hashed and cached. Change a generation-affecting setting and it gets caught automatically.</p></div>
         <div class="strip-item"><h4>Cross-platform audio</h4><p>Playback runs on <code>sounddevice</code>/<code>soundfile</code>, not a Windows-only API.</p></div>
         <div class="strip-item"><h4>Persistent layout</h4><p>Dock positions and window geometry autosave to <code>config_qt.json</code>.</p></div>

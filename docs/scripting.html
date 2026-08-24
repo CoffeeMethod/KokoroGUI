@@ -56,7 +56,7 @@
           </linearGradient>
         </defs>
       </svg>
-      <span class="brand-word">Kokoro GUI<span class="beta">BETA 3.3.0</span></span>
+      <span class="brand-word">Kokoro GUI<span class="beta">BETA 4.0.0</span></span>
     </a>
     <div class="navlinks">
       <a href="index.html#features">Docks</a>
@@ -80,13 +80,14 @@
     <div class="wrap">
       <span class="eyebrow">Guide</span>
       <h1>Multiple speakers and effects, in the same block of text</h1>
-      <p class="lede">The Generation dock's text box understands one piece of syntax on top of plain text: a bracketed tag at the start of a line switches which saved preset, and optionally which saved FX preset, applies to everything after it. This page covers exactly what that tag looks up, how the text around it gets split, and what happens when a tag doesn't match anything you've saved.</p>
+      <p class="lede">The transcript understands one piece of syntax on top of plain text: a bracketed tag at the start of a line switches which character, and optionally which saved FX preset, applies to everything after it. This page covers exactly what that tag looks up, how the text around it gets split, and what happens when a tag doesn't match anything you've saved. It's the fast-typing alternative to the transcript's Characters menu, not a separate feature from it, both end up assigning the same character metadata to the same text.</p>
       <div class="toc">
         <a href="#syntax">Syntax</a>
         <a href="#lookup">What gets looked up</a>
         <a href="#splitting">How segments split</a>
         <a href="#example">Worked example</a>
         <a href="#fallback">When a tag doesn't match</a>
+        <a href="#auto-split">Turning tags into clips</a>
         <a href="#plays-well">Plays well with</a>
       </div>
     </div>
@@ -113,8 +114,8 @@
   <section class="doc-section" id="lookup">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">02 · What gets looked up</span><code>PresetName</code> is a saved preset, not a raw voice</h2>
-        <p>This is the part that trips people up: the name in brackets isn't a voice ID like <code>af_heart</code>. It's the name of a preset you saved from the Generation dock's "Save Preset" button, a full snapshot of voice, speed, split pattern, and the rest, stored as <code>presets/&lt;name&gt;.json</code>. If you haven't saved a preset under that name, the tag has nothing to find.</p>
+        <h2><span class="idx">02 · What gets looked up</span><code>PresetName</code> is a character name, not a raw voice</h2>
+        <p>This is the part that trips people up: the name in brackets isn't a voice ID like <code>af_heart</code>. It's the name of a preset you saved from the Generation dock's "Save Preset" button, a full snapshot of voice, speed, split pattern, and the rest, stored as <code>presets/&lt;name&gt;.json</code>. Every preset file becomes a <a href="settings.html#presets" style="color:var(--violet); font-weight:600;">character</a> with that same name on load, so a tag's name is looked up as a character, case-insensitively, against whatever's saved. If you haven't saved anything under that name, the tag has nothing to find.</p>
         <p>Same idea for the FX half: <code>FXPresetName</code> is the name of an FX preset saved from the FX dock's "Save FX Preset" button, stored as <code>presets/fx/&lt;name&gt;.json</code>. The FX dock's full field list is on the <a href="settings.html#fx" style="color:var(--violet); font-weight:600;">settings reference</a>.</p>
         <p>So before a script like <code>[Narrator]: ...</code> means anything, a preset literally named <code>Narrator</code> has to already exist in <code>presets/</code>.</p>
       </div>
@@ -191,10 +192,21 @@
     </div>
   </section>
 
+  <section class="doc-section" id="auto-split">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">06 · Turning tags into clips</span>Auto-split does the Characters-menu work for you</h2>
+        <p>Writing a whole script with these tags and then manually selecting each block to assign it in the timeline works, but it's repetitive. Auto-split reads the same tags this page describes and creates one clip per tagged span automatically, landing each clip on its matching character's track, then generates them in one action.</p>
+        <p>Ask for the finer split and it also cuts each tagged span on paragraph breaks, so one <code>[Narrator]:</code> block spanning three paragraphs becomes three clips instead of one. Untagged narration only gets auto-clipped when your project has exactly one character, otherwise it's left alone, same as text nobody's assigned a character to today.</p>
+        <p>A span whose tag name doesn't match any saved character contributes no clip and shows up as a warning rather than failing the whole run, the same forgiving behavior described below for a missing preset.</p>
+      </div>
+    </div>
+  </section>
+
   <section class="doc-section" id="plays-well">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">06 · Plays well with</span>Lexicon, generation modes, and both engines</h2>
+        <h2><span class="idx">07 · Plays well with</span>Lexicon, generation modes, and both engines</h2>
         <p>The Lexicon dock's pronunciation overrides apply to every segment's text before synthesis, regardless of which preset or FX preset is active. Lexicon rules are global, not per-speaker.</p>
         <p>This syntax works the same way in Standard and JIT generation, both call the same parser before splitting text into chunks.</p>
         <p>Both Kokoro and Audio8 support it today. Since the tags reference saved <a href="settings.html#presets" style="color:var(--violet); font-weight:600;">presets</a>, not built-in engine voices, switching the active engine doesn't break an existing script as long as the preset names still resolve to something valid for the new engine.</p>
