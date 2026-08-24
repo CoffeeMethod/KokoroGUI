@@ -22,6 +22,7 @@ import time
 
 import playback
 from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QLabel, QMainWindow, QMessageBox,
     QProgressBar, QPushButton, QVBoxLayout, QWidget,
@@ -29,12 +30,15 @@ from PySide6.QtWidgets import (
 
 from kokoro_engine import KokoroEngine
 from kokoro_gui.daw import serialization as document_serialization
+from kokoro_gui.daw.auto_split import plan_auto_split_clips
+from kokoro_gui.daw.undo import AssignCharacterCommand
 from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, filter_allowed_keys
 from kokoro_gui.engine.time_utils import format_duration
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.qt import document_state
 from kokoro_gui.qt import spec
 from kokoro_gui.qt import settings as qt_settings
+from kokoro_gui.qt.selection import SelectionModel
 from kokoro_gui.qt.signals import EngineSignalBridge, wire_engine
 
 CONFIG_FILE = "config_qt.json"
@@ -43,7 +47,7 @@ FX_PRESETS_DIR = os.path.join(PRESETS_DIR, "fx")
 DOCUMENT_FILE = "document.json"
 
 from kokoro_gui.qt.docks import (  # noqa: E402
-    FXDock, GenerationDock, LexiconDock, MixingDock, TimelineDock, VoiceCloneDock,
+    FXDock, GenerationDock, LexiconDock, MixingDock, SettingsDock, TimelineDock, VoiceCloneDock,
 )
 
 
@@ -68,6 +72,13 @@ class QtTTSApp(QMainWindow):
         # it at construction time.
         self.document = document_state.load_or_create_document(DOCUMENT_FILE, self.settings, PRESETS_DIR)
 
+        # Item 1 ("Sync layer") of the DAW-for-text remaining-work roadmap:
+        # the shared clip/character/range selection, read by TranscriptEditor
+        # and TimelineView alike. Constructed before _build_docks() - those
+        # docks' widgets (TimelineDock's TimelineView) read self.selection at
+        # construction time.
+        self.selection = SelectionModel()
+
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.timeout.connect(self.save_settings)
@@ -75,6 +86,7 @@ class QtTTSApp(QMainWindow):
         self.mixing_dock: MixingDock | None = None
         self.voice_clone_dock: VoiceCloneDock | None = None
         self.generation_dock: GenerationDock | None = None
+        self.settings_dock: SettingsDock | None = None
         self.timeline_dock: TimelineDock | None = None
 
         # --- Engine / backend ---
@@ -86,6 +98,7 @@ class QtTTSApp(QMainWindow):
 
         self.previewFinished.connect(self._on_preview_finished)
 
+        self._build_menu_bar()
         self._build_toolbar()
         self._build_docks()
         self._build_action_bar()
@@ -119,6 +132,24 @@ class QtTTSApp(QMainWindow):
         except Exception:
             pass
 
+    def _build_menu_bar(self) -> None:
+        """The app's first menu bar (item 4, "Undo/redo", of the DAW-for-text
+        roadmap's cross-workstream resolutions - nothing in this app used
+        `QMainWindow.menuBar()` before this). A minimal Edit menu for now;
+        expected to grow a File menu when item 10 ("ASR-anchored audio
+        import") needs a discoverable "Import Audio" action."""
+        edit_menu = self.menuBar().addMenu("&Edit")
+
+        self.undo_action = QAction("Undo", self)
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.undo_action.triggered.connect(self.undo)
+        edit_menu.addAction(self.undo_action)
+
+        self.redo_action = QAction("Redo", self)
+        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        self.redo_action.triggered.connect(self.redo)
+        edit_menu.addAction(self.redo_action)
+
     def _build_toolbar(self) -> None:
         toolbar = self.addToolBar("Main")
         toolbar.setMovable(False)
@@ -142,8 +173,12 @@ class QtTTSApp(QMainWindow):
         self.generation_dock = GenerationDock(self)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.generation_dock)
 
+        self.settings_dock = SettingsDock(self)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.settings_dock)
+
         self.fx_dock = FXDock(self)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.fx_dock)
+        self.tabifyDockWidget(self.settings_dock, self.fx_dock)
 
         self.lexicon_dock = LexiconDock(self)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.lexicon_dock)
@@ -159,6 +194,8 @@ class QtTTSApp(QMainWindow):
         # something to squeeze into the already-tabbed Right column.
         self.timeline_dock = TimelineDock(self)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.timeline_dock)
+        self.timeline_dock.batchGenerationProgress.connect(self.on_batch_generation_progress)
+        self.timeline_dock.batchGenerationFinished.connect(self.on_batch_generation_finished)
 
     def _build_action_bar(self) -> None:
         central = QWidget()
@@ -185,7 +222,7 @@ class QtTTSApp(QMainWindow):
         self.preview_btn = QPushButton("Preview Audio")
         self.preview_btn.clicked.connect(self.preview_conversion)
         self.start_btn = QPushButton("Start Generation")
-        self.start_btn.clicked.connect(self.start_conversion)
+        self.start_btn.clicked.connect(self.on_generate_clicked)
         self._update_start_btn_text()
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self.cancel_conversion)
@@ -348,6 +385,15 @@ class QtTTSApp(QMainWindow):
             if fx_preset:
                 config.update(filter_allowed_keys(fx_preset, ALLOWED_FX_PRESET_KEYS))
 
+        # Item 5 ("Per-clip FX button"): a clip's own fx_override - a
+        # resolved FX-values dict, not a preset name - always wins over
+        # whatever the character's fx_preset resolved to above, mirroring
+        # the existing "clip overrides beat character preset" rule
+        # effective_config_for_clip already applies for ALLOWED_PRESET_KEYS
+        # fields. Merged last, deliberately.
+        if clip.fx_override:
+            config.update(filter_allowed_keys(clip.fx_override, ALLOWED_FX_PRESET_KEYS))
+
         return config
 
     # --- engine picker / switch --------------------
@@ -377,9 +423,9 @@ class QtTTSApp(QMainWindow):
         self.backend = new_backend
         self.bridge = new_bridge
 
-        # Rebuild the Generation dock's schema-driven fields for the new
+        # Rebuild the Settings dock's schema-driven fields for the new
         # backend and show/hide the Mixing dock.
-        self.generation_dock.rebuild_schema_form()
+        self.settings_dock.rebuild_schema_form()
         self._sync_mixing_dock()
         self._sync_voice_clone_dock()
         self._update_start_btn_text()
@@ -399,6 +445,13 @@ class QtTTSApp(QMainWindow):
         self.engine.worker.run_coro(self.engine.init_pipeline_async(new_lang_code))
 
     def _update_start_btn_text(self) -> None:
+        # Item 3 ("Consolidated action bar"): once the document has any
+        # clips at all, Generate always runs the dirty-scoped batch path
+        # (see on_generate_clicked) regardless of the JIT setting below, so
+        # the button label stops describing JIT/Standard mode entirely.
+        if self.document.clips:
+            self.start_btn.setText("Generate")
+            return
         will_stream = self.jit_enabled and self.backend.capabilities.supports_jit_streaming
         self.start_btn.setText("Start Real-time JIT" if will_stream else "Start Generation")
 
@@ -476,11 +529,11 @@ class QtTTSApp(QMainWindow):
         self.start_btn.setEnabled(not is_running)
         self.preview_btn.setEnabled(not is_running)
         self.cancel_btn.setEnabled(is_running)
-        threads_widget = self.generation_dock.schema_form.widget_for("num_threads")
+        threads_widget = self.settings_dock.schema_form.widget_for("num_threads")
         if threads_widget is not None:
             threads_widget.setEnabled(not is_running)
-        self.generation_dock.volume_spin.setEnabled(not is_running)
-        self.generation_dock.pitch_spin.setEnabled(not is_running)
+        self.settings_dock.volume_spin.setEnabled(not is_running)
+        self.settings_dock.pitch_spin.setEnabled(not is_running)
         if not is_running:
             self.progress_bar.setValue(0 if self.engine.cancel_event.is_set() else 100)
 
@@ -539,6 +592,95 @@ class QtTTSApp(QMainWindow):
 
     # --- start/cancel ------------------------------
 
+    def on_generate_clicked(self) -> None:
+        """The action bar's single Generate entry point (item 3,
+        "Consolidated action bar + batch dirty-scoped generation"). A
+        document with no clips yet (nobody's ever assigned a character to
+        any text) falls back to today's whole-document `start_conversion()`
+        unchanged; a document with clips dispatches the dirty-scoped batch
+        path instead, regardless of whether text has ever been generated
+        for it before."""
+        if not self.document.clips:
+            self.start_conversion()
+            return
+
+        dirty = self.document.dirty_clips()
+        if not dirty:
+            QMessageBox.information(self, "Up to date", "All clips are already generated.")
+            return
+
+        # Flagged product decision (DAW-for-text roadmap, cross-workstream
+        # resolutions): once a document has any clips, Generate always runs
+        # the dirty-scoped batch path below - even if JIT streaming is
+        # enabled in Settings. JIT has no per-clip/Segment output shape, so
+        # it stays reachable only via the no-clips-yet fallback above. This
+        # is a deliberate, confirmed behavior change for JIT users, not an
+        # oversight.
+        self.timeline_dock.generate_dirty_clips_requested()
+
+    def on_batch_generation_progress(self, completed: int, total: int, current_clip_label: str) -> None:
+        self.progress_bar.setValue(int((completed / total) * 100) if total else 0)
+        if current_clip_label:
+            self.detail_label.setText(f"Generated {completed}/{total} clips ({current_clip_label})")
+        else:
+            self.detail_label.setText(f"Generating {total} clip(s)...")
+
+    def on_batch_generation_finished(self, succeeded: int, failed: int, failed_clip_ids: list) -> None:
+        total = succeeded + failed
+        if failed == 0:
+            self.status_label.setText(f"Generated {succeeded} clip(s).")
+            self.status_label.setStyleSheet("color: gray;")
+        elif succeeded == 0:
+            # Total failure - nothing succeeded at all - uses the same red
+            # already used for a critical/error status elsewhere in this
+            # file (on_engine_status, _on_clip_generation_finished).
+            self.status_label.setText(f"Batch generation failed for all {failed} clip(s).")
+            self.status_label.setStyleSheet("color: #ff5555;")
+        else:
+            # Partial failure - reuse cancel_conversion's existing warning
+            # color rather than inventing a new one.
+            self.status_label.setText(f"Generated {succeeded} of {total} clips ({failed} failed)")
+            self.status_label.setStyleSheet("color: orange;")
+
+    def auto_split_and_generate(self) -> None:
+        """Item 7 ("Auto-split on generation + combined-vs-separate clip
+        generation") of the DAW-for-text remaining-work roadmap: turns every
+        `[Speaker:FX]:`-tagged span in the document (and, if
+        `auto_split_by_paragraph` is on, each span's paragraph-separated
+        sub-ranges too) into clips, then batch-generates them via item 3's
+        machinery, reused unmodified. Same one-job-at-a-time guard every
+        other generation trigger already uses."""
+        if self.cancel_btn.isEnabled():
+            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before auto-splitting.")
+            return
+
+        triples, unmatched = plan_auto_split_clips(
+            self.document, split_by_paragraph=self.settings.get("auto_split_by_paragraph", False)
+        )
+
+        if unmatched:
+            names = ", ".join(sorted(set(unmatched)))
+            QMessageBox.warning(
+                self, "Unmatched speaker names",
+                f"No character found for: {names}. Those blocks were skipped.",
+            )
+
+        if not triples:
+            QMessageBox.information(self, "Nothing to split", "No taggable text found to auto-split.")
+            return
+
+        # Ascending start order, applied against the same unchanging
+        # document.text - safe per assign_character_to_range's docstring,
+        # since none of these commands are text edits (see auto_split.py's
+        # module docstring for the full reasoning).
+        for start, end, character_id in triples:
+            self.document.undo_stack.push(AssignCharacterCommand(start, end, character_id))
+
+        self.schedule_save()
+        self.refresh_timeline()
+
+        self.timeline_dock.generate_dirty_clips_requested()
+
     def start_conversion(self) -> None:
         if self.generation_dock.using_file_tab():
             fpath = self.generation_dock.get_file_path()
@@ -575,6 +717,27 @@ class QtTTSApp(QMainWindow):
         self.engine.cancel()
         self.status_label.setText("Cancelling... waiting for workers...")
         self.status_label.setStyleSheet("color: orange;")
+
+    # --- undo/redo (item 4, "Undo/redo") -----------------------------------
+
+    def undo(self) -> None:
+        self._undo_or_redo(self.document.undo_stack.undo)
+
+    def redo(self) -> None:
+        self._undo_or_redo(self.document.undo_stack.redo)
+
+    def _undo_or_redo(self, stack_method) -> None:
+        stack_method()
+        # TextEditCommand.do/undo both mutate app.document.text directly,
+        # but the TranscriptEditor widget has its own internal text buffer -
+        # it isn't a live view of Document.text - so it needs an explicit
+        # resync. load_text is the established "set text without treating it
+        # as a new edit" method (also used to seed the widget at
+        # construction), so this doesn't loop back into another
+        # TextEditCommand push.
+        self.generation_dock.text_entry.load_text(self.document.text)
+        self.refresh_timeline()
+        self.schedule_save()
 
     # --- lifecycle -----------------------------------------------------------
 

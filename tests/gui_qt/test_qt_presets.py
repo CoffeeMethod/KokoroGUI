@@ -11,7 +11,7 @@ def _stub_get_text(monkeypatch, value):
 
 def test_save_generation_preset_writes_expected_keys(qt_app, monkeypatch):
     _stub_get_text(monkeypatch, "MyPreset")
-    qt_app.generation_dock.schema_form.set_values({"voice": "af_bella", "speed": 1.4})
+    qt_app.settings_dock.schema_form.set_values({"voice": "af_bella", "speed": 1.4})
     qt_app.generation_dock._save_preset_dialog()
 
     import kokoro_gui.qt.app as qt_app_module
@@ -27,10 +27,10 @@ def test_save_generation_preset_writes_expected_keys(qt_app, monkeypatch):
 
 def test_load_generation_preset_applies_values(qt_app, monkeypatch):
     _stub_get_text(monkeypatch, "SpeedyBella")
-    qt_app.generation_dock.schema_form.set_values({"voice": "af_bella", "speed": 1.6})
+    qt_app.settings_dock.schema_form.set_values({"voice": "af_bella", "speed": 1.6})
     qt_app.generation_dock._save_preset_dialog()
 
-    qt_app.generation_dock.schema_form.set_values({"voice": "af_heart", "speed": 1.0})
+    qt_app.settings_dock.schema_form.set_values({"voice": "af_heart", "speed": 1.0})
     qt_app.generation_dock.refresh_presets()
     qt_app.generation_dock._on_preset_selected("SpeedyBella")
 
@@ -63,4 +63,4 @@ def test_load_fx_preset_applies_values_and_syncs_gen_combo(qt_app, monkeypatch):
     qt_app.fx_dock.load_preset("LoudFX")
 
     assert qt_app.fx_dock._value_widgets["gain_db"].value() == 9.0
-    assert qt_app.generation_dock.fx_preset_combo.currentText() == "LoudFX"
+    assert qt_app.settings_dock.fx_preset_combo.currentText() == "LoudFX"

@@ -261,8 +261,8 @@ class VoiceCloneDock(QDockWidget):
         self.transcript_edit.setPlainText(Audio8ReferenceStore.get_transcript(name))
 
     def refresh_list(self) -> None:
-        if hasattr(self.app, "generation_dock") and self.app.generation_dock is not None:
-            self.app.generation_dock.refresh_voice_choices()
+        if hasattr(self.app, "settings_dock") and self.app.settings_dock is not None:
+            self.app.settings_dock.refresh_voice_choices()
 
         while self._list_layout.count():
             item = self._list_layout.takeAt(0)

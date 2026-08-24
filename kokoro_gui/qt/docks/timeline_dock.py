@@ -14,33 +14,67 @@ preview/mix flow already establishes.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QDockWidget, QMessageBox
+import threading
 
-from kokoro_gui.daw.dirty import compute_expected_cache_hash
-from kokoro_gui.daw.models import Segment
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (
+    QComboBox, QDialog, QDockWidget, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit,
+    QPushButton, QVBoxLayout,
+)
+
+from kokoro_gui.daw.dirty import build_segments_from_results, compute_expected_cache_hash
+from kokoro_gui.daw.undo import AssignCharacterCommand, MoveClipCommand, ReassignTrackCommand, SetClipFxCommand, TextEditCommand
+from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, filter_allowed_keys
 from kokoro_gui.qt.timeline_view import TimelineView
 
 
 class TimelineDock(QDockWidget):
     clipGenerationFinished = Signal(str, bool, str)
 
+    # Item 3 ("Consolidated action bar + batch dirty-scoped generation") of
+    # the DAW-for-text remaining-work roadmap. batchGenerationProgress:
+    # (completed_count, total_count, current_clip_label). batchGenerationFinished:
+    # (succeeded_count, failed_count, failed_clip_ids) - app.py connects both
+    # to update the existing status_label/progress_bar rather than routing
+    # through EngineSignalBridge, whose shape is built around a single
+    # character-throughput run with no per-clip identity.
+    batchGenerationProgress = Signal(int, int, str)
+    batchGenerationFinished = Signal(int, int, list)
+
+    # Internal-only, bare signal: marshals a completed batch's raw outcomes
+    # from the background engine-worker thread (where future.add_done_callback
+    # runs its callback) onto the GUI thread, same reasoning as
+    # clipGenerationFinished/_pending_results below - document mutation and
+    # schedule_save()/refresh_timeline() must happen on the GUI thread.
+    _batchGenerationRaw = Signal()
+
     def __init__(self, app, parent=None):
         super().__init__("Timeline", parent)
         self.setObjectName("dock_timeline")
         self.app = app
 
-        self.timeline_view = TimelineView()
+        self.timeline_view = TimelineView(selection_model=self.app.selection)
         self.timeline_view.generateClipRequested.connect(self.on_generate_clip_requested)
+        self.timeline_view.fxPresetRequested.connect(self.on_fx_preset_requested)
+        self.timeline_view.clipDragReassigned.connect(self.on_clip_drag_reassigned)
+        self.timeline_view.subRangeTtsRequested.connect(self.on_sub_range_tts_requested)
         self.setWidget(self.timeline_view)
 
         self.clipGenerationFinished.connect(self._on_clip_generation_finished)
+        self._batchGenerationRaw.connect(self._on_batch_generation_raw)
 
         # (results, expected_cache_hash) for a clip id whose generation
         # future hasn't been picked up by _on_clip_generation_finished yet -
         # avoids widening clipGenerationFinished's argument types just to
         # carry the result list across the thread-safe emit/handle boundary.
         self._pending_results: dict = {}
+
+        # {"outcomes": [...], "expected_hashes": {clip_id: hash}} for a
+        # batch whose future hasn't been picked up by
+        # _on_batch_generation_raw yet - same reasoning as _pending_results.
+        self._pending_batch: dict | None = None
+        self._batch_progress_lock = threading.Lock()
+        self._batch_completed = 0
 
         self.refresh()
 
@@ -85,19 +119,253 @@ class TimelineDock(QDockWidget):
         clip = self.app.document.get_clip(clip_id)
         if success and clip is not None:
             results, expected_hash = self._pending_results.pop(clip_id)
-            # enumerate(results) for order_index, NOT each dict's "seg_idx" -
-            # process_chunk_task sets seg_idx to the same outer chunk index
-            # (always 0 here) for every sub-segment of one call; using it
-            # directly would give every Segment order_index=0, breaking
-            # dirty.is_clip_dirty's segment-count comparison.
-            clip.segments = [
-                Segment(order_index=i, text=result["text"], cache_key=expected_hash,
-                        audio_path=result["path"], duration=result["duration"])
-                for i, result in enumerate(results)
-            ]
+            clip.segments = build_segments_from_results(expected_hash, results)
             self.app.schedule_save()
             self.app.refresh_timeline()
         elif not success:
             self._pending_results.pop(clip_id, None)
             self.app.status_label.setText(f"Clip generation failed: {error}")
             self.app.status_label.setStyleSheet("color: #ff5555;")
+
+    # -- per-clip FX preset menu (item 5, "Per-clip FX button") --------------
+
+    def on_fx_preset_requested(self, clip_id: str, preset_name: str) -> None:
+        """Handles `TimelineView.fxPresetRequested` - an empty `preset_name`
+        is the "Clear FX" case. Pushed through `SetClipFxCommand`
+        (kokoro_gui/daw/undo.py) rather than a direct `clip.fx_override =`
+        mutation, so this action is undoable like every other document edit
+        (item 4). `Clip.fx_override` is a resolved FX-values dict, not a
+        preset name - resolved here the same way every other FX-preset site
+        in this codebase does (`_assemble_clip_config`, `FXDock`'s own
+        preset loading), so the override survives the source preset later
+        being renamed or deleted."""
+        clip = self.app.document.get_clip(clip_id)
+        if clip is None:
+            return
+
+        if not preset_name:
+            fx_values = None
+        else:
+            preset = self.app.engine.load_fx_preset(preset_name)
+            fx_values = filter_allowed_keys(preset, ALLOWED_FX_PRESET_KEYS) if preset else None
+
+        self.app.document.undo_stack.push(SetClipFxCommand(clip_id, fx_values))
+        self.app.schedule_save()
+        self.app.refresh_timeline()
+
+    # -- drag-to-reassign (item 8, "Drag-to-reassign a clip to a different
+    # track") ------------------------------------------------------------
+
+    def on_clip_drag_reassigned(self, clip_id: str, target_track_id: str, should_reassign_character: bool) -> None:
+        """Handles `TimelineView.clipDragReassigned`. `TimelineView` only
+        ever hands over bare ids and the already-resolved Reassign/Just-Move
+        choice (Q9) - it never touches `self.app.document` itself, keeping
+        it app-independent per this file's module docstring - so clip/track
+        are re-resolved fresh here before pushing the actual undoable
+        command (`MoveClipCommand` for "just move", `ReassignTrackCommand`
+        for "reassign", per item 4)."""
+        clip = self.app.document.get_clip(clip_id)
+        target_track = self.app.document.get_track(target_track_id)
+        if clip is None or target_track is None:
+            return
+
+        if should_reassign_character:
+            command = ReassignTrackCommand(clip_id, target_track_id, target_track.character_id)
+        else:
+            command = MoveClipCommand(clip_id, target_track_id)
+
+        self.app.document.undo_stack.push(command)
+        self.app.schedule_save()
+        self.app.refresh_timeline()
+
+    # -- sub-range TTS replacement (item 9, "Sub-range TTS replacement") -----
+    # Per Q27: any sub-range of any clip (including imported audio) can be
+    # carved out and replaced by fresh TTS under ANY character, not
+    # necessarily the clip's own. `assign_character_to_range` is already the
+    # split-or-create primitive for this (tested by
+    # tests/daw/test_assign_character.py) - the only new work here is the
+    # dialog and correctly sequencing a real text edit (if the user edits
+    # the sub-range's transcript) before the character assignment.
+
+    def _build_sub_range_dialog(self, clip, original_text: str) -> QDialog:
+        """Split out from `on_sub_range_tts_requested` so tests can build and
+        inspect/drive the dialog without ever calling the blocking `.exec()`
+        themselves - same precedent as `TimelineView._build_context_menu`/
+        `_build_fx_menu`. Widgets are found back via `QDialog.findChild` by
+        type (there's exactly one `QPlainTextEdit` and one `QComboBox` in
+        this dialog), the same way a monkeypatched `.exec()` can reach in and
+        supply canned "user typed X and picked character Y" input."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Replace with TTS")
+        layout = QVBoxLayout(dialog)
+
+        layout.addWidget(QLabel("Text:"))
+        text_edit = QPlainTextEdit(original_text)
+        layout.addWidget(text_edit)
+
+        layout.addWidget(QLabel("Character:"))
+        character_combo = QComboBox()
+        default_index = 0
+        for index, character in enumerate(self.app.document.characters):
+            character_combo.addItem(character.name, character.id)
+            if character.id == clip.character_id:
+                default_index = index
+        if character_combo.count():
+            character_combo.setCurrentIndex(default_index)
+        layout.addWidget(character_combo)
+
+        button_row = QHBoxLayout()
+        ok_btn = QPushButton("OK")
+        ok_btn.clicked.connect(dialog.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        button_row.addWidget(ok_btn)
+        button_row.addWidget(cancel_btn)
+        layout.addLayout(button_row)
+
+        return dialog
+
+    def on_sub_range_tts_requested(self, clip_id: str, sub_start: int, sub_end: int) -> None:
+        """Handles `TimelineView.subRangeTtsRequested`. `TimelineView` only
+        ever hands over the bare clip id and document-text offsets - it
+        never touches `self.app.document` itself (same app-independence
+        pattern every other signal on that widget already establishes), so
+        the clip is re-resolved here before showing the dialog.
+
+        On OK: if the dialog's (possibly edited) text differs from the
+        original sub-range text, a `TextEditCommand` for that exact
+        replacement is pushed FIRST - the new sub-range's end offset is then
+        recomputed from the edited text's actual length, not the original
+        `sub_end` (text length may have changed). Then an
+        `AssignCharacterCommand` carves out `[sub_start, sub_end)` under
+        whichever character was chosen (Q27: any character, not necessarily
+        the parent clip's) - `assign_character_to_range`'s existing split
+        logic already produces correct leftover fragments for the parent
+        clip's remainder, retaining its `source`/`original_audio_path`
+        unmodified. Cancel pushes nothing.
+        """
+        clip = self.app.document.get_clip(clip_id)
+        if clip is None:
+            return
+
+        document = self.app.document
+        original_text = document.text[sub_start:sub_end]
+        dialog = self._build_sub_range_dialog(clip, original_text)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        text_edit = dialog.findChild(QPlainTextEdit)
+        character_combo = dialog.findChild(QComboBox)
+        new_text = text_edit.toPlainText()
+        character_id = character_combo.currentData()
+
+        if new_text != original_text:
+            old_text = document.text
+            new_full_text = old_text[:sub_start] + new_text + old_text[sub_end:]
+            document.undo_stack.push(TextEditCommand(
+                position=sub_start,
+                chars_removed=sub_end - sub_start,
+                chars_added=len(new_text),
+                old_text=old_text,
+                new_text=new_full_text,
+            ))
+            sub_end = sub_start + len(new_text)
+
+        if sub_end > sub_start:
+            document.undo_stack.push(AssignCharacterCommand(sub_start, sub_end, character_id))
+
+        self.app.schedule_save()
+        self.app.generation_dock.text_entry.load_text(document.text)
+        self.app.refresh_timeline()
+        self.generate_dirty_clips_requested()
+
+    # -- batch dirty-scoped Generate (item 3) --------------------------------
+
+    def generate_dirty_clips_requested(self) -> None:
+        """Dispatches `KokoroEngine.generate_dirty_clips` for every clip
+        `Document.dirty_clips()` currently reports as stale. Guarded by the
+        same one-job-at-a-time check `on_generate_clip_requested` already
+        uses. Callers (`QtTTSApp.on_generate_clicked`) are expected to have
+        already checked `dirty_clips()` themselves for the "nothing to do"
+        message - this method silently no-ops on an empty dirty list so it
+        stays safe to call directly too."""
+        if self.app.cancel_btn.isEnabled():
+            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before generating.")
+            return
+
+        dirty = self.app.document.dirty_clips()
+        if not dirty:
+            return
+
+        clips_with_configs = []
+        expected_hashes = {}
+        for clip in dirty:
+            text = self.app.document.clip_text(clip)
+            config = self.app._assemble_clip_config(clip)
+            clips_with_configs.append((clip.id, text, config))
+            expected_hashes[clip.id] = compute_expected_cache_hash(text, config)
+
+        total = len(clips_with_configs)
+        self._batch_completed = 0
+        self.app.set_ui_state(True)
+        self.batchGenerationProgress.emit(0, total, "")
+
+        def _on_clip_progress(clip_id, _success):
+            with self._batch_progress_lock:
+                self._batch_completed += 1
+                completed = self._batch_completed
+            self.batchGenerationProgress.emit(completed, total, clip_id)
+
+        def _done(future):
+            try:
+                outcomes = future.result()
+            except Exception as e:
+                # An exception here means the batch never even ran a single
+                # clip (e.g. the coroutine itself failed to schedule) -
+                # generate_dirty_clips already catches every per-clip
+                # exception internally via return_exceptions=True, so this
+                # branch is the "total failure" case, not a per-clip one.
+                outcomes = [
+                    {"clip_id": cid, "success": False, "results": [], "error": str(e), "cancelled": False}
+                    for cid, _text, _cfg in clips_with_configs
+                ]
+
+            self._pending_batch = {"outcomes": outcomes, "expected_hashes": expected_hashes}
+            self._batchGenerationRaw.emit()
+
+        future = self.app.engine.worker.run_coro(
+            self.app.engine.generate_dirty_clips(clips_with_configs, progress_callback=_on_clip_progress)
+        )
+        future.add_done_callback(_done)
+
+    def _on_batch_generation_raw(self) -> None:
+        self.app.set_ui_state(False)
+
+        pending = self._pending_batch
+        self._pending_batch = None
+        if pending is None:
+            return
+
+        succeeded_ids = []
+        failed_ids = []
+        any_segments_updated = False
+
+        for outcome in pending["outcomes"]:
+            clip_id = outcome["clip_id"]
+            clip = self.app.document.get_clip(clip_id)
+            if outcome["success"] and clip is not None:
+                expected_hash = pending["expected_hashes"].get(clip_id)
+                clip.segments = build_segments_from_results(expected_hash, outcome["results"])
+                succeeded_ids.append(clip_id)
+                any_segments_updated = True
+            else:
+                # Failed and cancelled clips alike: leave .segments
+                # untouched (still whatever they were before this batch -
+                # possibly empty/dirty, possibly stale-but-present).
+                failed_ids.append(clip_id)
+
+        if any_segments_updated:
+            self.app.schedule_save()
+            self.app.refresh_timeline()
+
+        self.batchGenerationFinished.emit(len(succeeded_ids), len(failed_ids), failed_ids)

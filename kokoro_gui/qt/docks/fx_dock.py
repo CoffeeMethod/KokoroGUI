@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 import kokoro_gui.qt.app as qt_app_module
 from kokoro_gui.qt import spec
+from kokoro_gui.qt.fx_presets import list_fx_preset_names
 
 
 class FXDock(QDockWidget):
@@ -138,17 +139,14 @@ class FXDock(QDockWidget):
     # --- presets (presets/fx/*.json, shared with Tk) ----------------------
 
     def refresh_presets(self) -> None:
-        presets = ["Select FX Preset..."]
-        if os.path.exists(qt_app_module.FX_PRESETS_DIR):
-            files = [f for f in os.listdir(qt_app_module.FX_PRESETS_DIR) if f.endswith(".json")]
-            presets.extend(f[:-5] for f in files)
+        presets = ["Select FX Preset..."] + list_fx_preset_names()
         self.preset_combo.blockSignals(True)
         self.preset_combo.clear()
         self.preset_combo.addItems(presets)
         self.preset_combo.setCurrentText("Select FX Preset...")
         self.preset_combo.blockSignals(False)
-        if hasattr(self.app, "generation_dock") and self.app.generation_dock is not None:
-            self.app.generation_dock.refresh_fx_presets()
+        if hasattr(self.app, "settings_dock") and self.app.settings_dock is not None:
+            self.app.settings_dock.refresh_fx_presets()
 
     def _save_preset_dialog(self) -> None:
         name, ok = QInputDialog.getText(self, "Save FX Preset", "Enter FX preset name:")
@@ -185,10 +183,8 @@ class FXDock(QDockWidget):
             self.preset_combo.blockSignals(True)
             self.preset_combo.setCurrentText(safe_name)
             self.preset_combo.blockSignals(False)
-            if hasattr(self.app, "generation_dock") and self.app.generation_dock is not None:
-                self.app.generation_dock.fx_preset_combo.blockSignals(True)
-                self.app.generation_dock.fx_preset_combo.setCurrentText(safe_name)
-                self.app.generation_dock.fx_preset_combo.blockSignals(False)
+            if hasattr(self.app, "settings_dock") and self.app.settings_dock is not None:
+                self.app.settings_dock.set_fx_preset_display(safe_name)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load FX preset: {e}")
 

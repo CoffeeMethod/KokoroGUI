@@ -19,6 +19,7 @@ line, and `predict_segment_texts`, which mirrors that same method's
 """
 import re
 
+from kokoro_gui.daw.models import Segment
 from kokoro_gui.engine.audio_fx import clamp_pitch_semitones
 from kokoro_gui.engine.caching import compute_cache_key
 
@@ -75,3 +76,23 @@ def is_clip_dirty(clip, text: str, config: dict) -> bool:
     if len(clip.segments) != expected_count:
         return True
     return any(segment.cache_key != expected_hash for segment in clip.segments)
+
+
+def build_segments_from_results(expected_hash: str, results: list) -> list:
+    """Builds the `Segment` list for a clip from a `generate_clip_audio`/
+    `process_chunk_task` result list - factors out the exact construction
+    that was inlined once in `TimelineDock._on_clip_generation_finished`
+    (kokoro_gui/qt/docks/timeline_dock.py) so both the single-clip and
+    batch (item 3) Generate paths share one implementation.
+
+    `order_index` comes from `enumerate(results)`, NOT each result dict's
+    `seg_idx` field: every sub-segment of one `process_chunk_task` call
+    shares the same `seg_idx` (the chunk's outer index), so using it
+    directly would give every `Segment` in a multi-segment clip
+    `order_index=0`, breaking `is_clip_dirty`'s segment-count comparison.
+    """
+    return [
+        Segment(order_index=i, text=result["text"], cache_key=expected_hash,
+                audio_path=result["path"], duration=result["duration"])
+        for i, result in enumerate(results)
+    ]

@@ -149,8 +149,8 @@ class MixingDock(QDockWidget):
         voice_combo.blockSignals(False)
 
     def refresh_voice_lists(self) -> None:
-        if hasattr(self.app, "generation_dock") and self.app.generation_dock is not None:
-            self.app.generation_dock.refresh_voice_choices()
+        if hasattr(self.app, "settings_dock") and self.app.settings_dock is not None:
+            self.app.settings_dock.refresh_voice_choices()
         self._refresh_voice_list(self.lang_a_combo, self.voice_a_combo)
         self._refresh_voice_list(self.lang_b_combo, self.voice_b_combo)
 

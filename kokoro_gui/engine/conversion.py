@@ -162,6 +162,107 @@ class ConversionMixin:
         self.cancel_event.clear()
         return await asyncio.to_thread(self.process_chunk_task, (index, text, config), progress_callback)
 
+    async def generate_dirty_clips(self, clips_with_configs, progress_callback=None):
+        """Batch dirty-scoped generation for the DAW timeline's consolidated
+        "Generate" action (item 3 of the DAW-for-text remaining-work
+        roadmap). `clips_with_configs` is `list[(clip_id, text, config)]`,
+        one entry per `Document.dirty_clips()` clip already resolved into an
+        engine config by the caller (`kokoro_gui/qt/app.py`'s
+        `_assemble_clip_config`) - kept Document-agnostic on this side.
+
+        Assigns each entry a batch-local unique `index` via `enumerate()` -
+        required, not cosmetic: every clip's config in one batch shares the
+        same `filename`/`time_id`, and `process_chunk_task`'s output
+        filenames are `{filename}_{time_id}_part{index}_{sub_idx}.{fmt}`, so
+        reusing one `index` (e.g. always 0) across clips would collide on
+        disk.
+
+        Bounds concurrency with `asyncio.Semaphore(num_threads)` (read from
+        the first entry's config, defaulting to 1 if absent) wrapping
+        per-clip calls to the existing `generate_clip_audio` - not
+        reimplementing its voice-resolution/out_dir-creation/
+        cancel_event-clearing.
+
+        Gathers with `return_exceptions=True`: one clip's exception never
+        aborts the batch, mirroring `_process_text_async`'s existing policy
+        for chunk failures within a single run.
+
+        Cancel-mid-batch race (specific to batching, and the reason this
+        isn't just "call generate_clip_audio in a loop"):
+        `generate_clip_audio` unconditionally clears `self.cancel_event` as
+        its first action - correct for a lone call, but in a batch a clip
+        still queued behind a full semaphore when the user cancels
+        (`cancel_event.set()`) would otherwise reach its turn, clear the
+        shared event, and run to completion (and let everything queued
+        behind it run too) as if nothing had been cancelled. Each per-clip
+        wrapper checks `cancel_event.is_set()` immediately before calling
+        `generate_clip_audio` and skips the call entirely when set,
+        recording a distinct "cancelled" outcome instead of a generic
+        failure.
+
+        `progress_callback`, if given, is called once per completed clip as
+        `progress_callback(clip_id, success)` - deliberately NOT forwarded
+        into `generate_clip_audio`'s own char-level progress_callback (whose
+        `(char_count, snippet)` signature means something different); a
+        caller wanting per-clip batch progress (e.g. `TimelineDock`'s
+        `batchGenerationProgress` signal) gets one call per clip rather than
+        a burst of sub-segment character counts.
+
+        Returns one outcome dict per clip, in the same order as
+        `clips_with_configs`:
+        `{"clip_id", "success", "results", "error", "cancelled"}`.
+        """
+        if not clips_with_configs:
+            return []
+
+        num_threads = clips_with_configs[0][2].get("num_threads", 1) or 1
+        semaphore = asyncio.Semaphore(max(1, num_threads))
+
+        async def _run_one(index, clip_id, text, config):
+            async with semaphore:
+                if self.cancel_event.is_set():
+                    if progress_callback:
+                        progress_callback(clip_id, False)
+                    return {
+                        "clip_id": clip_id, "success": False, "results": [],
+                        "error": "Cancelled.", "cancelled": True,
+                    }
+                try:
+                    results = await self.generate_clip_audio((index, text, config))
+                    success = bool(results)
+                    error = "" if success else "Generation produced no audio (cancelled or empty text)."
+                    if progress_callback:
+                        progress_callback(clip_id, success)
+                    return {
+                        "clip_id": clip_id, "success": success, "results": results,
+                        "error": error, "cancelled": False,
+                    }
+                except Exception as e:
+                    if progress_callback:
+                        progress_callback(clip_id, False)
+                    return {
+                        "clip_id": clip_id, "success": False, "results": [],
+                        "error": str(e), "cancelled": False,
+                    }
+
+        tasks = [
+            _run_one(index, clip_id, text, config)
+            for index, (clip_id, text, config) in enumerate(clips_with_configs)
+        ]
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        outcomes = []
+        for i, result in enumerate(raw_results):
+            if isinstance(result, Exception):
+                clip_id = clips_with_configs[i][0]
+                outcomes.append({
+                    "clip_id": clip_id, "success": False, "results": [],
+                    "error": str(result), "cancelled": False,
+                })
+            else:
+                outcomes.append(result)
+        return outcomes
+
     async def smart_combine(self, file_paths, output_path, update_callback):
         def combine_worker():
             total_files = len(file_paths)

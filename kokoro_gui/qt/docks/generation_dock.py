@@ -1,5 +1,20 @@
-"""Generation dock: input source, voice/speed/output config, and the speaker
-presets (`presets/*.json`) that snapshot that config.
+"""Generation dock: input source, output config, Processing Options, and
+the speaker presets (`presets/*.json`) that snapshot the project-wide
+config.
+
+The schema-driven config fields and the hand-built Audio Control widgets
+(volume/pitch/FX-preset-combo/apply_fx/normalize/trim) moved to
+`kokoro_gui.qt.docks.settings_dock.SettingsDock` (item 2, "Settings panel
+rescoping", of the DAW-for-text redesign's remaining-work roadmap) - they're
+exactly the surface that needs to vary per clip/character, which this dock
+knows nothing about. This dock keeps the transcript editor/file-path tabs,
+the legacy `presets/*.json` combo (a distinct feature from
+`kokoro_gui.daw.models.Character` - don't conflate them), the Output group,
+and Processing Options, none of which is meaningfully scoped to a selection.
+Loading/saving a generation preset now reaches into `self.app.settings_dock`
+for the fields it actually touches, since the widgets live there - the
+preset combo always targets the project-wide ("none") state, same as it did
+before this dock had any notion of per-clip/character scoping.
 
 Reads `kokoro_gui.qt.app.PRESETS_DIR` qualified at call time (not imported by
 name) so tests can monkeypatch it into a tmp_path.
@@ -11,15 +26,13 @@ import os
 import re
 
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog,
+    QCheckBox, QComboBox, QDockWidget, QFileDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QMessageBox, QPushButton, QScrollArea,
     QTabWidget, QVBoxLayout, QWidget,
 )
 
 import kokoro_gui.qt.app as qt_app_module
-from kokoro_gui.qt import spec
-from kokoro_gui.qt.schema_form import SchemaFormWidget
 from kokoro_gui.qt.transcript_editor import TranscriptEditor
 
 
@@ -59,7 +72,7 @@ class GenerationDock(QDockWidget):
         self.tabs.addTab(file_tab, "Load File")
         layout.addWidget(input_group)
 
-        # --- Presets row ---
+        # --- Presets row (presets/*.json, always project-wide) ---
         preset_row = QHBoxLayout()
         self.preset_combo = QComboBox()
         self.preset_combo.currentTextChanged.connect(self._on_preset_selected)
@@ -72,13 +85,6 @@ class GenerationDock(QDockWidget):
         preset_row.addWidget(save_btn)
         preset_row.addWidget(refresh_btn)
         layout.addLayout(preset_row)
-
-        # --- Schema-driven config (workstream 1's payoff) ---
-        self.schema_group = QGroupBox("Configuration")
-        self.schema_layout = QVBoxLayout(self.schema_group)
-        self.schema_form: SchemaFormWidget | None = None
-        layout.addWidget(self.schema_group)
-        self._build_schema_form()
 
         # --- Output (not schema-covered, hand-built) ---
         out_group = QGroupBox("Output")
@@ -97,44 +103,6 @@ class GenerationDock(QDockWidget):
         out_form.addRow("Base Filename:", self.filename_edit)
         layout.addWidget(out_group)
 
-        # --- Audio control (volume/pitch - not schema-covered) ---
-        audio_group = QGroupBox("Audio Control")
-        audio_form = QFormLayout(audio_group)
-        self.volume_spin = QDoubleSpinBox()
-        self.volume_spin.setRange(0.1, 2.0)
-        self.volume_spin.setSingleStep(0.1)
-        self.volume_spin.setValue(self.app.settings.get("volume", 1.0))
-        audio_form.addRow("Volume:", self.volume_spin)
-
-        self.pitch_spin = QDoubleSpinBox()
-        self.pitch_spin.setRange(-12, 12)
-        self.pitch_spin.setSingleStep(1)
-        self.pitch_spin.setValue(self.app.settings.get("pitch", 0.0))
-        audio_form.addRow("Pitch (st):", self.pitch_spin)
-
-        fx_row = QWidget()
-        fx_row_layout = QHBoxLayout(fx_row)
-        fx_row_layout.setContentsMargins(0, 0, 0, 0)
-        self.fx_preset_combo = QComboBox()
-        self.fx_preset_combo.currentTextChanged.connect(self._on_fx_preset_selected)
-        self.apply_fx_check = QCheckBox("Apply")
-        self.apply_fx_check.setChecked(self.app.settings.get("apply_fx", True))
-        fx_row_layout.addWidget(self.fx_preset_combo, 1)
-        fx_row_layout.addWidget(self.apply_fx_check)
-        audio_form.addRow("FX Preset:", fx_row)
-
-        self.normalize_check = QCheckBox("Normalize")
-        self.normalize_check.setChecked(self.app.settings.get("normalize", False))
-        self.trim_check = QCheckBox("Trim Silence")
-        self.trim_check.setChecked(self.app.settings.get("trim", False))
-        toggles_row = QWidget()
-        toggles_layout = QHBoxLayout(toggles_row)
-        toggles_layout.setContentsMargins(0, 0, 0, 0)
-        toggles_layout.addWidget(self.normalize_check)
-        toggles_layout.addWidget(self.trim_check)
-        audio_form.addRow("", toggles_row)
-        layout.addWidget(audio_group)
-
         # --- Processing options ---
         proc_group = QGroupBox("Processing Options")
         proc_layout = QVBoxLayout(proc_group)
@@ -151,73 +119,33 @@ class GenerationDock(QDockWidget):
         proc_layout.addLayout(chk_row)
         layout.addWidget(proc_group)
 
+        # --- Auto-split (item 7, "Auto-split on generation + combined-vs-
+        # separate clip generation") ---
+        auto_split_row = QHBoxLayout()
+        self.auto_split_paragraph_check = QCheckBox("Split by paragraph")
+        self.auto_split_paragraph_check.setChecked(self.app.settings.get("auto_split_by_paragraph", False))
+        self.auto_split_btn = QPushButton("Auto-Split && Generate")
+        self.auto_split_btn.clicked.connect(self.app.auto_split_and_generate)
+        auto_split_row.addWidget(self.auto_split_paragraph_check)
+        auto_split_row.addWidget(self.auto_split_btn)
+        layout.addLayout(auto_split_row)
+
         layout.addStretch(1)
         self.setWidget(content)
 
         for w in (self.out_dir_edit, self.filename_edit):
             w.textChanged.connect(lambda _v: self.app.schedule_save())
-        for w in (self.volume_spin, self.pitch_spin):
-            w.valueChanged.connect(lambda _v: self.app.schedule_save())
-        for w in (self.apply_fx_check, self.normalize_check, self.trim_check,
-                  self.separate_check, self.combine_check, self.subtitles_check):
+        for w in (self.separate_check, self.combine_check, self.subtitles_check):
             w.toggled.connect(lambda _v: self.app.schedule_save())
+        # auto_split_by_paragraph isn't read back through get_state() the way
+        # the checkboxes above are (auto_split_and_generate reads it straight
+        # off self.app.settings, since it's not part of the per-generation
+        # config dict) - written immediately rather than left to the debounced
+        # schedule_save(), so a toggle-then-click in the same instant sees the
+        # new value rather than a stale one.
+        self.auto_split_paragraph_check.toggled.connect(self._on_auto_split_paragraph_toggled)
 
         self.refresh_presets()
-        self.refresh_fx_presets()
-
-    # --- schema form (rebuilt on engine switch) ------------------------
-
-    def _build_schema_form(self) -> None:
-        if self.schema_form is not None:
-            self.schema_layout.removeWidget(self.schema_form)
-            self.schema_form.deleteLater()
-
-        schema = self.app.backend.get_config_schema()
-        lang_code = self.app.settings.get("lang_code", "a")
-        voice_choices = [(v, v) for v in self.app.get_all_voices(lang_code)]
-        values = {
-            "lang_code": self.app.settings.get("lang_code", "a"),
-            "voice": self.app.settings.get("voice", "af_heart"),
-            "speed": self.app.settings.get("speed", 1.0),
-            "split_pattern": self.app.settings.get("split_pattern", r"\n+"),
-            "format": self.app.settings.get("format", "wav"),
-            "num_threads": self.app.settings.get("num_threads", 1),
-            "caching": self.app.settings.get("caching", True),
-        }
-        # "voice" is always GUI-resolved (app.get_all_voices, above) since no
-        # backend's schema declares a fixed voice list. "lang_code" is only
-        # GUI-resolved for a backend that leaves it choices=None (today:
-        # Kokoro/Dummy, whose language table - spec.LANGUAGES - is display
-        # data owned by this frontend, not engine data); a backend whose
-        # schema already declares its own lang_code choices (e.g. Audio8's
-        # 11-language list) keeps those instead of being overridden here.
-        overrides = {"voice": voice_choices}
-        lang_field = next((f for f in schema if f.key == "lang_code"), None)
-        if lang_field is not None and lang_field.choices is None:
-            overrides["lang_code"] = [(label, code) for label, code in spec.LANGUAGES.items()]
-        self.schema_form = SchemaFormWidget(
-            schema, values,
-            choices_overrides=overrides,
-            skip_keys={"lexicon"},
-            on_change=self._on_schema_field_changed,
-        )
-        self.schema_layout.addWidget(self.schema_form)
-
-    def rebuild_schema_form(self) -> None:
-        """Called by app.py's switch_engine - re-renders this dock's schema
-        fields for the newly-active backend."""
-        self._build_schema_form()
-
-    def refresh_voice_choices(self) -> None:
-        lang_code = self.schema_form.values().get("lang_code", "a")
-        voices = self.app.get_all_voices(lang_code)
-        current = self.schema_form.values().get("voice")
-        self.schema_form.set_choices("voice", [(v, v) for v in voices], current)
-
-    def _on_schema_field_changed(self, key: str, _value) -> None:
-        if key == "lang_code":
-            self.refresh_voice_choices()
-        self.app.schedule_save()
 
     # --- output/text helpers --------------------------------------------
 
@@ -251,14 +179,14 @@ class GenerationDock(QDockWidget):
     # --- state (feeds app._assemble_config) ------------------------------
 
     def get_state(self) -> dict:
-        state = dict(self.schema_form.values())
+        """Project-wide ("none") config values, merging `SettingsDock`'s
+        schema/Audio-Control fields (now owned by that dock) with this
+        dock's own Output/Processing Options widgets - same key shape this
+        method produced before those fields moved out."""
+        state = dict(self.app.settings_dock.get_state())
         state.update({
             "out_dir": self.out_dir_edit.text(),
             "filename": self.filename_edit.text(),
-            "volume": self.volume_spin.value(),
-            "pitch": self.pitch_spin.value(),
-            "normalize": self.normalize_check.isChecked(),
-            "trim_silence": self.trim_check.isChecked(),
             "separate": self.separate_check.isChecked(),
             "combine": self.combine_check.isChecked(),
             "export_subtitles": self.subtitles_check.isChecked(),
@@ -266,7 +194,11 @@ class GenerationDock(QDockWidget):
         return state
 
     def apply_fx_enabled(self) -> bool:
-        return self.apply_fx_check.isChecked()
+        return self.app.settings_dock.apply_fx_enabled()
+
+    def _on_auto_split_paragraph_toggled(self, checked: bool) -> None:
+        self.app.settings["auto_split_by_paragraph"] = checked
+        self.app.schedule_save()
 
     # --- presets (presets/*.json, shared with Tk) -------------------------
 
@@ -289,19 +221,7 @@ class GenerationDock(QDockWidget):
         if not name:
             return
 
-        state = self.get_state()
-        data = {
-            "voice": state.get("voice"),
-            "speed": state.get("speed"),
-            "volume": state.get("volume"),
-            "pitch": state.get("pitch"),
-            "split_pattern": state.get("split_pattern"),
-            "normalize": state.get("normalize"),
-            "trim": state.get("trim_silence"),
-            "format": state.get("format"),
-            "apply_fx": self.apply_fx_enabled(),
-            "fx_preset": self.fx_preset_combo.currentText(),
-        }
+        data = self.app.settings_dock.get_none_preset_values()
         fpath = os.path.join(qt_app_module.PRESETS_DIR, f"{name}.json")
         try:
             os.makedirs(qt_app_module.PRESETS_DIR, exist_ok=True)
@@ -326,46 +246,9 @@ class GenerationDock(QDockWidget):
             QMessageBox.critical(self, "Error", f"Failed to load preset: {e}")
             return
 
-        values = {}
-        if "voice" in data:
-            values["voice"] = data["voice"]
-        if "speed" in data:
-            values["speed"] = data["speed"]
-        if "split_pattern" in data:
-            values["split_pattern"] = data["split_pattern"]
-        if "format" in data:
-            values["format"] = data["format"]
-        if values:
-            self.schema_form.set_values(values)
-        if "volume" in data:
-            self.volume_spin.setValue(data["volume"])
-        if "pitch" in data:
-            self.pitch_spin.setValue(data["pitch"])
-        if "normalize" in data:
-            self.normalize_check.setChecked(data["normalize"])
-        if "trim" in data:
-            self.trim_check.setChecked(data["trim"])
-        if "apply_fx" in data:
-            self.apply_fx_check.setChecked(data["apply_fx"])
+        self.app.settings_dock.apply_none_preset_values(data)
+
         fx_name = data.get("fx_preset")
         if fx_name and fx_name != "Select FX Preset...":
             self.app.fx_dock.load_preset(fx_name)
-            self.fx_preset_combo.setCurrentText(fx_name)
-
-    # --- FX preset combo mirror (kept in sync with the FX dock's own combo) --
-
-    def refresh_fx_presets(self) -> None:
-        presets = ["Select FX Preset..."]
-        if os.path.exists(qt_app_module.FX_PRESETS_DIR):
-            files = [f for f in os.listdir(qt_app_module.FX_PRESETS_DIR) if f.endswith(".json")]
-            presets.extend(f[:-5] for f in files)
-        self.fx_preset_combo.blockSignals(True)
-        self.fx_preset_combo.clear()
-        self.fx_preset_combo.addItems(presets)
-        self.fx_preset_combo.setCurrentText("Select FX Preset...")
-        self.fx_preset_combo.blockSignals(False)
-
-    def _on_fx_preset_selected(self, name: str) -> None:
-        if not name or name == "Select FX Preset...":
-            return
-        self.app.fx_dock.load_preset(name)
+            self.app.settings_dock.set_fx_preset_display(fx_name)

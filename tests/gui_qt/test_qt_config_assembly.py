@@ -10,7 +10,7 @@ def test_assembled_config_matches_mirrored_spec_keys(qt_app):
 
 
 def test_assembled_config_omits_fx_keys_when_apply_fx_off(qt_app):
-    qt_app.generation_dock.apply_fx_check.setChecked(False)
+    qt_app.settings_dock.apply_fx_check.setChecked(False)
     config = qt_app._assemble_config()
     assert set(config.keys()) == set(spec.GENERATION_BASE_KEYS)
     assert "reverb_enabled" not in config

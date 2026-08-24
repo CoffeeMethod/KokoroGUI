@@ -28,6 +28,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
+from kokoro_gui.daw.undo import UndoStack
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys
 
 # Small fixed palette cycled by migration.py when assigning default
@@ -152,6 +153,17 @@ class Document:
     tracks: list = field(default_factory=list)
     characters: list = field(default_factory=list)
     settings: dict = field(default_factory=dict)
+    # Runtime/session-only (item 4, "Undo/redo") - a `UndoStack` needs a
+    # reference to its owning `Document`, which a `field(default_factory=...)`
+    # can't capture (no access to `self` there), hence the `__post_init__`
+    # construction below instead. NEVER include this in
+    # `kokoro_gui/daw/serialization.py`'s `document_to_dict` (or any other
+    # persistence path) - undo history is not part of a saved project, it's
+    # this session's editing history only.
+    undo_stack: Optional[UndoStack] = field(default=None, init=False, repr=False)
+
+    def __post_init__(self):
+        self.undo_stack = UndoStack(self)
 
     # -- lookups -----------------------------------------------------------
 
@@ -159,6 +171,19 @@ class Document:
         if character_id is None:
             return None
         return next((c for c in self.characters if c.id == character_id), None)
+
+    def get_character_by_name(self, name: str) -> Optional[Character]:
+        """Case-insensitive, whitespace-stripped lookup by `Character.name`
+        - unlike `get_character`/`get_track`/`get_clip` above, this is a
+        name-based (not id-based) lookup, since a `[Speaker:FX]:` tag
+        (auto-split, item 7 of the DAW-for-text remaining-work roadmap)
+        names a character by its display name, not its id. Returns `None`
+        if no character's name matches, case-insensitively, ignoring
+        leading/trailing whitespace on both sides."""
+        if name is None:
+            return None
+        target = name.strip().lower()
+        return next((c for c in self.characters if c.name.strip().lower() == target), None)
 
     def get_track(self, track_id: Optional[str]) -> Optional[Track]:
         if track_id is None:

@@ -30,14 +30,17 @@ def test_switch_engine_rebuilds_schema_form_for_new_backend(qt_app):
     """The Generation dock's schema-driven fields must reflect the
     newly-active backend's schema, not stay frozen at whatever the first
     backend built."""
-    original_form = qt_app.generation_dock.schema_form
+    original_form = qt_app.settings_dock.schema_form
     qt_app.switch_engine("dummy")
-    assert qt_app.generation_dock.schema_form is not original_form
+    assert qt_app.settings_dock.schema_form is not original_form
 
     dummy_schema_keys = {f.key for f in qt_app.backend.get_config_schema()}
     assert "lexicon" not in dummy_schema_keys  # dummy backend has no lexicon field
-    rendered_keys = set(qt_app.generation_dock.schema_form.values().keys())
-    assert rendered_keys == dummy_schema_keys - {"lexicon"}
+    rendered_keys = set(qt_app.settings_dock.schema_form.values().keys())
+    # "pitch" is skip_keyed too - SettingsDock renders it via its own
+    # hand-built pitch_spin (Audio Control), not the schema form, to avoid
+    # two independent widgets fighting over the same override slot.
+    assert rendered_keys == dummy_schema_keys - {"lexicon", "pitch"}
 
 
 def test_switch_engine_refused_while_job_running(qt_app):

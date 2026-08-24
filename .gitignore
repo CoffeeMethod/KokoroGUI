@@ -181,3 +181,4 @@ cython_debug/
 /SECURITY_AUDIT.md
 /Claude/
 /.claude/
+document.json

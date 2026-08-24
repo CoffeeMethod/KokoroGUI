@@ -15,7 +15,13 @@ from kokoro_gui.daw.models import Character, Clip, Document, Segment, Track
 def document_to_dict(doc: Document) -> dict:
     """Plain-JSON-serializable shape for `doc` - dataclasses become dicts via
     `dataclasses.asdict`, which already handles the nested `Segment` objects
-    inside each `Clip`."""
+    inside each `Clip`.
+
+    Deliberately built field-by-field rather than via a blanket
+    `dataclasses.asdict(doc)` - this is what keeps `doc.undo_stack` (item 4,
+    "Undo/redo") out of the saved file for free: it's runtime/session-only
+    editing history, not part of the persisted project, and isn't even
+    JSON-serializable (it holds `Command` objects, not plain data)."""
     return {
         "text": doc.text,
         "clips": [dataclasses.asdict(c) for c in doc.clips],

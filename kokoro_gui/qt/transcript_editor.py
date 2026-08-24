@@ -13,9 +13,10 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from PySide6.QtCore import QMimeData
-from PySide6.QtGui import QColor, QSyntaxHighlighter, QTextCharFormat
+from PySide6.QtGui import QColor, QSyntaxHighlighter, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import QMenu, QTextEdit
 
+from kokoro_gui.daw.undo import AssignCharacterCommand, TextEditCommand
 from kokoro_gui.engine.text_extraction import find_character_fx_spans
 
 
@@ -112,6 +113,12 @@ class TranscriptEditor(QTextEdit):
     def __init__(self, app, parent=None):
         super().__init__(parent)
         self.app = app
+        # Item 4 ("Undo/redo"): text edits now route through
+        # `app.document.undo_stack` (see _on_contents_change below) instead
+        # of `Document.apply_text_change` directly - Qt's own built-in text
+        # undo/redo must never be listening at the same time, or Ctrl+Z would
+        # fight the new stack over the same keystroke.
+        self.setUndoRedoEnabled(False)
         self._suppress_contents_change = False
         # None outside of an active insertFromMimeData call; an int
         # accumulator while one is in progress, since a single paste can
@@ -119,9 +126,16 @@ class TranscriptEditor(QTextEdit):
         # selection, then inserting) and the *net* chars added is what
         # assign_character_to_range needs.
         self._paste_chars_accumulator: Optional[int] = None
+        # Item 1 ("Sync layer"): guards against _on_selection_model_changed's
+        # own setTextCursor() call bouncing straight back into
+        # _on_cursor_position_changed and re-selecting - same pattern as
+        # _suppress_contents_change above.
+        self._updating_from_model = False
 
         self._highlighter = CharacterFxHighlighter(self.document(), lambda: self.app.document)
         self.document().contentsChange.connect(self._on_contents_change)
+        self.cursorPositionChanged.connect(self._on_cursor_position_changed)
+        self.app.selection.changed.connect(self._on_selection_model_changed)
 
         self.load_text(self.app.document.text)
 
@@ -132,8 +146,14 @@ class TranscriptEditor(QTextEdit):
             self._paste_chars_accumulator += chars_added
         if self._suppress_contents_change:
             return
+        # app.document.text is still the pre-change text at this point in
+        # the signal handler - Qt's contentsChange doesn't hand over the
+        # inserted characters themselves, only position/counts, so this is
+        # the only place old_text is still available to snapshot.
+        old_text = self.app.document.text
         new_text = self.toPlainText()
-        self.app.document.apply_text_change(position, chars_removed, chars_added, new_text)
+        command = TextEditCommand(position, chars_removed, chars_added, old_text, new_text)
+        self.app.document.undo_stack.push(command)
         self.app.schedule_save()
         self.app.refresh_timeline()
 
@@ -148,6 +168,54 @@ class TranscriptEditor(QTextEdit):
         finally:
             self._suppress_contents_change = False
         self._highlighter.rehighlight()
+
+    # -- Selection sync (item 1, "Sync layer") ------------------------------
+
+    def _on_cursor_position_changed(self) -> None:
+        """Reacts to the built-in `QTextEdit.cursorPositionChanged` signal by
+        pushing the caret's current position/selection into `app.selection`,
+        skipped while we're the ones moving the cursor in response to a
+        selection made elsewhere (`_on_selection_model_changed` below)."""
+        if self._updating_from_model:
+            return
+        cursor = self.textCursor()
+        clip = self.app.document.clip_covering(cursor.selectionStart())
+        if clip is not None:
+            self.app.selection.select_clip(clip.id)
+        elif cursor.hasSelection():
+            self.app.selection.select_range(cursor.selectionStart(), cursor.selectionEnd())
+        else:
+            self.app.selection.clear()
+
+    def _on_selection_model_changed(self) -> None:
+        """Reacts to `app.selection.changed` by moving the caret to match a
+        clip selected elsewhere (e.g. a timeline click). Only clip selections
+        round-trip here - a range/character/none change didn't originate from
+        the timeline selecting a clip, so there's nothing for the transcript
+        to move to."""
+        clip_id = self.app.selection.selected_clip_id
+        if clip_id is None:
+            return
+        clip = self.app.document.get_clip(clip_id)
+        if clip is None:
+            return
+
+        cursor = self.textCursor()
+        if cursor.selectionStart() == clip.start_offset and cursor.selectionEnd() == clip.end_offset:
+            return  # Already there - avoid a redundant round-trip.
+
+        self._updating_from_model = True
+        try:
+            text_len = len(self.toPlainText())
+            start = max(0, min(clip.start_offset, text_len))
+            end = max(0, min(clip.end_offset, text_len))
+            new_cursor = QTextCursor(self.document())
+            new_cursor.setPosition(start)
+            new_cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+            self.setTextCursor(new_cursor)
+            self.ensureCursorVisible()
+        finally:
+            self._updating_from_model = False
 
     # -- Characters menu -----------------------------------------------------
 
@@ -174,7 +242,8 @@ class TranscriptEditor(QTextEdit):
         cursor = self.textCursor()
         if not cursor.hasSelection():
             return
-        self.app.document.assign_character_to_range(cursor.selectionStart(), cursor.selectionEnd(), character_id)
+        command = AssignCharacterCommand(cursor.selectionStart(), cursor.selectionEnd(), character_id)
+        self.app.document.undo_stack.push(command)
         self._highlighter.rehighlight()
         self.app.schedule_save()
         self.app.refresh_timeline()
@@ -210,9 +279,10 @@ class TranscriptEditor(QTextEdit):
 
         splits_enabled = self.app.settings.get("character_fx_paste_splits", True)
         if source_character_id and splits_enabled and chars_added:
-            self.app.document.assign_character_to_range(
+            command = AssignCharacterCommand(
                 insert_position, insert_position + chars_added, source_character_id
             )
+            self.app.document.undo_stack.push(command)
             self._highlighter.rehighlight()
             self.app.refresh_timeline()
         # Else: apply_text_change's existing "insertion inside an existing

@@ -74,7 +74,7 @@ def test_save_reference_appears_in_generation_voice_dropdown(qt_app, monkeypatch
 
     assert Audio8ReferenceStore.list_references() == ["Fred"]
 
-    combo = qt_app.generation_dock.schema_form.widget_for("voice")
+    combo = qt_app.settings_dock.schema_form.widget_for("voice")
     items = [combo.itemData(i) for i in range(combo.count())]
     assert "Fred" in items
 
@@ -104,7 +104,7 @@ def test_delete_reference_removes_it_and_dropdown_entry(qt_app, monkeypatch, tmp
     dock.delete_reference("Ghost")
 
     assert Audio8ReferenceStore.list_references() == []
-    combo = qt_app.generation_dock.schema_form.widget_for("voice")
+    combo = qt_app.settings_dock.schema_form.widget_for("voice")
     items = [combo.itemData(i) for i in range(combo.count())]
     assert "Ghost" not in items
 
