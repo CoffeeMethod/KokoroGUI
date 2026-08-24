@@ -5,6 +5,7 @@ and the compute_cache_key helper it's built on
 This is the ONLY test module allowed to pass caching=True - see
 tests/test_meta_caching_policy.py for the enforced guard.
 """
+import asyncio
 import os
 
 import numpy as np
@@ -56,6 +57,29 @@ def test_cache_hit_skips_pipeline_call(engine, isolated_dirs, make_config, monke
     monkeypatch.setattr(kokoro_engine, "get_thread_pipeline", _boom)
 
     results = engine.process_chunk_task((0, text, config), None)
+
+    assert len(results) == 1
+    assert os.path.exists(results[0]["path"])
+
+
+def test_generate_clip_audio_cache_hits_like_batch_path(engine, isolated_dirs, make_config, monkeypatch):
+    # kokoro_gui/engine/conversion.py's generate_clip_audio (the per-clip
+    # Generate entry point - Claude/PLAN_daw_ui_ux_redesign.md) is a thin
+    # asyncio.to_thread wrapper around process_chunk_task; confirms it
+    # doesn't interfere with that method's own already-tested cache-hit path.
+    config = make_config(caching=True)
+    text = "Hello world."
+    h = _hash(text, config)
+
+    audio = (0.1 * np.sin(2 * np.pi * 220 * np.arange(1200) / 24000)).astype(np.float32)
+    sf.write(str(isolated_dirs.cache_dir / f"{h}_0.wav"), audio, 24000)
+
+    def _boom(lang_code="a"):
+        raise AssertionError("pipeline should not be called on a cache hit")
+
+    monkeypatch.setattr(kokoro_engine, "get_thread_pipeline", _boom)
+
+    results = asyncio.run(engine.generate_clip_audio((0, text, config)))
 
     assert len(results) == 1
     assert os.path.exists(results[0]["path"])

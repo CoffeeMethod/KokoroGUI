@@ -132,6 +132,36 @@ class ConversionMixin:
 
         return await asyncio.to_thread(_gen)
 
+    async def generate_clip_audio(self, chunk_data, progress_callback=None):
+        """Generates (or cache-hits) audio for a single already-resolved
+        `(index, text, config)` chunk via the existing, unmodified
+        `process_chunk_task` (kokoro_gui/engine/caching.py) - the per-clip
+        Generate entry point for the DAW redesign's timeline dock
+        (Claude/PLAN_daw_ui_ux_redesign.md). A thin wrapper, not a
+        reimplementation: `process_chunk_task`'s signature and `chunk_data`
+        shape are untouched.
+
+        Replicates three things every other caller of `process_chunk_task`
+        (namely `start_conversion`/`_process_text_async`) already does
+        before dispatch, which a lone per-clip call has no one else to do
+        for it:
+        - Resolves `config['voice']` - `process_chunk_task` uses it verbatim
+          in both the cache key and the pipeline call, so skipping this
+          would silently break custom voices.
+        - Creates `config['out_dir']` if it doesn't exist yet - a document
+          whose output folder was never created by a prior whole-document
+          run would otherwise crash on write.
+        - Clears `self.cancel_event` - left set by an earlier cancelled run,
+          `process_chunk_task`'s first line would otherwise silently return
+          `[]` for what looks like a fresh request.
+        """
+        index, text, config = chunk_data
+        config = dict(config)
+        config["voice"] = self.resolve_voice_path(config["voice"])
+        os.makedirs(config["out_dir"], exist_ok=True)
+        self.cancel_event.clear()
+        return await asyncio.to_thread(self.process_chunk_task, (index, text, config), progress_callback)
+
     async def smart_combine(self, file_paths, output_path, update_callback):
         def combine_worker():
             total_files = len(file_paths)

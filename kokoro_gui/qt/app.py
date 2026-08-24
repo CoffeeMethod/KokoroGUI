@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from kokoro_engine import KokoroEngine
 from kokoro_gui.daw import serialization as document_serialization
+from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, filter_allowed_keys
 from kokoro_gui.engine.time_utils import format_duration
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.qt import document_state
@@ -293,6 +294,60 @@ class QtTTSApp(QMainWindow):
         }
         if self.generation_dock.apply_fx_enabled():
             config.update(self.fx_dock.get_state())
+        return config
+
+    def _assemble_clip_config(self, clip) -> dict:
+        """The config dict for a per-clip Generate action (Workstream 3 of
+        Claude/PLAN_daw_ui_ux_redesign.md) - generic app-level defaults
+        (out_dir/filename/lang_code/engine_id/caching/num_threads/etc, the
+        same source `_assemble_config` reads) with `clip`'s
+        character/override settings merged on top, so the clip's own values
+        win. Defaults must come first: `process_chunk_task` reads
+        `config['voice']`/`config['split_pattern']` via direct dict
+        indexing, not `.get`, so a clip with no character (an empty
+        `effective_config_for_clip()`) must still end up with usable
+        defaults rather than a KeyError deep in a background thread.
+        """
+        gen_state = self.generation_dock.get_state()
+        config = {
+            "engine_id": self.backend.id,
+            "lang_code": gen_state["lang_code"],
+            "voice": gen_state["voice"],
+            "speed": gen_state["speed"],
+            "split_pattern": gen_state["split_pattern"],
+            "format": gen_state["format"],
+            "out_dir": gen_state["out_dir"],
+            "caching": gen_state["caching"],
+            "time_id": time.strftime(self.timecode_format),
+            "num_threads": gen_state["num_threads"],
+            "volume": gen_state["volume"],
+            "pitch": gen_state["pitch"],
+            "normalize": gen_state["normalize"],
+            "trim_silence": gen_state["trim_silence"],
+            "filename": os.path.basename(gen_state["filename"]),
+        }
+
+        clip_config = dict(self.document.effective_config_for_clip(clip))
+        # ALLOWED_PRESET_KEYS (what effective_config_for_clip can return)
+        # whitelists "trim", but process_audio actually reads
+        # "trim_silence" - every other caller of process_chunk_task
+        # (start_conversion, generate_preview, jit.py) does this same
+        # rename inline; Document/models.py doesn't know process_audio's
+        # key names, so it's this GUI-side assembly's job.
+        if "trim" in clip_config:
+            clip_config["trim_silence"] = clip_config.pop("trim")
+        config.update(clip_config)
+
+        # effective_config_for_clip only ever returns the FX preset's
+        # *name* (that's all ALLOWED_PRESET_KEYS permits) - resolve it into
+        # actual FX values the same way _process_text_async/generate_preview
+        # already do, or a character's attached FX preset would silently
+        # have no audible effect.
+        if config.get("apply_fx") and config.get("fx_preset"):
+            fx_preset = self.engine.load_fx_preset(config["fx_preset"])
+            if fx_preset:
+                config.update(filter_allowed_keys(fx_preset, ALLOWED_FX_PRESET_KEYS))
+
         return config
 
     # --- engine picker / switch --------------------

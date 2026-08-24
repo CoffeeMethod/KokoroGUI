@@ -21,10 +21,12 @@ regardless of window size, which auto-fit would break.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF
+from typing import Optional
+
+from PySide6.QtCore import QRectF, Signal
 from PySide6.QtGui import QColor, QPen
 from PySide6.QtWidgets import (
-    QGraphicsItem, QGraphicsRectItem, QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView,
+    QGraphicsItem, QGraphicsRectItem, QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView, QMenu,
 )
 
 from kokoro_gui.qt import waveform_data
@@ -65,6 +67,10 @@ class ClipBlockItem(QGraphicsItem):
         self._color = FALLBACK_CLIP_COLOR
         self._label = ""
         self._waveform_item: WaveformItem | None = None
+        self.clip_id: Optional[str] = None
+
+    def set_clip_id(self, clip_id: str) -> None:
+        self.clip_id = clip_id
 
     def set_geometry(self, x: float, y: float, width: float, height: float) -> None:
         self.prepareGeometryChange()
@@ -107,10 +113,46 @@ class TimelineView(QGraphicsView):
     refreshes over large documents.
     """
 
+    generateClipRequested = Signal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
+
+    # -- per-clip Generate context menu -------------------------------------
+    # Introduces no persistent selection/highlight state - a one-shot QMenu
+    # triggered by hit-testing, same self-contained pattern
+    # TranscriptEditor's Characters menu already uses for text selections,
+    # just anchored to a clip block instead. Deliberately not the
+    # click-to-select sync layer (Workstream 4) - nothing here is
+    # remembered after the menu closes.
+
+    def _clip_block_at(self, pos) -> Optional[ClipBlockItem]:
+        item = self.itemAt(pos)
+        while item is not None and not isinstance(item, ClipBlockItem):
+            # A right-click can land on a clip's child WaveformItem (drawn
+            # on top of its parent block), so walk up to find the block.
+            item = item.parentItem()
+        return item
+
+    def _build_context_menu(self, pos) -> Optional[QMenu]:
+        """Split out from `contextMenuEvent` so tests can inspect/trigger it
+        without ever calling the blocking `.exec()` - same precedent as
+        TranscriptEditor._build_context_menu."""
+        block = self._clip_block_at(pos)
+        if block is None or block.clip_id is None:
+            return None
+
+        menu = QMenu(self)
+        action = menu.addAction("Generate")
+        action.triggered.connect(lambda checked=False, cid=block.clip_id: self.generateClipRequested.emit(cid))
+        return menu
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        menu = self._build_context_menu(event.pos())
+        if menu is not None:
+            menu.exec(event.globalPos())
 
     def render_document(self, document) -> None:
         self._scene.clear()
@@ -150,6 +192,7 @@ class TimelineView(QGraphicsView):
             height = LANE_HEIGHT_PX - 2 * LANE_MARGIN_PX
 
             block = ClipBlockItem()
+            block.set_clip_id(clip.id)
             block.set_color(color)
             block.set_label(character.name if character is not None else "")
             block.set_geometry(x, y, width, height)

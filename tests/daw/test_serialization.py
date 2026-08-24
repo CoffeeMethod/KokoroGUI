@@ -75,3 +75,38 @@ def test_load_document_corrupt_json_returns_none(tmp_path):
     path = tmp_path / "document.json"
     path.write_text("{not valid json", encoding="utf-8")
     assert load_document(str(path)) is None
+
+
+def test_generated_clip_round_trips_through_save_and_load(tmp_path, engine, fake_pipeline, make_config):
+    """Segment round-tripping was previously only exercised with hand-built
+    data (see _sample_document above) - this drives it through the actual
+    per-clip Generate path (kokoro_gui/engine/conversion.py's
+    generate_clip_audio) so real generation-shaped Segments are covered too."""
+    import asyncio
+
+    from kokoro_gui.daw.dirty import compute_expected_cache_hash
+
+    character = Character.from_preset_dict("Alice", {"voice": "af_heart", "speed": 1.0})
+    track = Track(name="Alice", character_id=character.id)
+    clip = Clip(start_offset=0, end_offset=11, character_id=character.id, track_id=track.id)
+    doc = Document(text="hello world", clips=[clip], tracks=[track], characters=[character])
+
+    config = make_config(voice="af_heart", speed=1.0)
+    text = doc.clip_text(clip)
+    results = asyncio.run(engine.generate_clip_audio((0, text, config)))
+    expected_hash = compute_expected_cache_hash(text, config)
+    clip.segments = [
+        Segment(order_index=i, text=r["text"], cache_key=expected_hash, audio_path=r["path"], duration=r["duration"])
+        for i, r in enumerate(results)
+    ]
+
+    path = tmp_path / "document.json"
+    save_document(doc, str(path))
+    loaded = load_document(str(path))
+
+    assert len(loaded.clips[0].segments) == len(clip.segments)
+    for original, restored in zip(clip.segments, loaded.clips[0].segments):
+        assert restored.order_index == original.order_index
+        assert restored.cache_key == original.cache_key
+        assert restored.audio_path == original.audio_path
+        assert restored.duration == original.duration
