@@ -174,6 +174,22 @@ def espeak_available():
         return False
 
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_ansi(text: str) -> str:
+    """Strips ANSI color/reset escape sequences from `text`. Some
+    subprocess-spawning tests (test_asr.py/test_engines_audio8.py's
+    `test_importing_module_does_not_load_the_model`) assert an exact match on
+    a child process's captured stdout; under some runners (e.g. PyCharm's
+    test runner, which sets env vars that make libraries in the import chain
+    think they're attached to a color-capable console) a trailing `\x1b[0m`
+    reset code leaks into that output even though nothing in the actual
+    assertion cares about color. Plain terminal/CI runs don't hit this, so
+    it's invisible there - this just makes the assertion robust either way."""
+    return _ANSI_ESCAPE_RE.sub("", text)
+
+
 # ---------------------------------------------------------------------------
 # GUI-level fixtures
 # ---------------------------------------------------------------------------

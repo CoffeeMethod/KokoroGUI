@@ -23,6 +23,7 @@ from kokoro_gui.engines.audio8_tts import (
     Audio8BackendAdapter, Audio8Engine, Audio8ReferenceStore,
 )
 from kokoro_gui.engines.base import ConfigField, EngineCapabilities, VoiceInfo
+from tests.conftest import strip_ansi
 
 
 @pytest.fixture
@@ -106,7 +107,7 @@ def test_importing_module_does_not_load_the_model():
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                              cwd=str(Path(__file__).resolve().parent.parent))
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "True"
+    assert strip_ansi(result.stdout).strip() == "True"
 
 
 # --- Audio8ReferenceStore ----------------------------------------------------

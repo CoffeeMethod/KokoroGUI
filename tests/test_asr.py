@@ -15,6 +15,7 @@ import pytest
 import soundfile as sf
 
 import kokoro_gui.engine.asr as asr
+from tests.conftest import strip_ansi
 
 
 def _write_pcm16_mono_wav(path, n_frames=1600, framerate=16000):
@@ -112,7 +113,7 @@ def test_importing_module_does_not_load_the_model():
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                              cwd=str(Path(__file__).resolve().parent.parent))
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "True"
+    assert strip_ansi(result.stdout).strip() == "True"
 
 
 # --- Vosk engine ----------------------------------------------------------
