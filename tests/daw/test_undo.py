@@ -1,10 +1,16 @@
 """Tests for kokoro_gui/daw/undo.py - the plain-Python Command/UndoStack
 pair behind item 4 ("Undo/redo") of the DAW-for-text redesign's
 remaining-work roadmap. Mirrors tests/daw/test_assign_character.py's
-fixtures/conventions - no Qt, no QT_QPA_PLATFORM needed."""
+fixtures/conventions - no Qt, no QT_QPA_PLATFORM needed.
+
+Per Claude/PLAN_text_editor_redesign.md, `TextEditCommand` here models the
+custom-stack's one remaining text-mutation use (the sub-range TTS replace
+button - a programmatic, non-typing text replacement), not interactive
+typing, which now rides the real GUI's native QTextDocument undo instead
+(see kokoro_gui/qt/transcript_editor.py)."""
 import json
 
-from kokoro_gui.daw.models import Character, Clip, Document, Track
+from kokoro_gui.daw.models import Character, Clip, Document, Run, Track
 from kokoro_gui.daw.serialization import document_from_dict, document_to_dict, load_document, save_document
 from kokoro_gui.daw.undo import AssignCharacterCommand, SetClipFxCommand, TextEditCommand, UndoStack
 
@@ -13,7 +19,7 @@ def _document_with_characters(text="0123456789ABCDEFGHIJ"):
     alice = Character.from_preset_dict("Alice", {"voice": "af_bella"})
     bob = Character.from_preset_dict("Bob", {"voice": "am_michael"})
     tracks = [Track(name="Alice", character_id=alice.id), Track(name="Bob", character_id=bob.id)]
-    doc = Document(text=text, characters=[alice, bob], tracks=tracks)
+    doc = Document.from_plain_text(text, characters=[alice, bob], tracks=tracks)
     return doc, alice, bob
 
 
@@ -29,7 +35,7 @@ def test_assign_character_command_push_creates_clip():
 
     assert len(doc.clips) == 1
     clip = doc.clips[0]
-    assert (clip.start_offset, clip.end_offset) == (2, 6)
+    assert doc.clip_extent(clip.id) == (2, 6)
     assert clip.character_id == alice.id
 
 
@@ -41,6 +47,7 @@ def test_assign_character_command_undo_removes_clip():
     stack.undo()
 
     assert doc.clips == []
+    assert doc.clip_covering(3) is None
 
 
 def test_assign_character_command_redo_restores_clip_with_same_properties():
@@ -53,7 +60,7 @@ def test_assign_character_command_redo_restores_clip_with_same_properties():
 
     assert len(doc.clips) == 1
     clip = doc.clips[0]
-    assert (clip.start_offset, clip.end_offset) == (2, 6)
+    assert doc.clip_extent(clip.id) == (2, 6)
     assert clip.character_id == alice.id
 
 
@@ -72,8 +79,7 @@ def test_assign_character_command_undo_restores_split_leftovers_verbatim():
     assert len(doc.clips) == 1
     restored = doc.clips[0]
     assert restored.id == original_id
-    assert restored.start_offset == 0
-    assert restored.end_offset == 10
+    assert doc.clip_extent(restored.id) == (0, 10)
     assert restored.character_id == alice.id
     assert restored.segments == ["pretend-generated"]  # cache-hit-preserving restore
 
@@ -82,20 +88,29 @@ def test_assign_character_command_undo_restores_split_leftovers_verbatim():
 # TextEditCommand round trip
 # ---------------------------------------------------------------------------
 
+_INSERTED_AFTER_HELLO = ", there"
+
+
+def _text_edit_insert_after_hello(old_text="hello world"):
+    position = 5  # right after "hello"
+    new_text = old_text[:position] + _INSERTED_AFTER_HELLO + old_text[position:]
+    return TextEditCommand(position, 0, len(_INSERTED_AFTER_HELLO), new_text=new_text), new_text
+
+
 def test_text_edit_command_push_changes_document_text():
     doc, _, _ = _document_with_characters(text="hello world")
     stack = UndoStack(doc)
 
-    command = TextEditCommand(5, 0, 6, old_text="hello world", new_text="hello, world world")
+    command, new_text = _text_edit_insert_after_hello()
     stack.push(command)
 
-    assert doc.text == "hello, world world"
+    assert doc.text == new_text
 
 
 def test_text_edit_command_undo_restores_original_text():
     doc, _, _ = _document_with_characters(text="hello world")
     stack = UndoStack(doc)
-    command = TextEditCommand(5, 0, 6, old_text="hello world", new_text="hello, world world")
+    command, _new_text = _text_edit_insert_after_hello()
     stack.push(command)
 
     stack.undo()
@@ -106,54 +121,52 @@ def test_text_edit_command_undo_restores_original_text():
 def test_text_edit_command_redo_reapplies_insertion():
     doc, _, _ = _document_with_characters(text="hello world")
     stack = UndoStack(doc)
-    command = TextEditCommand(5, 0, 6, old_text="hello world", new_text="hello, world world")
+    command, new_text = _text_edit_insert_after_hello()
     stack.push(command)
     stack.undo()
 
     stack.redo()
 
-    assert doc.text == "hello, world world"
+    assert doc.text == new_text
 
 
-def test_text_edit_command_lossy_offset_edge_case_restores_exact_clip_offsets():
-    """apply_text_change's docstring documents that an offset falling
-    strictly inside a replaced range collapses to the edit's start - a
-    naive reverse replay would NOT restore a surviving clip's boundary that
-    sat inside the original edited range. This is the scenario:
-    Clip covers [5, 15). Edit replaces [10, 20) - it starts inside the clip
-    and ends past it, so the clip survives (not fully consumed) but its end
-    offset collapses to the edit's start (10) on the forward pass."""
-    clip = Clip(start_offset=5, end_offset=15)
+def test_text_edit_command_undo_restores_exact_clip_tagging_across_a_split():
+    """A clip covers [5, 15). The edit replaces [10, 20) - it starts inside
+    the clip (position 10 sits strictly within it) and ends past it. The
+    replacement text inherits the clip's tag (ordinary "typing inside a
+    run extends it" behavior), so the clip survives, now covering its
+    original [5, 10) portion plus the 3-character replacement. Undo must
+    restore the clip's exact original extent, not whatever a naive
+    reverse-replay of the edit would reconstruct."""
     text = "0123456789ABCDEFGHIJKLMNOPQRST"  # len 30
-    doc = Document(text=text, clips=[clip])
+    doc, alice, _ = _document_with_characters(text=text)
     stack = UndoStack(doc)
+    stack.push(AssignCharacterCommand(5, 15, alice.id))
+    clip = doc.clips[0]
 
-    old_text = text
     new_text = text[:10] + "XYZ" + text[20:]  # replace [10,20) (10 chars) with "XYZ" (3 chars)
-    command = TextEditCommand(10, 10, 3, old_text=old_text, new_text=new_text)
+    command = TextEditCommand(10, 10, 3, new_text=new_text)
     stack.push(command)
 
-    # Forward edit: clip survives, start stays 5, end collapses to 10.
-    assert clip.start_offset == 5
-    assert clip.end_offset == 10
+    # Forward edit: clip survives, now [5, 10) plus the inherited "XYZ".
+    assert doc.clip_extent(clip.id) == (5, 13)
+    assert doc.clip_text(clip) == "56789XYZ"
 
     stack.undo()
 
-    assert doc.text == old_text
+    assert doc.text == text
     restored = doc.get_clip(clip.id)
     assert restored is not None
-    assert restored.start_offset == 5
-    assert restored.end_offset == 15  # exact pre-edit value, not whatever naive replay would give
+    assert doc.clip_extent(restored.id) == (5, 15)  # exact pre-edit extent, not a naive replay's guess
 
 
 def test_text_edit_command_undo_restores_fully_consumed_clip():
-    clip = Clip(start_offset=6, end_offset=11)
-    clip.segments = ["pretend-generated"]
-    text = "hello world"
-    doc = Document(text=text, clips=[clip])
+    doc, alice, _ = _document_with_characters(text="hello world")
     stack = UndoStack(doc)
+    clip = doc.assign_character_to_range(6, 11, alice.id)
+    clip.segments = ["pretend-generated"]
 
-    command = TextEditCommand(6, 5, 0, old_text=text, new_text="hello ")
+    command = TextEditCommand(6, 5, 0, new_text="hello ")
     stack.push(command)
     assert doc.clips == []
 
@@ -162,7 +175,7 @@ def test_text_edit_command_undo_restores_fully_consumed_clip():
     assert len(doc.clips) == 1
     restored = doc.clips[0]
     assert restored.id == clip.id
-    assert (restored.start_offset, restored.end_offset) == (6, 11)
+    assert doc.clip_extent(restored.id) == (6, 11)
     assert restored.segments == ["pretend-generated"]
 
 
@@ -171,8 +184,9 @@ def test_text_edit_command_undo_restores_fully_consumed_clip():
 # ---------------------------------------------------------------------------
 
 def test_set_clip_fx_command_push_sets_fx_override():
-    clip = Clip(start_offset=0, end_offset=5)
-    doc = Document(text="hello", clips=[clip])
+    doc = Document(runs=[Run(text="hello")])
+    clip = Clip()
+    doc.clips.append(clip)
     stack = UndoStack(doc)
 
     stack.push(SetClipFxCommand(clip.id, {"reverb_enabled": True, "comp_threshold": -10}))
@@ -181,8 +195,9 @@ def test_set_clip_fx_command_push_sets_fx_override():
 
 
 def test_set_clip_fx_command_undo_restores_none_when_previously_unset():
-    clip = Clip(start_offset=0, end_offset=5)
-    doc = Document(text="hello", clips=[clip])
+    doc = Document(runs=[Run(text="hello")])
+    clip = Clip()
+    doc.clips.append(clip)
     stack = UndoStack(doc)
     stack.push(SetClipFxCommand(clip.id, {"reverb_enabled": True}))
 
@@ -192,8 +207,9 @@ def test_set_clip_fx_command_undo_restores_none_when_previously_unset():
 
 
 def test_set_clip_fx_command_redo_reapplies_fx_override():
-    clip = Clip(start_offset=0, end_offset=5)
-    doc = Document(text="hello", clips=[clip])
+    doc = Document(runs=[Run(text="hello")])
+    clip = Clip()
+    doc.clips.append(clip)
     stack = UndoStack(doc)
     stack.push(SetClipFxCommand(clip.id, {"reverb_enabled": True}))
     stack.undo()
@@ -204,8 +220,9 @@ def test_set_clip_fx_command_redo_reapplies_fx_override():
 
 
 def test_set_clip_fx_command_clears_a_previously_set_override():
-    clip = Clip(start_offset=0, end_offset=5, fx_override={"reverb_enabled": True})
-    doc = Document(text="hello", clips=[clip])
+    doc = Document(runs=[Run(text="hello")])
+    clip = Clip(fx_override={"reverb_enabled": True})
+    doc.clips.append(clip)
     stack = UndoStack(doc)
 
     stack.push(SetClipFxCommand(clip.id, None))
@@ -214,8 +231,9 @@ def test_set_clip_fx_command_clears_a_previously_set_override():
 
 
 def test_set_clip_fx_command_undo_restores_previous_override_after_clear():
-    clip = Clip(start_offset=0, end_offset=5, fx_override={"reverb_enabled": True, "comp_ratio": 4})
-    doc = Document(text="hello", clips=[clip])
+    doc = Document(runs=[Run(text="hello")])
+    clip = Clip(fx_override={"reverb_enabled": True, "comp_ratio": 4})
+    doc.clips.append(clip)
     stack = UndoStack(doc)
     stack.push(SetClipFxCommand(clip.id, None))
     assert clip.fx_override is None
@@ -226,8 +244,9 @@ def test_set_clip_fx_command_undo_restores_previous_override_after_clear():
 
 
 def test_set_clip_fx_command_does_not_alias_caller_dict():
-    clip = Clip(start_offset=0, end_offset=5)
-    doc = Document(text="hello", clips=[clip])
+    doc = Document(runs=[Run(text="hello")])
+    clip = Clip()
+    doc.clips.append(clip)
     stack = UndoStack(doc)
     fx_values = {"reverb_enabled": True}
 
@@ -245,8 +264,8 @@ def test_mixed_sequence_type_then_assign_undo_twice_redo_once():
     doc, alice, _ = _document_with_characters(text="hello world")
     stack = UndoStack(doc)
 
-    # 1. Type text: insert ", there" after "hello" (position 5).
-    text_cmd = TextEditCommand(5, 0, 7, old_text="hello world", new_text="hello, there world")
+    # 1. Programmatically replace text: insert ", there" after "hello" (position 5).
+    text_cmd = TextEditCommand(5, 0, 7, new_text="hello, there world")
     stack.push(text_cmd)
     assert doc.text == "hello, there world"
 

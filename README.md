@@ -17,11 +17,16 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
     `Document` of canonical text, plus the `Clip`/`Track`/`Character` metadata layered on top of it
     (`kokoro_gui/daw/`). Project state autosaves to `document.json`, separate from the app's
     `config_qt.json` settings file.
--   **Transcript panel with character/FX highlighting.** The text editor colors each run by its
-    assigned character and FX, so speaker and effect boundaries are visible without reading the
-    inline `[Speaker:FX]:` syntax. A right-click Characters menu reassigns a selection's voice/FX
-    directly; copy/paste carries that assignment along (with a setting for whether a paste splits
-    off its own run or inherits the destination's).
+-   **Transcript panel with character highlighting and a live gutter.** The text editor colors each
+    run by its assigned character, so speaker boundaries are visible without reading the inline
+    `[Speaker:FX]:` syntax - which itself now converts into a real, colored assignment the moment you
+    finish a tagged line (press Enter), not just when you generate. A left gutter shows "Character: X"
+    (plus an FX marker) wherever it changes down the document, and its labels are clickable dropdowns
+    for reassigning that clip on the spot - a right-click Characters menu remains as a secondary path.
+    Copy/paste carries a selection's character assignment along (with a setting for whether a paste
+    splits off its own run or inherits the destination's). Typing undoes/redoes like a normal text
+    editor; character/FX assignments have their own undo history, and Ctrl+Z always reverts whichever
+    happened most recently.
 -   **A multi-track timeline.** One lane per character, clips rendered as colored blocks sized to
     their real audio duration once generated. Right-click a clip to generate or play it. Drag a clip
     onto a different character's track to reassign or move it. Drag inside a clip's waveform to carve

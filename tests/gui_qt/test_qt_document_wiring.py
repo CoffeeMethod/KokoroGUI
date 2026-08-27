@@ -22,8 +22,8 @@ def test_save_settings_writes_document_json_matching_current_state(qt_app):
 
 
 def test_document_persists_across_app_construction(qt_app):
-    clip = qt_app.document.assign_character_to_range(0, 5, qt_app.document.characters[0].id)
     qt_app.document.text = "hello world"
+    clip = qt_app.document.assign_character_to_range(0, 5, qt_app.document.characters[0].id)
     qt_app.save_settings()
 
     # Constructing a second QtTTSApp against the same (monkeypatched) paths

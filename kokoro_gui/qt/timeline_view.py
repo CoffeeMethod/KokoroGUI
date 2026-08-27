@@ -12,9 +12,10 @@ boundary honest.
 always `None` today. A per-clip Generate action (the timeline's right-click
 menu) can populate real audio into a `Clip`'s `segments` now, but nothing
 yet *repositions* a clip using that real duration - clips are still
-positioned/sized purely from their `start_offset`/`end_offset` into
-`Document.text`, i.e. "where they fall in the document," not "when they
-play." This is an explicit, temporary stand-in a later workstream replaces
+positioned/sized purely from `Document.clip_extent(clip.id)` (a run-list
+walk, per Claude/PLAN_text_editor_redesign.md - not a stored offset), i.e.
+"where they fall in the document," not "when they play." This is an
+explicit, temporary stand-in a later workstream replaces
 outright once the timeline is taught to use real audio durations - it is
 NOT a real time axis. A fixed pixels-per-character scale is used rather than
 auto-fitting to the viewport width (unlike a single waveform's one-bucket-
@@ -479,20 +480,22 @@ class TimelineView(QGraphicsView):
             # never crossed into a neighboring clip or empty lane space -
             # this is a sub-range-selection gesture instead, mapping the
             # x-coordinates back to document-text offsets via the same
-            # start_offset + pixels/PLACEHOLDER_PIXELS_PER_CHAR arithmetic
+            # clip_extent()-plus-pixels/PLACEHOLDER_PIXELS_PER_CHAR arithmetic
             # render_document() uses to position clips in the first place.
             # A drag that exits the origin clip's own bounds at either end
             # keeps today's plain no-op unchanged - cross-clip range
             # selection is explicitly out of scope.
-            if clip_x_range is not None:
+            extent = document.clip_extent(clip.id)
+            if clip_x_range is not None and extent is not None:
+                clip_start, clip_end = extent
                 left, right = clip_x_range
                 press_scene_x = self.mapToScene(start_pos).x()
                 release_scene_x = scene_pos.x()
                 if left <= press_scene_x <= right and left <= release_scene_x <= right:
-                    press_offset = clip.start_offset + round((press_scene_x - left) / PLACEHOLDER_PIXELS_PER_CHAR)
-                    release_offset = clip.start_offset + round((release_scene_x - left) / PLACEHOLDER_PIXELS_PER_CHAR)
-                    press_offset = max(clip.start_offset, min(clip.end_offset, press_offset))
-                    release_offset = max(clip.start_offset, min(clip.end_offset, release_offset))
+                    press_offset = clip_start + round((press_scene_x - left) / PLACEHOLDER_PIXELS_PER_CHAR)
+                    release_offset = clip_start + round((release_scene_x - left) / PLACEHOLDER_PIXELS_PER_CHAR)
+                    press_offset = max(clip_start, min(clip_end, press_offset))
+                    release_offset = max(clip_start, min(clip_end, release_offset))
                     sub_start, sub_end = sorted((press_offset, release_offset))
                     if sub_start != sub_end:
                         self.subRangeTtsRequested.emit(clip.id, sub_start, sub_end)
@@ -596,14 +599,21 @@ class TimelineView(QGraphicsView):
             self._scene.addItem(label)
             self._track_labels.append(label)  # keep-alive - see __init__
 
-        # Item 6 ("Real time-based positioning"): ascending start_offset, not
+        # Item 6 ("Real time-based positioning"): ascending extent-start, not
         # document.clips's incidental list order (not guaranteed sorted after
         # repeated splits/edits) - so that when a clip's width legitimately
         # overruns into where the next clip on its lane starts (its audio
         # runs long relative to its text), the later-starting clip is always
         # added to the scene last and therefore painted on top,
-        # deterministically rather than by incidental list order.
-        for clip in sorted(document.clips, key=lambda c: c.start_offset):
+        # deterministically rather than by incidental list order. A clip
+        # with no run pointing at it any more (extent is None - shouldn't
+        # normally happen, but not reachable-via-UI isn't the same as
+        # impossible) is skipped rather than crashing a whole refresh.
+        clips_with_extent = [
+            (clip, document.clip_extent(clip.id)) for clip in document.clips
+        ]
+        clips_with_extent = [(c, e) for c, e in clips_with_extent if e is not None]
+        for clip, (clip_start, clip_end) in sorted(clips_with_extent, key=lambda pair: pair[1][0]):
             track = document.get_track(clip.track_id)
             if track is None:
                 # Not reachable via UI today (nothing lets a track be
@@ -614,8 +624,8 @@ class TimelineView(QGraphicsView):
             character = document.get_character(clip.character_id)
             color = character.highlight_color if character is not None else FALLBACK_CLIP_COLOR
 
-            x = clip.start_offset * PLACEHOLDER_PIXELS_PER_CHAR
-            width = max((clip.end_offset - clip.start_offset) * PLACEHOLDER_PIXELS_PER_CHAR, MIN_CLIP_WIDTH_PX)
+            x = clip_start * PLACEHOLDER_PIXELS_PER_CHAR
+            width = max((clip_end - clip_start) * PLACEHOLDER_PIXELS_PER_CHAR, MIN_CLIP_WIDTH_PX)
             total_duration = sum(s.duration for s in clip.segments if s.duration is not None)
             if total_duration > 0:
                 width = max(width, total_duration * PIXELS_PER_SECOND)

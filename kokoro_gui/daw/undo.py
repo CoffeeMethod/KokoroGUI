@@ -8,6 +8,18 @@ package's `__init__.py`) - `Document` stays constructible/testable without a
 documented deviation from the more obvious "just use QUndoStack" precedent:
 the one-stack-per-`Document` intent is kept, the Qt dependency is not.
 
+Per Claude/PLAN_text_editor_redesign.md's undo-granularity grill: ordinary
+interactive typing in the real GUI does NOT go through this stack at all -
+it's recorded on the live `QTextDocument`'s own native undo (Qt already
+coalesces keystrokes like a word processor, for free), coordinated with this
+stack by `kokoro_gui.qt.transcript_editor` so Ctrl+Z pops whichever of the
+two histories has the more recent action. This stack still handles every
+*non-typing* document operation (character/FX assignment, clip moves, FX
+overrides) - see docs/timeline_dock.py's use of `TextEditCommand` for the one
+still-custom-stack text mutation, the sub-range TTS replace (a
+programmatic, non-interactive text replacement triggered by a button, not
+typing).
+
 No dirty/clean-flag tracking here - the app already autosaves on every
 change (see `kokoro_gui.qt.settings`), so adding one would be new, unrequested
 complexity.
@@ -39,6 +51,13 @@ class UndoStack:
         self._document = document
         self._undo: list = []
         self._redo: list = []
+        # Optional zero-arg hook, set from the Qt layer (see
+        # kokoro_gui.qt.undo_coordinator.UndoCoordinator) so it can log this
+        # stack's pushes into the same interleaved order log as the live
+        # QTextDocument's native undo, without this module importing
+        # anything Qt-related itself. `None` (the default) means nobody's
+        # listening - `push`/`clear_redo` stay plain no-ops toward it.
+        self.on_push = None
 
     def push(self, command: Command) -> None:
         """Runs `command.do(document)`, records it as the most recent undoable
@@ -47,6 +66,17 @@ class UndoStack:
         behavior every standard undo stack has."""
         command.do(self._document)
         self._undo.append(command)
+        self._redo.clear()
+        if self.on_push is not None:
+            self.on_push()
+
+    def clear_redo(self) -> None:
+        """Discards redo history without touching undo - called by
+        `UndoCoordinator` when the live QTextDocument's native stack records
+        a fresh (unrelated) edit, so a stale "redo the character
+        assignment I just undid" doesn't survive an intervening edit on the
+        other stack (ordinary "any new action clears redo" semantics,
+        just applied across two independent stacks instead of one)."""
         self._redo.clear()
 
     def undo(self) -> None:
@@ -74,104 +104,71 @@ class UndoStack:
 
 class AssignCharacterCommand(Command):
     """Wraps `Document.assign_character_to_range` (the Characters-menu /
-    paste-splitting primitive). `do()` snapshots (deep-copies) every clip
-    that call is about to remove or split BEFORE calling it, so `undo()` can
-    restore them verbatim - same ids, same `segments` - which is what lets
-    previously-generated audio survive an undo/redo round trip via the cache
-    (see `kokoro_gui/daw/dirty.py`).
+    gutter-dropdown / paste-splitting primitive). Rather than trying to
+    reconstruct exactly which runs/clips a split touched, `do()` snapshots
+    (deep-copies) the WHOLE `document.runs`/`document.clips` lists BEFORE
+    calling it, and `undo()` restores both verbatim - `Run`/`Clip` are small
+    plain-data dataclasses, so a full deep copy is cheap, and it sidesteps
+    the lossy-reconstruction trap the retired offset-based version had to
+    work around with a partial-snapshot-plus-reverse-replay (see
+    `TextEditCommand` below for the same reasoning applied to text edits).
 
-    `assign_character_to_range` doesn't just remove the overlapping clips -
-    it also creates a fresh "new" clip for `[start, end)` plus zero or more
-    fresh "leftover" clips for whatever those overlapping clips left outside
-    that range (see its docstring in models.py). `undo()` needs to remove
-    *all* of those newly-created clips, not just the returned one - tracked
-    here via an id-set diff (`document.clips` before vs. after the call)
-    rather than trusting a single stored id, since the leftovers' ids are
-    never handed back to the caller at all.
+    `redo()` re-runs `do()` from the (now-restored) pre-split state, so it
+    re-derives a fresh snapshot and re-applies the exact same split each
+    time - correct across any number of undo/redo cycles.
     """
 
     def __init__(self, start: int, end: int, character_id):
         self.start = start
         self.end = end
         self.character_id = character_id
-        self._removed_clips: list = []
-        self._added_clip_ids: set = set()
+        self._pre_runs: "list | None" = None
+        self._pre_clips: "list | None" = None
         self.new_clip_id: "str | None" = None
 
     def do(self, document) -> None:
-        self._removed_clips = [
-            copy.deepcopy(clip)
-            for clip in document.clips
-            if clip.start_offset < self.end and clip.end_offset > self.start
-        ]
-        before_ids = {clip.id for clip in document.clips}
-
+        self._pre_runs = copy.deepcopy(document.runs)
+        self._pre_clips = copy.deepcopy(document.clips)
         new_clip = document.assign_character_to_range(self.start, self.end, self.character_id)
-
         self.new_clip_id = new_clip.id
-        self._added_clip_ids = {clip.id for clip in document.clips} - before_ids
 
     def undo(self, document) -> None:
-        document.clips[:] = [clip for clip in document.clips if clip.id not in self._added_clip_ids]
-        document.clips.extend(copy.deepcopy(clip) for clip in self._removed_clips)
+        document.runs = copy.deepcopy(self._pre_runs)
+        document.clips = copy.deepcopy(self._pre_clips)
 
 
 class TextEditCommand(Command):
-    """Wraps `Document.apply_text_change` for one text edit.
+    """Wraps `Document.replace_text` for one text edit - used only for
+    non-interactive, custom-stack text mutations (the sub-range TTS replace
+    button; see docs/timeline_dock.py), NOT for ordinary typing in the
+    transcript editor, which now rides Qt's own native `QTextDocument` undo
+    instead (see this module's docstring).
 
-    The hard part, per `apply_text_change`'s own docstring: an offset that
-    fell strictly inside the replaced range "has no single well-defined
-    mapping" and collapses to the edit's start. Naively replaying the edit
-    in reverse (swapped remove/add counts) does NOT correctly restore a
-    clip whose boundary sat inside the original edited range - a clip that
-    survives the forward edit (not fully consumed) but has one endpoint
-    collapsed to `position` can end up at the wrong offset even after a
-    "correct" reverse call, because the reverse call's own collapse rule
-    doesn't know what the pre-edit value used to be.
-
-    Mitigation: `do()` snapshots `(clip.id, start_offset, end_offset)` for
-    every clip overlapping `[position, position + chars_removed)` BEFORE the
-    forward call runs, in addition to deep-copying whatever
-    `apply_text_change` itself reports as fully removed. `undo()` replays
-    the edit in reverse, re-appends the deep-copied removed clips, then
-    force-restores every snapshotted clip's exact pre-edit
-    `start_offset`/`end_offset` by id - overwriting whatever the reverse
-    call computed rather than trusting it, since that's the only way to
-    correctly undo the lossy case. This is a safe blanket approach: for a
-    clip whose offsets the reverse call would have gotten right anyway, the
-    overwrite just reassigns the same values.
+    Same snapshot-the-whole-run-list strategy as `AssignCharacterCommand`,
+    for the same reason: once an edit fully consumes a clip, there's no
+    longer enough information left in `position`/`chars_removed`/
+    `chars_added` alone to know which of the surviving text's *other* runs
+    that clip's characters used to belong to, so a naive "replay the edit in
+    reverse" can mis-tag the restored text. Snapshotting avoids the problem
+    entirely instead of solving it.
     """
 
-    def __init__(self, position: int, chars_removed: int, chars_added: int, old_text: str, new_text: str):
+    def __init__(self, position: int, chars_removed: int, chars_added: int, new_text: str):
         self.position = position
         self.chars_removed = chars_removed
         self.chars_added = chars_added
-        self.old_text = old_text
         self.new_text = new_text
-        self._removed_clips: list = []
-        self._overlap_snapshot: list = []
+        self._pre_runs: "list | None" = None
+        self._pre_clips: "list | None" = None
 
     def do(self, document) -> None:
-        removed_end = self.position + self.chars_removed
-        self._overlap_snapshot = [
-            (clip.id, clip.start_offset, clip.end_offset)
-            for clip in document.clips
-            if clip.start_offset < removed_end and clip.end_offset > self.position
-        ]
-
-        removed = document.apply_text_change(self.position, self.chars_removed, self.chars_added, self.new_text)
-        self._removed_clips = [copy.deepcopy(clip) for clip in removed]
+        self._pre_runs = copy.deepcopy(document.runs)
+        self._pre_clips = copy.deepcopy(document.clips)
+        document.replace_text(self.position, self.chars_removed, self.chars_added, self.new_text)
 
     def undo(self, document) -> None:
-        document.apply_text_change(self.position, self.chars_added, self.chars_removed, self.old_text)
-
-        document.clips.extend(copy.deepcopy(clip) for clip in self._removed_clips)
-
-        for clip_id, start_offset, end_offset in self._overlap_snapshot:
-            clip = document.get_clip(clip_id)
-            if clip is not None:
-                clip.start_offset = start_offset
-                clip.end_offset = end_offset
+        document.runs = copy.deepcopy(self._pre_runs)
+        document.clips = copy.deepcopy(self._pre_clips)
 
 
 class MoveClipCommand(Command):
@@ -180,7 +177,8 @@ class MoveClipCommand(Command):
     clip to a different track's lane while leaving every other field
     (`character_id` included) untouched. `do()` snapshots the clip's
     current `track_id` before overwriting it, so `undo()` can restore it
-    verbatim."""
+    verbatim. Untouched by the run-list rework - it only ever mutates a
+    `Clip`'s own fields, never `document.runs`."""
 
     def __init__(self, clip_id: str, new_track_id: str):
         self.clip_id = clip_id
@@ -206,7 +204,9 @@ class ReassignTrackCommand(Command):
     track's lane AND reassigns its `character_id` to match that track's
     character - unlike `MoveClipCommand`, which only ever touches
     `track_id`. `do()` snapshots both `track_id` and `character_id` before
-    overwriting them, so `undo()` restores both verbatim."""
+    overwriting them, so `undo()` restores both verbatim. Untouched by the
+    run-list rework - it only ever mutates a `Clip`'s own fields, never
+    `document.runs`."""
 
     def __init__(self, clip_id: str, new_track_id: str, new_character_id):
         self.clip_id = clip_id
@@ -242,7 +242,8 @@ class SetClipFxCommand(Command):
     Deep-copies on the way in and out (both `do()`'s stored `fx_values` and
     `undo()`'s snapshot) so a caller mutating its own dict after construction
     - or a later edit mutating `clip.fx_override` in place - can never alias
-    back into this command's undo history.
+    back into this command's undo history. Untouched by the run-list rework
+    - it only ever mutates a `Clip`'s own fields, never `document.runs`.
     """
 
     def __init__(self, clip_id: str, fx_values):

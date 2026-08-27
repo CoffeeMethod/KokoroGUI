@@ -1,7 +1,10 @@
-"""Tests for kokoro_gui/qt/transcript_editor.py's TranscriptEditor and
-CharacterFxHighlighter - Workstream 2 of the DAW-for-text redesign."""
-from PySide6.QtCore import QMimeData
-from PySide6.QtGui import QTextCursor
+"""Tests for kokoro_gui/qt/transcript_editor.py's TranscriptEditor - a
+`QTextEdit` synced to a `kokoro_gui.daw.models.Document`'s run list
+(Claude/PLAN_text_editor_redesign.md). `ClipHighlighter` replaces the
+retired `CharacterFxHighlighter`'s two-pass reconciliation with a single
+pass over `app.document.runs`, triggered via `TranscriptEditor.rehighlight()`."""
+from PySide6.QtCore import QMimeData, Qt
+from PySide6.QtGui import QFocusEvent, QTextCursor
 
 from kokoro_gui.daw.models import Character
 
@@ -18,14 +21,26 @@ def _set_text_via_real_edit(editor, text):
     cursor.insertText(text)
 
 
+def _type_line_and_press_enter(qtbot, editor, line_text):
+    """Simulates real keystrokes (unlike _set_text_via_real_edit's bulk
+    cursor.insertText) so TranscriptEditor.keyPressEvent's Enter-triggered
+    [Speaker:FX]: shorthand recognition (TE6's "on completing the line"
+    grill answer) actually fires."""
+    editor.setFocus()
+    qtbot.keyClicks(editor, line_text)
+    qtbot.keyClick(editor, Qt.Key.Key_Return)
+
+
 def _highlight_color_at(editor, position):
-    """QSyntaxHighlighter's setFormat() calls land in the block's QTextLayout
+    """ClipHighlighter's setFormat() calls land in the block's QTextLayout
     format overlay, not in QTextCursor.charFormat() (that reads the
-    document's "real" character formatting, a separate store) and, in this
-    PySide6 version, not reliably in QTextBlock.textFormats() either (it was
-    observed to return one merged, un-highlighted range) - so reading a
-    highlighter's actual output back for assertions means walking
-    QTextBlock.layout().formats() instead, which does reflect it."""
+    document's "real" character formatting, a separate store the
+    highlighter deliberately never touches - see transcript_editor.py's
+    module docstring for why) and, in this PySide6 version, not reliably in
+    QTextBlock.textFormats() either (it was observed to return one merged,
+    un-highlighted range) - so reading a highlighter's actual output back
+    for assertions means walking QTextBlock.layout().formats() instead,
+    which does reflect it."""
     block = editor.document().findBlock(position)
     offset_in_block = position - block.position()
     for fmt_range in block.layout().formats():
@@ -44,7 +59,7 @@ def test_real_edit_updates_document_text(qt_app):
     assert qt_app.document.text == "hello world"
 
 
-def test_real_edit_shifts_existing_clip_offsets(qt_app):
+def test_real_edit_extends_existing_clip_run(qt_app):
     editor = _editor(qt_app)
     _set_text_via_real_edit(editor, "hello world")
     character_id = qt_app.document.characters[0].id
@@ -55,15 +70,14 @@ def test_real_edit_shifts_existing_clip_offsets(qt_app):
     cursor.insertText("XYZ ")  # insert 4 chars before "hello world"
 
     assert qt_app.document.text == "XYZ hello world"
-    assert clip.start_offset == 10
-    assert clip.end_offset == 15
+    assert qt_app.document.clip_extent(clip.id) == (10, 15)
 
 
-def test_load_text_does_not_call_apply_text_change(qt_app, monkeypatch):
+def test_load_text_does_not_call_replace_text(qt_app, monkeypatch):
     editor = _editor(qt_app)
     calls = []
     monkeypatch.setattr(
-        qt_app.document, "apply_text_change",
+        qt_app.document, "replace_text",
         lambda *a, **k: calls.append(a) or []
     )
     editor.load_text("some new text")
@@ -71,7 +85,7 @@ def test_load_text_does_not_call_apply_text_change(qt_app, monkeypatch):
     assert editor.toPlainText() == "some new text"
 
 
-def test_load_text_does_not_disturb_clip_offsets(qt_app):
+def test_load_text_does_not_disturb_clip_tagging(qt_app):
     editor = _editor(qt_app)
     _set_text_via_real_edit(editor, "hello world")
     character_id = qt_app.document.characters[0].id
@@ -79,8 +93,7 @@ def test_load_text_does_not_disturb_clip_offsets(qt_app):
 
     editor.load_text("hello world")  # same text, reloaded programmatically
 
-    assert clip.start_offset == 6
-    assert clip.end_offset == 11
+    assert qt_app.document.clip_extent(clip.id) == (6, 11)
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +106,7 @@ def test_clip_range_is_highlighted_with_character_color(qt_app):
     character = qt_app.document.characters[0]
     character.highlight_color = "#123456"
     qt_app.document.assign_character_to_range(6, 11, character.id)
-    editor._highlighter.rehighlight()
+    editor.rehighlight()
 
     assert _highlight_color_at(editor, 7) == "#123456"
 
@@ -103,26 +116,73 @@ def test_text_outside_any_clip_is_not_highlighted(qt_app):
     _set_text_via_real_edit(editor, "hello world")
     character = qt_app.document.characters[0]
     qt_app.document.assign_character_to_range(6, 11, character.id)
-    editor._highlighter.rehighlight()
+    editor.rehighlight()
 
     assert _highlight_color_at(editor, 1) is None  # inside "hello", not covered by any clip
 
 
-def test_inline_tag_matching_a_character_name_is_highlighted(qt_app):
+def test_shorthand_line_is_recognized_and_highlighted_on_enter(qtbot, qt_app):
     editor = _editor(qt_app)
     alice = Character.from_preset_dict("Alice", {"voice": "af_bella"}, highlight_color="#abcdef")
     qt_app.document.characters.append(alice)
 
-    _set_text_via_real_edit(editor, "[Alice]: hello there")
+    _type_line_and_press_enter(qtbot, editor, "[Alice]: hello there")
 
     assert _highlight_color_at(editor, 10) == "#abcdef"  # inside "hello"
+    clip = qt_app.document.clip_covering(10)
+    assert clip is not None
+    assert clip.character_id == alice.id
 
 
-def test_inline_tag_with_no_matching_character_is_not_highlighted(qt_app):
+def test_shorthand_line_with_no_matching_character_is_not_recognized(qtbot, qt_app):
     editor = _editor(qt_app)
-    _set_text_via_real_edit(editor, "[NobodyHome]: hello there")
+
+    _type_line_and_press_enter(qtbot, editor, "[NobodyHome]: hello there")
 
     assert _highlight_color_at(editor, 15) is None
+    assert qt_app.document.clip_covering(15) is None
+
+
+def test_shorthand_line_not_yet_completed_is_not_recognized(qt_app):
+    """No Enter pressed and no focus lost - matches the recommended "on
+    completing the line" behavior's other half: a still-being-typed line
+    stays plain text."""
+    editor = _editor(qt_app)
+    alice = Character.from_preset_dict("Alice", {"voice": "af_bella"})
+    qt_app.document.characters.append(alice)
+
+    _set_text_via_real_edit(editor, "[Alice]: hello the")
+
+    assert qt_app.document.clip_covering(10) is None
+
+
+def test_shorthand_line_is_recognized_on_focus_out_without_enter(qt_app):
+    """Catches a last line with no trailing Enter, per the grill answer."""
+    editor = _editor(qt_app)
+    alice = Character.from_preset_dict("Alice", {"voice": "af_bella"})
+    qt_app.document.characters.append(alice)
+    _set_text_via_real_edit(editor, "[Alice]: hello there")
+
+    editor.focusOutEvent(QFocusEvent(QFocusEvent.Type.FocusOut, Qt.FocusReason.OtherFocusReason))
+
+    clip = qt_app.document.clip_covering(10)
+    assert clip is not None
+    assert clip.character_id == alice.id
+
+
+def test_already_tagged_line_is_not_reassigned_on_revisit(qtbot, qt_app):
+    editor = _editor(qt_app)
+    alice = Character.from_preset_dict("Alice", {"voice": "af_bella"})
+    qt_app.document.characters.append(alice)
+    _type_line_and_press_enter(qtbot, editor, "[Alice]: hello there")
+    first_clip = qt_app.document.clip_covering(10)
+
+    # Revisiting (focus-out again, cursor still on/near that already-tagged
+    # line) must not mint a second clip for the same text.
+    editor.focusOutEvent(QFocusEvent(QFocusEvent.Type.FocusOut, Qt.FocusReason.OtherFocusReason))
+
+    assert qt_app.document.clip_covering(10).id == first_clip.id
+    assert len(qt_app.document.clips) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +222,7 @@ def test_assign_character_directly_creates_clip_and_rehighlights(qt_app):
     editor = _editor(qt_app)
     _set_text_via_real_edit(editor, "hello world")
     character = qt_app.document.characters[0]
+    character.highlight_color = "#654321"
     cursor = editor.textCursor()
     cursor.setPosition(0)
     cursor.setPosition(5, QTextCursor.MoveMode.KeepAnchor)
@@ -172,8 +233,8 @@ def test_assign_character_directly_creates_clip_and_rehighlights(qt_app):
     clip = qt_app.document.clip_covering(0)
     assert clip is not None
     assert clip.character_id == character.id
-    assert clip.start_offset == 0
-    assert clip.end_offset == 5
+    assert qt_app.document.clip_extent(clip.id) == (0, 5)
+    assert _highlight_color_at(editor, 0) == "#654321"
 
 
 # ---------------------------------------------------------------------------

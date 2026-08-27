@@ -55,3 +55,31 @@ def qt_app(tmp_path, monkeypatch, qtbot):
     qtbot.addWidget(app)
     yield app
     app.close()
+
+
+@pytest.fixture
+def make_tagged_document():
+    """Factory for a `kokoro_gui.daw.models.Document` whose clips are placed
+    at specific text offsets - a test-only convenience, since `Document`
+    itself has no offsets to set directly any more
+    (Claude/PLAN_text_editor_redesign.md's run-list rework). Pass
+    `tagged_ranges` as `[(start, end, clip), ...]`; everything else forwards
+    straight to `Document(...)`."""
+    from kokoro_gui.daw.models import Document, Run
+
+    def _make(text: str, tagged_ranges=(), **kwargs):
+        runs = []
+        cursor = 0
+        for start, end, clip in sorted(tagged_ranges, key=lambda t: t[0]):
+            if start > cursor:
+                runs.append(Run(text=text[cursor:start]))
+            runs.append(Run(text=text[start:end], clip_id=clip.id, kind=clip.source))
+            cursor = end
+        if cursor < len(text):
+            runs.append(Run(text=text[cursor:]))
+        clips = kwargs.pop("clips", None)
+        if clips is None:
+            clips = [clip for _start, _end, clip in tagged_ranges]
+        return Document(runs=runs, clips=clips, **kwargs)
+
+    return _make

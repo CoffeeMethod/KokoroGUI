@@ -89,5 +89,6 @@ def test_clicking_timeline_clip_block_moves_transcript_cursor_to_clip_range(qt_a
     qtbot.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=pos)
 
     cursor = editor.textCursor()
-    assert cursor.selectionStart() == clip.start_offset
-    assert cursor.selectionEnd() == clip.end_offset
+    expected_start, expected_end = qt_app.document.clip_extent(clip.id)
+    assert cursor.selectionStart() == expected_start
+    assert cursor.selectionEnd() == expected_end

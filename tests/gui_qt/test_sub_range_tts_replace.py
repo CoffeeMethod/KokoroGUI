@@ -60,14 +60,14 @@ def test_same_text_different_character_creates_sub_clip_and_leaves_remainder(qt_
     assert qt_app.document.text == text  # no text edit happened
 
     new_clip = next(
-        c for c in qt_app.document.clips if c.start_offset == sub_start and c.end_offset == sub_end
+        c for c in qt_app.document.clips if qt_app.document.clip_extent(c.id) == (sub_start, sub_end)
     )
     assert new_clip.character_id == bob.id
 
     remainder = [c for c in qt_app.document.clips if c.id != new_clip.id]
     assert remainder  # at least one leftover fragment
     assert all(c.character_id == alice.id for c in remainder)
-    covered = sorted((c.start_offset, c.end_offset) for c in remainder)
+    covered = sorted(qt_app.document.clip_extent(c.id) for c in remainder)
     assert covered == [(0, sub_start), (sub_end, len(text))]
 
     assert qt_app.engine.generate_dirty_clips.called
@@ -90,7 +90,7 @@ def test_chosen_character_wins_over_parent_clips_own_character(qt_app, monkeypat
     qt_app.timeline_dock.on_sub_range_tts_requested(clip.id, sub_start, sub_end)
 
     new_clip = next(
-        c for c in qt_app.document.clips if c.start_offset == sub_start and c.end_offset == sub_end
+        c for c in qt_app.document.clips if qt_app.document.clip_extent(c.id) == (sub_start, sub_end)
     )
     assert new_clip.character_id == carol.id
     assert new_clip.character_id != alice.id
@@ -115,7 +115,7 @@ def test_edited_text_updates_document_and_resyncs_transcript_editor(qt_app, monk
 
     new_end = sub_start + len(new_fragment)
     new_clip = next(
-        c for c in qt_app.document.clips if c.start_offset == sub_start and c.end_offset == new_end
+        c for c in qt_app.document.clips if qt_app.document.clip_extent(c.id) == (sub_start, new_end)
     )
     assert new_clip.character_id == alice.id
 
@@ -147,8 +147,7 @@ def test_both_pushes_are_undoable_and_undo_twice_restores_original_state(qt_app,
     assert len(qt_app.document.clips) == 1
     restored_clip = qt_app.document.clips[0]
     assert restored_clip.id == original_clip_id
-    assert restored_clip.start_offset == 0
-    assert restored_clip.end_offset == len(text)
+    assert qt_app.document.clip_extent(restored_clip.id) == (0, len(text))
 
 
 # ---------------------------------------------------------------------------

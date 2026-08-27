@@ -29,7 +29,7 @@ def test_migrates_seeding_default_character_when_no_presets(tmp_path):
 
 def test_loads_existing_document_verbatim_without_remigrating(tmp_path):
     document_path = tmp_path / "document.json"
-    existing = Document(text="hello world", characters=[Character.from_preset_dict("Saved", {})])
+    existing = Document.from_plain_text("hello world", characters=[Character.from_preset_dict("Saved", {})])
     save_document(existing, str(document_path))
 
     presets_dir = tmp_path / "presets"

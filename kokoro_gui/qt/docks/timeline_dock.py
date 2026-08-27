@@ -175,6 +175,10 @@ class TimelineDock(QDockWidget):
             command = MoveClipCommand(clip_id, target_track_id)
 
         self.app.document.undo_stack.push(command)
+        if should_reassign_character:
+            # character_id changed, which changes the transcript's
+            # highlight color for this clip's run(s) too.
+            self.app.generation_dock.text_entry.rehighlight()
         self.app.schedule_save()
         self.app.refresh_timeline()
 
@@ -266,7 +270,6 @@ class TimelineDock(QDockWidget):
                 position=sub_start,
                 chars_removed=sub_end - sub_start,
                 chars_added=len(new_text),
-                old_text=old_text,
                 new_text=new_full_text,
             ))
             sub_end = sub_start + len(new_text)

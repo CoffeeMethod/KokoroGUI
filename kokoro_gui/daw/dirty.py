@@ -64,9 +64,9 @@ def is_clip_dirty(clip, text: str, config: dict) -> bool:
     """True if `clip` needs (re)generation: it has never been generated, or
     its current text/effective-config no longer matches what its stored
     `Segment`s were generated from (Q16: an in-place edit keeps the same
-    `Clip` object, now dirty; models.Document.apply_text_change is what
-    guarantees a fully-deleted-then-retyped clip never reaches this function
-    as the *same* object in the first place - see Q18)."""
+    `Clip` object, now dirty; models.Document.replace_text is what guarantees
+    a fully-deleted-then-retyped clip never reaches this function as the
+    *same* object in the first place - see Q18)."""
     if not clip.segments:
         return True
 

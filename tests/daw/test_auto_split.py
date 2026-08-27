@@ -14,26 +14,26 @@ from kokoro_gui.engine.text_extraction import find_character_fx_spans
 
 def test_get_character_by_name_exact_match():
     alice = Character.from_preset_dict("Alice", {})
-    doc = Document(text="", characters=[alice])
+    doc = Document.from_plain_text("", characters=[alice])
     assert doc.get_character_by_name("Alice") is alice
 
 
 def test_get_character_by_name_case_insensitive():
     alice = Character.from_preset_dict("Alice", {})
-    doc = Document(text="", characters=[alice])
+    doc = Document.from_plain_text("", characters=[alice])
     assert doc.get_character_by_name("alice") is alice
     assert doc.get_character_by_name("ALICE") is alice
 
 
 def test_get_character_by_name_whitespace_tolerant():
     alice = Character.from_preset_dict("Alice", {})
-    doc = Document(text="", characters=[alice])
+    doc = Document.from_plain_text("", characters=[alice])
     assert doc.get_character_by_name("  Alice  ") is alice
 
 
 def test_get_character_by_name_no_match_returns_none():
     alice = Character.from_preset_dict("Alice", {})
-    doc = Document(text="", characters=[alice])
+    doc = Document.from_plain_text("", characters=[alice])
     assert doc.get_character_by_name("Carol") is None
     assert doc.get_character_by_name(None) is None
 
@@ -47,7 +47,7 @@ def test_combined_mode_one_triple_per_tagged_span():
     alice = Character.from_preset_dict("Alice", {})
     bob = Character.from_preset_dict("Bob", {})
     text = "[Alice]: Hello there.\n\n[Bob]: Hi Alice, how are you?"
-    doc = Document(text=text, characters=[alice, bob])
+    doc = Document.from_plain_text(text, characters=[alice, bob])
 
     triples, unmatched = plan_auto_split_clips(doc, split_by_paragraph=False)
 
@@ -73,7 +73,7 @@ def test_auto_split_mode_splits_a_paragraph_break_into_multiple_triples():
         "Second paragraph for Alice.\n\n"
         "[Bob]: Single paragraph for Bob."
     )
-    doc = Document(text=text, characters=[alice, bob])
+    doc = Document.from_plain_text(text, characters=[alice, bob])
 
     triples, unmatched = plan_auto_split_clips(doc, split_by_paragraph=True)
 
@@ -96,7 +96,7 @@ def test_auto_split_mode_skips_empty_paragraphs_within_a_span():
     # empty middle "paragraph" per str.split('\n\n') - it must be skipped,
     # not emitted as a zero-width or garbage triple.
     text = "[Alice]: First paragraph.\n\n\n\nSecond paragraph."
-    doc = Document(text=text, characters=[alice, bob])
+    doc = Document.from_plain_text(text, characters=[alice, bob])
 
     triples, unmatched = plan_auto_split_clips(doc, split_by_paragraph=True)
 
@@ -116,7 +116,7 @@ def test_auto_split_mode_skips_empty_paragraphs_within_a_span():
 def test_unmatched_tag_name_contributes_no_triples_and_is_reported():
     alice = Character.from_preset_dict("Alice", {})
     text = "[Carol]: I have no matching character."
-    doc = Document(text=text, characters=[alice])
+    doc = Document.from_plain_text(text, characters=[alice])
 
     triples, unmatched = plan_auto_split_clips(doc, split_by_paragraph=False)
 
@@ -127,7 +127,7 @@ def test_unmatched_tag_name_contributes_no_triples_and_is_reported():
 def test_unmatched_span_does_not_block_matched_spans():
     alice = Character.from_preset_dict("Alice", {})
     text = "[Carol]: Unknown speaker.\n\n[Alice]: Known speaker."
-    doc = Document(text=text, characters=[alice])
+    doc = Document.from_plain_text(text, characters=[alice])
 
     triples, unmatched = plan_auto_split_clips(doc, split_by_paragraph=False)
 
@@ -144,7 +144,7 @@ def test_unmatched_span_does_not_block_matched_spans():
 def test_untagged_text_assigned_to_the_sole_character():
     alice = Character.from_preset_dict("Alice", {})
     text = "Untagged narration with no tags at all."
-    doc = Document(text=text, characters=[alice])
+    doc = Document.from_plain_text(text, characters=[alice])
 
     triples, unmatched = plan_auto_split_clips(doc, split_by_paragraph=False)
 
@@ -154,7 +154,7 @@ def test_untagged_text_assigned_to_the_sole_character():
 
 def test_untagged_text_produces_no_triples_with_zero_characters():
     text = "Untagged narration with no tags at all."
-    doc = Document(text=text, characters=[])
+    doc = Document.from_plain_text(text, characters=[])
 
     triples, unmatched = plan_auto_split_clips(doc, split_by_paragraph=False)
 
@@ -166,7 +166,7 @@ def test_untagged_text_produces_no_triples_with_two_or_more_characters():
     alice = Character.from_preset_dict("Alice", {})
     bob = Character.from_preset_dict("Bob", {})
     text = "Untagged narration with no tags at all."
-    doc = Document(text=text, characters=[alice, bob])
+    doc = Document.from_plain_text(text, characters=[alice, bob])
 
     triples, unmatched = plan_auto_split_clips(doc, split_by_paragraph=False)
 
@@ -177,7 +177,7 @@ def test_untagged_text_produces_no_triples_with_two_or_more_characters():
 def test_untagged_gap_before_a_tagged_span_with_sole_character():
     alice = Character.from_preset_dict("Alice", {})
     text = "Untagged intro.\n\n[Alice]: Tagged block."
-    doc = Document(text=text, characters=[alice])
+    doc = Document.from_plain_text(text, characters=[alice])
 
     triples, unmatched = plan_auto_split_clips(doc, split_by_paragraph=False)
 
@@ -194,7 +194,7 @@ def test_untagged_gap_before_a_tagged_span_with_sole_character():
 def test_whitespace_only_gap_is_skipped():
     alice = Character.from_preset_dict("Alice", {})
     text = "   \n\n[Alice]: Tagged block."
-    doc = Document(text=text, characters=[alice])
+    doc = Document.from_plain_text(text, characters=[alice])
 
     triples, unmatched = plan_auto_split_clips(doc, split_by_paragraph=False)
 
