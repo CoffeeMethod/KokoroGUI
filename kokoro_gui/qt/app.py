@@ -676,6 +676,11 @@ class QtTTSApp(QMainWindow):
         for start, end, character_id in triples:
             self.document.undo_stack.push(AssignCharacterCommand(start, end, character_id))
 
+        # Native highlighting (Claude/PLAN_text_editor_redesign.md): each
+        # push above only changed app.document.runs - the live editor's
+        # QTextCharFormat needs an explicit repaint to catch up, same as
+        # every other undo_stack.push site.
+        self.generation_dock.text_entry.rehighlight()
         self.schedule_save()
         self.refresh_timeline()
 
@@ -719,25 +724,22 @@ class QtTTSApp(QMainWindow):
         self.status_label.setStyleSheet("color: orange;")
 
     # --- undo/redo (item 4, "Undo/redo") -----------------------------------
+    # Delegates to the transcript editor's UndoCoordinator
+    # (kokoro_gui.qt.undo_coordinator) rather than touching
+    # document.undo_stack directly, so the app-wide Undo/Redo menu actions
+    # behave identically to pressing Ctrl+Z/Ctrl+Shift+Z with the editor
+    # focused - both pop whichever of the native-typing / custom-tagging
+    # histories acted most recently (see the coordinator's module docstring
+    # and Claude/PLAN_text_editor_redesign.md's undo-granularity grill
+    # answer). The coordinator's own callbacks handle re-syncing the
+    # editor's text/highlighting and calling schedule_save/refresh_timeline
+    # - nothing left for this method to do afterward.
 
     def undo(self) -> None:
-        self._undo_or_redo(self.document.undo_stack.undo)
+        self.generation_dock.text_entry.undo_coordinator.undo()
 
     def redo(self) -> None:
-        self._undo_or_redo(self.document.undo_stack.redo)
-
-    def _undo_or_redo(self, stack_method) -> None:
-        stack_method()
-        # TextEditCommand.do/undo both mutate app.document.text directly,
-        # but the TranscriptEditor widget has its own internal text buffer -
-        # it isn't a live view of Document.text - so it needs an explicit
-        # resync. load_text is the established "set text without treating it
-        # as a new edit" method (also used to seed the widget at
-        # construction), so this doesn't loop back into another
-        # TextEditCommand push.
-        self.generation_dock.text_entry.load_text(self.document.text)
-        self.refresh_timeline()
-        self.schedule_save()
+        self.generation_dock.text_entry.undo_coordinator.redo()
 
     # --- lifecycle -----------------------------------------------------------
 

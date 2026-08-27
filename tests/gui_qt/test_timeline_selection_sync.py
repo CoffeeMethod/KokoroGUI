@@ -3,7 +3,7 @@
 qt_app, mirroring test_timeline_view.py's app-independence pattern."""
 from PySide6.QtCore import QPoint, Qt
 
-from kokoro_gui.daw.models import Character, Clip, Document, Track
+from kokoro_gui.daw.models import Character, Clip, Document, Run, Track
 from kokoro_gui.qt.selection import SelectionModel
 from kokoro_gui.qt.timeline_view import ClipBlockItem, TimelineView
 
@@ -19,8 +19,11 @@ def _click(view, pos: QPoint, qtbot):
 def _build_doc_with_one_clip():
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
-    clip = Clip(start_offset=0, end_offset=10, character_id=alice.id, track_id=track.id)
-    doc = Document(text="x" * 40, characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id)
+    doc = Document(
+        runs=[Run(text="x" * 10, clip_id=clip.id, kind=clip.source), Run(text="x" * 30)],
+        characters=[alice], tracks=[track], clips=[clip],
+    )
     return doc, clip, track
 
 
@@ -60,7 +63,7 @@ def test_clicking_lane_label_selects_character(qtbot):
     qtbot.addWidget(view)
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
-    doc = Document(text="x" * 40, characters=[alice], tracks=[track], clips=[])
+    doc = Document.from_plain_text("x" * 40, characters=[alice], tracks=[track], clips=[])
     view.render_document(doc)
 
     # The label is drawn at (4, y + 2); click well inside its glyph area.

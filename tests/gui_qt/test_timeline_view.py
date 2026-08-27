@@ -7,7 +7,7 @@ import soundfile as sf
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QMessageBox
 
-from kokoro_gui.daw.models import Character, Clip, Document, Segment, Track
+from kokoro_gui.daw.models import Character, Clip, Document, Run, Segment, Track
 from kokoro_gui.qt.selection import SelectionModel
 from kokoro_gui.qt.timeline_view import (
     ClipBlockItem, FX_BUTTON_HEIGHT_PX, FX_BUTTON_WIDTH_PX, LANE_HEIGHT_PX,
@@ -25,6 +25,26 @@ def _clip_block_items(view):
     return [item for item in view._scene.items() if isinstance(item, ClipBlockItem)]
 
 
+def _tagged_doc(text, tagged=(), **kwargs):
+    """Builds a Document whose clips are placed at specific text offsets -
+    a test-only convenience, since Document has no offsets to set directly
+    any more (Claude/PLAN_text_editor_redesign.md's run-list rework). Pass
+    `tagged` as `[(start, end, clip), ...]`."""
+    runs = []
+    cursor = 0
+    for start, end, clip in sorted(tagged, key=lambda t: t[0]):
+        if start > cursor:
+            runs.append(Run(text=text[cursor:start]))
+        runs.append(Run(text=text[start:end], clip_id=clip.id, kind=clip.source))
+        cursor = end
+    if cursor < len(text):
+        runs.append(Run(text=text[cursor:]))
+    clips = kwargs.pop("clips", None)
+    if clips is None:
+        clips = [clip for _start, _end, clip in tagged]
+    return Document(runs=runs, clips=clips, **kwargs)
+
+
 def test_lanes_match_track_count_and_order_index_ordering(qtbot):
     view = TimelineView()
     qtbot.addWidget(view)
@@ -34,7 +54,7 @@ def test_lanes_match_track_count_and_order_index_ordering(qtbot):
     # insertion order, drives lane position.
     track_bob = Track(name="Bob", character_id=bob.id, order_index=1)
     track_alice = Track(name="Alice", character_id=alice.id, order_index=0)
-    doc = Document(text="", characters=[alice, bob], tracks=[track_bob, track_alice])
+    doc = Document.from_plain_text("", characters=[alice, bob], tracks=[track_bob, track_alice])
 
     view.render_document(doc)
 
@@ -48,8 +68,8 @@ def test_clip_position_and_width_match_offsets(qtbot):
     qtbot.addWidget(view)
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
-    clip = Clip(start_offset=10, end_offset=30, character_id=alice.id, track_id=track.id)
-    doc = Document(text="x" * 40, characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id)
+    doc = _tagged_doc("x" * 40, [(10, 30, clip)], characters=[alice], tracks=[track])
 
     view.render_document(doc)
 
@@ -65,8 +85,8 @@ def test_clip_width_floors_at_min_clip_width(qtbot):
     qtbot.addWidget(view)
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
-    clip = Clip(start_offset=0, end_offset=1, character_id=alice.id, track_id=track.id)  # 1 char, tiny
-    doc = Document(text="x", characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id)  # 1 char, tiny
+    doc = _tagged_doc("x", [(0, 1, clip)], characters=[alice], tracks=[track])
 
     view.render_document(doc)
 
@@ -79,8 +99,8 @@ def test_clip_color_matches_character_highlight_color(qtbot):
     qtbot.addWidget(view)
     alice = Character.from_preset_dict("Alice", {}, highlight_color="#abcdef")
     track = Track(name="Alice", character_id=alice.id)
-    clip = Clip(start_offset=0, end_offset=5, character_id=alice.id, track_id=track.id)
-    doc = Document(text="hello", characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id)
+    doc = _tagged_doc("hello", [(0, 5, clip)], characters=[alice], tracks=[track])
 
     view.render_document(doc)
 
@@ -92,8 +112,8 @@ def test_clip_with_unresolvable_character_uses_fallback_color(qtbot):
     view = TimelineView()
     qtbot.addWidget(view)
     track = Track(name="Orphan")
-    clip = Clip(start_offset=0, end_offset=5, character_id="nonexistent", track_id=track.id)
-    doc = Document(text="hello", characters=[], tracks=[track], clips=[clip])
+    clip = Clip(character_id="nonexistent", track_id=track.id)
+    doc = _tagged_doc("hello", [(0, 5, clip)], characters=[], tracks=[track])
 
     view.render_document(doc)
 
@@ -104,8 +124,8 @@ def test_clip_with_unresolvable_character_uses_fallback_color(qtbot):
 def test_clip_with_unresolvable_track_is_skipped_not_crashed(qtbot):
     view = TimelineView()
     qtbot.addWidget(view)
-    clip = Clip(start_offset=0, end_offset=5, track_id="nonexistent")
-    doc = Document(text="hello", tracks=[], clips=[clip])
+    clip = Clip(track_id="nonexistent")
+    doc = _tagged_doc("hello", [(0, 5, clip)], tracks=[])
 
     view.render_document(doc)  # must not raise
 
@@ -125,8 +145,8 @@ def test_rerender_replaces_previous_clip_items(qtbot):
     qtbot.addWidget(view)
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
-    clip_a = Clip(start_offset=0, end_offset=5, character_id=alice.id, track_id=track.id)
-    doc = Document(text="hello", characters=[alice], tracks=[track], clips=[clip_a])
+    clip_a = Clip(character_id=alice.id, track_id=track.id)
+    doc = _tagged_doc("hello", [(0, 5, clip_a)], characters=[alice], tracks=[track])
     view.render_document(doc)
     assert len(_clip_block_items(view)) == 1
 
@@ -145,8 +165,8 @@ def test_clip_with_real_audio_path_renders_waveform(qtbot, tmp_path):
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
     segment = Segment(audio_path=str(wav_path))
-    clip = Clip(start_offset=0, end_offset=10, character_id=alice.id, track_id=track.id, segments=[segment])
-    doc = Document(text="x" * 10, characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id, segments=[segment])
+    doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
 
     view.render_document(doc)
 
@@ -161,8 +181,8 @@ def test_clip_with_missing_audio_path_falls_back_to_flat_block(qtbot, tmp_path):
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
     segment = Segment(audio_path=str(tmp_path / "does_not_exist.wav"))
-    clip = Clip(start_offset=0, end_offset=10, character_id=alice.id, track_id=track.id, segments=[segment])
-    doc = Document(text="x" * 10, characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id, segments=[segment])
+    doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
 
     view.render_document(doc)  # must not raise
 
@@ -186,8 +206,8 @@ def test_context_menu_over_clip_with_audio_shows_generate_and_play(qtbot, tmp_pa
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
     segment = Segment(audio_path=str(wav_path))
-    clip = Clip(start_offset=0, end_offset=10, character_id=alice.id, track_id=track.id, segments=[segment])
-    doc = Document(text="x" * 10, characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id, segments=[segment])
+    doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
     view.render_document(doc)
 
     block = _clip_block_items(view)[0]
@@ -202,8 +222,8 @@ def test_context_menu_over_clip_without_audio_shows_generate_only(qtbot):
     qtbot.addWidget(view)
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
-    clip = Clip(start_offset=0, end_offset=10, character_id=alice.id, track_id=track.id)
-    doc = Document(text="x" * 10, characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id)
+    doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
     view.render_document(doc)
 
     block = _clip_block_items(view)[0]
@@ -224,8 +244,8 @@ def test_triggering_play_calls_playback_play_with_clip_audio_path(qtbot, tmp_pat
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
     segment = Segment(audio_path=str(wav_path))
-    clip = Clip(start_offset=0, end_offset=10, character_id=alice.id, track_id=track.id, segments=[segment])
-    doc = Document(text="x" * 10, characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id, segments=[segment])
+    doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
     view.render_document(doc)
 
     block = _clip_block_items(view)[0]
@@ -248,11 +268,8 @@ def _click(view, pos, qtbot):
 def _build_doc_with_one_clip(fx_override=None):
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
-    clip = Clip(
-        start_offset=0, end_offset=10, character_id=alice.id, track_id=track.id,
-        fx_override=fx_override,
-    )
-    doc = Document(text="x" * 40, characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id, fx_override=fx_override)
+    doc = _tagged_doc("x" * 40, [(0, 10, clip)], characters=[alice], tracks=[track])
     return doc, clip, track
 
 
@@ -390,8 +407,8 @@ def test_clip_with_no_segments_renders_at_unchanged_placeholder_width(qtbot):
     qtbot.addWidget(view)
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
-    clip = Clip(start_offset=10, end_offset=30, character_id=alice.id, track_id=track.id)
-    doc = Document(text="x" * 40, characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id)
+    doc = _tagged_doc("x" * 40, [(10, 30, clip)], characters=[alice], tracks=[track])
 
     view.render_document(doc)
 
@@ -408,10 +425,8 @@ def test_clip_with_none_durations_renders_at_unchanged_placeholder_width(qtbot):
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
     segments = [Segment(duration=None), Segment(duration=None)]
-    clip = Clip(
-        start_offset=10, end_offset=30, character_id=alice.id, track_id=track.id, segments=segments,
-    )
-    doc = Document(text="x" * 40, characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id, segments=segments)
+    doc = _tagged_doc("x" * 40, [(10, 30, clip)], characters=[alice], tracks=[track])
 
     view.render_document(doc)
 
@@ -427,10 +442,8 @@ def test_clip_width_grows_to_fit_duration_when_it_exceeds_placeholder(qtbot):
     # 5 chars -> placeholder floors at MIN_CLIP_WIDTH_PX (20px). 2.0s of
     # audio at PIXELS_PER_SECOND=50 is 100px, well past that.
     segment = Segment(duration=2.0)
-    clip = Clip(
-        start_offset=0, end_offset=5, character_id=alice.id, track_id=track.id, segments=[segment],
-    )
-    doc = Document(text="x" * 5, characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id, segments=[segment])
+    doc = _tagged_doc("x" * 5, [(0, 5, clip)], characters=[alice], tracks=[track])
 
     view.render_document(doc)
 
@@ -446,10 +459,8 @@ def test_clip_width_stays_at_placeholder_floor_when_duration_is_smaller(qtbot):
     # 100 chars -> placeholder 400px. 1.0s of audio at PIXELS_PER_SECOND=50
     # is only 50px, well under the placeholder - the max() floor must hold.
     segment = Segment(duration=1.0)
-    clip = Clip(
-        start_offset=0, end_offset=100, character_id=alice.id, track_id=track.id, segments=[segment],
-    )
-    doc = Document(text="x" * 100, characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id, segments=[segment])
+    doc = _tagged_doc("x" * 100, [(0, 100, clip)], characters=[alice], tracks=[track])
 
     view.render_document(doc)
 
@@ -463,10 +474,8 @@ def test_clip_width_sums_multiple_segment_durations(qtbot):
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
     segments = [Segment(duration=1.0), Segment(duration=2.0), Segment(duration=0.5)]
-    clip = Clip(
-        start_offset=0, end_offset=10, character_id=alice.id, track_id=track.id, segments=segments,
-    )
-    doc = Document(text="x" * 10, characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id, segments=segments)
+    doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
 
     view.render_document(doc)
 
@@ -480,10 +489,8 @@ def test_clip_width_skips_none_duration_segments_without_crashing(qtbot):
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
     segments = [Segment(duration=1.0), Segment(duration=None), Segment(duration=2.0)]
-    clip = Clip(
-        start_offset=0, end_offset=10, character_id=alice.id, track_id=track.id, segments=segments,
-    )
-    doc = Document(text="x" * 10, characters=[alice], tracks=[track], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track.id, segments=segments)
+    doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
 
     view.render_document(doc)  # must not raise (summing a None duration)
 
@@ -500,9 +507,12 @@ def test_overlapping_clips_paint_in_ascending_start_offset_order(qtbot):
     qtbot.addWidget(view)
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
-    clip_a = Clip(start_offset=50, end_offset=60, character_id=alice.id, track_id=track.id)
-    clip_b = Clip(start_offset=10, end_offset=20, character_id=alice.id, track_id=track.id)
-    doc = Document(text="x" * 100, characters=[alice], tracks=[track], clips=[])
+    clip_a = Clip(character_id=alice.id, track_id=track.id)
+    clip_b = Clip(character_id=alice.id, track_id=track.id)
+    doc = _tagged_doc(
+        "x" * 100, [(50, 60, clip_a), (10, 20, clip_b)],
+        characters=[alice], tracks=[track], clips=[],
+    )
     # Deliberately appended in descending start_offset order: clip_a (larger
     # start_offset) first, clip_b (smaller start_offset) after - proving
     # render order follows start_offset, not list/insertion order.
@@ -547,8 +557,8 @@ def _build_doc_two_tracks_same_character():
     alice = Character.from_preset_dict("Alice", {})
     track_a = Track(name="Alice A", character_id=alice.id, order_index=0)
     track_b = Track(name="Alice B", character_id=alice.id, order_index=1)
-    clip = Clip(start_offset=0, end_offset=10, character_id=alice.id, track_id=track_a.id)
-    doc = Document(text="x" * 40, characters=[alice], tracks=[track_a, track_b], clips=[clip])
+    clip = Clip(character_id=alice.id, track_id=track_a.id)
+    doc = _tagged_doc("x" * 40, [(0, 10, clip)], characters=[alice], tracks=[track_a, track_b])
     return doc, clip, track_a, track_b
 
 
@@ -712,7 +722,8 @@ def test_same_track_drag_within_one_block_emits_sub_range_tts_left_to_right(qtbo
     assert len(received) == 1
     cid, sub_start, sub_end = received[0]
     assert cid == clip.id
-    assert clip.start_offset <= sub_start < sub_end <= clip.end_offset
+    clip_start, clip_end = doc.clip_extent(clip.id)
+    assert clip_start <= sub_start < sub_end <= clip_end
 
 
 def test_same_track_drag_within_one_block_emits_sub_range_tts_right_to_left(qtbot):
@@ -736,7 +747,8 @@ def test_same_track_drag_within_one_block_emits_sub_range_tts_right_to_left(qtbo
     cid, sub_start, sub_end = received[0]
     assert cid == clip.id
     assert sub_start < sub_end
-    assert clip.start_offset <= sub_start < sub_end <= clip.end_offset
+    clip_start, clip_end = doc.clip_extent(clip.id)
+    assert clip_start <= sub_start < sub_end <= clip_end
 
 
 def test_same_track_drag_exiting_block_bounds_stays_a_plain_noop(qtbot):

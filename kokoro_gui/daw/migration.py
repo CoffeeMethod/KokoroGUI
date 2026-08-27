@@ -77,4 +77,4 @@ def migrate_legacy_settings_to_document(settings: dict, presets_dir: str) -> Doc
         for i, character in enumerate(characters)
     ]
 
-    return Document(text="", clips=[], tracks=tracks, characters=characters, settings={})
+    return Document(runs=[], clips=[], tracks=tracks, characters=characters, settings={})

@@ -26,35 +26,54 @@ def _clip_block_items(qt_app):
 # ---------------------------------------------------------------------------
 
 def test_typing_then_undo_restores_previous_text_in_document_and_widget(qt_app):
+    # One bulk edit, not two adjacent inserts - Qt's native undo merges
+    # adjacent same-position insertions into a single command (verified
+    # directly against QTextDocument), so this exercises exactly one
+    # native-stack undo, cleanly.
     editor = _editor(qt_app)
     _set_text_via_real_edit(editor, "hello world")
     assert qt_app.document.text == "hello world"
 
-    cursor = editor.textCursor()
-    cursor.setPosition(11)
-    editor.setTextCursor(cursor)
-    cursor.insertText("!")
-    assert qt_app.document.text == "hello world!"
-
     qt_app.undo()
 
-    assert qt_app.document.text == "hello world"
-    assert editor.toPlainText() == "hello world"
+    assert qt_app.document.text == ""
+    assert editor.toPlainText() == ""
 
 
 def test_undo_then_redo_reapplies_the_typed_text(qt_app):
     editor = _editor(qt_app)
     _set_text_via_real_edit(editor, "hello world")
-    cursor = editor.textCursor()
-    cursor.setPosition(11)
-    editor.setTextCursor(cursor)
-    cursor.insertText("!")
 
     qt_app.undo()
     qt_app.redo()
 
-    assert qt_app.document.text == "hello world!"
-    assert editor.toPlainText() == "hello world!"
+    assert qt_app.document.text == "hello world"
+    assert editor.toPlainText() == "hello world"
+
+
+def test_typing_then_assigning_then_undo_twice_reverts_assignment_then_typing(qt_app):
+    """The coordinated-dual-stack behavior this whole rebuild grilled for:
+    a native (typing) edit followed by a custom-stack (character
+    assignment) action undoes in the right order - the more recent action
+    (the assignment, on the custom stack) first, then the older one (the
+    typing, on the native stack) - regardless of which stack each came
+    from."""
+    editor = _editor(qt_app)
+    _set_text_via_real_edit(editor, "hello world")
+    character = qt_app.document.characters[0]
+    cursor = editor.textCursor()
+    cursor.setPosition(6)
+    cursor.setPosition(11, QTextCursor.MoveMode.KeepAnchor)
+    editor.setTextCursor(cursor)
+    editor._assign_character(character.id)
+    assert len(qt_app.document.clips) == 1
+
+    qt_app.undo()
+    assert qt_app.document.clips == []
+    assert qt_app.document.text == "hello world"  # typing survives this first undo
+
+    qt_app.undo()
+    assert qt_app.document.text == ""
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +116,7 @@ def test_assign_character_undo_redo_restores_clip(qt_app):
 
     assert len(qt_app.document.clips) == 1
     clip = qt_app.document.clips[0]
-    assert (clip.start_offset, clip.end_offset) == (6, 11)
+    assert qt_app.document.clip_extent(clip.id) == (6, 11)
     assert clip.character_id == character.id
 
 

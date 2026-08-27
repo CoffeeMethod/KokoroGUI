@@ -1,17 +1,17 @@
 """Tests for kokoro_gui/daw/models.py's Document.assign_character_to_range
 and clip_covering - the shared split-or-create primitive behind the
-transcript panel's Characters menu and paste-splitting."""
+transcript panel's Characters menu, gutter dropdowns, and paste-splitting."""
 import pytest
 
 from kokoro_gui.daw.dirty import is_clip_dirty
-from kokoro_gui.daw.models import Character, Clip, Document, Track
+from kokoro_gui.daw.models import Character, Document, Track
 
 
 def _document_with_characters():
     alice = Character.from_preset_dict("Alice", {"voice": "af_bella"})
     bob = Character.from_preset_dict("Bob", {"voice": "am_michael"})
     tracks = [Track(name="Alice", character_id=alice.id), Track(name="Bob", character_id=bob.id)]
-    doc = Document(text="0123456789ABCDEFGHIJ", characters=[alice, bob], tracks=tracks)
+    doc = Document.from_plain_text("0123456789ABCDEFGHIJ", characters=[alice, bob], tracks=tracks)
     return doc, alice, bob
 
 
@@ -25,13 +25,12 @@ def test_clip_covering_returns_none_when_no_clip_present():
 
 
 def test_clip_covering_inclusive_start_exclusive_end():
-    clip = Clip(start_offset=5, end_offset=10)
-    doc, _, _ = _document_with_characters()
-    doc.clips.append(clip)
-    assert doc.clip_covering(4) is None
+    doc, alice, _ = _document_with_characters()
+    clip = doc.assign_character_to_range(5, 10, alice.id)
+    assert doc.clip_covering(4) is not clip
     assert doc.clip_covering(5) is clip
     assert doc.clip_covering(9) is clip
-    assert doc.clip_covering(10) is None
+    assert doc.clip_covering(10) is not clip
 
 
 # ---------------------------------------------------------------------------
@@ -50,15 +49,14 @@ def test_creates_clip_when_none_exists():
     doc, alice, _ = _document_with_characters()
     clip = doc.assign_character_to_range(2, 6, alice.id)
     assert clip in doc.clips
-    assert clip.start_offset == 2
-    assert clip.end_offset == 6
+    assert doc.clip_extent(clip.id) == (2, 6)
     assert clip.character_id == alice.id
     assert clip.track_id == next(t.id for t in doc.tracks if t.character_id == alice.id)
     assert clip.segments == []
 
 
 def test_track_id_falls_back_to_none_without_a_matching_track():
-    doc = Document(text="hello")
+    doc = Document.from_plain_text("hello")
     clip = doc.assign_character_to_range(0, 5, "nonexistent-character")
     assert clip.track_id is None
 
@@ -82,13 +80,11 @@ def test_left_only_split():
 
     doc.assign_character_to_range(5, 10, bob.id)
 
-    remaining = [c for c in doc.clips if c.id != existing.id]
+    assert existing.id not in {c.id for c in doc.clips}
     leftover = next(c for c in doc.clips if c.character_id == alice.id)
-    assert leftover.start_offset == 0
-    assert leftover.end_offset == 5
+    assert doc.clip_extent(leftover.id) == (0, 5)
     assigned = next(c for c in doc.clips if c.character_id == bob.id)
-    assert assigned.start_offset == 5
-    assert assigned.end_offset == 10
+    assert doc.clip_extent(assigned.id) == (5, 10)
     assert len(doc.clips) == 2
 
 
@@ -99,11 +95,9 @@ def test_right_only_split():
     doc.assign_character_to_range(0, 5, bob.id)
 
     leftover = next(c for c in doc.clips if c.character_id == alice.id)
-    assert leftover.start_offset == 5
-    assert leftover.end_offset == 10
+    assert doc.clip_extent(leftover.id) == (5, 10)
     assigned = next(c for c in doc.clips if c.character_id == bob.id)
-    assert assigned.start_offset == 0
-    assert assigned.end_offset == 5
+    assert doc.clip_extent(assigned.id) == (0, 5)
     assert len(doc.clips) == 2
 
 
@@ -115,38 +109,38 @@ def test_both_sided_split():
 
     alice_leftovers = sorted(
         (c for c in doc.clips if c.character_id == alice.id),
-        key=lambda c: c.start_offset,
+        key=lambda c: doc.clip_extent(c.id),
     )
     assert len(alice_leftovers) == 2
-    assert (alice_leftovers[0].start_offset, alice_leftovers[0].end_offset) == (0, 5)
-    assert (alice_leftovers[1].start_offset, alice_leftovers[1].end_offset) == (10, 20)
+    assert doc.clip_extent(alice_leftovers[0].id) == (0, 5)
+    assert doc.clip_extent(alice_leftovers[1].id) == (10, 20)
     assigned = next(c for c in doc.clips if c.character_id == bob.id)
-    assert (assigned.start_offset, assigned.end_offset) == (5, 10)
+    assert doc.clip_extent(assigned.id) == (5, 10)
     assert len(doc.clips) == 3
 
 
 def test_selection_spanning_three_clips_worked_example():
     # Clip A: [0, 10) Alice, Clip B: [10, 15) Bob, Clip C: [15, 20) Alice.
     doc, alice, bob = _document_with_characters()
-    clip_a = Clip(start_offset=0, end_offset=10, character_id=alice.id)
-    clip_b = Clip(start_offset=10, end_offset=15, character_id=bob.id)
-    clip_c = Clip(start_offset=15, end_offset=20, character_id=alice.id)
-    doc.clips.extend([clip_a, clip_b, clip_c])
+    clip_a = doc.assign_character_to_range(0, 10, alice.id)
+    clip_b = doc.assign_character_to_range(10, 15, bob.id)
+    clip_c = doc.assign_character_to_range(15, 20, alice.id)
 
     # Assign Bob to [5, 18) - overlaps all three.
     new_clip = doc.assign_character_to_range(5, 18, bob.id)
 
     assert len(doc.clips) == 3  # leftover of A, leftover of C, and the new clip - B fully consumed
-    a_leftover = next(c for c in doc.clips if c.start_offset == 0)
-    assert a_leftover.end_offset == 5
+    a_leftover = next(c for c in doc.clips if doc.clip_extent(c.id) is not None and doc.clip_extent(c.id)[0] == 0)
+    assert doc.clip_extent(a_leftover.id) == (0, 5)
     assert a_leftover.character_id == alice.id
-    c_leftover = next(c for c in doc.clips if c.end_offset == 20)
-    assert c_leftover.start_offset == 18
+    c_leftover = next(c for c in doc.clips if doc.clip_extent(c.id) is not None and doc.clip_extent(c.id)[1] == 20)
+    assert doc.clip_extent(c_leftover.id) == (18, 20)
     assert c_leftover.character_id == alice.id
-    assert new_clip.start_offset == 5
-    assert new_clip.end_offset == 18
+    assert doc.clip_extent(new_clip.id) == (5, 18)
     assert new_clip.character_id == bob.id
-    assert clip_b not in doc.clips
+    assert clip_a.id not in {c.id for c in doc.clips}
+    assert clip_b.id not in {c.id for c in doc.clips}
+    assert clip_c.id not in {c.id for c in doc.clips}
 
 
 def test_leftover_clips_are_dirty_and_have_fresh_ids():

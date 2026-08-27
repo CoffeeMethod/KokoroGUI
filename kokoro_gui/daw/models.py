@@ -1,11 +1,17 @@
-"""Core dataclasses: Document, Clip, Segment, Track, Character.
+"""Core dataclasses: Document, Run, Clip, Segment, Track, Character.
 
-Resolves the "grill chat" architecture (Claude/Kokorogui grill chat.md, Q1-Q29)
-into concrete types:
+Resolves the "grill chat" architecture (Claude/Kokorogui grill chat.md, Q1-Q29
+plus the Text Editor Grill TE1-TE6) into concrete types. As of
+Claude/PLAN_text_editor_redesign.md, the offset-based `Clip` (`start_offset`/
+`end_offset` into a flat `Document.text`) has been replaced by a **tagged
+run list**: `Document.runs` is the authoritative structure, each `Run` a
+contiguous stretch of text carrying (at most) one `Clip.id`. A clip's extent
+is wherever its id is applied across the run list, found by walking runs -
+not stored as numbers that need shifting on every edit. `Document.text`
+remains available as a *derived* property (the join of every run's text),
+used only for TTS generation, cache-key input, word count, and export - it
+is never the authoritative field.
 
-- `Document.text` is the canonical source of truth (Q15's closing principle:
-  "the document is the source of truth; generated audio is a render of that
-  document state").
 - A `Clip` is a user-facing unit that may map to multiple engine-level
   `Segment`s (Q3) - the engine's own text splitting (KPipeline's
   `split_pattern`) stays internal to a clip, not surfaced as the primary
@@ -13,8 +19,9 @@ into concrete types:
 - `Clip.id` is a UUID, never derived from content - this is what keeps cache
   identity (a content hash, see kokoro_gui/engine/caching.py) and clip
   identity (Q18) genuinely independent: deleting a clip removes the object
-  entirely, and a later, coincidentally-identical clip gets a fresh id and
-  default metadata even though its audio may still cache-hit.
+  entirely (and untags its runs), and a later, coincidentally-identical clip
+  gets a fresh id and default metadata even though its audio may still
+  cache-hit.
 - `Track` is a lane keyed by `character_id` for auto-placement (Q8) - kept as
   a separate object from `Character` on purpose, since a clip can be dragged
   onto a track whose `character_id` differs from the clip's own (Q9).
@@ -122,11 +129,11 @@ class Segment:
 @dataclass
 class Clip:
     """A user-facing unit of text-anchored audio (Q19: every clip, imported
-    or generated, is text-anchored). `start_offset`/`end_offset` index into
-    the owning `Document.text`."""
+    or generated, is text-anchored). Unlike the retired offset-based model,
+    a `Clip` no longer stores its own extent - that's wherever `Document.runs`
+    tags a run with this clip's `id` (see `Document.clip_extent`/
+    `Document.clip_text`)."""
 
-    start_offset: int = 0
-    end_offset: int = 0
     character_id: Optional[str] = None
     track_id: Optional[str] = None
     overrides: dict = field(default_factory=dict)
@@ -143,12 +150,39 @@ class Clip:
 
 
 @dataclass
-class Document:
-    """The whole project's source of truth (Q15's closing principle). Owns
-    the canonical text plus the clip/track/character metadata layered on top
-    of it."""
+class Run:
+    """One contiguous stretch of `Document` text carrying (at most) one
+    `Clip.id` - the tagged-run-list replacement for offset-shifted `Clip`
+    ranges (Claude/PLAN_text_editor_redesign.md, TE5). Mirrors, at the
+    Qt-free data-model level, the `QTextCharFormat` custom property the real
+    `TranscriptEditor` widget applies to the equivalent stretch of its
+    `QTextDocument` - this class is what lets `kokoro_gui/daw/` stay
+    Qt-free (per this package's `__init__.py`) while still round-tripping
+    through `serialization.py`'s JSON shape and being usable headlessly (a
+    future CLI, or this module's own test suite).
+
+    `clip_id=None` means "untagged" - ordinary narration nobody has assigned
+    a character to yet, exactly like today's "some text has no clip" state.
+    `kind` mirrors the owning `Clip.source` ("generated"/"imported") for a
+    tagged run, or is `None` for an untagged one; `"placeholder"` is reserved
+    for a future ASR-anchored import awaiting transcription (deliberately
+    unused for now - see the plan doc's "Open items", this pass only
+    reserves the marker, it doesn't build the import UX behind it).
+    """
 
     text: str = ""
+    clip_id: Optional[str] = None
+    kind: Optional[str] = None
+
+
+@dataclass
+class Document:
+    """The whole project's source of truth (Q15's closing principle). Owns
+    the canonical run list plus the clip/track/character metadata layered on
+    top of it. `text` is a computed property (the join of every run's text),
+    not a stored field - see the module docstring."""
+
+    runs: list = field(default_factory=list)
     clips: list = field(default_factory=list)
     tracks: list = field(default_factory=list)
     characters: list = field(default_factory=list)
@@ -164,6 +198,50 @@ class Document:
 
     def __post_init__(self):
         self.undo_stack = UndoStack(self)
+
+    @classmethod
+    def from_plain_text(cls, text: str = "", **kwargs) -> "Document":
+        """Convenience constructor for a fresh `Document` whose entire text
+        is one untagged run - the common case for a brand-new project, a
+        freshly-loaded plain-text import, or a test fixture that doesn't
+        care about tagging."""
+        return cls(runs=[Run(text=text)] if text else [], **kwargs)
+
+    def set_plain_text(self, text: str) -> None:
+        """Replaces the whole document with one untagged run, discarding
+        every existing run tag - a full reload/reset, NOT an ordinary edit
+        primitive (see `replace_text` for that)."""
+        self.runs = [Run(text=text)] if text else []
+
+    # -- text (derived) ------------------------------------------------------
+
+    @property
+    def text(self) -> str:
+        return "".join(run.text for run in self.runs)
+
+    @text.setter
+    def text(self, value: str) -> None:
+        """Convenience alias for `set_plain_text` - a full reload/reset, NOT
+        an ordinary edit primitive (use `replace_text` for that). Kept as a
+        settable property (rather than getter-only) since a lot of call
+        sites - tests especially - reasonably expect `doc.text = "..."` to
+        keep working the way it always did before `text` became derived."""
+        self.set_plain_text(value)
+
+    def _iter_runs_with_offsets(self):
+        """Yields `(run, start, end)` for every run, in document order -
+        the shared walk every offset-deriving lookup below builds on."""
+        pos = 0
+        for run in self.runs:
+            end = pos + len(run.text)
+            yield run, pos, end
+            pos = end
+
+    def _run_covering(self, position: int) -> Optional[Run]:
+        for run, start, end in self._iter_runs_with_offsets():
+            if start <= position < end:
+                return run
+        return None
 
     # -- lookups -----------------------------------------------------------
 
@@ -194,16 +272,33 @@ class Document:
         return next((c for c in self.clips if c.id == clip_id), None)
 
     def clip_covering(self, position: int) -> Optional[Clip]:
-        """The `Clip` containing text offset `position`, if any (inclusive
-        start, exclusive end - consistent with `start_offset`/`end_offset`
-        slicing elsewhere in this class)."""
-        return next((c for c in self.clips if c.start_offset <= position < c.end_offset), None)
+        """The `Clip` covering text offset `position`, if any (inclusive
+        start, exclusive end) - reads whichever run's tag covers that
+        position, rather than scanning a stored offset-range list."""
+        run = self._run_covering(position)
+        return self.get_clip(run.clip_id) if run is not None else None
+
+    def clip_extent(self, clip_id: str) -> Optional[tuple]:
+        """The `(start, end)` character-offset span a clip's tagged run(s)
+        currently occupy in `self.text`, or `None` if no run carries that
+        id. Computed on demand by walking `self.runs` - this is the
+        run-based replacement for reading `clip.start_offset`/`end_offset`
+        directly (timeline positioning, sub-range TTS replacement, etc. all
+        go through this now)."""
+        start = end = None
+        for run, r_start, r_end in self._iter_runs_with_offsets():
+            if run.clip_id == clip_id:
+                if start is None:
+                    start = r_start
+                end = r_end
+        return None if start is None else (start, end)
 
     # -- text/config -------------------------------------------------------
 
     def clip_text(self, clip: Clip) -> str:
-        """The clip's current slice of the canonical document text."""
-        return self.text[clip.start_offset:clip.end_offset]
+        """The clip's current text - every run tagged with `clip.id`,
+        concatenated in document order."""
+        return "".join(run.text for run in self.runs if run.clip_id == clip.id)
 
     def effective_config_for_clip(self, clip: Clip) -> dict:
         """The clip's character preset merged with its own overrides (Q7:
@@ -230,6 +325,72 @@ class Document:
             if is_clip_dirty(clip, self.clip_text(clip), self.effective_config_for_clip(clip))
         ]
 
+    # -- run-list maintenance (private) -------------------------------------
+
+    def _split_at(self, offset: int) -> None:
+        """Splits whichever run straddles `offset` into two runs at that
+        boundary, so later code can retag/replace an exact `[start, end)`
+        span without disturbing text on either side of it. A no-op if
+        `offset` already falls on a run boundary (including the document's
+        own start/end)."""
+        if offset <= 0 or offset >= len(self.text):
+            return
+        pos = 0
+        for i, run in enumerate(self.runs):
+            end = pos + len(run.text)
+            if pos < offset < end:
+                cut = offset - pos
+                self.runs[i:i + 1] = [
+                    Run(text=run.text[:cut], clip_id=run.clip_id, kind=run.kind),
+                    Run(text=run.text[cut:], clip_id=run.clip_id, kind=run.kind),
+                ]
+                return
+            pos = end
+
+    def _normalize_runs(self) -> None:
+        """Drops zero-length runs and merges adjacent runs sharing the same
+        `clip_id`/`kind` - the run-list equivalent of Qt's own "typing
+        inside a run just extends it" merge behavior, kept true here too so
+        two operations that happen to retag neighboring spans identically
+        don't leave a meaningless split between them."""
+        merged: list = []
+        for run in self.runs:
+            if not run.text:
+                continue
+            if merged and merged[-1].clip_id == run.clip_id and merged[-1].kind == run.kind:
+                merged[-1] = Run(text=merged[-1].text + run.text, clip_id=run.clip_id, kind=run.kind)
+            else:
+                merged.append(run)
+        self.runs = merged
+
+    def _retag_range(self, start: int, end: int, clip_id: Optional[str], kind: Optional[str]) -> None:
+        """Replaces whatever runs currently occupy `[start, end)` with a
+        single run of that same text, tagged `clip_id`/`kind` - the shared
+        "retag an exact span" primitive `assign_character_to_range` below
+        applies once per clip it touches (the new clip's span, plus one per
+        leftover fragment). Never changes `len(self.text)`."""
+        self._split_at(start)
+        self._split_at(end)
+
+        new_runs: list = []
+        merged_text_parts: list = []
+        inserted_at: Optional[int] = None
+        pos = 0
+        for run in self.runs:
+            run_end = pos + len(run.text)
+            if run_end <= start or pos >= end:
+                new_runs.append(run)
+            else:
+                merged_text_parts.append(run.text)
+                if inserted_at is None:
+                    inserted_at = len(new_runs)
+                    new_runs.append(None)
+            pos = run_end
+
+        new_runs[inserted_at] = Run(text="".join(merged_text_parts), clip_id=clip_id, kind=kind)
+        self.runs = new_runs
+        self._normalize_runs()
+
     # -- UI-driven authoring (Q20): Characters menu / paste-splitting ------
 
     def assign_character_to_range(self, start: int, end: int, character_id: Optional[str]) -> Clip:
@@ -247,8 +408,8 @@ class Document:
         no segments), since a split invalidates whatever was cached for the
         now-different range. Even an exact range-for-range reassignment goes
         through remove-then-recreate: identity is independent of content,
-        the same rule `apply_text_change`'s fully-consumed-clip removal
-        already establishes.
+        the same rule `replace_text`'s fully-consumed-clip removal already
+        establishes.
 
         No manual dirty-marking is needed - every clip this method touches
         ends up with no `segments`, which `dirty.is_clip_dirty` already
@@ -256,82 +417,133 @@ class Document:
         """
         if end <= start:
             raise ValueError(f"assign_character_to_range requires end > start, got start={start}, end={end}")
+        text_len = len(self.text)
+        if start < 0 or end > text_len:
+            raise ValueError(
+                f"assign_character_to_range requires [start, end) within [0, {text_len}), "
+                f"got start={start}, end={end}"
+            )
 
         track_id = next((t.id for t in self.tracks if t.character_id == character_id), None)
 
-        overlapping = [c for c in self.clips if c.start_offset < end and c.end_offset > start]
-        leftovers = []
-        for clip in overlapping:
-            if clip.start_offset < start:
-                leftovers.append(Clip(
-                    start_offset=clip.start_offset, end_offset=start,
-                    character_id=clip.character_id, track_id=clip.track_id,
-                    overrides=dict(clip.overrides), fx_override=clip.fx_override,
-                    source=clip.source, original_audio_path=clip.original_audio_path,
-                ))
-            if clip.end_offset > end:
-                leftovers.append(Clip(
-                    start_offset=end, end_offset=clip.end_offset,
-                    character_id=clip.character_id, track_id=clip.track_id,
-                    overrides=dict(clip.overrides), fx_override=clip.fx_override,
-                    source=clip.source, original_audio_path=clip.original_audio_path,
-                ))
+        overlapping_ids = set()
+        for run, r_start, r_end in self._iter_runs_with_offsets():
+            if run.clip_id is not None and r_start < end and r_end > start:
+                overlapping_ids.add(run.clip_id)
 
-        for clip in overlapping:
-            self.clips.remove(clip)
-        self.clips.extend(leftovers)
+        leftover_ranges = []  # (start, end, old_clip)
+        for clip_id in overlapping_ids:
+            old_clip = self.get_clip(clip_id)
+            if old_clip is None:
+                continue
+            o_start, o_end = self.clip_extent(clip_id)
+            if o_start < start:
+                leftover_ranges.append((o_start, start, old_clip))
+            if o_end > end:
+                leftover_ranges.append((end, o_end, old_clip))
 
-        new_clip = Clip(start_offset=start, end_offset=end, character_id=character_id, track_id=track_id)
+        leftover_clips = [
+            Clip(
+                character_id=old_clip.character_id, track_id=old_clip.track_id,
+                overrides=dict(old_clip.overrides), fx_override=old_clip.fx_override,
+                source=old_clip.source, original_audio_path=old_clip.original_audio_path,
+            )
+            for (_l_start, _l_end, old_clip) in leftover_ranges
+        ]
+
+        new_clip = Clip(character_id=character_id, track_id=track_id)
+
+        self.clips = [c for c in self.clips if c.id not in overlapping_ids]
+        self.clips.extend(leftover_clips)
         self.clips.append(new_clip)
+
+        # None of these _retag_range calls change len(self.text), so it's
+        # safe to apply them in any order using offsets all computed above,
+        # against the pre-edit run layout.
+        self._retag_range(start, end, new_clip.id, new_clip.source)
+        for (l_start, l_end, _old_clip), leftover_clip in zip(leftover_ranges, leftover_clips):
+            self._retag_range(l_start, l_end, leftover_clip.id, leftover_clip.source)
+
         return new_clip
 
-    # -- incremental offset maintenance (Q16/Q18 dirty-tracking mechanism) --
+    # -- plain text edits (typing, paste, programmatic replace) -------------
 
-    def apply_text_change(self, position: int, chars_removed: int, chars_added: int, new_text: str) -> list:
+    def replace_text(self, position: int, chars_removed: int, chars_added: int, new_text: str) -> list:
         """Applies one `QTextDocument.contentsChange`-shaped edit
         (position/charsRemoved/charsAdded, plus the resulting full text -
         Qt's signal doesn't carry the inserted characters themselves, so the
-        caller passes `editor.toPlainText()` after the change) and
-        incrementally shifts/extends every `Clip`'s offsets - rather than
-        reconstructing clip boundaries after the fact via text diffing.
+        caller passes `editor.toPlainText()` after the change) directly
+        against the run list - the run-based replacement for the retired
+        `apply_text_change`/offset-shift mechanism (see the module
+        docstring's "core inversion").
 
-        An edit strictly inside a clip's range extends/shrinks that same
-        `Clip` object (now stale/dirty by construction, since its text no
-        longer matches what its segments were generated from - see
-        `dirty.is_clip_dirty`). An edit whose removed range fully contains a
-        clip's range removes the `Clip` object outright, so a later,
-        textually-identical retype creates a brand-new `Clip` with a fresh id
-        (Q18) even though its audio may still cache-hit. This one incremental
-        rule resolves both Q16 ("propagate metadata across edits, kinda like
-        git") and Q18 without an actual content-diffing algorithm.
+        A clip whose entire extent falls inside `[position, position +
+        chars_removed)` is fully consumed and removed outright (Q18: a
+        later, textually-identical retype creates a brand-new `Clip` with a
+        fresh id even though its audio may still cache-hit). A clip that
+        only partially overlaps the edited range keeps its identity - the
+        portion of its run(s) outside the edited range is untouched by this
+        splice, so it simply survives, shrunk or extended in place.
+
+        The newly inserted text inherits the tag of whatever run ends
+        exactly at `position` (i.e. the text immediately to the edit's
+        left) - ordinary "typing extends the current run" behavior, same as
+        a real rich-text editor's cursor format inheritance. Typing at the
+        very start of the document, or right after a clip that this same
+        edit fully consumed, leaves the inserted text untagged.
 
         Returns the list of `Clip`s removed by this edit, for callers that
         need to react (e.g. dropping them from a track view).
         """
         removed_end = position + chars_removed
-        delta = chars_added - chars_removed
 
-        def map_offset(x: int) -> int:
-            if x <= position:
-                return x
-            if x >= removed_end:
-                return x + delta
-            # An offset that fell strictly inside the replaced range has no
-            # single well-defined mapping - collapse it to the edit's start,
-            # which is what makes a fully-consumed clip's start >= its
-            # (mapped) end below.
-            return position
+        overlapping_ids = set()
+        for run, r_start, r_end in self._iter_runs_with_offsets():
+            if run.clip_id is not None and r_start < removed_end and r_end > position:
+                overlapping_ids.add(run.clip_id)
 
-        removed_clips = []
-        for clip in list(self.clips):
-            old_start, old_end = clip.start_offset, clip.end_offset
-            fully_consumed = chars_removed > 0 and position <= old_start and removed_end >= old_end
-            if fully_consumed:
-                self.clips.remove(clip)
-                removed_clips.append(clip)
+        fully_consumed_ids = {
+            clip_id for clip_id in overlapping_ids
+            if chars_removed > 0
+            for (o_start, o_end) in [self.clip_extent(clip_id)]
+            if position <= o_start and o_end <= removed_end
+        }
+
+        removed_clips = [self.get_clip(clip_id) for clip_id in fully_consumed_ids]
+        self.clips = [c for c in self.clips if c.id not in fully_consumed_ids]
+
+        inherited = self._run_covering(position - 1) if position > 0 else None
+        inherited_clip_id = inherited.clip_id if inherited is not None else None
+        inherited_kind = inherited.kind if inherited is not None else None
+        if inherited_clip_id in fully_consumed_ids:
+            inherited_clip_id = None
+            inherited_kind = None
+
+        inserted_text = new_text[position:position + chars_added]
+
+        self._split_at(position)
+        self._split_at(removed_end)
+
+        new_run = Run(text=inserted_text, clip_id=inherited_clip_id, kind=inherited_kind)
+        new_runs: list = []
+        inserted = False
+        pos = 0
+        for run in self.runs:
+            run_end = pos + len(run.text)
+            if pos >= position and run_end <= removed_end and pos < removed_end:
+                if not inserted:
+                    new_runs.append(new_run)
+                    inserted = True
+                pos = run_end
                 continue
-            clip.start_offset = map_offset(old_start)
-            clip.end_offset = max(map_offset(old_end), clip.start_offset)
+            if not inserted and pos >= position:
+                new_runs.append(new_run)
+                inserted = True
+            new_runs.append(run)
+            pos = run_end
+        if not inserted:
+            new_runs.append(new_run)
 
-        self.text = new_text
+        self.runs = new_runs
+        self._normalize_runs()
         return removed_clips
