@@ -90,7 +90,24 @@ class KokoroEngine(
 
     async def init_pipeline_async(self, lang_code="a"):
         try:
-            self.pipeline = await asyncio.to_thread(KPipeline, lang_code=lang_code)
+            try:
+                self.pipeline = await asyncio.to_thread(KPipeline, lang_code=lang_code)
+            except Exception:
+                if lang_code == "a":
+                    raise
+                # A lang_code value left over from a different engine
+                # backend (e.g. Audio8 stores full language names like
+                # "English", not Kokoro's single-letter codes) can reach
+                # here despite the Settings dock's own combo-fallback
+                # reconciliation (kokoro_gui/qt/docks/settings_dock.py's
+                # SchemaFormWidget._set_combo) - KPipeline itself rejects it
+                # with a raw AssertionError against its own internal
+                # LANG_CODES table. Retry once with Kokoro's own safe
+                # default rather than surface that to the user; if "a"
+                # itself fails (a real problem - missing model, no network,
+                # etc.), let that failure propagate normally below.
+                self.pipeline = await asyncio.to_thread(KPipeline, lang_code="a")
+                lang_code = "a"
             if self.on_status: self.on_status(f"Pipeline Initialized ({lang_code}).", False)
             return True
         except Exception as e:

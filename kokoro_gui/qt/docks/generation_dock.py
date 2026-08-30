@@ -1,17 +1,19 @@
-"""Generation dock: input source, output config, Processing Options, and
-the speaker presets (`presets/*.json`) that snapshot the project-wide
-config.
+"""Generation dock: input source (Direct Text/Load File tabs) and the
+speaker presets (`presets/*.json`) that snapshot the project-wide config.
 
-The schema-driven config fields and the hand-built Audio Control widgets
-(volume/pitch/FX-preset-combo/apply_fx/normalize/trim) moved to
+The schema-driven config fields, the hand-built Audio Control widgets
+(volume/pitch/FX-preset-combo/apply_fx/normalize/trim), and the Output/
+Processing Options groups all moved to
 `kokoro_gui.qt.docks.settings_dock.SettingsDock` (item 2, "Settings panel
-rescoping", of the DAW-for-text redesign's remaining-work roadmap) - they're
-exactly the surface that needs to vary per clip/character, which this dock
-knows nothing about. This dock keeps the transcript editor/file-path tabs,
-the legacy `presets/*.json` combo (a distinct feature from
-`kokoro_gui.daw.models.Character` - don't conflate them), the Output group,
-and Processing Options, none of which is meaningfully scoped to a selection.
-Loading/saving a generation preset now reaches into `self.app.settings_dock`
+rescoping", of the DAW-for-text redesign's remaining-work roadmap, plus a
+later follow-up moving Output/Processing Options alongside them) - none of
+it is this dock's concern any more: Audio Control/schema fields vary per
+clip/character, which this dock knows nothing about, and Output/Processing
+Options simply belong with the rest of "how generation is configured"
+rather than sitting next to the text input. This dock keeps the transcript
+editor/file-path tabs and the legacy `presets/*.json` combo (a distinct
+feature from `kokoro_gui.daw.models.Character` - don't conflate them).
+Loading/saving a generation preset reaches into `self.app.settings_dock`
 for the fields it actually touches, since the widgets live there - the
 preset combo always targets the project-wide ("none") state, same as it did
 before this dock had any notion of per-clip/character scoping.
@@ -27,7 +29,7 @@ import re
 
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDockWidget, QFileDialog,
-    QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QMessageBox, QPushButton, QScrollArea,
     QTabWidget, QVBoxLayout, QWidget,
 )
@@ -86,39 +88,6 @@ class GenerationDock(QDockWidget):
         preset_row.addWidget(refresh_btn)
         layout.addLayout(preset_row)
 
-        # --- Output (not schema-covered, hand-built) ---
-        out_group = QGroupBox("Output")
-        out_form = QFormLayout(out_group)
-        dir_row = QWidget()
-        dir_layout = QHBoxLayout(dir_row)
-        dir_layout.setContentsMargins(0, 0, 0, 0)
-        self.out_dir_edit = QLineEdit(self.app.settings.get("out_dir", "audio_output"))
-        dir_browse = QPushButton("...")
-        dir_browse.clicked.connect(self._browse_dir)
-        dir_layout.addWidget(self.out_dir_edit)
-        dir_layout.addWidget(dir_browse)
-        out_form.addRow("Output Folder:", dir_row)
-
-        self.filename_edit = QLineEdit(self.app.settings.get("filename", "output"))
-        out_form.addRow("Base Filename:", self.filename_edit)
-        layout.addWidget(out_group)
-
-        # --- Processing options ---
-        proc_group = QGroupBox("Processing Options")
-        proc_layout = QVBoxLayout(proc_group)
-        chk_row = QHBoxLayout()
-        self.separate_check = QCheckBox("Keep Segments")
-        self.separate_check.setChecked(self.app.settings.get("separate", True))
-        self.combine_check = QCheckBox("Combine Output")
-        self.combine_check.setChecked(self.app.settings.get("combine", True))
-        self.subtitles_check = QCheckBox("Export Subtitles (.srt)")
-        self.subtitles_check.setChecked(self.app.settings.get("export_subtitles", False))
-        chk_row.addWidget(self.separate_check)
-        chk_row.addWidget(self.combine_check)
-        chk_row.addWidget(self.subtitles_check)
-        proc_layout.addLayout(chk_row)
-        layout.addWidget(proc_group)
-
         # --- Auto-split (item 7, "Auto-split on generation + combined-vs-
         # separate clip generation") ---
         auto_split_row = QHBoxLayout()
@@ -133,10 +102,6 @@ class GenerationDock(QDockWidget):
         layout.addStretch(1)
         self.setWidget(content)
 
-        for w in (self.out_dir_edit, self.filename_edit):
-            w.textChanged.connect(lambda _v: self.app.schedule_save())
-        for w in (self.separate_check, self.combine_check, self.subtitles_check):
-            w.toggled.connect(lambda _v: self.app.schedule_save())
         # auto_split_by_paragraph isn't read back through get_state() the way
         # the checkboxes above are (auto_split_and_generate reads it straight
         # off self.app.settings, since it's not part of the per-generation
@@ -147,12 +112,7 @@ class GenerationDock(QDockWidget):
 
         self.refresh_presets()
 
-    # --- output/text helpers --------------------------------------------
-
-    def _browse_dir(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, "Select output folder")
-        if d:
-            self.out_dir_edit.setText(d)
+    # --- text-source helpers ----------------------------------------------
 
     def _browse_file(self) -> None:
         f, _ = QFileDialog.getOpenFileName(self, "Select input file", filter="Documents (*.txt *.pdf *.epub)")
@@ -179,19 +139,14 @@ class GenerationDock(QDockWidget):
     # --- state (feeds app._assemble_config) ------------------------------
 
     def get_state(self) -> dict:
-        """Project-wide ("none") config values, merging `SettingsDock`'s
-        schema/Audio-Control fields (now owned by that dock) with this
-        dock's own Output/Processing Options widgets - same key shape this
-        method produced before those fields moved out."""
-        state = dict(self.app.settings_dock.get_state())
-        state.update({
-            "out_dir": self.out_dir_edit.text(),
-            "filename": self.filename_edit.text(),
-            "separate": self.separate_check.isChecked(),
-            "combine": self.combine_check.isChecked(),
-            "export_subtitles": self.subtitles_check.isChecked(),
-        })
-        return state
+        """Project-wide ("none") config values - entirely `SettingsDock`'s
+        now (schema/Audio-Control fields, plus Output/Processing Options),
+        since this dock no longer owns any config widgets itself. Kept as a
+        pass-through method rather than having every call site read
+        `self.app.settings_dock.get_state()` directly, so the "same key
+        shape as before those fields moved out" contract stays in one
+        place."""
+        return dict(self.app.settings_dock.get_state())
 
     def apply_fx_enabled(self) -> bool:
         return self.app.settings_dock.apply_fx_enabled()

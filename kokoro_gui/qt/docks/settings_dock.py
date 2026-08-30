@@ -6,7 +6,16 @@ backend-specific groups) and the hand-built Audio Control widgets
 `GenerationDock` - now scoped to whatever `self.app.selection` currently
 points at, instead of always editing the whole document's defaults.
 
-Three states, keyed off `SelectionModel.kind`:
+Also owns the Output (output folder/base filename) and Processing Options
+(keep segments/combine/export subtitles) groups, moved here from
+`GenerationDock` too - unlike Audio Control, these never vary per clip or
+character (they describe how the *whole job* writes files to disk, not one
+clip's synthesis), so they're rendered once, always enabled, and always
+read/write `app.settings` directly regardless of `self._mode` - no
+none/clip/character branching for these two groups at all.
+
+Three states, keyed off `SelectionModel.kind` (Output/Processing Options are
+NOT part of this - see above):
 
 - "none": values come from `self.app.settings` (today's whole-document
   defaults) - the literal migration of what `GenerationDock._build_schema_form`
@@ -42,8 +51,8 @@ from __future__ import annotations
 import os
 
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFormLayout,
-    QGroupBox, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
+    QGroupBox, QHBoxLayout, QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 import kokoro_gui.qt.app as qt_app_module
@@ -92,6 +101,40 @@ class SettingsDock(QDockWidget):
         self.schema_layout = QVBoxLayout(self.schema_group)
         layout.addWidget(self.schema_group)
 
+        # --- Output (not schema-covered, hand-built, moved from
+        # GenerationDock) - never per-clip/character, see module docstring ---
+        out_group = QGroupBox("Output")
+        out_form = QFormLayout(out_group)
+        dir_row = QWidget()
+        dir_layout = QHBoxLayout(dir_row)
+        dir_layout.setContentsMargins(0, 0, 0, 0)
+        self.out_dir_edit = QLineEdit(self.app.settings.get("out_dir", "audio_output"))
+        dir_browse = QPushButton("...")
+        dir_browse.clicked.connect(self._browse_dir)
+        dir_layout.addWidget(self.out_dir_edit)
+        dir_layout.addWidget(dir_browse)
+        out_form.addRow("Output Folder:", dir_row)
+
+        self.filename_edit = QLineEdit(self.app.settings.get("filename", "output"))
+        out_form.addRow("Base Filename:", self.filename_edit)
+        layout.addWidget(out_group)
+
+        # --- Processing options (moved from GenerationDock) ---
+        proc_group = QGroupBox("Processing Options")
+        proc_layout = QVBoxLayout(proc_group)
+        chk_row = QHBoxLayout()
+        self.separate_check = QCheckBox("Keep Segments")
+        self.separate_check.setChecked(self.app.settings.get("separate", True))
+        self.combine_check = QCheckBox("Combine Output")
+        self.combine_check.setChecked(self.app.settings.get("combine", True))
+        self.subtitles_check = QCheckBox("Export Subtitles (.srt)")
+        self.subtitles_check.setChecked(self.app.settings.get("export_subtitles", False))
+        chk_row.addWidget(self.separate_check)
+        chk_row.addWidget(self.combine_check)
+        chk_row.addWidget(self.subtitles_check)
+        proc_layout.addLayout(chk_row)
+        layout.addWidget(proc_group)
+
         # --- Audio control (volume/pitch/FX preset - hand-built, moved
         # from GenerationDock) ---
         audio_group = QGroupBox("Audio Control")
@@ -138,9 +181,24 @@ class SettingsDock(QDockWidget):
         self.apply_fx_check.toggled.connect(lambda v: self._on_hand_built_changed("apply_fx", v))
         self.fx_preset_combo.currentTextChanged.connect(self._on_fx_preset_selected)
 
+        # Output/Processing Options: never per-clip/character (see module
+        # docstring) - always write straight to app.settings, unlike every
+        # other widget wired above.
+        for w in (self.out_dir_edit, self.filename_edit):
+            w.textChanged.connect(lambda _v: self.app.schedule_save())
+        for w in (self.separate_check, self.combine_check, self.subtitles_check):
+            w.toggled.connect(lambda _v: self.app.schedule_save())
+
         self.refresh_fx_presets()
         self._build_for_selection()
         self.app.selection.changed.connect(self._on_selection_changed)
+
+    # --- Output (never per-clip/character) ---------------------------------
+
+    def _browse_dir(self) -> None:
+        d = QFileDialog.getExistingDirectory(self, "Select output folder")
+        if d:
+            self.out_dir_edit.setText(d)
 
     # --- selection-driven three-state rendering ---------------------------
 
@@ -381,9 +439,21 @@ class SettingsDock(QDockWidget):
 
     def get_state(self) -> dict:
         """Always the project-wide ("none") state's values, regardless of
-        what's currently rendered - see this module's docstring."""
+        what's currently rendered - see this module's docstring. Output/
+        Processing Options are read straight off their own (always-live,
+        never torn down) widgets - unlike the schema/Audio-Control fields
+        above, they have no clip/character-mode snapshot to fall back to,
+        since they never vary by mode in the first place."""
         src = self._snapshot_none_values() if self._mode == "none" else self._none_values
-        return {k: v for k, v in src.items() if k not in _INTERNAL_ONLY_KEYS}
+        state = {k: v for k, v in src.items() if k not in _INTERNAL_ONLY_KEYS}
+        state.update({
+            "out_dir": self.out_dir_edit.text(),
+            "filename": self.filename_edit.text(),
+            "separate": self.separate_check.isChecked(),
+            "combine": self.combine_check.isChecked(),
+            "export_subtitles": self.subtitles_check.isChecked(),
+        })
+        return state
 
     def apply_fx_enabled(self) -> bool:
         if self._mode == "none":

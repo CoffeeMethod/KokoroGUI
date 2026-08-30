@@ -7,7 +7,7 @@ from kokoro_gui.qt import settings as qt_settings
 
 def test_save_settings_writes_config_qt_json(qt_app):
     import kokoro_gui.qt.app as qt_app_module
-    qt_app.generation_dock.filename_edit.setText("my_output")
+    qt_app.settings_dock.filename_edit.setText("my_output")
     qt_app.save_settings()
 
     assert os.path.exists(qt_app_module.CONFIG_FILE)
