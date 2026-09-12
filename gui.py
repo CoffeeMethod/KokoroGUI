@@ -2,6 +2,7 @@ import os
 import time
 import json
 import re
+import queue
 import playback
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
@@ -11,6 +12,10 @@ from kokoro_engine import KokoroEngine
 # Set Default Appearance (will be overridden by settings)
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
+ctk.DrawEngine.preferred_drawing_method = "polygon_shapes"
+ctk.ThemeManager.theme["CTkFont"]["size"] = 18
+
+FONT_SCALE = 1.4
 
 CONFIG_FILE = "config.json"
 PRESETS_DIR = "presets"
@@ -19,6 +24,8 @@ FX_PRESETS_DIR = os.path.join(PRESETS_DIR, "fx")
 class TTSApp(ctk.CTk):
     def __init__(self):
         super().__init__()
+        self._ui_callbacks = queue.Queue()
+        self.after(50, self._process_ui_callbacks)
 
         self.title("Kokoro TTS GUI")
         self.geometry("700x900")
@@ -181,7 +188,38 @@ class TTSApp(ctk.CTk):
         
         # Init Pipeline
         self.status_label.configure(text="Initializing engine...")
-        self.engine.worker.run_coro(self.engine.init_pipeline_async(self.lang_var.get()))
+        self._pipeline_init_future = self.engine.worker.run_coro(
+            self.engine.init_pipeline_async(self.lang_var.get(), notify=False)
+        )
+        self.after(100, self._poll_pipeline_initialization)
+
+    def _post_to_ui(self, callback):
+        self._ui_callbacks.put(callback)
+
+    def _process_ui_callbacks(self):
+        while True:
+            try:
+                callback = self._ui_callbacks.get_nowait()
+            except queue.Empty:
+                break
+            callback()
+        self.after(50, self._process_ui_callbacks)
+
+    def _poll_pipeline_initialization(self):
+        if not self._pipeline_init_future.done():
+            self.after(100, self._poll_pipeline_initialization)
+            return
+
+        try:
+            ready = self._pipeline_init_future.result()
+        except Exception as exc:
+            self.status_label.configure(text=f"Engine initialization failed: {exc}", text_color="#ff5555")
+            return
+
+        if ready:
+            self.status_label.configure(text="Ready", text_color="gray")
+        else:
+            self.status_label.configure(text="Engine initialization failed.", text_color="#ff5555")
 
     def get_all_voices(self, lang_code=None):
         if lang_code is None:
@@ -433,6 +471,10 @@ class TTSApp(ctk.CTk):
             ctk.set_widget_scaling(scale_float)
         except Exception:
             ctk.set_widget_scaling(1.0)
+
+    @staticmethod
+    def ui_font(family, size, weight="normal"):
+        return ctk.CTkFont(family=family, size=round(size * FONT_SCALE), weight=weight)
 
     # --- Preset Management ---
     
@@ -753,12 +795,14 @@ class TTSApp(ctk.CTk):
             try:
                 success, err = future.result()
                 if success:
-                    self.after(0, lambda: self.mix_status_label.configure(text="Playing preview...", text_color="green"))
-                    playback.play(tmp_audio_path)
+                    def _play_preview():
+                        self.mix_status_label.configure(text="Playing preview...", text_color="green")
+                        playback.play(tmp_audio_path)
+                    self._post_to_ui(_play_preview)
                 else:
-                    self.after(0, lambda: self.mix_status_label.configure(text=f"Preview failed: {err}", text_color="red"))
+                    self._post_to_ui(lambda: self.mix_status_label.configure(text=f"Preview failed: {err}", text_color="red"))
             except Exception as e:
-                self.after(0, lambda: self.mix_status_label.configure(text=f"Error: {e}", text_color="red"))
+                self._post_to_ui(lambda error=str(e): self.mix_status_label.configure(text=f"Error: {error}", text_color="red"))
 
         future = self.engine.worker.run_coro(_run_preview())
         future.add_done_callback(_on_done)
@@ -786,16 +830,16 @@ class TTSApp(ctk.CTk):
         self.set_ui_state(True) # Reuse existing lock
         
         def _done(future):
-            self.after(0, lambda: self.set_ui_state(False))
+            self._post_to_ui(lambda: self.set_ui_state(False))
             try:
                 success, msg, _ = future.result()
                 if success:
-                    self.after(0, lambda: self.mix_status_label.configure(text=f"Saved: {name}", text_color="green"))
-                    self.after(0, self.refresh_voice_lists)
+                    self._post_to_ui(lambda: self.mix_status_label.configure(text=f"Saved: {name}", text_color="green"))
+                    self._post_to_ui(self.refresh_voice_lists)
                 else:
-                    self.after(0, lambda: self.mix_status_label.configure(text=f"Error: {msg}", text_color="red"))
+                    self._post_to_ui(lambda: self.mix_status_label.configure(text=f"Error: {msg}", text_color="red"))
             except Exception as e:
-                self.after(0, lambda: self.mix_status_label.configure(text=f"Error: {e}", text_color="red"))
+                self._post_to_ui(lambda error=str(e): self.mix_status_label.configure(text=f"Error: {error}", text_color="red"))
 
         future = self.engine.worker.run_coro(self.engine.mix_voices(v1, v2, ratio, name, op=op))
         future.add_done_callback(_done)
@@ -887,7 +931,7 @@ class TTSApp(ctk.CTk):
         self.mix_status_label.pack(pady=5)
         
         # 4. List
-        ctk.CTkLabel(parent, text="Custom Voices:", font=("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=(20,5))
+        ctk.CTkLabel(parent, text="Custom Voices:", font=self.ui_font("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=(20,5))
         self.custom_list_frame = ctk.CTkScrollableFrame(parent, height=200)
         self.custom_list_frame.pack(fill="x", padx=10, pady=5)
         
@@ -925,12 +969,12 @@ class TTSApp(ctk.CTk):
         dyn_frame = ctk.CTkFrame(scroll)
         dyn_frame.pack(fill="x", padx=5, pady=5)
         
-        ctk.CTkLabel(dyn_frame, text="Dynamics", font=("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
+        ctk.CTkLabel(dyn_frame, text="Dynamics", font=self.ui_font("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
         
         # Compressor
         c_head = ctk.CTkFrame(dyn_frame, fg_color="transparent")
         c_head.pack(fill="x", padx=5)
-        ctk.CTkCheckBox(c_head, text="Compressor", variable=self.comp_enabled, font=("Roboto", 12, "bold")).pack(side="left")
+        ctk.CTkCheckBox(c_head, text="Compressor", variable=self.comp_enabled, font=self.ui_font("Roboto", 12, "bold")).pack(side="left")
         
         c_body = ctk.CTkFrame(dyn_frame)
         c_body.pack(fill="x", padx=10, pady=2)
@@ -940,7 +984,7 @@ class TTSApp(ctk.CTk):
         # Limiter
         l_head = ctk.CTkFrame(dyn_frame, fg_color="transparent")
         l_head.pack(fill="x", padx=5, pady=(5,0))
-        ctk.CTkCheckBox(l_head, text="Limiter", variable=self.limiter_enabled, font=("Roboto", 12, "bold")).pack(side="left")
+        ctk.CTkCheckBox(l_head, text="Limiter", variable=self.limiter_enabled, font=self.ui_font("Roboto", 12, "bold")).pack(side="left")
         
         l_body = ctk.CTkFrame(dyn_frame)
         l_body.pack(fill="x", padx=10, pady=2)
@@ -949,13 +993,13 @@ class TTSApp(ctk.CTk):
         # Gain
         g_head = ctk.CTkFrame(dyn_frame, fg_color="transparent")
         g_head.pack(fill="x", padx=5, pady=(5,0))
-        ctk.CTkCheckBox(g_head, text="Gain", variable=self.gain_enabled, font=("Roboto", 12, "bold")).pack(side="left")
+        ctk.CTkCheckBox(g_head, text="Gain", variable=self.gain_enabled, font=self.ui_font("Roboto", 12, "bold")).pack(side="left")
         _create_slider(dyn_frame, "dB", self.gain_db, -20, 20, 80, 'gain_label')
 
         # --- 2. EQ & Filters ---
         eq_frame = ctk.CTkFrame(scroll)
         eq_frame.pack(fill="x", padx=5, pady=5)
-        ctk.CTkLabel(eq_frame, text="EQ & Filters", font=("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
+        ctk.CTkLabel(eq_frame, text="EQ & Filters", font=self.ui_font("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
         
         _create_slider(eq_frame, "Bass (LowShelf)", self.eq_bass, -20, 20, 40, 'bass_label')
         _create_slider(eq_frame, "Treble (HighShelf)", self.eq_treble, -20, 20, 40, 'treble_label')
@@ -975,12 +1019,12 @@ class TTSApp(ctk.CTk):
         # --- 3. Spatial & Time ---
         sp_frame = ctk.CTkFrame(scroll)
         sp_frame.pack(fill="x", padx=5, pady=5)
-        ctk.CTkLabel(sp_frame, text="Spatial & Time", font=("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
+        ctk.CTkLabel(sp_frame, text="Spatial & Time", font=self.ui_font("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
         
         # Reverb
         r_head = ctk.CTkFrame(sp_frame, fg_color="transparent")
         r_head.pack(fill="x", padx=5)
-        ctk.CTkCheckBox(r_head, text="Reverb", variable=self.reverb_enabled, font=("Roboto", 12, "bold")).pack(side="left")
+        ctk.CTkCheckBox(r_head, text="Reverb", variable=self.reverb_enabled, font=self.ui_font("Roboto", 12, "bold")).pack(side="left")
         
         r_body = ctk.CTkFrame(sp_frame)
         r_body.pack(fill="x", padx=10, pady=2)
@@ -992,7 +1036,7 @@ class TTSApp(ctk.CTk):
         # Delay
         d_head = ctk.CTkFrame(sp_frame, fg_color="transparent")
         d_head.pack(fill="x", padx=5, pady=(5,0))
-        ctk.CTkCheckBox(d_head, text="Delay", variable=self.delay_enabled, font=("Roboto", 12, "bold")).pack(side="left")
+        ctk.CTkCheckBox(d_head, text="Delay", variable=self.delay_enabled, font=self.ui_font("Roboto", 12, "bold")).pack(side="left")
         
         d_body = ctk.CTkFrame(sp_frame)
         d_body.pack(fill="x", padx=10, pady=2)
@@ -1003,7 +1047,7 @@ class TTSApp(ctk.CTk):
         # --- 4. Guitar / Modulation ---
         mod_frame = ctk.CTkFrame(scroll)
         mod_frame.pack(fill="x", padx=5, pady=5)
-        ctk.CTkLabel(mod_frame, text="Guitar / Modulation", font=("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
+        ctk.CTkLabel(mod_frame, text="Guitar / Modulation", font=self.ui_font("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
 
         # Chorus
         ch_head = ctk.CTkFrame(mod_frame, fg_color="transparent")
@@ -1033,7 +1077,7 @@ class TTSApp(ctk.CTk):
         # --- 5. Quality & Pitch ---
         q_frame = ctk.CTkFrame(scroll)
         q_frame.pack(fill="x", padx=5, pady=5)
-        ctk.CTkLabel(q_frame, text="Quality / Pitch", font=("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
+        ctk.CTkLabel(q_frame, text="Quality / Pitch", font=self.ui_font("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
         
         # Pitch Shift
         ps_head = ctk.CTkFrame(q_frame, fg_color="transparent")
@@ -1067,7 +1111,7 @@ class TTSApp(ctk.CTk):
         input_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         input_frame.grid_columnconfigure(0, weight=1)
         
-        ctk.CTkLabel(input_frame, text="Input Source", font=("Roboto", 16, "bold")).grid(row=0, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(input_frame, text="Input Source", font=self.ui_font("Roboto", 16, "bold")).grid(row=0, column=0, sticky="w", padx=10, pady=5)
         
         self.tab_view = ctk.CTkTabview(input_frame, height=150)
         self.tab_view.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
@@ -1094,7 +1138,7 @@ class TTSApp(ctk.CTk):
         config_frame.grid(row=1, column=0, sticky="ew", pady=10)
         config_frame.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(config_frame, text="Configuration", font=("Roboto", 16, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(config_frame, text="Configuration", font=self.ui_font("Roboto", 16, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
 
         # Presets Row
         preset_frame = ctk.CTkFrame(config_frame, fg_color="transparent")
@@ -1183,7 +1227,7 @@ class TTSApp(ctk.CTk):
         audio_frame.grid(row=2, column=0, sticky="ew", pady=10)
         audio_frame.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(audio_frame, text="Audio Control", font=("Roboto", 16, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(audio_frame, text="Audio Control", font=self.ui_font("Roboto", 16, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
 
         # Volume
         self.vol_label = ctk.CTkLabel(audio_frame, text="Volume: 100%")
@@ -1221,7 +1265,7 @@ class TTSApp(ctk.CTk):
         adv_frame = ctk.CTkFrame(main_frame)
         adv_frame.grid(row=3, column=0, sticky="ew", pady=10)
         
-        ctk.CTkLabel(adv_frame, text="Processing Options", font=("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
+        ctk.CTkLabel(adv_frame, text="Processing Options", font=self.ui_font("Roboto", 14, "bold")).pack(anchor="w", padx=10, pady=5)
         
         chk_frame = ctk.CTkFrame(adv_frame, fg_color="transparent")
         chk_frame.pack(fill="x", padx=10, pady=5)
@@ -1309,9 +1353,9 @@ class TTSApp(ctk.CTk):
             row = ctk.CTkFrame(self.lex_list_frame)
             row.pack(fill="x", pady=2)
             
-            ctk.CTkLabel(row, text=orig, width=150, anchor="w", font=("Consolas", 12)).pack(side="left", padx=10)
+            ctk.CTkLabel(row, text=orig, width=150, anchor="w", font=self.ui_font("Consolas", 12)).pack(side="left", padx=10)
             ctk.CTkLabel(row, text="->", width=30).pack(side="left")
-            ctk.CTkLabel(row, text=rep, width=150, anchor="w", font=("Consolas", 12)).pack(side="left", padx=10)
+            ctk.CTkLabel(row, text=rep, width=150, anchor="w", font=self.ui_font("Consolas", 12)).pack(side="left", padx=10)
             
             ctk.CTkButton(row, text="X", width=30, fg_color="#c42b1c", command=lambda k=orig: self.delete_lexicon_rule(k)).pack(side="right", padx=5)
 
@@ -1324,7 +1368,7 @@ class TTSApp(ctk.CTk):
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10,0))
         
-        ctk.CTkLabel(header_frame, text="Kokoro TTS", font=("Roboto", 20, "bold")).pack(side="left", padx=5)
+        ctk.CTkLabel(header_frame, text="Kokoro TTS", font=self.ui_font("Roboto", 20, "bold")).pack(side="left", padx=5)
         ctk.CTkButton(header_frame, text="⚙ Settings", width=80, height=28, command=self.open_settings).pack(side="right")
 
         # Main Tabs
@@ -1350,7 +1394,7 @@ class TTSApp(ctk.CTk):
         self.status_label = ctk.CTkLabel(action_frame, text="Ready", text_color="gray", anchor="w")
         self.status_label.pack(fill="x", padx=10, pady=(5,0))
         
-        self.detail_label = ctk.CTkLabel(action_frame, text="...", font=("Consolas", 10), text_color="gray", anchor="w")
+        self.detail_label = ctk.CTkLabel(action_frame, text="...", font=self.ui_font("Consolas", 10), text_color="gray", anchor="w")
         self.detail_label.pack(fill="x", padx=10, pady=(0,5))
 
         self.progress_bar = ctk.CTkProgressBar(action_frame)
@@ -1367,7 +1411,7 @@ class TTSApp(ctk.CTk):
         self.preview_btn.pack(side="left", fill="x", expand=True, padx=5)
         
         btn_txt = "Start Real-time JIT" if self.jit_enabled.get() else "Start Generation"
-        self.start_btn = ctk.CTkButton(btn_frame, text=btn_txt, command=self.start_conversion, height=40, font=("Roboto", 14, "bold"))
+        self.start_btn = ctk.CTkButton(btn_frame, text=btn_txt, command=self.start_conversion, height=40, font=self.ui_font("Roboto", 14, "bold"))
         self.start_btn.pack(side="left", fill="x", expand=True, padx=5)
         
         self.cancel_btn = ctk.CTkButton(btn_frame, text="Cancel", command=self.cancel_conversion, height=40, fg_color="#c42b1c", hover_color="#8a1f14", state="disabled")
@@ -1389,27 +1433,25 @@ class TTSApp(ctk.CTk):
         frame.pack(fill="both", expand=True, padx=20, pady=20)
         
         # Appearance
-        ctk.CTkLabel(frame, text="Appearance Mode:", font=("Roboto", 14, "bold")).pack(anchor="w", pady=(10, 5))
+        ctk.CTkLabel(frame, text="Appearance Mode:", font=self.ui_font("Roboto", 14, "bold")).pack(anchor="w", pady=(10, 5))
         app_menu = ctk.CTkOptionMenu(frame, values=["System", "Dark", "Light"], command=self.change_appearance)
         app_menu.set(self.settings["appearance"])
         app_menu.pack(fill="x", pady=5)
         
         # Scaling
-        ctk.CTkLabel(frame, text="UI Scaling:", font=("Roboto", 14, "bold")).pack(anchor="w", pady=(15, 5))
-        scale_menu = ctk.CTkOptionMenu(frame, values=["80%", "90%", "100%", "110%", "120%"], command=self.change_scaling)
+        ctk.CTkLabel(frame, text="UI Scaling:", font=self.ui_font("Roboto", 14, "bold")).pack(anchor="w", pady=(15, 5))
+        scale_menu = ctk.CTkOptionMenu(frame, values=["80%", "90%", "100%", "110%", "120%", "150%", "200%", "250%", "300%"], command=self.change_scaling)
         scale_menu.set(self.settings["scaling"])
         scale_menu.pack(fill="x", pady=5)
         
         # Caching
-        ctk.CTkLabel(frame, text="Generation Cache:", font=("Roboto", 14, "bold")).pack(anchor="w", pady=(15, 5))
+        ctk.CTkLabel(frame, text="Generation Cache:", font=self.ui_font("Roboto", 14, "bold")).pack(anchor="w", pady=(15, 5))
         ctk.CTkCheckBox(frame, text="Enable Generation Caching", variable=self.caching_enabled).pack(anchor="w", pady=5)
         
         # JIT
-        ctk.CTkLabel(frame, text="Real-time / JIT:", font=("Roboto", 14, "bold")).pack(anchor="w", pady=(15, 5))
+        ctk.CTkLabel(frame, text="Real-time / JIT:", font=self.ui_font("Roboto", 14, "bold")).pack(anchor="w", pady=(15, 5))
         ctk.CTkCheckBox(frame, text="Enable JIT Generation (Streaming)", variable=self.jit_enabled, command=self.on_jit_toggle).pack(anchor="w", pady=5)
         
-        ctk.CTkLabel(frame, text="Note: Restart may be required for optimal scaling.", text_color="gray", font=("Arial", 10)).pack(pady=20)
-
         ctk.CTkButton(frame, text="Close", command=toplevel.destroy).pack(side="bottom", pady=10)
 
     def change_appearance(self, new_val):
@@ -1491,11 +1533,10 @@ class TTSApp(ctk.CTk):
 
     def on_engine_status(self, msg, is_error):
         color = "#ff5555" if is_error else "gray" # Red or Gray
-        # Schedule update on main thread
-        self.after(0, lambda: self.status_label.configure(text=msg.split('\n')[0], text_color=color))
+        self._post_to_ui(lambda: self.status_label.configure(text=msg.split('\n')[0], text_color=color))
         
         if is_error and "pip install" in msg:
-            self.after(0, lambda: messagebox.showerror("Missing Dependencies", msg))
+            self._post_to_ui(lambda: messagebox.showerror("Missing Dependencies", msg))
 
     def on_engine_progress(self, percent, elapsed, eta, detail):
         # Schedule update
@@ -1504,10 +1545,10 @@ class TTSApp(ctk.CTk):
             elapsed_str = time.strftime('%M:%S', time.gmtime(elapsed))
             self.info_label.configure(text=f"Time: {elapsed_str} / ETA: {eta} | {int(percent)}%")
             self.detail_label.configure(text=detail)
-        self.after(0, _update)
+        self._post_to_ui(_update)
 
     def on_engine_finish(self):
-        self.after(0, lambda: self.set_ui_state(False))
+        self._post_to_ui(lambda: self.set_ui_state(False))
 
     def set_ui_state(self, is_running):
         state = "disabled" if is_running else "normal"
@@ -1629,7 +1670,7 @@ class TTSApp(ctk.CTk):
                 except Exception as e:
                     self.status_label.configure(text=f"Preview error: {e}", text_color="red")
             
-            self.after(0, _ui_update)
+            self._post_to_ui(_ui_update)
         
         future = self.engine.worker.run_coro(self.engine.generate_preview(preview_text, voice, speed, tmp_path, extra_config, lang_code=self.lang_var.get()))
         future.add_done_callback(_on_preview_done)

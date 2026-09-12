@@ -14,6 +14,18 @@ def test_generate_preview_writes_wav_file(engine, fake_pipeline, tmp_path):
     assert os.path.getsize(out_path) > 0
 
 
+def test_generate_preview_reuses_initialized_pipeline(engine, fake_pipeline, tmp_path, monkeypatch):
+    engine.pipeline = fake_pipeline
+
+    def _boom(lang_code="a"):
+        raise AssertionError("preview should reuse the initialized pipeline")
+
+    monkeypatch.setattr("kokoro_engine.get_thread_pipeline", _boom)
+    out_path = str(tmp_path / "preview.wav")
+
+    assert asyncio.run(engine.generate_preview("Hello.", "af_heart", 1.0, out_path)) is True
+
+
 def test_generate_preview_truncates_multispeaker_to_two_segments(engine, fake_pipeline, tmp_path, monkeypatch):
     calls = []
     orig_call = fake_pipeline.__call__

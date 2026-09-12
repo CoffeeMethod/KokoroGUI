@@ -1,6 +1,7 @@
 """Tests for TTSApp.load_settings/save_settings/apply_settings
 (gui.py:263-436)."""
 import json
+from unittest.mock import call, MagicMock
 
 
 def test_load_settings_defaults_when_no_config_file(tts_app):
@@ -47,3 +48,33 @@ def test_change_appearance_and_scaling_persist_to_settings(tts_app):
 
     assert tts_app.settings["appearance"] == "Light"
     assert tts_app.settings["scaling"] == "120%"
+
+
+def test_change_scaling_uses_requested_widget_scale_without_cap(tts_app, monkeypatch):
+    import gui
+    set_widget_scaling = MagicMock()
+    monkeypatch.setattr(gui.ctk, "set_widget_scaling", set_widget_scaling)
+
+    tts_app.change_scaling("250%")
+    tts_app.change_scaling("300%")
+
+    assert set_widget_scaling.call_args_list == [call(2.5), call(3.0)]
+
+
+def test_apply_settings_falls_back_to_default_for_invalid_scale(tts_app, monkeypatch):
+    import gui
+    set_widget_scaling = MagicMock()
+    monkeypatch.setattr(gui.ctk, "set_widget_scaling", set_widget_scaling)
+    tts_app.settings["scaling"] = "invalid"
+
+    tts_app.apply_settings()
+
+    set_widget_scaling.assert_called_once_with(1.0)
+
+
+def test_accessibility_fonts_are_larger_than_control_base_fonts(tts_app):
+    import gui
+
+    assert gui.ctk.ThemeManager.theme["CTkFont"]["size"] == 18
+    assert tts_app.ui_font("Roboto", 14, "bold").cget("size") == 20
+    assert gui.ctk.DrawEngine.preferred_drawing_method == "polygon_shapes"

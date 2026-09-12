@@ -261,10 +261,10 @@ class KokoroEngine:
 
         return audio
 
-    async def init_pipeline_async(self, lang_code="a"):
+    async def init_pipeline_async(self, lang_code="a", notify=True):
         try:
             self.pipeline = await asyncio.to_thread(KPipeline, lang_code=lang_code)
-            if self.on_status: self.on_status(f"Pipeline Initialized ({lang_code}).", False)
+            if notify and self.on_status: self.on_status(f"Pipeline Initialized ({lang_code}).", False)
             return True
         except Exception as e:
             msg = f"Pipeline Init Failed: {e}"
@@ -274,7 +274,7 @@ class KokoroEngine:
             elif lang_code == 'z' and "pypinyin" in err_str:
                  msg += "\n(Try: pip install pypinyin)"
             
-            if self.on_status: self.on_status(msg, True)
+            if notify and self.on_status: self.on_status(msg, True)
             return False
 
     async def mix_voices(self, v1_name, v2_name, ratio, new_name, op='mix'):
@@ -338,8 +338,9 @@ class KokoroEngine:
 
     async def generate_preview(self, text, voice, speed, output_path, extra_config=None, voice_tensor=None, lang_code='a'):
         def _gen():
-            # Use specific lang code for preview
-            p = get_thread_pipeline(lang_code)
+            # Reuse the initialized pipeline when it serves the selected language.
+            # Creating another KPipeline reloads the model and rechecks Hugging Face.
+            p = self.pipeline if getattr(self.pipeline, "lang_code", None) == lang_code else get_thread_pipeline(lang_code)
             if not p: return False
 
             try:
