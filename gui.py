@@ -5,7 +5,7 @@ import re
 import queue
 import playback
 import customtkinter as ctk
-from tkinter import filedialog, messagebox
+from tkinter import TclError, filedialog, messagebox
 import threading
 from kokoro_engine import KokoroEngine
 
@@ -13,9 +13,13 @@ from kokoro_engine import KokoroEngine
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 ctk.DrawEngine.preferred_drawing_method = "polygon_shapes"
-ctk.ThemeManager.theme["CTkFont"]["size"] = 18
 
-FONT_SCALE = 1.4
+BASE_FONT_SIZE = 13
+DEFAULT_FONT_SIZE = 24
+UI_FONT_FAMILY = "Liberation Sans"
+MONOSPACE_FONT_FAMILY = "Liberation Mono"
+ctk.ThemeManager.theme["CTkFont"]["family"] = UI_FONT_FAMILY
+ctk.ThemeManager.theme["CTkFont"]["size"] = DEFAULT_FONT_SIZE
 
 CONFIG_FILE = "config.json"
 PRESETS_DIR = "presets"
@@ -39,6 +43,8 @@ class TTSApp(ctk.CTk):
 
         # Load Settings
         self.settings = self.load_settings()
+        self.font_size = self._parse_font_size(self.settings["font_size"])
+        self._font_size_ratios = {}
         self.apply_settings()
 
         # Initialize Engine
@@ -185,6 +191,7 @@ class TTSApp(ctk.CTk):
         self.setup_autosave()
 
         self.create_widgets()
+        self._set_rendered_font_size(self.font_size)
         
         # Init Pipeline
         self.status_label.configure(text="Initializing engine...")
@@ -302,6 +309,7 @@ class TTSApp(ctk.CTk):
         defaults = {
             "appearance": "Dark", 
             "scaling": "100%",
+            "font_size": DEFAULT_FONT_SIZE,
             "lang_code": "a",
             "voice": "af_heart",
             "filename": "output",
@@ -368,7 +376,12 @@ class TTSApp(ctk.CTk):
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    return {**defaults, **json.load(f)}
+                    loaded = json.load(f)
+                if "font_size" not in loaded and "font_scaling" in loaded:
+                    scale = float(str(loaded["font_scaling"]).replace("%", "")) / 100
+                    loaded["font_size"] = round(BASE_FONT_SIZE * scale / 2) * 2
+                loaded.pop("font_scaling", None)
+                return {**defaults, **loaded}
             except Exception:
                 pass
         return defaults
@@ -463,6 +476,8 @@ class TTSApp(ctk.CTk):
 
     def apply_settings(self):
         ctk.set_appearance_mode(self.settings["appearance"])
+        self.font_size = self._parse_font_size(self.settings["font_size"])
+        ctk.ThemeManager.theme["CTkFont"]["size"] = self.font_size
         
         # Parse scaling
         scale_str = self.settings["scaling"].replace("%", "")
@@ -473,8 +488,42 @@ class TTSApp(ctk.CTk):
             ctk.set_widget_scaling(1.0)
 
     @staticmethod
-    def ui_font(family, size, weight="normal"):
-        return ctk.CTkFont(family=family, size=round(size * FONT_SCALE), weight=weight)
+    def _parse_font_size(value):
+        try:
+            size = int(str(value).replace("px", "").strip())
+            return size if size > 0 else DEFAULT_FONT_SIZE
+        except (TypeError, ValueError):
+            return DEFAULT_FONT_SIZE
+
+    def ui_font(self, family, size, weight="normal"):
+        if family == "Roboto":
+            family = UI_FONT_FAMILY
+        elif family == "Consolas":
+            family = MONOSPACE_FONT_FAMILY
+        return ctk.CTkFont(family=family, size=round(size * self.font_size / BASE_FONT_SIZE), weight=weight)
+
+    def _set_rendered_font_size(self, font_size):
+        seen_fonts = set()
+
+        def scale_fonts(widget):
+            fonts = [getattr(widget, "_font", None)]
+            try:
+                fonts.append(widget.cget("font"))
+            except (AttributeError, TclError, ValueError):
+                pass
+
+            for font in fonts:
+                if isinstance(font, ctk.CTkFont) and id(font) not in seen_fonts:
+                    seen_fonts.add(id(font))
+                    ratio = self._font_size_ratios.setdefault(id(font), font.cget("size") / self.font_size)
+                    widget_scale = widget._get_widget_scaling()
+                    font.configure(size=round(font_size * ratio / widget_scale))
+
+            for child in widget.winfo_children():
+                scale_fonts(child)
+
+        scale_fonts(self)
+        self.update_idletasks()
 
     # --- Preset Management ---
     
@@ -1420,14 +1469,14 @@ class TTSApp(ctk.CTk):
     def open_settings(self):
         toplevel = ctk.CTkToplevel(self)
         toplevel.title("Settings")
-        toplevel.geometry("400x380")
+        toplevel.geometry("400x455")
         toplevel.grab_set() # Modal
         
         # Center the window
         toplevel.update_idletasks()
         x = self.winfo_x() + (self.winfo_width() // 2) - (toplevel.winfo_width() // 2)
         y = self.winfo_y() + (self.winfo_height() // 2) - (toplevel.winfo_height() // 2)
-        toplevel.geometry(f"400x380+{x}+{y}")
+        toplevel.geometry(f"400x455+{x}+{y}")
 
         frame = ctk.CTkFrame(toplevel)
         frame.pack(fill="both", expand=True, padx=20, pady=20)
@@ -1443,6 +1492,12 @@ class TTSApp(ctk.CTk):
         scale_menu = ctk.CTkOptionMenu(frame, values=["80%", "90%", "100%", "110%", "120%", "150%", "200%", "250%", "300%"], command=self.change_scaling)
         scale_menu.set(self.settings["scaling"])
         scale_menu.pack(fill="x", pady=5)
+
+        # CustomTkinter sizes fonts in pixels; this does not alter widget or window dimensions.
+        ctk.CTkLabel(frame, text="Font Size:", font=self.ui_font("Roboto", 14, "bold")).pack(anchor="w", pady=(15, 5))
+        font_menu = ctk.CTkOptionMenu(frame, values=["14 px", "16 px", "18 px", "20 px", "22 px", "24 px", "26 px", "28 px", "32 px", "36 px", "40 px"], command=self.change_font_size)
+        font_menu.set(f"{self.font_size} px")
+        font_menu.pack(fill="x", pady=5)
         
         # Caching
         ctk.CTkLabel(frame, text="Generation Cache:", font=self.ui_font("Roboto", 14, "bold")).pack(anchor="w", pady=(15, 5))
@@ -1463,6 +1518,14 @@ class TTSApp(ctk.CTk):
         self.settings["scaling"] = new_val
         scale_float = float(new_val.replace("%", "")) / 100
         ctk.set_widget_scaling(scale_float)
+        self.save_settings()
+
+    def change_font_size(self, new_val):
+        new_size = self._parse_font_size(new_val)
+        self.font_size = new_size
+        self.settings["font_size"] = new_size
+        ctk.ThemeManager.theme["CTkFont"]["size"] = new_size
+        self._set_rendered_font_size(new_size)
         self.save_settings()
 
     def on_jit_toggle(self):
