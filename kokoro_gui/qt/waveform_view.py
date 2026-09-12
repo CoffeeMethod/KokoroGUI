@@ -1,36 +1,21 @@
-"""Single-track waveform view spike (Workstream 3 of
-Claude/PLAN_daw_ui_ux_redesign.md) - flagged, in the prior Tk->Qt migration
-plan (Claude/PLAN_qt_and_engine_abstraction.md's Phase 3b), as "the point of
-first real technical risk in the whole plan... treat it as a standalone
-spike/prototype before wiring it into the docked shell."
+"""Waveform rendering primitives: `WaveformItem` (the peak-envelope path the
+timeline draws inside every generated clip block) and `WaveformView`, the
+single-file view the original Workstream 3 spike validated.
 
-Nothing here is wired into kokoro_gui/qt/app.py or any dock - `WaveformPanel`
-is a freestanding widget, verified only by its own tests (and
-scripts/manual_waveform_spike.py for a visual check automated tests can't
-give). The full multi-track timeline (clip/track/document integration,
-drag/trim, undo, auto-track-assignment, per-clip FX buttons) is deliberately
-a separate, later pass once this spike is signed off.
+The spike's `WaveformPanel` (Play/Stop plus a wall-clock playhead) and
+`playhead_calc.py` are gone - the real transport
+(`kokoro_gui.audio.transport.Transport`) tracks position from the audio
+callback's frame counter, and the timeline draws the playhead.
 """
 from __future__ import annotations
 
-import time
+from PySide6.QtCore import QRectF
+from PySide6.QtGui import QBrush, QColor, QPainterPath
+from PySide6.QtWidgets import QGraphicsItem, QGraphicsScene, QGraphicsView
 
-import playback
-from PySide6.QtCore import QRectF, QTimer
-from PySide6.QtGui import QBrush, QColor, QPainterPath, QPen
-from PySide6.QtWidgets import (
-    QGraphicsItem, QGraphicsLineItem, QGraphicsScene, QGraphicsView,
-    QHBoxLayout, QPushButton, QVBoxLayout, QWidget,
-)
-
-from kokoro_gui.qt import playhead_calc, waveform_data
+from kokoro_gui.qt import waveform_data
 
 WAVEFORM_BRUSH_COLOR = "#4a90d9"
-PLAYHEAD_PEN_COLOR = "#e5484d"
-PLAYHEAD_TIMER_INTERVAL_MS = 33  # ~30fps - smooth-looking without over-firing;
-# actual OS timer granularity is coarser than this on most platforms, an
-# accepted spike-level limitation (see playhead_calc.py's own docstring on
-# why this is a wall-clock approximation in the first place).
 
 
 class WaveformItem(QGraphicsItem):
@@ -124,81 +109,3 @@ class WaveformView(QGraphicsView):
     def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().resizeEvent(event)
         self._reload_peaks()
-
-
-class WaveformPanel(QWidget):
-    """The standalone top-level widget for this spike: a `WaveformView` plus
-    Play/Stop buttons and a `QTimer`-driven playhead line. Not wired into
-    the app - see module docstring."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-        self._view = WaveformView()
-        self._play_btn = QPushButton("Play")
-        self._stop_btn = QPushButton("Stop")
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(self._view)
-        btn_row = QHBoxLayout()
-        btn_row.addWidget(self._play_btn)
-        btn_row.addWidget(self._stop_btn)
-        layout.addLayout(btn_row)
-
-        self._playhead_item = QGraphicsLineItem()
-        self._playhead_item.setPen(QPen(QColor(PLAYHEAD_PEN_COLOR), 2))
-        self._playhead_item.hide()
-        self._view._scene.addItem(self._playhead_item)
-
-        self._timer = QTimer(self)
-        self._timer.setInterval(PLAYHEAD_TIMER_INTERVAL_MS)
-        self._timer.timeout.connect(self._on_timer_tick)
-        self._play_started: float | None = None
-
-        self._play_btn.clicked.connect(self._on_play_clicked)
-        self._stop_btn.clicked.connect(self._on_stop_clicked)
-
-    def load_audio(self, path: str) -> None:
-        self._view.load_audio(path)
-        self._playhead_item.hide()
-
-    # -- playback control ----------------------------------------------------
-
-    def _on_play_clicked(self) -> None:
-        if not self._view._loaded_path:
-            return
-
-        # Clicking Play again while already playing restarts cleanly rather
-        # than being blocked - matches playback.play()'s own "replaces the
-        # currently playing buffer" behavior, so nothing here needs to guard
-        # against a second call.
-        playback.play(self._view._loaded_path, blocking=False)
-
-        if not playback.AVAILABLE:
-            # No PortAudio (e.g. headless/CI) - nothing plays, so there's
-            # nothing to animate a playhead against. Must not crash.
-            return
-
-        self._play_started = time.monotonic()
-        self._timer.start()
-
-    def _on_timer_tick(self) -> None:
-        if self._play_started is None:
-            return
-
-        elapsed = time.monotonic() - self._play_started
-        x = playhead_calc.playhead_x(elapsed, self._view.duration, self._view.viewport().width())
-        if x is None:
-            self._playhead_item.hide()
-        else:
-            height = max(1, self._view.viewport().height())
-            self._playhead_item.setLine(x, 0, x, height)
-            self._playhead_item.show()
-
-        if elapsed >= self._view.duration:
-            self._timer.stop()
-
-    def _on_stop_clicked(self) -> None:
-        playback.stop()
-        self._timer.stop()
-        self._playhead_item.hide()

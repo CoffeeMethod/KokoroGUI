@@ -1,5 +1,6 @@
 """Load/save `config_qt.json` (the Qt frontend's app-settings file), plus
-`QMainWindow` dock-layout persistence.
+the base64 helpers `kokoro_gui.qt.workspace` uses for `QMainWindow`
+dock-layout bytes.
 
 Pure functions (no `QMainWindow`/app-instance state held here) so they're
 easy to unit test in isolation - `app.py` calls these and owns the debounce
@@ -45,23 +46,3 @@ def encode_bytes(qbytearray) -> str:
 def decode_bytes(b64_str: str):
     from PySide6.QtCore import QByteArray
     return QByteArray(base64.b64decode(b64_str.encode("ascii")))
-
-
-def save_window_state(main_window, settings: dict) -> None:
-    settings["dock_state"] = encode_bytes(main_window.saveState())
-    settings["geometry"] = encode_bytes(main_window.saveGeometry())
-
-
-def restore_window_state(main_window, settings: dict) -> None:
-    dock_state = settings.get("dock_state")
-    geometry = settings.get("geometry")
-    if geometry:
-        try:
-            main_window.restoreGeometry(decode_bytes(geometry))
-        except Exception:
-            pass
-    if dock_state:
-        try:
-            main_window.restoreState(decode_bytes(dock_state))
-        except Exception:
-            pass

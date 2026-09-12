@@ -99,7 +99,7 @@ class DummyEngine(
 
         self._lexicon_cache = {}
 
-    async def init_pipeline_async(self, lang_code="a"):
+    async def init_pipeline_async(self, lang_code="a", device=None):
         self.pipeline = True
         if self.on_status:
             self.on_status(f"Dummy pipeline ready ({lang_code}).", False)

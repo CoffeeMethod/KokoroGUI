@@ -200,9 +200,9 @@
       <div class="console-frame reveal">
         <div class="bar">
           <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-          <span class="path">kokoro_gui · pre-DAW-redesign Generation dock</span>
+          <span class="path">kokoro_gui · 4.1 shell, light theme</span>
         </div>
-        <img src="https://github.com/user-attachments/assets/a6ec3d30-e837-4815-a0e1-1ff69d1e31be" alt="Kokoro GUI dockable Qt interface showing the Generation panel, voice picker, and FX controls" loading="lazy" width="933" height="1787" style="max-height: 640px; width:100%; object-fit: cover; object-position: top;" />
+        <img src="assets/shell_light.png" alt="KokoroGUI: transcript with character gutter and settings tabs above a seconds-axis timeline with waveforms, a playhead, and the transport" loading="lazy" width="1600" height="1000" style="width:100%;" />
       </div>
     </div>
   </section>
@@ -211,8 +211,8 @@
     <div class="wrap">
       <div class="sec-head reveal">
         <span class="eyebrow">The panels</span>
-        <h2>Seven docks, rearranged to how you work</h2>
-        <p>The whole app is dockable Qt panels. Five ship with every engine, two appear only when the active engine actually supports them. No dead tabs, no engine-specific special-casing in the UI.</p>
+        <h2>A 2x2 grid of docks, rearranged to how you work</h2>
+        <p>Transcript and the settings tabs on top, timeline and transport underneath. Every panel is a dock; Workspace &gt; Simple hides the timeline, Reset brings the grid back. The Voices tab shows whichever voice tool the active engine has.</p>
       </div>
       <div class="dock-grid">
 
@@ -223,15 +223,15 @@
             </div>
             <span class="dock-tag core">Always on</span>
           </div>
-          <h3>Generation</h3>
-          <p>The transcript editor, input source, output, and processing options.</p>
+          <h3>Transcript</h3>
+          <p>The editor, with Character and FX combos above it and a speaking gutter beside it.</p>
           <ul>
-            <li>Direct text or a loaded file, syntax-highlighted by character/FX</li>
-            <li>Output format, combine/keep-segments, SRT export</li>
-            <li>The legacy generation-preset combo</li>
-            <li>Standard batch or real-time JIT mode</li>
+            <li>Text colored by character, dashed where a clip is out of date</li>
+            <li>Gutter names the speaker and FX once per change, with a per-clip regenerate button</li>
+            <li>Rules show clip boundaries and where Auto-split will cut</li>
+            <li>Follows playback: the playing clip highlights and scrolls into view</li>
           </ul>
-          <a class="more" href="settings.html#generation">Every field, explained →</a>
+          <a class="more" href="settings.html#transcript">Every field, explained →</a>
         </div>
 
         <div class="dock-card reveal">
@@ -247,7 +247,7 @@
             <li>Nothing selected: the whole document's defaults</li>
             <li>A clip selected: that clip's overrides</li>
             <li>A character selected: that character's preset</li>
-            <li>Same schema-driven fields the Generation dock used to hold</li>
+            <li>Voice, speed, language, split pattern, audio control</li>
           </ul>
           <a class="more" href="settings.html#settings-dock">Every field, explained →</a>
         </div>
@@ -260,12 +260,12 @@
             <span class="dock-tag core">Always on</span>
           </div>
           <h3>Timeline</h3>
-          <p>One track per character. Clips are colored blocks sized to real audio duration.</p>
+          <p>One track per character on a seconds axis, with a ruler and a playhead.</p>
           <ul>
-            <li>Right-click a clip to generate or play it</li>
-            <li>Drag a clip onto another track to reassign or move it</li>
-            <li>Drag inside a clip to replace a sub-range with new TTS</li>
-            <li>Per-clip FX button, opacity marks whether FX is active</li>
+            <li>Generated clips show waveforms; ungenerated ones are dashed estimates</li>
+            <li>Drag a clip in time (past an earlier clip reorders the text too) or onto another track</li>
+            <li>Shift+drag inside a clip to replace a sub-range with new TTS</li>
+            <li>Click the ruler to seek; the Transport dock plays the whole arrangement</li>
           </ul>
           <a class="more" href="settings.html#timeline">Every field, explained →</a>
         </div>
@@ -367,7 +367,7 @@
       <div class="sec-head reveal">
         <span class="eyebrow">Pick a backend</span>
         <h2>Two real synthesis engines, one interface</h2>
-        <p>Both are registered behind the same <code>TTSEngineBackend</code> abstraction, so switching in the toolbar swaps voices, sample rate, and available docks. Nothing else about the app changes.</p>
+        <p>Both are registered behind the same <code>TTSEngineBackend</code> abstraction, so switching under Options &gt; Engine swaps voices, sample rate, and what the Voices tab holds. Nothing else about the app changes.</p>
       </div>
       <div class="engine-grid">
 

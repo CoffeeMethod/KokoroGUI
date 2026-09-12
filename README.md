@@ -5,11 +5,59 @@ synthesis backend, edited less like a form and more like a DAW project, with a d
 timed clips on character tracks, and undo/redo. Powered by [Kokoro](https://github.com/hexgrad/kokoro)
 by default, with a zero-shot voice-cloning backend also built in.
 
-<img width="933" height="1787" alt="Screenshot 2026-02-13 172822" src="https://github.com/user-attachments/assets/a6ec3d30-e837-4815-a0e1-1ff69d1e31be" />
+<img width="1600" height="1000" alt="KokoroGUI 4.1: transcript and settings tabs over a seconds-axis timeline and transport" src="docs/assets/shell_light.png" />
 
 *(demo sounds better in `.wav` but GitHub doesn't support that so it's kinda bad)*
 
 https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
+
+## New in Beta 4.1.0
+
+The shell now matches the original wireframe: a 2x2 grid of docks, a real timeline, and playback.
+
+-   **The 2x2 grid.** Transcript (top-left) | Settings / Audio FX / Lexicon / Voices tabs
+    (top-right), Timeline (bottom-left) | Transport (bottom-right). Everything is still a dock you
+    can drag; **Workspace > Advanced / Simple / Reset layout** are saved layouts. Simple hides the
+    timeline and gives the transcript the full height, nothing else changes. The toolbar and the
+    central button block are gone.
+-   **Menus.** File (New / Open / Recent / Save / Save As / Import Text / Export), Edit (Undo / Redo /
+    Cut / Copy / Paste / Characters...), Options (Engine, Device, Theme, copy/paste behavior, JIT),
+    Workspace. The old Settings dialog folded into Options.
+-   **Projects.** A project is a `.json` file in the `document.json` shape plus a
+    `project_settings` block (export defaults). Launch reopens the last project; New inherits the
+    previous project's characters; Import Text asks whether to add to the current project or start
+    a new one. Autosave keeps writing to the current file; Save As branches it. The window title
+    names the project and shows `*` while a save is pending.
+-   **A stripped transcript panel.** The Input Source tabs, file path row, legacy preset row and
+    Auto-Split row are gone. Above the editor sit two combos, Character and FX, that reflect the
+    caret's clip and reassign the selection (or the whole clip) when changed. The gutter labels once
+    per character/FX change, two lines (`Narrator` / `FX: Echo`), and shows a small play button
+    beside each out-of-date clip: click it to regenerate just that clip. Out-of-date text is
+    dash-underlined, and thin rules show where clips end and where Auto-split would cut.
+-   **A timeline on a real seconds axis.** Clips sit end to end in text order across all tracks, at
+    their real duration once generated and an estimated one (dashed outline, no waveform) before.
+    The estimate learns from `generation_stats.json`. A ruler with a playhead, a fixed track-header
+    column, Ctrl+wheel zoom. Dragging a clip pins it to a time; dragging it before an earlier clip
+    also moves its text there. Shift+drag inside a clip still carves out a sub-range for TTS
+    replacement.
+-   **Playback.** Play / pause / stop, click the ruler to seek, a playhead across all lanes, and the
+    transcript highlights and scrolls to the clip being played. Space toggles playback anywhere but
+    the text editor; Ctrl+Space toggles everywhere. Built on one `sounddevice.OutputStream` that
+    mixes the arrangement in the callback (`kokoro_gui/audio/transport.py`), so the position is
+    sample accurate. Loop toggle included.
+-   **Export.** File > Export mixes every clip down to one file (wav/mp3/flac/ogg) at its timeline
+    position, optionally with a `.srt` and per-clip files (`<base>_001_Narrator.wav`). It warns when
+    clips are out of date and offers to generate first. Output folder / filename / format moved here
+    from the Settings tab.
+-   **Audio FX follows the selection** like Settings does: project defaults, a character's preset
+    (asks once before changing a preset every clip using that character shares), or a clip's
+    override (slider drags become one undoable override). The timeline's FX button selects the clip
+    and raises the tab.
+-   **Light and dark themes** (Options > Theme). Custom-painted widgets read one palette module.
+-   **Edit > Characters...** edits name, color, voice and FX preset for the project's characters.
+-   Removed: the wall-clock playhead spike (`playhead_calc.py`, `WaveformPanel`). Tests that reached
+    for `app.start_btn` / `app.generation_dock` now use `app.transport_dock` /
+    `app.transcript_dock.editor`.
 
 ## New in Beta 4.0.0
 
@@ -120,7 +168,7 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
         pipeline per worker thread for true parallel generation.
     -   **Audio8** (voice cloning): zero-shot cloning from a reference WAV + transcript, 44,100 Hz,
         one shared lock-serialized model.
-    -   Both register behind the same backend abstraction, so switching engines in the toolbar swaps
+    -   Both register behind the same backend abstraction, so switching engines (Options > Engine) swaps
         voices, sample rate, and the docks that make sense for that engine, live.
 -   **Generation modes:**
     -   **Standard:** parallel batch processing across a thread pool.
@@ -187,33 +235,37 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
     -   **Windows:** double-click `run.bat` or run `python main.py`
     -   **Other:** run `python main.py`
 
-    This launches the PySide6 (Qt) frontend: a dockable-panel shell with an engine picker in the
-    toolbar, an Edit menu (Undo/Redo), and these docks:
+    This launches the PySide6 (Qt) frontend: a menu bar (File / Edit / Options / Workspace) over a
+    2x2 grid of docks:
 
-    -   **Generation:** input source (direct text or a loaded file), output settings, processing
-        options (keep segments/combine/export SRT), and the legacy `presets/*.json` combo.
-    -   **Settings:** voice/speed/language/split pattern/format/caching/volume/pitch/FX toggle/
-        normalize/trim, scoped to whatever's currently selected: the whole document, one clip, or
-        one character.
-    -   **FX:** the live Pedalboard effect chain.
-    -   **Lexicon:** pronunciation overrides.
-    -   **Timeline:** the multi-track clip view, at the bottom of the window.
-    -   **Mixing** (Kokoro only): blend named voices into a new one.
-    -   **Voice Reference** (Audio8 only): manage cloning reference clips.
+    -   **Transcript** (top-left): the editor, with Character and FX combos above it and a gutter
+        that names the speaker and offers a per-clip regenerate button.
+    -   **Settings / Audio FX / Lexicon / Voices** (top-right, tabbed): voice, speed, language and
+        audio controls scoped to whatever's selected (document, clip or character); the Pedalboard
+        chain, also scoped; pronunciation overrides; and the engine's voice tools (Mixing for
+        Kokoro, Voice Reference for Audio8).
+    -   **Timeline** (bottom-left): one lane per character on a seconds axis, ruler, playhead.
+    -   **Transport** (bottom-right): play / pause / stop, Preview, Generate (with Auto-split in its
+        menu), Cancel, and the progress line.
+
+    The engine, compute device and theme live under **Options**; **Workspace** switches between
+    the full grid and a Simple layout without the timeline.
 
 2.  **Write and assign:**
-    -   Type or paste text into the transcript panel, or load a file.
-    -   Select a range and use the Characters menu to assign a voice/FX, or write inline
-        `[Speaker:FX]: Text` tags and let auto-split turn them into clips for you.
+    -   Type or paste text into the transcript, or File > Import Text for `.txt`/`.pdf`/`.epub`.
+    -   Select a range and pick a character from the header combo (or the right-click Characters
+        menu), or write inline `[Speaker:FX]: Text` tags and let Generate > Auto-split turn them
+        into clips for you.
     -   Each character carries its own highlight color, visible right in the transcript.
 
-3.  **Preview, generate, and edit:**
-    -   Click "Preview Audio" to hear a short sample of the current settings.
-    -   Click "Start Generation" to render every dirty clip (or the whole document, for
-        clip-free projects).
-    -   Right-click a clip in the Timeline to regenerate or play just that clip, drag it onto
-        another track to reassign it, or drag inside its waveform to replace a sub-range with new
-        TTS.
+3.  **Preview, generate, play, export:**
+    -   Preview speaks a short sample of the current settings.
+    -   Generate renders every out-of-date clip (or the whole document, for clip-free projects);
+        the gutter's play buttons regenerate one clip at a time.
+    -   Play (or Space) plays the arrangement; the timeline playhead and the transcript follow.
+    -   Drag a clip on the timeline to move it in time, onto another lane to reassign it, or
+        Shift+drag inside it to replace a sub-range with new TTS.
+    -   File > Export mixes the timeline down to one file (plus optional `.srt` and per-clip files).
     -   Undo/redo any of the above from the Edit menu.
 
 ## Running Tests

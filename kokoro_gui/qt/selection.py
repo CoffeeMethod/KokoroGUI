@@ -27,12 +27,18 @@ class SelectionModel(QObject):
     character/range clears the other two fields)."""
 
     changed = Signal()
+    # UI4: the clip the transport is currently inside. Separate from, and
+    # non-exclusive with, the user's selection - playback must never clobber
+    # what they have selected. Its own signal so `changed` consumers (the
+    # Settings/FX tabs) don't re-render 30 times a second.
+    playingChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.selected_clip_id: Optional[str] = None
         self.selected_character_id: Optional[str] = None
         self.selected_range: Optional[tuple[int, int]] = None
+        self.playing_clip_id: Optional[str] = None
 
     @property
     def kind(self) -> str:
@@ -68,3 +74,9 @@ class SelectionModel(QObject):
 
     def clear(self) -> None:
         self._set(None, None, None)
+
+    def set_playing_clip(self, clip_id: Optional[str]) -> None:
+        if clip_id == self.playing_clip_id:
+            return
+        self.playing_clip_id = clip_id
+        self.playingChanged.emit()

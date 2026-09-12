@@ -76,7 +76,7 @@ def test_auto_split_and_generate_is_undoable(qt_app):
 def test_auto_split_and_generate_blocked_while_a_job_is_already_running(qt_app):
     _add_bob(qt_app)
     qt_app.document.text = _two_speaker_text()
-    qt_app.cancel_btn.setEnabled(True)  # simulate a running job
+    qt_app.transport_dock.set_busy(True)  # simulate a running job
 
     qt_app.auto_split_and_generate()
 
@@ -109,7 +109,7 @@ def test_auto_split_by_paragraph_checkbox_produces_finer_clips(qt_app):
     text = "[Bob]: First paragraph.\n\nSecond paragraph.\n\nThird paragraph."
     qt_app.document.text = text
 
-    assert qt_app.generation_dock.auto_split_paragraph_check.isChecked() is False
+    assert qt_app.transport_dock.split_paragraph_action.isChecked() is False
     qt_app.auto_split_and_generate()
     coarse_count = len(qt_app.document.clips)
     assert coarse_count == 1
@@ -121,9 +121,9 @@ def test_auto_split_by_paragraph_checkbox_produces_finer_clips(qt_app):
     # engaged (its dispatched future never resolves in this StubEngine-backed
     # test) - reset it so the second auto_split_and_generate() call below
     # isn't blocked by the first one's still-"running" job.
-    qt_app.cancel_btn.setEnabled(False)
+    qt_app.transport_dock.set_busy(False)
 
-    qt_app.generation_dock.auto_split_paragraph_check.setChecked(True)
+    qt_app.transport_dock.split_paragraph_action.setChecked(True)
     assert qt_app.settings["auto_split_by_paragraph"] is True
     qt_app.document.text = text
     qt_app.auto_split_and_generate()

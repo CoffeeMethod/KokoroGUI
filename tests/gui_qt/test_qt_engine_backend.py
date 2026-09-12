@@ -44,13 +44,17 @@ def test_switch_engine_rebuilds_schema_form_for_new_backend(qt_app):
 
 
 def test_switch_engine_refused_while_job_running(qt_app):
-    qt_app.cancel_btn.setEnabled(True)  # simulate a job in flight
+    qt_app.transport_dock.set_busy(True)  # simulate a job in flight
     original_backend_id = qt_app.backend.id
     qt_app.switch_engine("dummy")
     assert qt_app.backend.id == original_backend_id
 
 
-def test_engine_picker_combo_lists_all_registered_engines(qt_app):
-    items = [qt_app.engine_picker.itemText(i) for i in range(qt_app.engine_picker.count())]
-    expected = {engine_registry.get_display_name(eid) for eid in engine_registry.list_engines()}
-    assert set(items) == expected
+def test_engine_menu_lists_all_registered_engines_with_active_checked(qt_app):
+    items = {eid: a.text() for eid, a in qt_app.engine_actions.items()}
+    expected = {eid: engine_registry.get_display_name(eid) for eid in engine_registry.list_engines()}
+    assert items == expected
+    assert qt_app.engine_actions[qt_app.backend.id].isChecked()
+    qt_app.switch_engine("dummy")
+    assert qt_app.engine_actions["dummy"].isChecked()
+    assert not qt_app.engine_actions["kokoro"].isChecked()

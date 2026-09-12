@@ -239,30 +239,116 @@ class SetClipFxCommand(Command):
     later being renamed or deleted. `fx_values=None` clears the override
     back to "no clip-level FX, defer to the character's fx_preset."
 
-    Deep-copies on the way in and out (both `do()`'s stored `fx_values` and
-    `undo()`'s snapshot) so a caller mutating its own dict after construction
-    - or a later edit mutating `clip.fx_override` in place - can never alias
-    back into this command's undo history. Untouched by the run-list rework
-    - it only ever mutates a `Clip`'s own fields, never `document.runs`.
+    `preset_name` (UI shell pass) is recorded alongside, in
+    `clip.overrides["fx_preset"]`, so the gutter and the transcript header
+    can name the preset the values came from; the Settings tab's clip-mode
+    FX combo writes the same key. Clearing (`fx_values=None`) drops the
+    name too.
+
+    Deep-copies on the way in and out so a caller mutating its own dict
+    after construction - or a later edit mutating `clip.fx_override` in
+    place - can never alias back into this command's undo history.
     """
 
-    def __init__(self, clip_id: str, fx_values):
+    def __init__(self, clip_id: str, fx_values, preset_name=None):
         self.clip_id = clip_id
         self.fx_values = copy.deepcopy(fx_values) if fx_values else fx_values
+        self.preset_name = preset_name
         self._previous = None
+        self._previous_name = None
+        self._had_name = False
 
     def do(self, document) -> None:
         clip = document.get_clip(self.clip_id)
         if clip is None:
             return
         self._previous = copy.deepcopy(clip.fx_override) if clip.fx_override else clip.fx_override
+        self._had_name = "fx_preset" in clip.overrides
+        self._previous_name = clip.overrides.get("fx_preset")
         clip.fx_override = copy.deepcopy(self.fx_values) if self.fx_values else self.fx_values
+        if self.fx_values is None:
+            clip.overrides.pop("fx_preset", None)
+        elif self.preset_name:
+            clip.overrides["fx_preset"] = self.preset_name
 
     def undo(self, document) -> None:
         clip = document.get_clip(self.clip_id)
         if clip is None:
             return
         clip.fx_override = copy.deepcopy(self._previous) if self._previous else self._previous
+        if self._had_name:
+            clip.overrides["fx_preset"] = self._previous_name
+        else:
+            clip.overrides.pop("fx_preset", None)
+
+
+class SetClipTimestampCommand(Command):
+    """UI9: a horizontal drag on the timeline pins a clip to an explicit
+    start time (`Clip.timeline_timestamp`, seconds). `None` unpins it so
+    `compute_arrangement` places it after its text-order predecessor
+    again."""
+
+    def __init__(self, clip_id: str, timestamp):
+        self.clip_id = clip_id
+        self.timestamp = timestamp
+        self._previous = None
+
+    def do(self, document) -> None:
+        clip = document.get_clip(self.clip_id)
+        if clip is None:
+            return
+        self._previous = clip.timeline_timestamp
+        clip.timeline_timestamp = self.timestamp
+
+    def undo(self, document) -> None:
+        clip = document.get_clip(self.clip_id)
+        if clip is None:
+            return
+        clip.timeline_timestamp = self._previous
+
+
+class MoveClipBeforeCommand(Command):
+    """UI9 / grill Q13: dragging a clip to before another clip on the
+    timeline also moves its text to just before that clip's text. Moves
+    every run tagged `clip_id` (in order) to immediately before the first
+    run tagged `before_clip_id`. Same whole-run-list snapshot strategy as
+    `AssignCharacterCommand`. Untagged text between the moved clip's runs
+    stays where it was; only the tagged runs travel.
+
+    Also pins the moved clip's `timeline_timestamp` to `timestamp` when one
+    is given (the drop position), so the drag's visual result and the text
+    reorder land in one undoable step."""
+
+    def __init__(self, clip_id: str, before_clip_id: str, timestamp=None):
+        self.clip_id = clip_id
+        self.before_clip_id = before_clip_id
+        self.timestamp = timestamp
+        self._pre_runs = None
+        self._pre_clips = None
+        self._previous_timestamp = None
+
+    def do(self, document) -> None:
+        self._pre_runs = copy.deepcopy(document.runs)
+        self._pre_clips = copy.deepcopy(document.clips)
+        clip = document.get_clip(self.clip_id)
+        if clip is None or self.clip_id == self.before_clip_id:
+            return
+        moving = [r for r in document.runs if r.clip_id == self.clip_id]
+        if not moving:
+            return
+        remaining = [r for r in document.runs if r.clip_id != self.clip_id]
+        insert_at = next((i for i, r in enumerate(remaining) if r.clip_id == self.before_clip_id), None)
+        if insert_at is None:
+            return
+        document.runs = remaining[:insert_at] + moving + remaining[insert_at:]
+        document._normalize_runs()
+        self._previous_timestamp = clip.timeline_timestamp
+        if self.timestamp is not None:
+            clip.timeline_timestamp = self.timestamp
+
+    def undo(self, document) -> None:
+        document.runs = copy.deepcopy(self._pre_runs)
+        document.clips = copy.deepcopy(self._pre_clips)
 
 
 # The split-or-create primitive item 7 ("Auto-split on generation") and

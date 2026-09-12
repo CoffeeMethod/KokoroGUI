@@ -172,9 +172,12 @@ def test_editing_clip_config_flips_dirty_state_with_no_explicit_marking(qt_app):
 # ---------------------------------------------------------------------------
 
 def test_generation_dock_state_covers_base_keys_minus_settings_owned(qt_app):
-    state = qt_app.generation_dock.get_state()
+    state = qt_app.settings_dock.get_state()
     settings_owned = {"engine_id", "time_id", "lexicon"}
-    assert set(state.keys()) | settings_owned == set(spec.GENERATION_BASE_KEYS)
+    # Output/format/subtitles/keep-segments live in the Export dialog now
+    # (kokoro_gui/qt/docks/export_dialog.py), not the Settings tab.
+    export_owned = {"filename", "out_dir", "separate", "combine", "export_subtitles"}
+    assert set(state.keys()) | settings_owned | export_owned == set(spec.GENERATION_BASE_KEYS)
 
 
 def test_assemble_config_does_not_raise_key_error(qt_app):

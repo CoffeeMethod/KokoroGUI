@@ -8,7 +8,7 @@ from kokoro_gui.qt.transcript_editor import GUTTER_WIDTH_PX
 
 
 def _editor(qt_app):
-    return qt_app.generation_dock.text_entry
+    return qt_app.editor
 
 
 def _gutter(qt_app):

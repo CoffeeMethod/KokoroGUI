@@ -27,9 +27,12 @@ def test_generation_dock_state_covers_base_keys_minus_settings_owned(qt_app):
     """Everything _assemble_config adds on top of the Generation dock's own
     get_state() (engine_id/time_id/lexicon) is intentionally settings-owned,
     not dock-owned - see app.py's _assemble_config."""
-    state = qt_app.generation_dock.get_state()
+    state = qt_app.settings_dock.get_state()
     settings_owned = {"engine_id", "time_id", "lexicon"}
-    assert set(state.keys()) | settings_owned == set(spec.GENERATION_BASE_KEYS)
+    # Output/format/subtitles/keep-segments live in the Export dialog now
+    # (kokoro_gui/qt/docks/export_dialog.py), not the Settings tab.
+    export_owned = {"filename", "out_dir", "separate", "combine", "export_subtitles"}
+    assert set(state.keys()) | settings_owned | export_owned == set(spec.GENERATION_BASE_KEYS)
 
 
 def test_fx_dock_state_covers_all_fx_preset_keys(qt_app):

@@ -11,7 +11,7 @@ from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QMessageBox
 
 from kokoro_gui.daw.models import Character, Track
-from kokoro_gui.qt.timeline_view import LANE_HEIGHT_PX
+from kokoro_gui.qt.timeline_view import LANE_HEIGHT_PX, lane_top
 
 
 def _setup_two_tracks(qt_app, same_character: bool):
@@ -43,14 +43,14 @@ def _make_clip_on_track(qt_app, track, start=0, end=5, text="hello world"):
 
 def _drag_clip_onto_track_b(qt_app, qtbot, clip):
     """Simulates the full mouse gesture: press on the clip's block, release
-    over track_b's lane (lane index 1, y in [LANE_HEIGHT_PX, 2*LANE_HEIGHT_PX))."""
+    over track_b's lane (lane index 1, below the ruler)."""
     qt_app.timeline_dock.refresh()
     view = qt_app.timeline_dock.timeline_view
     block = view._blocks_by_clip_id[clip.id]
 
     press_pos = view.mapFromScene(block.mapToScene(2, 2))
     release_scene_x = block.mapToScene(2, 2).x()
-    release_pos = view.mapFromScene(QPointF(release_scene_x, LANE_HEIGHT_PX + 10))
+    release_pos = view.mapFromScene(QPointF(release_scene_x, lane_top(1) + 10))
 
     qtbot.mousePress(view.viewport(), Qt.MouseButton.LeftButton, pos=press_pos)
     qtbot.mouseRelease(view.viewport(), Qt.MouseButton.LeftButton, pos=release_pos)
@@ -149,10 +149,12 @@ def test_drag_cancel_choice_pushes_nothing(qt_app, qtbot, monkeypatch):
 # Busy/no-op cases leave the undo stack untouched.
 # ---------------------------------------------------------------------------
 
-def test_drag_onto_same_track_pushes_no_command(qt_app, qtbot):
+def test_drag_along_same_track_pins_a_timestamp_and_keeps_the_track(qt_app, qtbot):
+    """UI9: a horizontal drag on the same lane is a move on the seconds
+    axis (an undoable SetClipTimestampCommand), never a track change."""
     track_a, _track_b, _alice, _bob = _setup_two_tracks(qt_app, same_character=True)
     clip = _make_clip_on_track(qt_app, track_a)
-    can_undo_before = qt_app.document.undo_stack.can_undo()
+    assert clip.timeline_timestamp is None
 
     qt_app.timeline_dock.refresh()
     view = qt_app.timeline_dock.timeline_view
@@ -164,7 +166,10 @@ def test_drag_onto_same_track_pushes_no_command(qt_app, qtbot):
     qtbot.mouseRelease(view.viewport(), Qt.MouseButton.LeftButton, pos=release_pos)
 
     assert clip.track_id == track_a.id
-    assert qt_app.document.undo_stack.can_undo() is can_undo_before
+    assert clip.timeline_timestamp is not None
+    assert clip.timeline_timestamp > 0
+    qt_app.undo()
+    assert clip.timeline_timestamp is None
 
 
 def test_drag_off_all_lanes_pushes_no_command(qt_app, qtbot):

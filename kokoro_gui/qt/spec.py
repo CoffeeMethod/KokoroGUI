@@ -162,6 +162,11 @@ SETTINGS_DEFAULTS = {
     "jit_enabled": False,
     "auto_split_by_paragraph": False,
     "character_fx_paste_splits": True,
+    "character_fx_copy": True,
+    "theme": "light",           # Options > Theme: "light" | "dark"
+    "device": "auto",           # Options > Device: "auto" | "cpu" | "cuda"
+    "last_project": None,       # File menu: the project launch reopens
+    "recent_projects": [],      # File > Recent, most recent first (max 10)
     "normalize": False,
     "trim": False,
     "apply_fx": True,
@@ -211,8 +216,11 @@ SETTINGS_DEFAULTS = {
     "engine_id": "kokoro",
     "asr_engine": "audio8",
     "lexicon": {},
-    "dock_state": None,   # base64 QMainWindow.saveState() bytes, set at runtime
-    "geometry": None,     # base64 QMainWindow.saveGeometry() bytes, set at runtime
+    # Workspace layouts: {"Advanced": {"state": b64, "geometry": b64}, ...}
+    # (kokoro_gui/qt/workspace.py). The old flat dock_state/geometry keys
+    # migrate into workspaces.Advanced on first load.
+    "workspaces": {},
+    "active_workspace": "Advanced",
 }
 
 _FX_ENABLED_KEYS = {s.enabled_key for s in FX_FIELD_SPECS if s.enabled_key}

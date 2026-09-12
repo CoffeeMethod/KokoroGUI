@@ -109,7 +109,7 @@ def test_failed_generation_with_exception_leaves_segments_unchanged(qt_app):
     qt_app.engine.worker.run_coro.return_value.set_exception(RuntimeError("boom"))
 
     assert clip.segments == []
-    assert "Clip generation failed" in qt_app.status_label.text()
+    assert "Clip generation failed" in qt_app.transport_dock.status_text()
 
 
 def test_failed_generation_with_empty_result_leaves_segments_unchanged(qt_app):
@@ -119,12 +119,12 @@ def test_failed_generation_with_empty_result_leaves_segments_unchanged(qt_app):
     qt_app.engine.worker.run_coro.return_value.set_result([])
 
     assert clip.segments == []
-    assert "Clip generation failed" in qt_app.status_label.text()
+    assert "Clip generation failed" in qt_app.transport_dock.status_text()
 
 
 def test_generate_blocked_while_a_job_is_already_running(qt_app):
     clip = _make_clip(qt_app)
-    qt_app.cancel_btn.setEnabled(True)  # simulate a running whole-document job
+    qt_app.transport_dock.set_busy(True)  # simulate a running whole-document job
 
     qt_app.timeline_dock.on_generate_clip_requested(clip.id)
 

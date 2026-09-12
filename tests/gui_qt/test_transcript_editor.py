@@ -10,7 +10,7 @@ from kokoro_gui.daw.models import Character
 
 
 def _editor(qt_app):
-    return qt_app.generation_dock.text_entry
+    return qt_app.editor
 
 
 def _set_text_via_real_edit(editor, text):

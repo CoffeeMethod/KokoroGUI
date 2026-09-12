@@ -106,7 +106,7 @@
 <span class="c2">[PresetName:FXPresetName]:</span> Same, plus that FX preset layered on top.</pre>
       </div>
       <div class="prose reveal" style="margin-top:1.3rem;">
-        <p>Everything up to the next tag (or the end of the text) belongs to that segment. Plain text with no tag at all is treated as a single segment using whatever voice and settings the Generation dock is currently set to, exactly like today.</p>
+        <p>Everything up to the next tag (or the end of the text) belongs to that segment. Plain text with no tag at all is treated as a single segment using whatever voice and settings the Settings tab is currently set to, exactly like today.</p>
       </div>
     </div>
   </section>
@@ -115,14 +115,14 @@
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">02 · What gets looked up</span><code>PresetName</code> is a character name, not a raw voice</h2>
-        <p>This is the part that trips people up: the name in brackets isn't a voice ID like <code>af_heart</code>. It's the name of a preset you saved from the Generation dock's "Save Preset" button, a full snapshot of voice, speed, split pattern, and the rest, stored as <code>presets/&lt;name&gt;.json</code>. Every preset file becomes a <a href="settings.html#presets" style="color:var(--violet); font-weight:600;">character</a> with that same name on load, so a tag's name is looked up as a character, case-insensitively, against whatever's saved. If you haven't saved anything under that name, the tag has nothing to find.</p>
+        <p>This is the part that trips people up: the name in brackets isn't a voice ID like <code>af_heart</code>. It's the name of a <a href="settings.html#presets" style="color:var(--violet); font-weight:600;">character</a> (Edit &gt; Characters..., or one of the legacy <code>presets/&lt;name&gt;.json</code> snapshots, which each become a character with that same name on load), so a tag's name is looked up as a character, case-insensitively, against whatever's saved. If you haven't saved anything under that name, the tag has nothing to find.</p>
         <p>Same idea for the FX half: <code>FXPresetName</code> is the name of an FX preset saved from the FX dock's "Save FX Preset" button, stored as <code>presets/fx/&lt;name&gt;.json</code>. The FX dock's full field list is on the <a href="settings.html#fx" style="color:var(--violet); font-weight:600;">settings reference</a>.</p>
         <p>So before a script like <code>[Narrator]: ...</code> means anything, a preset literally named <code>Narrator</code> has to already exist in <code>presets/</code>.</p>
       </div>
       <div class="callout info reveal" style="max-width:720px; margin-top:1.3rem;">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/></svg>
         <div>
-          <p><strong>The FX-only trick.</strong> Leave the preset name blank and start with a colon: <code>[:FXPresetName]: Text</code>. Since there's nothing before the colon, no preset gets applied, only the FX preset does, and the voice stays whatever the Generation dock is currently set to. Handy for layering an effect onto a line without also switching who's speaking.</p>
+          <p><strong>The FX-only trick.</strong> Leave the preset name blank and start with a colon: <code>[:FXPresetName]: Text</code>. Since there's nothing before the colon, no preset gets applied, only the FX preset does, and the voice stays whatever the Settings tab is currently set to. Handy for layering an effect onto a line without also switching who's speaking.</p>
         </div>
       </div>
     </div>
@@ -132,10 +132,10 @@
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">03 · How segments split</span>Each tag resets to your base settings, not the last tag's</h2>
-        <p>This is the second thing worth knowing before writing a long script: segments don't inherit from each other. Each one starts fresh from the Generation dock's current settings, then layers on its own tag if it has one.</p>
+        <p>This is the second thing worth knowing before writing a long script: segments don't inherit from each other. Each one starts fresh from the Settings tab's project-scope settings, then layers on its own tag if it has one.</p>
       </div>
       <ol class="steps reveal" style="max-width:720px; margin-top:1.3rem;">
-        <li><p><strong>Untagged text</strong> before the first tag, or text with no tags at all, uses the Generation dock's settings as-is.</p></li>
+        <li><p><strong>Untagged text</strong> before the first tag, or text with no tags at all, uses the Settings tab's project-scope settings as-is.</p></li>
         <li><p><strong>A <code>[Preset]:</code> tag</strong> loads that preset and overlays it on top of the base settings for everything until the next tag.</p></li>
         <li><p><strong>A <code>[:FXPreset]:</code> tag</strong> keeps the base voice and settings, and only overlays the FX preset.</p></li>
         <li><p><strong>An empty segment</strong>, one tag immediately followed by another with no text between them, is dropped rather than generating a silent clip.</p></li>
@@ -148,7 +148,7 @@
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">04 · Worked example</span>A four-line script, segment by segment</h2>
-        <p>Assume two presets already exist, <code>Narrator</code> and <code>VillainVoice</code>, along with two FX presets, <code>Reverb Heavy</code> and <code>Whisper</code>. The Generation dock's currently selected voice is whatever you last picked, called out below as "the base voice."</p>
+        <p>Assume two presets already exist, <code>Narrator</code> and <code>VillainVoice</code>, along with two FX presets, <code>Reverb Heavy</code> and <code>Whisper</code>. The Settings tab's currently selected voice is whatever you last picked, called out below as "the base voice."</p>
       </div>
       <div class="code-block reveal" style="max-width:720px; margin-top:1.3rem;">
         <div class="head">Script</div>
@@ -185,7 +185,7 @@
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">05 · When a tag doesn't match</span>Typos don't stop the run</h2>
-        <p>If a preset name in brackets doesn't match a saved file, that segment doesn't fail. It falls back to the Generation dock's current settings, generation continues, and the status line shows a warning: <code>Warning: Preset 'X' not found.</code></p>
+        <p>If a preset name in brackets doesn't match a saved file, that segment doesn't fail. It falls back to the Settings tab's project-scope settings, generation continues, and the status line shows a warning: <code>Warning: Preset 'X' not found.</code></p>
         <p>Same story for a missing FX preset: <code>Warning: FX Preset 'X' not found.</code> That segment just skips the FX step rather than erroring out.</p>
         <p>The practical upshot: a typo in a long script quietly generates that block in the wrong voice instead of stopping you. Worth watching the status line while a multi-speaker script is running, especially the first time you use a new preset name.</p>
       </div>

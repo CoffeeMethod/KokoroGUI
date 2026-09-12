@@ -22,10 +22,13 @@ from PySide6.QtWidgets import (
     QPushButton, QVBoxLayout,
 )
 
+from kokoro_gui.daw.arrangement import compute_arrangement
 from kokoro_gui.daw.dirty import build_segments_from_results, compute_expected_cache_hash
-from kokoro_gui.daw.undo import AssignCharacterCommand, MoveClipCommand, ReassignTrackCommand, SetClipFxCommand, TextEditCommand
-from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, filter_allowed_keys
-from kokoro_gui.qt.timeline_view import TimelineView
+from kokoro_gui.daw.undo import (
+    AssignCharacterCommand, MoveClipBeforeCommand, MoveClipCommand, ReassignTrackCommand,
+    SetClipTimestampCommand, TextEditCommand,
+)
+from kokoro_gui.qt.timeline_view import TimelineWidget
 
 
 class TimelineDock(QDockWidget):
@@ -53,12 +56,17 @@ class TimelineDock(QDockWidget):
         self.setObjectName("dock_timeline")
         self.app = app
 
-        self.timeline_view = TimelineView(selection_model=self.app.selection)
+        self.timeline_widget = TimelineWidget(selection_model=self.app.selection)
+        self.timeline_view = self.timeline_widget.view
         self.timeline_view.generateClipRequested.connect(self.on_generate_clip_requested)
         self.timeline_view.fxPresetRequested.connect(self.on_fx_preset_requested)
         self.timeline_view.clipDragReassigned.connect(self.on_clip_drag_reassigned)
         self.timeline_view.subRangeTtsRequested.connect(self.on_sub_range_tts_requested)
-        self.setWidget(self.timeline_view)
+        self.timeline_view.clipMoved.connect(self.on_clip_moved)
+        self.timeline_view.unpinRequested.connect(self.on_clip_unpin_requested)
+        self.setWidget(self.timeline_widget)
+        if hasattr(self.app, "themeChanged"):
+            self.app.themeChanged.connect(self.refresh)
 
         self.clipGenerationFinished.connect(self._on_clip_generation_finished)
         self._batchGenerationRaw.connect(self._on_batch_generation_raw)
@@ -79,12 +87,48 @@ class TimelineDock(QDockWidget):
         self.refresh()
 
     def refresh(self) -> None:
-        self.timeline_view.render_document(self.app.document)
+        arrangement = compute_arrangement(self.app.document, engine_id=self.app.backend.id)
+        self.timeline_view.render_document(self.app.document, arrangement)
+
+    # -- seconds-axis drags (UI9) ------------------------------------------------
+
+    def on_clip_moved(self, clip_id: str, new_start_s: float) -> None:
+        """Handles `TimelineView.clipMoved`. Pins the clip's timestamp; if
+        the drop lands at or before the start of the clip that precedes it in
+        text order, the clip's text moves too (grill Q13) - to just before the
+        first clip in text order that now starts at or after it."""
+        document = self.app.document
+        clip = document.get_clip(clip_id)
+        if clip is None:
+            return
+        arrangement = compute_arrangement(document, engine_id=self.app.backend.id)
+        order = [p for p in arrangement.placed]
+        index = next((i for i, p in enumerate(order) if p.clip.id == clip_id), None)
+        predecessor = order[index - 1] if index is not None and index > 0 else None
+
+        if predecessor is not None and new_start_s <= predecessor.start_s:
+            before = next((p for p in order if p.clip.id != clip_id and p.start_s >= new_start_s), None)
+            if before is not None:
+                document.undo_stack.push(MoveClipBeforeCommand(clip_id, before.clip.id, timestamp=new_start_s))
+                self.app.editor.load_text(document.text)
+                self.app.schedule_save()
+                self.app.refresh_timeline()
+                return
+        document.undo_stack.push(SetClipTimestampCommand(clip_id, new_start_s))
+        self.app.schedule_save()
+        self.app.refresh_timeline()
+
+    def on_clip_unpin_requested(self, clip_id: str) -> None:
+        if self.app.document.get_clip(clip_id) is None:
+            return
+        self.app.document.undo_stack.push(SetClipTimestampCommand(clip_id, None))
+        self.app.schedule_save()
+        self.app.refresh_timeline()
 
     # -- per-clip Generate ---------------------------------------------------
 
     def on_generate_clip_requested(self, clip_id: str) -> None:
-        if self.app.cancel_btn.isEnabled():
+        if self.app.is_busy():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before generating a clip.")
             return
 
@@ -120,38 +164,27 @@ class TimelineDock(QDockWidget):
         if success and clip is not None:
             results, expected_hash = self._pending_results.pop(clip_id)
             clip.segments = build_segments_from_results(expected_hash, results)
+            self.app.editor.rehighlight()
             self.app.schedule_save()
             self.app.refresh_timeline()
         elif not success:
             self._pending_results.pop(clip_id, None)
-            self.app.status_label.setText(f"Clip generation failed: {error}")
-            self.app.status_label.setStyleSheet("color: #ff5555;")
+            self.app.set_status(f"Clip generation failed: {error}", "error")
 
     # -- per-clip FX preset menu (item 5, "Per-clip FX button") --------------
 
     def on_fx_preset_requested(self, clip_id: str, preset_name: str) -> None:
         """Handles `TimelineView.fxPresetRequested` - an empty `preset_name`
-        is the "Clear FX" case. Pushed through `SetClipFxCommand`
-        (kokoro_gui/daw/undo.py) rather than a direct `clip.fx_override =`
-        mutation, so this action is undoable like every other document edit
-        (item 4). `Clip.fx_override` is a resolved FX-values dict, not a
-        preset name - resolved here the same way every other FX-preset site
-        in this codebase does (`_assemble_clip_config`, `FXDock`'s own
-        preset loading), so the override survives the source preset later
-        being renamed or deleted."""
-        clip = self.app.document.get_clip(clip_id)
-        if clip is None:
+        is the "Clear FX" case. UI6: also selects the clip and raises the
+        Audio FX tab, so the tab shows the override that was just set. The
+        undoable `SetClipFxCommand` push lives in
+        `TranscriptDock.apply_fx_preset_to_clip`, shared with the transcript
+        header's FX combo."""
+        if self.app.document.get_clip(clip_id) is None:
             return
-
-        if not preset_name:
-            fx_values = None
-        else:
-            preset = self.app.engine.load_fx_preset(preset_name)
-            fx_values = filter_allowed_keys(preset, ALLOWED_FX_PRESET_KEYS) if preset else None
-
-        self.app.document.undo_stack.push(SetClipFxCommand(clip_id, fx_values))
-        self.app.schedule_save()
-        self.app.refresh_timeline()
+        self.app.selection.select_clip(clip_id)
+        self.app.transcript_dock.apply_fx_preset_to_clip(clip_id, preset_name)
+        self.app.raise_fx_tab()
 
     # -- drag-to-reassign (item 8, "Drag-to-reassign a clip to a different
     # track") ------------------------------------------------------------
@@ -178,7 +211,7 @@ class TimelineDock(QDockWidget):
         if should_reassign_character:
             # character_id changed, which changes the transcript's
             # highlight color for this clip's run(s) too.
-            self.app.generation_dock.text_entry.rehighlight()
+            self.app.editor.rehighlight()
         self.app.schedule_save()
         self.app.refresh_timeline()
 
@@ -278,7 +311,7 @@ class TimelineDock(QDockWidget):
             document.undo_stack.push(AssignCharacterCommand(sub_start, sub_end, character_id))
 
         self.app.schedule_save()
-        self.app.generation_dock.text_entry.load_text(document.text)
+        self.app.editor.load_text(document.text)
         self.app.refresh_timeline()
         self.generate_dirty_clips_requested()
 
@@ -292,7 +325,7 @@ class TimelineDock(QDockWidget):
         already checked `dirty_clips()` themselves for the "nothing to do"
         message - this method silently no-ops on an empty dirty list so it
         stays safe to call directly too."""
-        if self.app.cancel_btn.isEnabled():
+        if self.app.is_busy():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before generating.")
             return
 
@@ -368,6 +401,7 @@ class TimelineDock(QDockWidget):
                 failed_ids.append(clip_id)
 
         if any_segments_updated:
+            self.app.editor.rehighlight()
             self.app.schedule_save()
             self.app.refresh_timeline()
 

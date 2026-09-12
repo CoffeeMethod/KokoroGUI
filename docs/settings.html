@@ -68,14 +68,16 @@
       <h1>What every setting actually does</h1>
       <p class="lede">Every field in every dock, grouped the way they're grouped in the app, with the parts that aren't obvious from the label alone called out. Three things are worth reading before the rest: the Settings dock's fields mean something different depending on what's selected, Audio8 quietly ignores two of its own generation fields, and JIT streaming isn't a checkbox every engine gets.</p>
       <div class="toc">
-        <a href="#engine-picker">Engine picker</a>
+        <a href="#engine-picker">Options menu</a>
         <a href="#transcript">Transcript &amp; characters</a>
-        <a href="#settings-dock">Settings dock</a>
+        <a href="#settings-dock">Settings tab</a>
         <a href="#audio-control">Audio control</a>
-        <a href="#timeline">Timeline dock</a>
+        <a href="#timeline">Timeline</a>
+        <a href="#transport">Transport &amp; playback</a>
         <a href="#undo">Undo &amp; redo</a>
-        <a href="#generation">Generation dock</a>
-        <a href="#processing">Processing options</a>
+        <a href="#generation">File menu &amp; projects</a>
+        <a href="#processing">Export</a>
+        <a href="#workspace">Workspaces &amp; theme</a>
         <a href="#fx">FX</a>
         <a href="#lexicon">Lexicon</a>
         <a href="#mixing">Mixing</a>
@@ -89,8 +91,9 @@
   <section class="doc-section" id="engine-picker">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">Toolbar</span>The engine picker</h2>
-        <p>A dropdown in the toolbar, not a dock. It's the one setting that changes what every other setting on this page looks like: switching it rebuilds the Settings dock's fields from the new engine's schema and shows or hides the Mixing and Voice Reference docks based on what the new engine supports. Everything below is written per-engine where the two differ.</p>
+        <h2><span class="idx">Options menu</span>Engine, device, theme</h2>
+        <p><strong>Options &gt; Engine</strong> is the one setting that changes what every other setting on this page looks like: switching it rebuilds the Settings tab's fields from the new engine's schema and swaps what sits behind the Voices tab (Mixing for Kokoro, Voice Reference for Audio8, nothing for the Dummy engine). Everything below is written per-engine where the two differ.</p>
+        <p><strong>Options &gt; Device</strong> picks CPU / CUDA / Auto for the Kokoro pipeline (the CUDA entry is greyed out when torch reports no device) and re-initializes the engine. <strong>Options &gt; Theme</strong> switches between the light and dark palettes. The three checkable entries under them are the old Settings dialog: whether copying text carries its character/FX along, whether a paste splits off its own run, and JIT streaming for clip-free documents.</p>
       </div>
     </div>
   </section>
@@ -98,8 +101,9 @@
   <section class="doc-section" id="transcript">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">Generation dock</span>The transcript</h2>
-        <p>The Generation dock's text box is a syntax-highlighting editor over the document's canonical text, not a plain input field. Every run of text is colored by its assigned character and FX, so the boundaries between speakers and effects are visible at a glance, without reading the inline <a href="scripting.html" style="color:var(--violet); font-weight:600;"><code>[Speaker:FX]:</code></a> syntax.</p>
+        <h2><span class="idx">Transcript dock</span>The transcript</h2>
+        <p>The Transcript dock is a syntax-highlighting editor over the document's canonical text, not a plain input field. Two combos sit above it: <strong>Character</strong> and <strong>FX</strong>, both reflecting the clip under the caret. Changing Character reassigns the selection (or the caret's whole clip, or its line for untagged text); changing FX sets a named FX override on the caret's clip, undoable like everything else. The left gutter names the speaker once per character/FX change (<code>Narrator</code> on one line, <code>FX: Echo</code> under it) and shows a small play button beside each out-of-date clip that regenerates just that clip. Out-of-date text is dash-underlined; thin rules mark clip boundaries and where Auto-split would cut.</p>
+        <p> Every run of text is colored by its assigned character and FX, so the boundaries between speakers and effects are visible at a glance, without reading the inline <a href="scripting.html" style="color:var(--violet); font-weight:600;"><code>[Speaker:FX]:</code></a> syntax.</p>
         <p>Selecting a range and opening the Characters menu reassigns that range's character/FX directly. Placing the caret inside an existing run instead shows that run's currently active voice/FX in the Settings dock. Copying a range carries its character/FX metadata with it; pasting into a run belonging to a different character splits the paste into its own run rather than silently overwriting the destination's assignment, unless "character/FX paste splits" is turned off, in which case a paste inherits whatever it lands on.</p>
       </div>
     </div>
@@ -108,8 +112,8 @@
   <section class="doc-section" id="settings-dock">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">Settings dock</span>One panel, three scopes</h2>
-        <p>Every field below used to live in the Generation dock and always edited the whole document's defaults. It's the same schema-driven form, now re-scoped to whatever <code>self.app.selection</code> currently points at:</p>
+        <h2><span class="idx">Settings tab</span>One panel, three scopes</h2>
+        <p>The schema-driven form, scoped to whatever <code>self.app.selection</code> currently points at:</p>
       </div>
       <div class="table-wrap reveal" style="max-width:760px; margin-top:1rem;">
         <table class="ref">
@@ -154,7 +158,7 @@
 
   <section class="doc-section" id="audio-control">
     <div class="wrap">
-      <h2><span class="idx">Settings dock</span>Audio control</h2>
+      <h2><span class="idx">Settings tab</span>Audio control</h2>
       <p class="dek">Hand-coded, not schema-driven, so every engine gets the same fields here, still subject to the same three-scope rules above. These are the post-processing steps from the <a href="index.html#signal-chain" style="color:var(--violet); font-weight:600;">signal chain</a> on the home page.</p>
       <div class="table-wrap reveal">
         <table class="ref">
@@ -175,7 +179,7 @@
   <section class="doc-section" id="timeline">
     <div class="wrap">
       <h2><span class="idx">Timeline dock</span>Timeline</h2>
-      <p class="dek">One track per character, at the bottom of the window. Unconditional, not engine-gated, it renders the document's own clips/tracks/characters, which don't depend on which backend is active.</p>
+      <p class="dek">One track per character on a real seconds axis, bottom-left of the window. Clips sit end to end in text order across all tracks: at their real duration once generated (with a waveform), at an estimated one before (dashed outline, no waveform; the estimate learns from <code>generation_stats.json</code>). A ruler runs across the top, a fixed header column names the tracks, and Ctrl+wheel zooms between 20 and 400 pixels per second.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Timeline</caption>
@@ -184,13 +188,33 @@
             <tr><td>Right-click a clip &gt; Generate</td><td>Renders just that clip's text/settings through the normal cache-aware generation path, populating its segments with real audio.</td></tr>
             <tr><td>Right-click a clip &gt; Play</td><td>Plays that clip's cached audio.</td></tr>
             <tr><td>Per-clip FX button</td><td>Opens an FX override for that one clip, applied on top of the FX chain and winning over its character's own FX preset. Button opacity shows state at a glance: 50% means no FX override, 90% means one's active.</td></tr>
-            <tr><td>Drag a clip onto another track</td><td>Reassigns the clip to that track's character (with a confirmation prompt when the characters actually differ) or just repositions it, if dropped on its own track.</td></tr>
-            <tr><td>Drag inside a clip's waveform</td><td>Carves out the selected sub-range and opens an editable transcript for it. Confirming replaces just that sub-range with fresh TTS, under any character, not necessarily the clip's own.</td></tr>
-            <tr><td>Generate (action bar)</td><td>Once the document has clips, this regenerates every dirty clip in one pass instead of the whole document, with bounded concurrency and cancel-safe queuing. A document with no clips yet still falls back to the original whole-document pipeline.</td></tr>
+            <tr><td>Drag a clip left or right</td><td>Pins it to that start time (snapping to other clips' edges and the playhead). Drop it at or before the start of the clip that precedes it in the text and its text moves there too, so the timeline and the transcript stay in the same order. Right-click &gt; Unpin from timeline puts it back in the flow.</td></tr>
+            <tr><td>Drag a clip onto another track</td><td>Reassigns the clip to that track's character (with a confirmation prompt when the characters actually differ) or just moves it to that lane.</td></tr>
+            <tr><td>Shift+drag inside a clip</td><td>Carves out the selected sub-range and opens an editable transcript for it. Confirming replaces just that sub-range with fresh TTS, under any character, not necessarily the clip's own.</td></tr>
+            <tr><td>Click the ruler</td><td>Seeks the transport to that time.</td></tr>
+            <tr><td>Generate (Transport dock)</td><td>Once the document has clips, this regenerates every dirty clip in one pass instead of the whole document, with bounded concurrency and cancel-safe queuing. A document with no clips yet still falls back to the original whole-document pipeline. Its menu holds Auto-split then generate and the Split by paragraph toggle.</td></tr>
           </tbody>
         </table>
       </div>
-      <p class="dek" style="margin-top:1rem;">A clip's rendered width grows to match its real audio duration once generated; ungenerated clips stay a fixed placeholder width. Position always stays anchored to document order, so the timeline and transcript never drift out of sync.</p>
+    </div>
+  </section>
+
+  <section class="doc-section" id="transport">
+    <div class="wrap">
+      <h2><span class="idx">Transport dock</span>Playback</h2>
+      <p class="dek">Bottom-right. Play / pause / stop, the position readout, a Loop toggle, then Preview / Generate / Cancel, then one progress bar that carries the status text.</p>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>Transport</caption>
+          <thead><tr><th>Control</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Play / Pause / Stop</td><td>Plays the whole arrangement through one <code>sounddevice</code> output stream that mixes every clip at its timeline position (overlaps are a plain sum, clipped to full scale). Position comes from the audio callback's frame counter, so the playhead is sample accurate. Space toggles playback anywhere except inside the text editor; Ctrl+Space toggles everywhere.</td></tr>
+            <tr><td>Playhead</td><td>A line across every lane plus a marker on the ruler. The transcript highlights the clip being played and scrolls to it without moving your caret. A clip that finishes generating mid-playback becomes audible without stopping.</td></tr>
+            <tr><td>Loop</td><td>Wraps to the start instead of stopping at the end of the arrangement.</td></tr>
+            <tr><td>Preview</td><td>Speaks the selected text (or the first 1000 characters of the document) with the project-scope settings, through the fire-and-forget preview player.</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </section>
 
@@ -198,25 +222,26 @@
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">Edit menu</span>Undo &amp; redo</h2>
-        <p>The app's first menu bar. Text edits in the transcript and Characters-menu reassignments both push onto a plain-Python undo stack tied to the document, reachable from Edit &gt; Undo/Redo or the standard OS shortcuts. It isn't Qt's own undo framework, the data model stays framework-free so it can be tested without a running GUI.</p>
+        <p>Text edits ride the editor's native undo; character/FX reassignments, clip moves and FX overrides push onto a plain-Python undo stack tied to the document. Edit &gt; Undo/Redo (or the OS shortcuts) pops whichever happened most recently. <strong>Edit &gt; Characters...</strong> edits each character's name, color, voice and FX preset; a character still used by clips can't be removed.</p>
       </div>
     </div>
   </section>
 
   <section class="doc-section" id="generation">
     <div class="wrap">
-      <h2><span class="idx">Generation dock</span>Input source &amp; output</h2>
-      <p class="dek">What's left in the Generation dock after voice/speed/audio-control moved to the Settings dock above: where the text comes from, and where the audio goes.</p>
+      <h2><span class="idx">File menu</span>Projects</h2>
+      <p class="dek">A project is a <code>.json</code> file in the <code>document.json</code> shape (runs, clips, tracks, characters) plus a <code>project_settings</code> block for the export defaults. Launch reopens the last project you had open.</p>
       <div class="table-wrap reveal">
         <table class="ref">
-          <caption>Input source &amp; output</caption>
-          <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+          <caption>File menu</caption>
+          <thead><tr><th>Action</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Direct Text</td><td>The syntax-highlighted transcript editor described above, typed or pasted straight in.</td></tr>
-            <tr><td>Load File</td><td>A path to a <code>.txt</code>, <code>.pdf</code>, or <code>.epub</code> file, extracted into the transcript instead.</td></tr>
-            <tr><td>Output Directory</td><td>Where finished audio (and, if enabled, SRT/kept segments) gets written.</td></tr>
-            <tr><td>Base Filename</td><td>The stem used for the combined output file and, if Keep Segments is on, each segment file's name.</td></tr>
-            <tr><td>Save Preset / Load Preset</td><td>The legacy <code>presets/*.json</code> combo: snapshots or restores the whole-document ("none" scope) settings. See <a href="#presets" style="color:var(--violet); font-weight:600;">Presets &amp; characters</a> below for how this relates to the newer Characters system.</td></tr>
+            <tr><td>New</td><td>An empty project that inherits the current project's characters (a copy, until the global character library exists).</td></tr>
+            <tr><td>Open / Recent</td><td>Opens a project file; Recent lists the last ten.</td></tr>
+            <tr><td>Save / Save As</td><td>Autosave keeps writing to the current file on the usual debounce; Save forces it, Save As branches to a new file and switches to it. The window title shows <code>*</code> while a save is pending.</td></tr>
+            <tr><td>Import Text</td><td>Extracts a <code>.txt</code>, <code>.pdf</code>, or <code>.epub</code> and asks whether to add it at the caret or start a new project from it. The insert is one undo step.</td></tr>
+            <tr><td>Import Audio</td><td>Greyed out for now; arrives with ASR-anchored import.</td></tr>
+            <tr><td>Export</td><td>The mixdown dialog described next.</td></tr>
           </tbody>
         </table>
       </div>
@@ -225,24 +250,35 @@
 
   <section class="doc-section" id="processing">
     <div class="wrap">
-      <h2><span class="idx">Generation dock</span>Processing options</h2>
+      <h2><span class="idx">File &gt; Export</span>Export</h2>
+      <p class="dek">Generate only fills the per-clip cache. Export is what produces a deliverable: every clip mixed down at its timeline position into one file, using the same summing rule the transport plays. It refuses with a count when clips are out of date and offers to generate first.</p>
       <div class="table-wrap reveal">
         <table class="ref">
-          <caption>Processing options</caption>
+          <caption>Export dialog</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Keep segments</td><td>Keeps each generated chunk as its own file in the output folder, alongside the combined file if Combine Output is also on.</td></tr>
-            <tr><td>Combine output</td><td>Merges every segment into one final audio file in your chosen output format.</td></tr>
-            <tr><td>Export subtitles (.srt)</td><td>Writes an <code>.srt</code> file timed to the actual duration of each generated segment.</td></tr>
+            <tr><td>Output folder / Base filename</td><td>Where the mixdown is written and what it's called. Remembered per project.</td></tr>
+            <tr><td>Format</td><td>wav, mp3, flac or ogg.</td></tr>
+            <tr><td>Also write .srt</td><td>Subtitles timed from each clip's timeline start and duration, one row per generated clip.</td></tr>
+            <tr><td>Keep per-clip files</td><td>Writes each clip next to the mixdown as <code>&lt;base&gt;_001_&lt;Character&gt;.&lt;ext&gt;</code>, numbered in timeline order.</td></tr>
           </tbody>
         </table>
       </div>
     </div>
   </section>
 
+  <section class="doc-section" id="workspace">
+    <div class="wrap">
+      <h2><span class="idx">Workspace menu</span>Workspaces &amp; theme</h2>
+      <div class="prose reveal">
+        <p>Every panel is a dock you can drag, close and re-tab. <strong>Workspace &gt; Advanced</strong> is the default 2x2 grid; <strong>Simple</strong> hides the timeline and gives the transcript the full height, same document, same Generate behavior; <strong>Reset layout</strong> rebuilds the active one. Whatever you drag around is saved into the active workspace and comes back with it. <strong>Options &gt; Theme</strong> switches light and dark; the gutter, timeline and ruler read the same palette as the widgets.</p>
+      </div>
+    </div>
+  </section>
+
   <section class="doc-section" id="fx">
     <div class="wrap">
-      <h2><span class="idx">FX dock</span>FX</h2>
+      <h2><span class="idx">Audio FX tab</span>FX</h2>
       <p class="dek">Five groups, each section gated behind its own enable checkbox except EQ, which is always live (a slider left at 0 dB is simply a no-op). All of it runs through one Pedalboard chain together as step 4 of the signal chain.</p>
       <div class="table-wrap reveal">
         <table class="ref">
@@ -360,7 +396,7 @@
     <div class="wrap">
       <h2><span class="idx">Presets</span>Presets, characters, and how they relate to inline scripting</h2>
       <div class="prose reveal">
-        <p>Two independent preset systems, both plain JSON on disk: "Save Preset..." in the Generation dock snapshots the entire current generation config (voice, speed, split pattern, and the rest) under a name, as <code>presets/&lt;name&gt;.json</code>. "Save FX Preset..." in the FX dock snapshots just the FX sliders, as <code>presets/fx/&lt;name&gt;.json</code>.</p>
+        <p>Two preset systems, both plain JSON on disk. <code>presets/&lt;name&gt;.json</code> files are whole-config snapshots (voice, speed, split pattern, and the rest); since 4.1 nothing in the GUI writes them any more, because Edit &gt; Characters... is where a named voice/FX bundle is edited now, but existing files still load. "Save FX Preset..." in the Audio FX tab snapshots just the FX sliders, as <code>presets/fx/&lt;name&gt;.json</code>.</p>
         <p>Every file in <code>presets/</code> also becomes a <code>Character</code> on first load, one per file, with a highlight color assigned from a small fixed palette. If you had no presets saved yet, one "Default" character is seeded from your last-used settings instead, so a returning user's config isn't discarded. The preset files themselves are untouched either way, characters are read from them, not a replacement for them.</p>
         <p>These aren't a separate feature from <a href="scripting.html" style="color:var(--violet); font-weight:600;">inline scripting</a>, they're the same thing. A <code>[Name]:</code> tag in the transcript looks up a character by exactly that name, case-insensitively, and a character's name starts out as whatever the preset file it came from was called.</p>
       </div>
@@ -385,7 +421,7 @@
         </table>
       </div>
       <div class="prose reveal" style="margin-top:1.4rem;">
-        <p>Audio8 is a 0.6B-parameter model running through one shared, lock-serialized instance rather than a pipeline per thread, so there's no way to overlap generation the way Kokoro does. Rather than offer a JIT toggle that would just stall constantly, the app disables it outright: open Settings with Audio8 active and the "Enable JIT Generation (Streaming)" checkbox is greyed out, with a line underneath reading <code>(Audio8 TTS (voice cloning) doesn't support streaming - runs as Standard.)</code>. Every run on that engine falls back to Standard batch generation, automatically, no separate setting to change.</p>
+        <p>Audio8 is a 0.6B-parameter model running through one shared, lock-serialized instance rather than a pipeline per thread, so there's no way to overlap generation the way Kokoro does. Rather than offer a JIT toggle that would just stall constantly, the app disables it outright: with Audio8 active the "JIT streaming" entry under Options is greyed out, its tooltip reading <code>Audio8 TTS (voice cloning) doesn't support streaming - runs as Standard.</code>. Every run on that engine falls back to Standard batch generation, automatically, no separate setting to change.</p>
       </div>
     </div>
   </section>

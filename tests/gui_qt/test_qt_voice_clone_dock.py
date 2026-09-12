@@ -56,8 +56,17 @@ def test_switch_back_to_kokoro_hides_voice_clone_dock_and_restores_mixing(qt_app
 def test_jit_streaming_disabled_falls_back_to_standard_start(qt_app, monkeypatch):
     _switch_to_audio8(qt_app, monkeypatch)
     qt_app.jit_enabled = True
-    qt_app._update_start_btn_text()
-    assert qt_app.start_btn.text() == "Start Generation"
+    # The Options menu's JIT toggle greys out for a backend without
+    # streaming, and start_conversion() takes the Standard path.
+    assert qt_app.jit_action.isEnabled() is False
+    from unittest.mock import MagicMock
+    monkeypatch.setattr(qt_app.engine, "start_conversion", MagicMock())
+    monkeypatch.setattr(qt_app.engine, "start_jit_conversion", MagicMock())
+    monkeypatch.setattr(qt_app.engine, "pipeline", True)
+    qt_app.editor.setPlainText("hello")
+    qt_app.start_conversion()
+    assert qt_app.engine.start_conversion.called
+    assert not qt_app.engine.start_jit_conversion.called
 
 
 # --- save / delete reference -------------------------------------------------

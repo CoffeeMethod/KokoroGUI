@@ -58,17 +58,22 @@ def test_clicking_empty_lane_space_clears_selection(qtbot):
 
 
 def test_clicking_lane_label_selects_character(qtbot):
+    """Track labels live in the header column (TimelineWidget.header), a
+    separate view so labels never overlap clips."""
+    from kokoro_gui.qt.timeline_view import TimelineWidget, lane_top
+
     selection = SelectionModel()
-    view = TimelineView(selection_model=selection)
-    qtbot.addWidget(view)
+    widget = TimelineWidget(selection_model=selection)
+    qtbot.addWidget(widget)
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
     doc = Document.from_plain_text("x" * 40, characters=[alice], tracks=[track], clips=[])
-    view.render_document(doc)
+    widget.render_document(doc)
 
-    # The label is drawn at (4, y + 2); click well inside its glyph area.
-    pos = view.mapFromScene(6, 6)
-    _click(view, pos, qtbot)
+    # The label is drawn at (22, lane_top + 5); click inside its glyph area.
+    header = widget.header
+    pos = header.mapFromScene(30, lane_top(0) + 10)
+    _click(header, pos, qtbot)
 
     assert selection.kind == "character"
     assert selection.selected_character_id == alice.id

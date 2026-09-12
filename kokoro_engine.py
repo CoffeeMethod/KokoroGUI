@@ -25,12 +25,22 @@ STATS_FILE = "generation_stats.json"  # per-engine generation-history, see kokor
 # --- Thread Local Storage ---
 thread_local = threading.local()
 
+# Options > Device in the Qt shell writes settings["device"] ("auto" | "cpu" |
+# "cuda"); init_pipeline_async() copies it here so every worker thread's
+# KPipeline lands on the same device. None means "let kokoro pick".
+PIPELINE_DEVICE = None
+
+
+def _pipeline_kwargs():
+    return {"device": PIPELINE_DEVICE} if PIPELINE_DEVICE else {}
+
+
 def get_thread_pipeline(lang_code="a"):
     """Get or create a KPipeline instance for the current thread."""
     current = getattr(thread_local, "pipeline", None)
     if current is None or getattr(current, "lang_code", None) != lang_code:
         try:
-            thread_local.pipeline = KPipeline(lang_code=lang_code)
+            thread_local.pipeline = KPipeline(lang_code=lang_code, **_pipeline_kwargs())
         except Exception as e:
             print(f"Error init pipeline in thread {threading.get_ident()}: {e}")
             return None
@@ -88,10 +98,13 @@ class KokoroEngine(
         "get_thread_pipeline", ...)` in tests still takes effect."""
         return get_thread_pipeline(lang_code)
 
-    async def init_pipeline_async(self, lang_code="a"):
+    async def init_pipeline_async(self, lang_code="a", device=None):
+        global PIPELINE_DEVICE
+        if device is not None:
+            PIPELINE_DEVICE = None if device == "auto" else device
         try:
             try:
-                self.pipeline = await asyncio.to_thread(KPipeline, lang_code=lang_code)
+                self.pipeline = await asyncio.to_thread(KPipeline, lang_code=lang_code, **_pipeline_kwargs())
             except Exception:
                 if lang_code == "a":
                     raise
@@ -106,7 +119,7 @@ class KokoroEngine(
                 # default rather than surface that to the user; if "a"
                 # itself fails (a real problem - missing model, no network,
                 # etc.), let that failure propagate normally below.
-                self.pipeline = await asyncio.to_thread(KPipeline, lang_code="a")
+                self.pipeline = await asyncio.to_thread(KPipeline, lang_code="a", **_pipeline_kwargs())
                 lang_code = "a"
             if self.on_status: self.on_status(f"Pipeline Initialized ({lang_code}).", False)
             return True

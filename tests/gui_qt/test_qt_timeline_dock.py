@@ -9,7 +9,7 @@ from kokoro_gui.qt.timeline_view import ClipBlockItem
 
 
 def _editor(qt_app):
-    return qt_app.generation_dock.text_entry
+    return qt_app.editor
 
 
 def _set_text_via_real_edit(editor, text):
@@ -32,7 +32,10 @@ def _clip_block_items(dock):
 def test_timeline_dock_constructed_and_registered(qt_app):
     assert qt_app.timeline_dock is not None
     assert qt_app.timeline_dock.objectName() == "dock_timeline"
-    assert qt_app.dockWidgetArea(qt_app.timeline_dock) == Qt.DockWidgetArea.BottomDockWidgetArea
+    # The 2x2 grid puts the top row in the Top area and the bottom row
+    # (timeline | transport) in the Left area (see QtTTSApp.arrange_docks_default).
+    assert qt_app.dockWidgetArea(qt_app.timeline_dock) == Qt.DockWidgetArea.LeftDockWidgetArea
+    assert qt_app.dockWidgetArea(qt_app.transcript_dock) == Qt.DockWidgetArea.TopDockWidgetArea
 
 
 def test_dock_renders_clips_already_present_at_startup(qt_app):

@@ -9,10 +9,19 @@ from PySide6.QtWidgets import QMessageBox
 
 from kokoro_gui.daw.models import Character, Clip, Document, Run, Segment, Track
 from kokoro_gui.qt.selection import SelectionModel
+from kokoro_gui.daw.arrangement import compute_arrangement
 from kokoro_gui.qt.timeline_view import (
-    ClipBlockItem, FX_BUTTON_HEIGHT_PX, FX_BUTTON_WIDTH_PX, LANE_HEIGHT_PX,
-    MIN_CLIP_WIDTH_PX, PIXELS_PER_SECOND, PLACEHOLDER_PIXELS_PER_CHAR, TimelineView,
+    ClipBlockItem, DEFAULT_PIXELS_PER_SECOND, FX_BUTTON_HEIGHT_PX, FX_BUTTON_WIDTH_PX, LANE_HEIGHT_PX,
+    MIN_CLIP_WIDTH_PX, RULER_HEIGHT_PX, TimelineView, TimelineWidget, lane_top, seconds_to_x,
 )
+
+# Every ungenerated clip is estimated at this rate, so a clip's width is
+# predictable without generation_stats.json (see kokoro_gui/daw/arrangement.py).
+CPS = 10.0
+
+
+def _render(view, doc):
+    view.render_document(doc, compute_arrangement(doc, chars_per_second=CPS))
 
 
 def _write_tone_wav(path, sample_rate=8000, seconds=0.25, freq=440):
@@ -46,8 +55,8 @@ def _tagged_doc(text, tagged=(), **kwargs):
 
 
 def test_lanes_match_track_count_and_order_index_ordering(qtbot):
-    view = TimelineView()
-    qtbot.addWidget(view)
+    widget = TimelineWidget()
+    qtbot.addWidget(widget)
     alice = Character.from_preset_dict("Alice", {})
     bob = Character.from_preset_dict("Bob", {})
     # Deliberately built out of order_index order to prove sorting, not
@@ -56,14 +65,15 @@ def test_lanes_match_track_count_and_order_index_ordering(qtbot):
     track_alice = Track(name="Alice", character_id=alice.id, order_index=0)
     doc = Document.from_plain_text("", characters=[alice, bob], tracks=[track_bob, track_alice])
 
-    view.render_document(doc)
+    widget.render_document(doc)
 
-    labels = [item for item in view._scene.items() if hasattr(item, "text") and item.text() in ("Alice", "Bob")]
+    labels = [item for item in widget.header._scene.items() if hasattr(item, "text") and item.text() in ("Alice", "Bob")]
     label_by_text = {label.text(): label for label in labels}
     assert label_by_text["Alice"].pos().y() < label_by_text["Bob"].pos().y()
+    assert label_by_text["Alice"].pos().y() >= RULER_HEIGHT_PX
 
 
-def test_clip_position_and_width_match_offsets(qtbot):
+def test_first_clip_starts_at_zero_seconds_and_is_as_wide_as_its_estimate(qtbot):
     view = TimelineView()
     qtbot.addWidget(view)
     alice = Character.from_preset_dict("Alice", {})
@@ -71,13 +81,67 @@ def test_clip_position_and_width_match_offsets(qtbot):
     clip = Clip(character_id=alice.id, track_id=track.id)
     doc = _tagged_doc("x" * 40, [(10, 30, clip)], characters=[alice], tracks=[track])
 
-    view.render_document(doc)
+    _render(view, doc)
 
     blocks = _clip_block_items(view)
     assert len(blocks) == 1
     block = blocks[0]
-    assert block.pos().x() == 10 * PLACEHOLDER_PIXELS_PER_CHAR
-    assert block.boundingRect().width() == 20 * PLACEHOLDER_PIXELS_PER_CHAR
+    # Text offset 10 does not matter any more: the first clip in text order
+    # starts at 0s. 20 chars at CPS=10 -> 2.0s estimated.
+    assert block.pos().x() == 0
+    assert block.estimated is True
+    assert block.boundingRect().width() == seconds_to_x(2.0, DEFAULT_PIXELS_PER_SECOND)
+    assert block.pos().y() == lane_top(0) + 8
+
+
+def test_clips_are_laid_end_to_end_in_text_order_across_tracks(qtbot):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    alice = Character.from_preset_dict("Alice", {})
+    bob = Character.from_preset_dict("Bob", {})
+    track_a = Track(name="Alice", character_id=alice.id, order_index=0)
+    track_b = Track(name="Bob", character_id=bob.id, order_index=1)
+    clip_a = Clip(character_id=alice.id, track_id=track_a.id)
+    clip_b = Clip(character_id=bob.id, track_id=track_b.id)
+    doc = _tagged_doc("x" * 40, [(0, 10, clip_a), (10, 40, clip_b)], characters=[alice, bob], tracks=[track_a, track_b])
+
+    _render(view, doc)
+
+    by_id = view._blocks_by_clip_id
+    assert by_id[clip_a.id].pos().x() == 0
+    # clip_a is 10 chars / 10 cps = 1.0s, so clip_b starts at 1.0s on its own lane.
+    assert by_id[clip_b.id].pos().x() == seconds_to_x(1.0, DEFAULT_PIXELS_PER_SECOND)
+    assert by_id[clip_b.id].pos().y() == lane_top(1) + 8
+
+
+def test_pinned_timestamp_positions_the_clip(qtbot):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    alice = Character.from_preset_dict("Alice", {})
+    track = Track(name="Alice", character_id=alice.id)
+    clip = Clip(character_id=alice.id, track_id=track.id, timeline_timestamp=3.5)
+    doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
+
+    _render(view, doc)
+
+    assert _clip_block_items(view)[0].pos().x() == seconds_to_x(3.5, DEFAULT_PIXELS_PER_SECOND)
+
+
+def test_zoom_rescales_clip_positions(qtbot):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    alice = Character.from_preset_dict("Alice", {})
+    track = Track(name="Alice", character_id=alice.id)
+    clip = Clip(character_id=alice.id, track_id=track.id, timeline_timestamp=2.0)
+    doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
+    _render(view, doc)
+
+    view.set_zoom(100.0)
+
+    assert view.zoom == 100.0
+    assert _clip_block_items(view)[0].pos().x() == 200.0
+    view.set_zoom(5.0)  # clamps to the minimum
+    assert view.zoom == 20.0
 
 
 def test_clip_width_floors_at_min_clip_width(qtbot):
@@ -88,7 +152,7 @@ def test_clip_width_floors_at_min_clip_width(qtbot):
     clip = Clip(character_id=alice.id, track_id=track.id)  # 1 char, tiny
     doc = _tagged_doc("x", [(0, 1, clip)], characters=[alice], tracks=[track])
 
-    view.render_document(doc)
+    _render(view, doc)
 
     block = _clip_block_items(view)[0]
     assert block.boundingRect().width() == MIN_CLIP_WIDTH_PX
@@ -102,7 +166,7 @@ def test_clip_color_matches_character_highlight_color(qtbot):
     clip = Clip(character_id=alice.id, track_id=track.id)
     doc = _tagged_doc("hello", [(0, 5, clip)], characters=[alice], tracks=[track])
 
-    view.render_document(doc)
+    _render(view, doc)
 
     block = _clip_block_items(view)[0]
     assert block._color == "#abcdef"
@@ -115,7 +179,7 @@ def test_clip_with_unresolvable_character_uses_fallback_color(qtbot):
     clip = Clip(character_id="nonexistent", track_id=track.id)
     doc = _tagged_doc("hello", [(0, 5, clip)], characters=[], tracks=[track])
 
-    view.render_document(doc)
+    _render(view, doc)
 
     block = _clip_block_items(view)[0]
     assert block._color == "#888888"
@@ -127,7 +191,7 @@ def test_clip_with_unresolvable_track_is_skipped_not_crashed(qtbot):
     clip = Clip(track_id="nonexistent")
     doc = _tagged_doc("hello", [(0, 5, clip)], tracks=[])
 
-    view.render_document(doc)  # must not raise
+    _render(view, doc)  # must not raise
 
     assert _clip_block_items(view) == []
 
@@ -147,11 +211,11 @@ def test_rerender_replaces_previous_clip_items(qtbot):
     track = Track(name="Alice", character_id=alice.id)
     clip_a = Clip(character_id=alice.id, track_id=track.id)
     doc = _tagged_doc("hello", [(0, 5, clip_a)], characters=[alice], tracks=[track])
-    view.render_document(doc)
+    _render(view, doc)
     assert len(_clip_block_items(view)) == 1
 
     doc.clips = []
-    view.render_document(doc)
+    _render(view, doc)
 
     assert _clip_block_items(view) == []
 
@@ -168,7 +232,7 @@ def test_clip_with_real_audio_path_renders_waveform(qtbot, tmp_path):
     clip = Clip(character_id=alice.id, track_id=track.id, segments=[segment])
     doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
 
-    view.render_document(doc)
+    _render(view, doc)
 
     block = _clip_block_items(view)[0]
     assert block._waveform_item is not None
@@ -184,7 +248,7 @@ def test_clip_with_missing_audio_path_falls_back_to_flat_block(qtbot, tmp_path):
     clip = Clip(character_id=alice.id, track_id=track.id, segments=[segment])
     doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
 
-    view.render_document(doc)  # must not raise
+    _render(view, doc)  # must not raise
 
     block = _clip_block_items(view)[0]
     assert block._waveform_item is None
@@ -208,7 +272,7 @@ def test_context_menu_over_clip_with_audio_shows_generate_and_play(qtbot, tmp_pa
     segment = Segment(audio_path=str(wav_path))
     clip = Clip(character_id=alice.id, track_id=track.id, segments=[segment])
     doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
-    view.render_document(doc)
+    _render(view, doc)
 
     block = _clip_block_items(view)[0]
     pos = view.mapFromScene(block.mapToScene(0, 0))
@@ -224,7 +288,7 @@ def test_context_menu_over_clip_without_audio_shows_generate_only(qtbot):
     track = Track(name="Alice", character_id=alice.id)
     clip = Clip(character_id=alice.id, track_id=track.id)
     doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
-    view.render_document(doc)
+    _render(view, doc)
 
     block = _clip_block_items(view)[0]
     pos = view.mapFromScene(block.mapToScene(0, 0))
@@ -246,7 +310,7 @@ def test_triggering_play_calls_playback_play_with_clip_audio_path(qtbot, tmp_pat
     segment = Segment(audio_path=str(wav_path))
     clip = Clip(character_id=alice.id, track_id=track.id, segments=[segment])
     doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
-    view.render_document(doc)
+    _render(view, doc)
 
     block = _clip_block_items(view)[0]
     pos = view.mapFromScene(block.mapToScene(0, 0))
@@ -278,7 +342,7 @@ def test_clip_with_fx_override_renders_fx_active(qtbot):
     qtbot.addWidget(view)
     doc, _clip, _track = _build_doc_with_one_clip(fx_override={"reverb_enabled": True})
 
-    view.render_document(doc)
+    _render(view, doc)
 
     block = _clip_block_items(view)[0]
     assert block._fx_active is True
@@ -289,7 +353,7 @@ def test_clip_without_fx_override_renders_fx_inactive(qtbot):
     qtbot.addWidget(view)
     doc, _clip, _track = _build_doc_with_one_clip(fx_override=None)
 
-    view.render_document(doc)
+    _render(view, doc)
 
     block = _clip_block_items(view)[0]
     assert block._fx_active is False
@@ -335,7 +399,7 @@ def test_fx_menu_lists_preset_names_plus_clear_fx(qtbot, monkeypatch):
         "kokoro_gui.qt.timeline_view.list_fx_preset_names", lambda: ["Warm", "Telephone"]
     )
     doc, clip, _track = _build_doc_with_one_clip()
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     menu = view._build_fx_menu(block)
@@ -348,7 +412,7 @@ def test_fx_menu_preset_action_emits_fx_preset_requested_with_clip_id_and_name(q
     qtbot.addWidget(view)
     monkeypatch.setattr("kokoro_gui.qt.timeline_view.list_fx_preset_names", lambda: ["Warm"])
     doc, clip, _track = _build_doc_with_one_clip()
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     menu = view._build_fx_menu(block)
@@ -364,7 +428,7 @@ def test_fx_menu_clear_fx_action_emits_fx_preset_requested_with_empty_name(qtbot
     qtbot.addWidget(view)
     monkeypatch.setattr("kokoro_gui.qt.timeline_view.list_fx_preset_names", lambda: [])
     doc, clip, _track = _build_doc_with_one_clip(fx_override={"reverb_enabled": True})
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     menu = view._build_fx_menu(block)
@@ -380,7 +444,7 @@ def test_click_within_fx_button_rect_bypasses_click_to_select(qtbot, monkeypatch
     view = TimelineView(selection_model=selection)
     qtbot.addWidget(view)
     doc, clip, _track = _build_doc_with_one_clip()
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     handled = []
@@ -399,27 +463,9 @@ def test_click_within_fx_button_rect_bypasses_click_to_select(qtbot, monkeypatch
 # Real time-based positioning (item 6, "Real time-based positioning")
 # ---------------------------------------------------------------------------
 
-def test_clip_with_no_segments_renders_at_unchanged_placeholder_width(qtbot):
-    """Regression pin - same scenario test_clip_position_and_width_match_offsets
-    already covers: a clip with no segments must render pixel-identical
-    to before this item's width rule existed."""
-    view = TimelineView()
-    qtbot.addWidget(view)
-    alice = Character.from_preset_dict("Alice", {})
-    track = Track(name="Alice", character_id=alice.id)
-    clip = Clip(character_id=alice.id, track_id=track.id)
-    doc = _tagged_doc("x" * 40, [(10, 30, clip)], characters=[alice], tracks=[track])
-
-    view.render_document(doc)
-
-    block = _clip_block_items(view)[0]
-    assert block.pos().x() == 10 * PLACEHOLDER_PIXELS_PER_CHAR
-    assert block.boundingRect().width() == 20 * PLACEHOLDER_PIXELS_PER_CHAR
-
-
-def test_clip_with_none_durations_renders_at_unchanged_placeholder_width(qtbot):
-    """Segments that exist but carry duration=None (not yet generated) must
-    not affect width either."""
+def test_clip_with_segments_but_no_audio_is_still_estimated(qtbot):
+    """Segments that exist but carry no audio_path (not yet generated) are
+    treated as ungenerated: estimated width, dashed outline."""
     view = TimelineView()
     qtbot.addWidget(view)
     alice = Character.from_preset_dict("Alice", {})
@@ -428,74 +474,65 @@ def test_clip_with_none_durations_renders_at_unchanged_placeholder_width(qtbot):
     clip = Clip(character_id=alice.id, track_id=track.id, segments=segments)
     doc = _tagged_doc("x" * 40, [(10, 30, clip)], characters=[alice], tracks=[track])
 
-    view.render_document(doc)
+    _render(view, doc)
 
     block = _clip_block_items(view)[0]
-    assert block.boundingRect().width() == 20 * PLACEHOLDER_PIXELS_PER_CHAR
+    assert block.estimated is True
+    assert block.boundingRect().width() == seconds_to_x(2.0, DEFAULT_PIXELS_PER_SECOND)
 
 
-def test_clip_width_grows_to_fit_duration_when_it_exceeds_placeholder(qtbot):
+def test_generated_clip_width_is_its_real_duration(qtbot, tmp_path):
     view = TimelineView()
     qtbot.addWidget(view)
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
-    # 5 chars -> placeholder floors at MIN_CLIP_WIDTH_PX (20px). 2.0s of
-    # audio at PIXELS_PER_SECOND=50 is 100px, well past that.
-    segment = Segment(duration=2.0)
+    wav = tmp_path / "a.wav"
+    _write_tone_wav(wav)
+    segment = Segment(duration=2.0, audio_path=str(wav))
     clip = Clip(character_id=alice.id, track_id=track.id, segments=[segment])
     doc = _tagged_doc("x" * 5, [(0, 5, clip)], characters=[alice], tracks=[track])
 
-    view.render_document(doc)
+    _render(view, doc)
 
     block = _clip_block_items(view)[0]
-    assert block.boundingRect().width() == 2.0 * PIXELS_PER_SECOND
+    assert block.estimated is False
+    assert block.boundingRect().width() == seconds_to_x(2.0, DEFAULT_PIXELS_PER_SECOND)
 
 
-def test_clip_width_stays_at_placeholder_floor_when_duration_is_smaller(qtbot):
+def test_generated_clip_width_sums_multiple_segment_durations(qtbot, tmp_path):
     view = TimelineView()
     qtbot.addWidget(view)
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
-    # 100 chars -> placeholder 400px. 1.0s of audio at PIXELS_PER_SECOND=50
-    # is only 50px, well under the placeholder - the max() floor must hold.
-    segment = Segment(duration=1.0)
-    clip = Clip(character_id=alice.id, track_id=track.id, segments=[segment])
-    doc = _tagged_doc("x" * 100, [(0, 100, clip)], characters=[alice], tracks=[track])
-
-    view.render_document(doc)
-
-    block = _clip_block_items(view)[0]
-    assert block.boundingRect().width() == 100 * PLACEHOLDER_PIXELS_PER_CHAR
-
-
-def test_clip_width_sums_multiple_segment_durations(qtbot):
-    view = TimelineView()
-    qtbot.addWidget(view)
-    alice = Character.from_preset_dict("Alice", {})
-    track = Track(name="Alice", character_id=alice.id)
-    segments = [Segment(duration=1.0), Segment(duration=2.0), Segment(duration=0.5)]
+    wav = tmp_path / "a.wav"
+    _write_tone_wav(wav)
+    segments = [Segment(duration=1.0, audio_path=str(wav)), Segment(duration=2.0, audio_path=str(wav)),
+                Segment(duration=0.5, audio_path=str(wav))]
     clip = Clip(character_id=alice.id, track_id=track.id, segments=segments)
     doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
 
-    view.render_document(doc)
+    _render(view, doc)
 
     block = _clip_block_items(view)[0]
-    assert block.boundingRect().width() == 3.5 * PIXELS_PER_SECOND
+    assert block.boundingRect().width() == seconds_to_x(3.5, DEFAULT_PIXELS_PER_SECOND)
 
 
-def test_clip_width_skips_none_duration_segments_without_crashing(qtbot):
+def test_generated_clip_skips_none_duration_segments_without_crashing(qtbot, tmp_path):
     view = TimelineView()
     qtbot.addWidget(view)
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
-    segments = [Segment(duration=1.0), Segment(duration=None), Segment(duration=2.0)]
+    wav = tmp_path / "a.wav"
+    _write_tone_wav(wav)
+    segments = [Segment(duration=1.0, audio_path=str(wav)), Segment(duration=None),
+                Segment(duration=2.0, audio_path=str(wav))]
     clip = Clip(character_id=alice.id, track_id=track.id, segments=segments)
     doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
 
-    view.render_document(doc)  # must not raise (summing a None duration)
+    _render(view, doc)  # must not raise (summing a None duration)
 
     block = _clip_block_items(view)[0]
-    assert block.boundingRect().width() == 3.0 * PIXELS_PER_SECOND
+    assert block.boundingRect().width() == seconds_to_x(3.0, DEFAULT_PIXELS_PER_SECOND)
 
 
 def test_overlapping_clips_paint_in_ascending_start_offset_order(qtbot):
@@ -507,8 +544,10 @@ def test_overlapping_clips_paint_in_ascending_start_offset_order(qtbot):
     qtbot.addWidget(view)
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
-    clip_a = Clip(character_id=alice.id, track_id=track.id)
-    clip_b = Clip(character_id=alice.id, track_id=track.id)
+    # Pinned so they overlap on the seconds axis (the default layout is
+    # end-to-end, which never overlaps).
+    clip_a = Clip(character_id=alice.id, track_id=track.id, timeline_timestamp=0.5)
+    clip_b = Clip(character_id=alice.id, track_id=track.id, timeline_timestamp=0.0)
     doc = _tagged_doc(
         "x" * 100, [(50, 60, clip_a), (10, 20, clip_b)],
         characters=[alice], tracks=[track], clips=[],
@@ -519,7 +558,7 @@ def test_overlapping_clips_paint_in_ascending_start_offset_order(qtbot):
     doc.clips.append(clip_a)
     doc.clips.append(clip_b)
 
-    view.render_document(doc)
+    _render(view, doc)
 
     blocks = _clip_block_items(view)
     assert len(blocks) == 2
@@ -534,7 +573,7 @@ def test_click_outside_fx_button_rect_still_selects_the_block(qtbot, monkeypatch
     view = TimelineView(selection_model=selection)
     qtbot.addWidget(view)
     doc, clip, _track = _build_doc_with_one_clip()
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     handled = []
@@ -562,9 +601,12 @@ def _build_doc_two_tracks_same_character():
     return doc, clip, track_a, track_b
 
 
-def _press_release(view, qtbot, press_pos, release_pos):
-    qtbot.mousePress(view.viewport(), Qt.MouseButton.LeftButton, pos=press_pos)
-    qtbot.mouseRelease(view.viewport(), Qt.MouseButton.LeftButton, pos=release_pos)
+def _press_release(view, qtbot, press_pos, release_pos, modifier=Qt.KeyboardModifier.NoModifier):
+    qtbot.mousePress(view.viewport(), Qt.MouseButton.LeftButton, modifier, pos=press_pos)
+    qtbot.mouseRelease(view.viewport(), Qt.MouseButton.LeftButton, modifier, pos=release_pos)
+
+
+SHIFT = Qt.KeyboardModifier.ShiftModifier
 
 
 def test_plain_click_on_clip_block_still_selects_it_unchanged(qtbot):
@@ -576,7 +618,7 @@ def test_plain_click_on_clip_block_still_selects_it_unchanged(qtbot):
     view = TimelineView(selection_model=selection)
     qtbot.addWidget(view)
     doc, clip, _track = _build_doc_with_one_clip()
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     pos = view.mapFromScene(block.mapToScene(2, 2))
@@ -594,7 +636,7 @@ def test_plain_click_on_fx_button_still_opens_fx_menu_unchanged(qtbot, monkeypat
     view = TimelineView(selection_model=selection)
     qtbot.addWidget(view)
     doc, clip, _track = _build_doc_with_one_clip()
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     handled = []
@@ -615,7 +657,7 @@ def test_sub_threshold_movement_behaves_as_plain_click_not_a_drag(qtbot):
     view = TimelineView(selection_model=selection)
     qtbot.addWidget(view)
     doc, clip, track = _build_doc_with_one_clip()
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     received = []
@@ -638,7 +680,7 @@ def test_drag_release_on_different_track_with_matching_character_emits_signal_no
     view = TimelineView(selection_model=selection)
     qtbot.addWidget(view)
     doc, clip, track_a, track_b = _build_doc_two_tracks_same_character()
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     def _fail_exec(self):
@@ -650,31 +692,67 @@ def test_drag_release_on_different_track_with_matching_character_emits_signal_no
 
     press_pos = view.mapFromScene(block.mapToScene(2, 2))
     release_scene_x = block.mapToScene(2, 2).x()
-    release_pos = view.mapFromScene(QPointF(release_scene_x, LANE_HEIGHT_PX + 10))
+    release_pos = view.mapFromScene(QPointF(release_scene_x, lane_top(1) + 10))
     _press_release(view, qtbot, press_pos, release_pos)
 
     assert received == [(clip.id, track_b.id, False)]
 
 
-def test_drag_release_on_same_track_is_a_noop(qtbot):
+def test_drag_release_on_same_track_emits_clip_moved_not_reassigned(qtbot):
+    """UI9: a horizontal drag on the same lane is a move on the seconds
+    axis. The view reports the new start; the dock decides timestamp vs.
+    text reorder."""
     selection = SelectionModel()
     view = TimelineView(selection_model=selection)
     qtbot.addWidget(view)
     doc, clip, track_a, _track_b = _build_doc_two_tracks_same_character()
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     received = []
+    moved = []
     view.clipDragReassigned.connect(lambda *a: received.append(a))
+    view.clipMoved.connect(lambda *a: moved.append(a))
 
     press_pos = view.mapFromScene(block.mapToScene(2, 2))
-    # Big horizontal movement (past threshold) but still within track_a's
-    # own lane vertically - a no-op, not a reassignment.
-    release_pos = view.mapFromScene(block.mapToScene(60, 2))
+    release_pos = view.mapFromScene(block.mapToScene(60, 2))  # 58px right = 1.16s at 50px/s
     _press_release(view, qtbot, press_pos, release_pos)
 
     assert received == []
     assert clip.track_id == track_a.id
+    assert len(moved) == 1
+    assert moved[0][0] == clip.id
+    assert abs(moved[0][1] - 58 / DEFAULT_PIXELS_PER_SECOND) < 0.05
+
+
+def test_ruler_click_emits_seek(qtbot):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, _clip, _track = _build_doc_with_one_clip()
+    _render(view, doc)
+
+    seeks = []
+    view.seekRequested.connect(seeks.append)
+    pos = view.mapFromScene(QPointF(seconds_to_x(2.0, DEFAULT_PIXELS_PER_SECOND), RULER_HEIGHT_PX / 2))
+    _click(view, pos, qtbot)
+
+    assert len(seeks) == 1
+    assert abs(seeks[0] - 2.0) < 0.05
+
+
+def test_set_playhead_shows_line_at_the_right_x(qtbot):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, _clip, _track = _build_doc_with_one_clip()
+    _render(view, doc)
+
+    view.set_playhead(1.5)
+
+    line = view._playhead_item
+    assert line.isVisible()
+    assert line.line().x1() == seconds_to_x(1.5, DEFAULT_PIXELS_PER_SECOND)
+    view.set_playhead(None)
+    assert not line.isVisible()
 
 
 def test_drag_release_off_all_lanes_is_a_noop(qtbot):
@@ -682,7 +760,7 @@ def test_drag_release_off_all_lanes_is_a_noop(qtbot):
     view = TimelineView(selection_model=selection)
     qtbot.addWidget(view)
     doc, clip, track_a, _track_b = _build_doc_two_tracks_same_character()
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     received = []
@@ -698,10 +776,9 @@ def test_drag_release_off_all_lanes_is_a_noop(qtbot):
 
 
 # ---------------------------------------------------------------------------
-# Sub-range TTS replacement (item 9) - a FOURTH mouse gesture layered on
-# item 8's same-track drag branch: a drag that starts and ends within one
-# clip block's own x-range, on the same track, is a sub-range-selection
-# gesture rather than item 8's plain no-op.
+# Sub-range TTS replacement (item 9): Shift+drag that starts and ends within
+# one clip block's own x-range. Behind Shift since the UI shell redesign, so
+# a plain drag can mean "move on the seconds axis" (clipMoved).
 # ---------------------------------------------------------------------------
 
 def test_same_track_drag_within_one_block_emits_sub_range_tts_left_to_right(qtbot):
@@ -709,7 +786,7 @@ def test_same_track_drag_within_one_block_emits_sub_range_tts_left_to_right(qtbo
     view = TimelineView(selection_model=selection)
     qtbot.addWidget(view)
     doc, clip, _track = _build_doc_with_one_clip()  # start=0, end=10, block width 40px
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     received = []
@@ -717,7 +794,7 @@ def test_same_track_drag_within_one_block_emits_sub_range_tts_left_to_right(qtbo
 
     press_pos = view.mapFromScene(block.mapToScene(4, 2))
     release_pos = view.mapFromScene(block.mapToScene(20, 2))
-    _press_release(view, qtbot, press_pos, release_pos)
+    _press_release(view, qtbot, press_pos, release_pos, SHIFT)
 
     assert len(received) == 1
     cid, sub_start, sub_end = received[0]
@@ -733,7 +810,7 @@ def test_same_track_drag_within_one_block_emits_sub_range_tts_right_to_left(qtbo
     view = TimelineView(selection_model=selection)
     qtbot.addWidget(view)
     doc, clip, _track = _build_doc_with_one_clip()
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     received = []
@@ -741,7 +818,7 @@ def test_same_track_drag_within_one_block_emits_sub_range_tts_right_to_left(qtbo
 
     press_pos = view.mapFromScene(block.mapToScene(20, 2))
     release_pos = view.mapFromScene(block.mapToScene(4, 2))
-    _press_release(view, qtbot, press_pos, release_pos)
+    _press_release(view, qtbot, press_pos, release_pos, SHIFT)
 
     assert len(received) == 1
     cid, sub_start, sub_end = received[0]
@@ -751,16 +828,14 @@ def test_same_track_drag_within_one_block_emits_sub_range_tts_right_to_left(qtbo
     assert clip_start <= sub_start < sub_end <= clip_end
 
 
-def test_same_track_drag_exiting_block_bounds_stays_a_plain_noop(qtbot):
-    """Regression check: item 8's original same-track-no-op behavior must
-    still hold when the drag's x-coordinates exit the origin block's own
-    bounds (empty space here) - falls back to no signal at all, not
-    subRangeTtsRequested."""
+def test_shift_drag_exiting_block_bounds_emits_nothing(qtbot):
+    """A Shift+drag whose x-coordinates exit the origin block's own bounds
+    is neither a sub-range selection nor a move."""
     selection = SelectionModel()
     view = TimelineView(selection_model=selection)
     qtbot.addWidget(view)
     doc, clip, track_a, _track_b = _build_doc_two_tracks_same_character()
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     drag_received = []
@@ -770,7 +845,7 @@ def test_same_track_drag_exiting_block_bounds_stays_a_plain_noop(qtbot):
 
     press_pos = view.mapFromScene(block.mapToScene(2, 2))
     release_pos = view.mapFromScene(block.mapToScene(60, 2))  # past the block's own 40px width
-    _press_release(view, qtbot, press_pos, release_pos)
+    _press_release(view, qtbot, press_pos, release_pos, SHIFT)
 
     assert drag_received == []
     assert sub_range_received == []
@@ -785,7 +860,7 @@ def test_different_track_drag_emits_drag_reassigned_not_sub_range_tts(qtbot):
     view = TimelineView(selection_model=selection)
     qtbot.addWidget(view)
     doc, clip, _track_a, track_b = _build_doc_two_tracks_same_character()
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     drag_received = []
@@ -795,7 +870,7 @@ def test_different_track_drag_emits_drag_reassigned_not_sub_range_tts(qtbot):
 
     press_pos = view.mapFromScene(block.mapToScene(2, 2))
     release_scene_x = block.mapToScene(2, 2).x()
-    release_pos = view.mapFromScene(QPointF(release_scene_x, LANE_HEIGHT_PX + 10))
+    release_pos = view.mapFromScene(QPointF(release_scene_x, lane_top(1) + 10))
     _press_release(view, qtbot, press_pos, release_pos)
 
     assert drag_received == [(clip.id, track_b.id, False)]
@@ -813,7 +888,7 @@ def test_sub_range_drag_too_small_to_select_a_character_emits_nothing(qtbot):
     view = TimelineView(selection_model=selection)
     qtbot.addWidget(view)
     doc, clip, _track = _build_doc_with_one_clip()
-    view.render_document(doc)
+    _render(view, doc)
     block = _clip_block_items(view)[0]
 
     sub_range_received = []
@@ -823,7 +898,7 @@ def test_sub_range_drag_too_small_to_select_a_character_emits_nothing(qtbot):
 
     press_pos = view.mapFromScene(block.mapToScene(4, 2))
     release_pos = view.mapFromScene(block.mapToScene(5, 70))
-    _press_release(view, qtbot, press_pos, release_pos)
+    _press_release(view, qtbot, press_pos, release_pos, SHIFT)
 
     assert sub_range_received == []
     assert drag_received == []

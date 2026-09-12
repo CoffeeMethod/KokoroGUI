@@ -289,7 +289,7 @@ class Audio8Engine(
 
         os.makedirs(AUDIO8_REFS_DIR, exist_ok=True)
 
-    async def init_pipeline_async(self, lang_code="a"):
+    async def init_pipeline_async(self, lang_code="a", device=None):
         if self.on_status:
             self.on_status("Loading Audio8 TTS model (first use downloads it)...", False)
         try:

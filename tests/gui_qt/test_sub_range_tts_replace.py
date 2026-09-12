@@ -119,7 +119,7 @@ def test_edited_text_updates_document_and_resyncs_transcript_editor(qt_app, monk
     )
     assert new_clip.character_id == alice.id
 
-    assert qt_app.generation_dock.text_entry.toPlainText() == expected_text
+    assert qt_app.editor.toPlainText() == expected_text
 
 
 # ---------------------------------------------------------------------------

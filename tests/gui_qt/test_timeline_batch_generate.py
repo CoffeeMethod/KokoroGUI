@@ -72,7 +72,7 @@ def test_on_generate_clicked_with_clips_present_but_none_dirty_calls_neither(qt_
 
 def test_generate_blocked_while_a_job_is_already_running(qt_app):
     _make_clip(qt_app)
-    qt_app.cancel_btn.setEnabled(True)  # simulate a running job
+    qt_app.transport_dock.set_busy(True)  # simulate a running job
 
     qt_app.timeline_dock.generate_dirty_clips_requested()
 
@@ -108,8 +108,8 @@ def test_partial_batch_completion_populates_segments_for_succeeded_only_and_repo
     assert clip_a.segments[0].cache_key == expected_hash_a
     assert clip_b.segments == []  # failed clip's segments left untouched
 
-    assert "Generated 1 of 2 clips (1 failed)" in qt_app.status_label.text()
-    assert "orange" in qt_app.status_label.styleSheet()
+    assert "Generated 1 of 2 clips (1 failed)" in qt_app.transport_dock.status_text()
+    assert "orange" in qt_app.transport_dock.progress_bar.styleSheet()
 
 
 def test_total_batch_failure_uses_error_styling(qt_app):
@@ -124,7 +124,7 @@ def test_total_batch_failure_uses_error_styling(qt_app):
 
     assert clip_a.segments == []
     assert clip_b.segments == []
-    assert "#ff5555" in qt_app.status_label.styleSheet()
+    assert "#ff5555" in qt_app.transport_dock.progress_bar.styleSheet()
 
 
 def test_fully_successful_batch_calls_schedule_save_and_refresh_timeline_once(qt_app, monkeypatch):
@@ -154,4 +154,4 @@ def test_fully_successful_batch_calls_schedule_save_and_refresh_timeline_once(qt
 
     assert len(save_calls) == 1
     assert len(refresh_calls) == 1
-    assert "Generated 2 clip(s)." in qt_app.status_label.text()
+    assert "Generated 2 clip(s)." in qt_app.transport_dock.status_text()

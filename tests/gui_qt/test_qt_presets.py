@@ -1,4 +1,6 @@
-"""Generation + FX preset save/load (presets/*.json, presets/fx/*.json)."""
+"""FX preset save/load (presets/fx/*.json). The legacy generation-preset
+row left the transcript panel with the UI shell redesign (Characters
+replaced it), so only FX presets have GUI save/load now."""
 import json
 import os
 
@@ -7,36 +9,6 @@ from PySide6.QtWidgets import QInputDialog
 
 def _stub_get_text(monkeypatch, value):
     monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: (value, True)))
-
-
-def test_save_generation_preset_writes_expected_keys(qt_app, monkeypatch):
-    _stub_get_text(monkeypatch, "MyPreset")
-    qt_app.settings_dock.schema_form.set_values({"voice": "af_bella", "speed": 1.4})
-    qt_app.generation_dock._save_preset_dialog()
-
-    import kokoro_gui.qt.app as qt_app_module
-    fpath = os.path.join(qt_app_module.PRESETS_DIR, "MyPreset.json")
-    assert os.path.exists(fpath)
-    with open(fpath, encoding="utf-8") as f:
-        data = json.load(f)
-    assert data["voice"] == "af_bella"
-    assert data["speed"] == 1.4
-    assert set(data.keys()) == {"voice", "speed", "volume", "pitch", "split_pattern",
-                                 "normalize", "trim", "format", "apply_fx", "fx_preset"}
-
-
-def test_load_generation_preset_applies_values(qt_app, monkeypatch):
-    _stub_get_text(monkeypatch, "SpeedyBella")
-    qt_app.settings_dock.schema_form.set_values({"voice": "af_bella", "speed": 1.6})
-    qt_app.generation_dock._save_preset_dialog()
-
-    qt_app.settings_dock.schema_form.set_values({"voice": "af_heart", "speed": 1.0})
-    qt_app.generation_dock.refresh_presets()
-    qt_app.generation_dock._on_preset_selected("SpeedyBella")
-
-    state = qt_app.generation_dock.get_state()
-    assert state["voice"] == "af_bella"
-    assert state["speed"] == 1.6
 
 
 def test_save_fx_preset_writes_all_43_keys(qt_app, monkeypatch):

@@ -1,0 +1,210 @@
+"""Tests for the Export dialog (section 6) and the Edit > Characters dialog
+(UI13) of Claude/PLAN_ui_shell_redesign.md, plus the transport -> playhead
+-> transcript follow chain (section 5) at the app level."""
+import os
+
+import numpy as np
+import soundfile as sf
+from PySide6.QtGui import QTextCursor
+from PySide6.QtWidgets import QMessageBox
+
+from kokoro_gui.daw.dirty import build_segments_from_results, compute_expected_cache_hash
+
+import kokoro_gui.qt.app  # noqa: F401 - app.py must load before any docks module (circular import)
+from kokoro_gui.qt.characters_dialog import CharactersDialog  # noqa: E402
+from kokoro_gui.qt.docks.export_dialog import ExportDialog, export_defaults, run_export  # noqa: E402
+
+
+def _type(editor, text):
+    cursor = editor.textCursor()
+    cursor.select(QTextCursor.SelectionType.Document)
+    cursor.insertText(text)
+
+
+def _generated_clip(qt_app, tmp_path, start, end, seconds=1.0, name="a"):
+    alice = qt_app.document.characters[0]
+    clip = qt_app.document.assign_character_to_range(start, end, alice.id)
+    path = str(tmp_path / f"{name}.wav")
+    sf.write(path, np.full(int(24000 * seconds), 0.25, dtype=np.float32), 24000)
+    text = qt_app.document.clip_text(clip)
+    expected = compute_expected_cache_hash(text, qt_app.document.effective_config_for_clip(clip))
+    clip.segments = build_segments_from_results(expected, [{"text": text, "path": path, "duration": seconds}])
+    return clip
+
+
+# -- export -------------------------------------------------------------------------
+
+
+def test_export_defaults_fall_back_to_legacy_settings_then_project(qt_app):
+    qt_app.settings["out_dir"] = "legacy_dir"
+    qt_app.settings["export_subtitles"] = True
+    assert export_defaults(qt_app)["out_dir"] == "legacy_dir"
+    assert export_defaults(qt_app)["srt"] is True
+
+    qt_app.project_settings["export"] = {"out_dir": "proj_dir", "format": "flac"}
+    values = export_defaults(qt_app)
+    assert values["out_dir"] == "proj_dir" and values["format"] == "flac"
+
+
+def test_export_dialog_reads_back_sanitized_values(qt_app):
+    dialog = ExportDialog(qt_app)
+    dialog.out_dir_edit.setText("out")
+    dialog.filename_edit.setText("../../evil")
+    dialog.format_combo.setCurrentText("flac")
+    dialog.srt_check.setChecked(True)
+    dialog.keep_clips_check.setChecked(True)
+
+    values = dialog.values()
+
+    assert values == {"out_dir": "out", "filename": "evil", "format": "flac", "srt": True, "keep_clip_files": True}
+
+
+def test_run_export_refuses_without_clips(qt_app, monkeypatch):
+    infos = []
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: infos.append(a)))
+    assert run_export(qt_app, export_defaults(qt_app)) is False
+    assert infos
+
+
+def test_run_export_with_dirty_clips_offers_generate_first(qt_app, monkeypatch):
+    _type(qt_app.editor, "hello world")
+    alice = qt_app.document.characters[0]
+    qt_app.document.assign_character_to_range(0, 11, alice.id)  # dirty
+    generated = []
+    monkeypatch.setattr(qt_app, "on_generate_clicked", lambda: generated.append(True))
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: None)
+    monkeypatch.setattr(QMessageBox, "clickedButton",
+                        lambda self: next(b for b in self.buttons() if b.text() == "Generate first"))
+
+    assert run_export(qt_app, export_defaults(qt_app)) is False
+    assert generated == [True]
+
+
+def test_run_export_schedules_mixdown_on_the_worker_and_writes_the_file(qt_app, tmp_path):
+    _type(qt_app.editor, "hello world")
+    _generated_clip(qt_app, tmp_path, 0, 5, seconds=1.0, name="a")
+    _generated_clip(qt_app, tmp_path, 6, 11, seconds=0.5, name="b")
+    values = {"out_dir": str(tmp_path / "out"), "filename": "mix", "format": "wav", "srt": True,
+              "keep_clip_files": True}
+
+    assert run_export(qt_app, values) is True
+    assert qt_app.is_busy()
+    assert qt_app.project_settings["export"] == values
+
+    coro = qt_app.engine.worker.run_coro.call_args[0][0]
+    import asyncio
+
+    result = asyncio.run(coro)
+    assert os.path.exists(result.audio_path)
+    data, rate = sf.read(result.audio_path)
+    assert rate == 24000 and len(data) == 36000
+    assert result.srt_path.endswith("mix.srt")
+    assert len(result.clip_files) == 2
+
+    # StubEngine hands out a real Future; resolving it runs run_export's
+    # done-callback (the worker thread in real life), which emits
+    # exportFinished back onto the GUI thread.
+    future = qt_app.engine.worker.run_coro.return_value
+    future.set_result(result)
+    assert not qt_app.is_busy()
+    assert "Exported" in qt_app.transport_dock.status_text()
+
+
+# -- characters dialog ------------------------------------------------------------------
+
+
+def test_characters_dialog_lists_and_edits_name_color_voice_fx(qt_app):
+    alice = qt_app.document.characters[0]
+    dialog = CharactersDialog(qt_app)
+    assert [dialog.list.item(i).text() for i in range(dialog.list.count())] == ["Default"]
+
+    dialog.name_edit.setText("Narrator")
+    dialog.name_edit.textEdited.emit("Narrator")
+    dialog.set_color("#123456")
+    dialog.voice_combo.setCurrentText("af_bella")
+    dialog.fx_combo.addItem("Echo")
+    dialog.fx_combo.setCurrentText("Echo")
+
+    assert alice.name == "Narrator"
+    assert alice.highlight_color == "#123456"
+    assert alice.preset_data["voice"] == "af_bella"
+    assert alice.preset_data["fx_preset"] == "Echo"
+    assert qt_app.document.tracks[0].name == "Narrator"
+    assert qt_app.transcript_dock.character_combo.findText("Narrator") >= 0
+
+
+def test_characters_dialog_add_and_remove(qt_app, monkeypatch):
+    dialog = CharactersDialog(qt_app)
+    new = dialog.add_character()
+    assert new in qt_app.document.characters
+    assert any(t.character_id == new.id for t in qt_app.document.tracks)
+
+    dialog.remove_current()
+    assert new not in qt_app.document.characters
+    assert not any(t.character_id == new.id for t in qt_app.document.tracks)
+
+
+def test_characters_dialog_refuses_to_remove_a_character_in_use(qt_app, monkeypatch):
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: warned.append(a)))
+    _type(qt_app.editor, "hello")
+    alice = qt_app.document.characters[0]
+    qt_app.document.assign_character_to_range(0, 5, alice.id)
+    dialog = CharactersDialog(qt_app)
+
+    dialog.remove_current()
+
+    assert alice in qt_app.document.characters
+    assert warned
+
+
+# -- transport follow ---------------------------------------------------------------------
+
+
+def test_transport_position_drives_playhead_readout_and_playing_clip(qt_app, tmp_path):
+    _type(qt_app.editor, "hello world")
+    first = _generated_clip(qt_app, tmp_path, 0, 5, seconds=1.0, name="a")
+    second = _generated_clip(qt_app, tmp_path, 6, 11, seconds=1.0, name="b")
+    qt_app._rebuild_transport_schedule()
+    assert qt_app.transport.duration() == 2.0
+
+    qt_app.transport._set_state("playing")
+    qt_app._on_transport_position(0.5)
+    assert qt_app.selection.playing_clip_id == first.id
+    assert "00:00.5 / 00:02.0" == qt_app.transport_dock.time_label.text()
+    assert qt_app.timeline_dock.timeline_view._playhead_item.isVisible()
+
+    qt_app._on_transport_position(1.5)
+    assert qt_app.selection.playing_clip_id == second.id
+    assert qt_app.selection.selected_clip_id is None
+
+    qt_app._on_transport_state("stopped")
+    assert qt_app.selection.playing_clip_id is None
+
+
+def test_generation_finishing_reloads_the_transport(qt_app, tmp_path, monkeypatch):
+    reloads = []
+    monkeypatch.setattr(qt_app.transport, "load", lambda *a, **k: reloads.append(True))
+    qt_app.on_batch_generation_finished(1, 0, [])
+    qt_app.on_engine_finish()
+    assert reloads == [True, True]
+
+
+def test_ruler_seek_moves_the_transport(qt_app, tmp_path):
+    _type(qt_app.editor, "hello world")
+    _generated_clip(qt_app, tmp_path, 0, 11, seconds=3.0, name="a")
+    qt_app._rebuild_transport_schedule()
+
+    qt_app.timeline_dock.timeline_view.seekRequested.emit(1.25)
+
+    assert abs(qt_app.transport.position() - 1.25) < 1e-6
+    assert qt_app.transport_dock.time_label.text().startswith("00:01.2")
+
+
+def test_characters_changed_refreshes_header_and_timeline(qt_app):
+    dialog = CharactersDialog(qt_app)
+    added = dialog.add_character()
+    assert qt_app.transcript_dock.character_combo.findData(added.id) >= 0
+    labels = [item.text() for item in qt_app.timeline_dock.timeline_widget.header._scene.items()
+              if hasattr(item, "text")]
+    assert added.name in labels

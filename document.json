@@ -1,24 +1,24 @@
 {
-  "text": "",
+  "runs": [],
   "clips": [],
   "tracks": [
     {
       "name": "Default",
-      "character_id": "e58f89a8e686442093bb95fce9008f8c",
+      "character_id": "c3d90a1dadc14911a2caa11f1edc0171",
       "order_index": 0,
-      "id": "7cb44ef168c84f588e575bd7b7b2f5d9"
+      "id": "857f792e392c4972a2fc5012535e74ec"
     },
     {
       "name": "Speaker 1",
-      "character_id": "c230527e6e8943338f15283f5c37438f",
+      "character_id": "7ac2c39f65524f53ab46105a2e0d65eb",
       "order_index": 1,
-      "id": "0b682f04289d4e5aaf22486b40a57aae"
+      "id": "0cf86aa1e8f24454a6c604a3621c902d"
     },
     {
       "name": "Speaker 2",
-      "character_id": "16d38090225f441eacc8bef21d777655",
+      "character_id": "62829ef6b27643b4871b95753f084d40",
       "order_index": 2,
-      "id": "ab3cafbf504743f5a60e176fc6afa0c2"
+      "id": "b08311077a644f11a5bab229e977089c"
     }
   ],
   "characters": [
@@ -35,7 +35,7 @@
       },
       "highlight_color": "#f4b400",
       "backend_id": "kokoro",
-      "id": "e58f89a8e686442093bb95fce9008f8c"
+      "id": "c3d90a1dadc14911a2caa11f1edc0171"
     },
     {
       "name": "Speaker 1",
@@ -53,7 +53,7 @@
       },
       "highlight_color": "#4285f4",
       "backend_id": "kokoro",
-      "id": "c230527e6e8943338f15283f5c37438f"
+      "id": "7ac2c39f65524f53ab46105a2e0d65eb"
     },
     {
       "name": "Speaker 2",
@@ -71,8 +71,9 @@
       },
       "highlight_color": "#db4437",
       "backend_id": "kokoro",
-      "id": "16d38090225f441eacc8bef21d777655"
+      "id": "62829ef6b27643b4871b95753f084d40"
     }
   ],
-  "settings": {}
+  "settings": {},
+  "project_settings": {}
 }
