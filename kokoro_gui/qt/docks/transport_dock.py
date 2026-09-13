@@ -4,11 +4,12 @@ Claude/PLAN_ui_shell_redesign.md section 1).
 What `QtTTSApp._build_action_bar` used to build as the central widget,
 moved into a dock and reshaped into three rows:
 
-1. play / pause / stop, elapsed / total time, loop toggle - driven by
-   `kokoro_gui.audio.transport.Transport` through the app.
-2. Preview, Generate (a `QToolButton` whose menu holds "Generate dirty
-   clips", "Auto-split then generate" and the checkable "Split by
-   paragraph"), Cancel.
+1. play / pause / stop (round `QToolButton`s with `kokoro_gui.qt.icons`
+   glyphs, retinted on `themeChanged`), elapsed / total time, loop toggle -
+   driven by `kokoro_gui.audio.transport.Transport` through the app.
+2. Preview, Generate (the row's one `primary` button: a `QToolButton`
+   whose menu holds "Generate dirty clips", "Auto-split then generate" and
+   the checkable "Split by paragraph"), Cancel (flat).
 3. One progress bar carrying the status/detail text via `setFormat`, in
    place of the three separate labels the old central widget had.
 
@@ -21,11 +22,11 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QDockWidget, QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QStyle, QToolButton, QVBoxLayout,
-    QWidget,
+    QDockWidget, QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QToolButton, QVBoxLayout, QWidget,
 )
 
 from kokoro_gui.engine.time_utils import format_duration
+from kokoro_gui.qt import icons, theme
 
 
 def format_clock(seconds: float) -> str:
@@ -58,23 +59,24 @@ class TransportDock(QDockWidget):
 
         # Row 1: transport
         row1 = QHBoxLayout()
-        # Standard media icons rather than the U+23F5-family glyphs: Fusion
-        # ships them on every platform, while the glyphs depend on the
-        # installed fonts (and are blank under the offscreen platform).
-        style = self.style()
-        self.play_btn = QPushButton()
-        self.play_btn.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        row1.setSpacing(4)
+        # Painted glyphs rather than Fusion's SP_Media* pixmaps or the
+        # U+23F5-family characters: the pixmaps are the 2000s look this
+        # dock is trying to shed, the characters depend on installed fonts
+        # (and are blank under the offscreen platform).
+        self.play_btn = QToolButton()
         self.play_btn.setToolTip("Play (Space)")
-        self.pause_btn = QPushButton()
-        self.pause_btn.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_MediaPause))
+        self.pause_btn = QToolButton()
         self.pause_btn.setToolTip("Pause (Space)")
         self.pause_btn.setEnabled(False)
-        self.stop_btn = QPushButton()
-        self.stop_btn.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_MediaStop))
+        self.stop_btn = QToolButton()
         self.stop_btn.setToolTip("Stop")
         for btn in (self.play_btn, self.pause_btn, self.stop_btn):
-            btn.setFixedWidth(36)
+            btn.setProperty("transport", True)
+            btn.setAutoRaise(True)
             row1.addWidget(btn)
+        self._apply_icons()
+        self.app.themeChanged.connect(self._apply_icons)
         self.time_label = QLabel("00:00.0 / 00:00.0")
         self.time_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         row1.addSpacing(8)
@@ -98,6 +100,7 @@ class TransportDock(QDockWidget):
 
         self.generate_btn = QToolButton()
         self.generate_btn.setText("Generate")
+        self.generate_btn.setProperty("primary", True)
         self.generate_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self.generate_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.generate_btn.clicked.connect(self.app.on_generate_clicked)
@@ -118,6 +121,7 @@ class TransportDock(QDockWidget):
         row2.addWidget(self.generate_btn)
 
         self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setFlat(True)
         self.cancel_btn.clicked.connect(self.app.cancel_conversion)
         self.cancel_btn.setEnabled(False)
         row2.addWidget(self.cancel_btn)
@@ -135,6 +139,12 @@ class TransportDock(QDockWidget):
         layout.addStretch(1)
         self.setWidget(content)
         self._refresh_format()
+
+    def _apply_icons(self) -> None:
+        pal = theme.current()
+        self.play_btn.setIcon(icons.icon("play", pal.accent))
+        self.pause_btn.setIcon(icons.icon("pause", pal.text))
+        self.stop_btn.setIcon(icons.icon("stop", pal.text))
 
     # -- status / progress -------------------------------------------------
 

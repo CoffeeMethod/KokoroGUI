@@ -163,7 +163,7 @@ SETTINGS_DEFAULTS = {
     "auto_split_by_paragraph": False,
     "character_fx_paste_splits": True,
     "character_fx_copy": True,
-    "theme": "light",           # Options > Theme: "light" | "dark"
+    "theme": "dark",            # Options > Theme: "light" | "dark"
     "device": "auto",           # Options > Device: "auto" | "cpu" | "cuda"
     "last_project": None,       # File menu: the project launch reopens
     "recent_projects": [],      # File > Recent, most recent first (max 10)

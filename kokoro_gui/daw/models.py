@@ -44,13 +44,18 @@ from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys
 # change later from the (future) Characters menu, per the design doc's note
 # that per-character highlight colors are one of the few places this redesign
 # does make an actual color decision.
+# Eight hues at similar lightness so any of them takes the same label
+# color on a clip and tints the transcript evenly in both themes; the
+# Characters dialog offers the same eight as the color picker's presets.
 DEFAULT_HIGHLIGHT_PALETTE = (
-    "#f4b400",  # amber
-    "#4285f4",  # blue
-    "#db4437",  # red
-    "#0f9d58",  # green
-    "#ab47bc",  # purple
-    "#00acc1",  # teal
+    "#e3a72f",  # amber
+    "#4f8fe6",  # blue
+    "#e0655c",  # coral
+    "#3fae7a",  # green
+    "#a76fd6",  # purple
+    "#3bb3c4",  # teal
+    "#e78a3e",  # orange
+    "#d75c9a",  # pink
 )
 
 

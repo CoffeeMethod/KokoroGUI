@@ -73,6 +73,9 @@ from kokoro_gui.qt.undo_coordinator import UndoCoordinator
 _SHORTHAND_LINE_PATTERN = re.compile(r"^\[([^\]\n]{1,100})\]:\s*")
 
 GUTTER_WIDTH_PX = 140
+# Character highlights tint the text rather than paint over it, so the
+# same hex reads on the light and the dark panel.
+HIGHLIGHT_ALPHA = 90
 GUTTER_BUTTON_PX = 16
 SPLIT_RULE_DEBOUNCE_MS = 150
 _FX_PLACEHOLDER = "Select FX Preset..."
@@ -157,7 +160,9 @@ class ClipHighlighter(QSyntaxHighlighter):
                 continue
             fmt = QTextCharFormat()
             if character is not None:
-                fmt.setBackground(QColor(character.highlight_color))
+                tint = QColor(character.highlight_color)
+                tint.setAlpha(HIGHLIGHT_ALPHA)
+                fmt.setBackground(tint)
             if clip is not None and clip.id in dirty:
                 fmt.setUnderlineStyle(QTextCharFormat.UnderlineStyle.DashUnderline)
                 fmt.setUnderlineColor(underline_color)
@@ -394,6 +399,9 @@ class TranscriptEditor(QTextEdit):
     def _apply_theme_colors(self) -> None:
         pal = theme.current()
         self.setStyleSheet(f"QTextEdit {{ background: {pal.panel}; color: {pal.text}; }}")
+        font = QFont(self.font())
+        font.setPointSize(theme.EDITOR_FONT_POINT_SIZE)
+        self.setFont(font)
 
     def _on_theme_changed(self) -> None:
         self._apply_theme_colors()

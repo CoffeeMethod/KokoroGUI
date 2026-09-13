@@ -112,7 +112,7 @@ class FXDock(QDockWidget):
             specs_by_group[s.group].append(s)
 
         for group in spec.FX_GROUP_ORDER:
-            box = QGroupBox(group)
+            box = QGroupBox(group.replace("&", "&&"))
             box_layout = QVBoxLayout(box)
             self._build_group(box_layout, specs_by_group[group])
             for key, label, toggle_group in spec.FX_STANDALONE_TOGGLES:

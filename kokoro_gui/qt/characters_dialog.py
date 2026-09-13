@@ -159,6 +159,8 @@ class CharactersDialog(QDialog):
     def _pick_color(self) -> None:
         if self._current is None:
             return
+        for i, preset in enumerate(DEFAULT_HIGHLIGHT_PALETTE):
+            QColorDialog.setCustomColor(i, QColor(preset))
         color = QColorDialog.getColor(QColor(self._current.highlight_color), self, "Highlight color")
         if color.isValid():
             self.set_color(color.name())

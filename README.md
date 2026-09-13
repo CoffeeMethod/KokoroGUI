@@ -5,7 +5,7 @@ synthesis backend, edited less like a form and more like a DAW project, with a d
 timed clips on character tracks, and undo/redo. Powered by [Kokoro](https://github.com/hexgrad/kokoro)
 by default, with a zero-shot voice-cloning backend also built in.
 
-<img width="1600" height="1000" alt="KokoroGUI 4.1: transcript and settings tabs over a seconds-axis timeline and transport" src="docs/assets/shell_light.png" />
+<img width="1600" height="1000" alt="KokoroGUI 4.2: transcript and settings tabs over a seconds-axis timeline and transport, dark theme" src="docs/assets/shell_dark.png" />
 
 *(demo sounds better in `.wav` but GitHub doesn't support that so it's kinda bad)*
 
@@ -36,6 +36,15 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 -   **Segment cache rekeyed.** Cache entries are now keyed on the voice's name and content rather
     than its path, so the first generate after upgrading misses the old `cache/` entries.
     Converted `.json` projects don't pay for this: their audio is adopted by the conversion.
+-   **Flat shell.** Dark is the default theme (Options > Theme still has Light). Both themes now
+    style every control from one stylesheet: borderless setting groups, rounded inputs and
+    buttons, an underlined tab strip, thin scrollbars, a flat progress line, painted play /
+    pause / stop glyphs and a filled Generate button. The UI font is Segoe UI / Inter / Noto
+    Sans at 10pt, the transcript one point larger. Timeline clips have rounded corners, a
+    waveform in the clip's own darker shade and a label in black or white by contrast;
+    transcript highlights are a tint over the text instead of a solid block; the default
+    character palette is eight hues at one lightness and doubles as the color picker's presets.
+    Panel spacing is unchanged.
 
 ## New in Beta 4.1.2
 
@@ -101,7 +110,8 @@ The shell now matches the original wireframe: a 2x2 grid of docks, a real timeli
     (asks once before changing a preset every clip using that character shares), or a clip's
     override (slider drags become one undoable override). The timeline's FX button selects the clip
     and raises the tab.
--   **Light and dark themes** (Options > Theme). Custom-painted widgets read one palette module.
+-   **Dark and light themes** (Options > Theme, dark by default). One palette module feeds the
+    custom-painted widgets, the Qt palette and the stylesheet.
 -   **Edit > Characters...** edits name, color, voice and FX preset for the project's characters.
 -   Removed: the wall-clock playhead spike (`playhead_calc.py`, `WaveformPanel`). Tests that reached
     for `app.start_btn` / `app.generation_dock` now use `app.transport_dock` /
@@ -243,7 +253,7 @@ The shell now matches the original wireframe: a 2x2 grid of docks, a real timeli
     -   Save and load FX presets separately from generation presets.
     -   Pronunciation lexicon: case-insensitive literal find-and-replace overrides, applied before
         synthesis.
--   **UI:** adjustable interface scaling and theme (Dark/Light/System), persistent dock layout.
+-   **UI:** dark or light theme, persistent dock layouts (Workspace menu).
 
 ## Prerequisites
 

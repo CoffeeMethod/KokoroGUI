@@ -37,7 +37,7 @@ import time
 from typing import Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QGraphicsItem, QGraphicsLineItem, QGraphicsRectItem, QGraphicsScene, QGraphicsSimpleTextItem,
     QGraphicsView, QHBoxLayout, QMenu, QMessageBox, QWidget,
@@ -57,6 +57,11 @@ DEFAULT_PIXELS_PER_SECOND = 50.0
 MIN_PIXELS_PER_SECOND = 20.0
 MAX_PIXELS_PER_SECOND = 400.0
 HEADER_WIDTH_PX = 120
+CLIP_RADIUS_PX = 4.0
+# A clip's fill is its character color over the lane at this alpha: the
+# label stays readable in both themes and the waveform (the color's darker
+# shade) reads as one object with the block instead of a blue overlay.
+CLIP_FILL_ALPHA = 200
 SNAP_PX = 8.0
 MIN_SCENE_SECONDS = 10.0
 AUTO_SCROLL_GRACE_S = 2.0
@@ -98,6 +103,12 @@ def format_ruler_label(seconds: float) -> str:
     if minutes == 0:
         return f"{int(rest)}s"
     return f"{minutes}:{int(rest):02d}"
+
+
+def label_color_for(fill: QColor) -> QColor:
+    """Black or white, whichever reads on `fill` (perceived luminance)."""
+    lum = 0.299 * fill.red() + 0.587 * fill.green() + 0.114 * fill.blue()
+    return QColor("#111111") if lum > 150 else QColor("#ffffff")
 
 
 class ClipBlockItem(QGraphicsItem):
@@ -168,6 +179,7 @@ class ClipBlockItem(QGraphicsItem):
     def set_waveform(self, peaks, width: float, height: float) -> None:
         if self._waveform_item is None:
             self._waveform_item = WaveformItem(parent=self)
+        self._waveform_item.set_color(QColor(self._color).darker(170).name())
         self._waveform_item.set_peaks(peaks, width, height)
 
     def boundingRect(self) -> QRectF:  # noqa: N802 (Qt override)
@@ -175,21 +187,22 @@ class ClipBlockItem(QGraphicsItem):
 
     def paint(self, painter, option, widget=None) -> None:  # noqa: N802 (Qt override)
         pal = theme.current()
-        rect = QRectF(0, 0, self._width, self._height)
-        fill = QColor(self._color)
-        if self._estimated:
-            fill.setAlpha(90)
-        painter.fillRect(rect, fill)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(0.5, 0.5, self._width - 1, self._height - 1)
+        base = QColor(self._color)
+        fill = QColor(base)
+        fill.setAlpha(70 if self._estimated else CLIP_FILL_ALPHA)
         if self._selected:
             painter.setPen(QPen(QColor(pal.selection_border), SELECTED_BORDER_WIDTH_PX))
         elif self._estimated:
             painter.setPen(QPen(QColor(pal.estimated_outline), 1, Qt.PenStyle.DashLine))
         else:
-            painter.setPen(QPen(QColor(pal.lane_border)))
-        painter.drawRect(rect)
+            painter.setPen(QPen(base.darker(135), 1))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(rect, CLIP_RADIUS_PX, CLIP_RADIUS_PX)
         if self._label:
-            painter.setPen(QColor(pal.text))
-            painter.drawText(rect.adjusted(4, 2, -4, -2), 0, self._label)
+            painter.setPen(label_color_for(base) if not self._estimated else QColor(pal.text))
+            painter.drawText(rect.adjusted(6, 3, -4, -2), 0, self._label)
 
         painter.setOpacity(FX_BUTTON_ACTIVE_OPACITY if self._fx_active else FX_BUTTON_INACTIVE_OPACITY)
         fx_rect = self.fx_button_rect()
@@ -302,7 +315,7 @@ class TrackHeaderView(QGraphicsView):
             character = document.get_character(track.character_id) if document is not None else None
             swatch = QGraphicsRectItem(6, y + 8, 10, 10)
             swatch.setBrush(QColor(character.highlight_color if character else FALLBACK_CLIP_COLOR))
-            swatch.setPen(QPen(QColor(pal.lane_border)))
+            swatch.setPen(Qt.PenStyle.NoPen)
             self._scene.addItem(swatch)
             label = _TrackLabelItem(track.name, track.character_id)
             label.setBrush(QColor(pal.text))

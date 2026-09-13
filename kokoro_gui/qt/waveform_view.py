@@ -33,6 +33,7 @@ class WaveformItem(QGraphicsItem):
         self._height = 0.0
         self._peaks = None
         self._path = QPainterPath()
+        self._color = WAVEFORM_BRUSH_COLOR
 
     def set_peaks(self, peaks, width: float, height: float) -> None:
         # prepareGeometryChange() must happen *before* the stored width/
@@ -65,8 +66,12 @@ class WaveformItem(QGraphicsItem):
     def boundingRect(self) -> QRectF:  # noqa: N802 (Qt override)
         return QRectF(0, 0, self._width, self._height)
 
+    def set_color(self, hex_color: str) -> None:
+        self._color = hex_color
+        self.update()
+
     def paint(self, painter, option, widget=None) -> None:  # noqa: N802 (Qt override)
-        painter.fillPath(self._path, QBrush(QColor(WAVEFORM_BRUSH_COLOR)))
+        painter.fillPath(self._path, QBrush(QColor(self._color)))
 
 
 class WaveformView(QGraphicsView):
