@@ -110,3 +110,9 @@ enumerate specific capabilities.
 Pending from the README's 4.1.2 entry: the welcome dialog (recent projects, Resume/New/New from
 text/Open, "Show at startup") isn't on `index.html`'s dock-grid walkthrough yet, and
 `settings.html` doesn't list the `show_welcome` key or the File ▸ Welcome… item.
+
+Pending from the README's 4.2.0 entry: `settings.html`'s File menu section and Export table now
+describe `.tbaw` bundles and the two bundle options; `index.html`'s feature strip still says
+nothing about projects being portable bundles, and there is no page on what a `.tbaw` contains
+(the manifest, `audio/generated/`, `engines/<id>/`, `fx/`), which anyone writing a tool against
+the format would want.

@@ -31,19 +31,26 @@ def test_fixture_never_opens_it(qt_app):
     assert qt_app.welcome_dialog is None
 
 
+def _save_as(qt_app, path):
+    qt_app.save_project_as(path)
+    qt_app.wait_for_project_io()
+    return qt_app.project_path
+
+
 def test_lists_recent_with_current_first_and_resume_default(qt_app, tmp_path):
-    qt_app.save_project_as(str(tmp_path / "one.json"))
-    qt_app.save_project_as(str(tmp_path / "two.json"))
+    one = _save_as(qt_app, str(tmp_path / "one.tbaw"))
+    _save_as(qt_app, str(tmp_path / "two.tbaw"))
     dialog = qt_app.show_welcome()
 
-    assert dialog.paths()[:2] == [qt_app.project_path, str(tmp_path / "one.json")]
+    assert dialog.paths()[:2] == [qt_app.project_path, one]
     assert dialog.selected_path() == qt_app.project_path
     assert dialog.open_btn.text() == "Resume"
     assert dialog.characters_label.text() == str(len(qt_app.document.characters))
+    assert dialog.duration_label.text() == "0:00"
 
     dialog.list.setCurrentRow(1)
     assert dialog.open_btn.text() == "Open"
-    assert dialog.path_label.text() == str(tmp_path / "one.json")
+    assert dialog.path_label.text() == one
 
 
 def test_missing_row_is_disabled_and_can_be_removed(qt_app, tmp_path):
@@ -76,10 +83,9 @@ def test_clear_list_keeps_only_current_project(qt_app, tmp_path):
 
 def test_choose_opens_other_and_resume_is_noop(qt_app, tmp_path):
     _type(qt_app.editor, "story text")
-    qt_app.save_project_as(str(tmp_path / "story.json"))
-    story = qt_app.project_path
+    story = _save_as(qt_app, str(tmp_path / "story.tbaw"))
     qt_app.new_project()
-    qt_app.save_project_as(str(tmp_path / "other.json"))
+    _save_as(qt_app, str(tmp_path / "other.tbaw"))
     other_doc = qt_app.document
 
     dialog = qt_app.show_welcome()
@@ -89,6 +95,7 @@ def test_choose_opens_other_and_resume_is_noop(qt_app, tmp_path):
 
     dialog = qt_app.show_welcome()
     dialog.choose(story)
+    qt_app.wait_for_project_io()
     assert qt_app.project_path == story
     assert qt_app.editor.toPlainText() == "story text"
     assert qt_app.windowTitle().startswith("story")

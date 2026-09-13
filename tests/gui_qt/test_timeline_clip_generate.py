@@ -131,7 +131,7 @@ def test_generate_blocked_while_a_job_is_already_running(qt_app):
     assert not qt_app.engine.generate_clip_audio.called
 
 
-# --- takes (Claude/PLAN_tbaw_bundle.md 2.3, grill TB8) -----------------------
+# --- takes (Claude/old/PLAN_tbaw_bundle.md 2.3, grill TB8) -----------------------
 
 def test_generate_clip_on_a_clean_clip_sends_regenerate_and_a_dirty_one_does_not(qt_app, tmp_path):
     from kokoro_gui.daw.dirty import build_segments_from_results

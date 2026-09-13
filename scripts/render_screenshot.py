@@ -133,6 +133,9 @@ def main() -> None:
     qapp.processEvents()
     app.grab().save(out)
     print(out)
+    # The sample project is Untitled and edited: closing would ask Save /
+    # Discard / Cancel (grill TB12), which a headless run can't answer.
+    app._ask_close_choice = lambda: "discard"
     app.close()
 
 

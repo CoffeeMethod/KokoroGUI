@@ -82,7 +82,7 @@ class ConversionMixin:
                                 target_extra['apply_fx'] = preset['apply_fx']
 
                     if fx_name:
-                        fx_preset = self.load_fx_preset(fx_name)
+                        fx_preset = self.load_fx_preset(fx_name, (extra_config or {}).get("project_dir"))
                         if fx_preset:
                             target_extra.update(filter_allowed_keys(fx_preset, ALLOWED_FX_PRESET_KEYS))
                             target_extra['apply_fx'] = True
@@ -336,7 +336,7 @@ class ConversionMixin:
                         if self.on_status: self.on_status(f"Warning: Preset '{speaker_name}' not found.", False)
 
                 if fx_name:
-                    fx_preset = self.load_fx_preset(fx_name)
+                    fx_preset = self.load_fx_preset(fx_name, config.get("project_dir"))
                     if fx_preset:
                         seg_config.update(filter_allowed_keys(fx_preset, ALLOWED_FX_PRESET_KEYS))
                         seg_config['apply_fx'] = True

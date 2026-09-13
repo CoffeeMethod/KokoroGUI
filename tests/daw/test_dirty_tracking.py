@@ -110,7 +110,7 @@ def test_changing_segment_count_marks_clip_dirty():
 
 
 # ---------------------------------------------------------------------------
-# segment_key through a key function (Claude/PLAN_tbaw_bundle.md section 2.3)
+# segment_key through a key function (Claude/old/PLAN_tbaw_bundle.md section 2.3)
 # ---------------------------------------------------------------------------
 
 import os

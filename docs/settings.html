@@ -230,7 +230,7 @@
   <section class="doc-section" id="generation">
     <div class="wrap">
       <h2><span class="idx">File menu</span>Projects</h2>
-      <p class="dek">A project is a <code>.json</code> file in the <code>document.json</code> shape (runs, clips, tracks, characters) plus a <code>project_settings</code> block for the export defaults. Launch reopens the last project you had open.</p>
+      <p class="dek">A project is a <code>.tbaw</code> bundle: one zip with the text and clips, every generated segment, and the voice mixes, voice references and FX presets it names, so it opens on another machine with the same engines installed. Older <code>.json</code> projects open and are converted next to the original. Launch reopens the last project you had open.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>File menu</caption>
@@ -238,7 +238,7 @@
           <tbody>
             <tr><td>New</td><td>An empty project that inherits the current project's characters (a copy, until the global character library exists).</td></tr>
             <tr><td>Open / Recent</td><td>Opens a project file; Recent lists the last ten.</td></tr>
-            <tr><td>Save / Save As</td><td>Autosave keeps writing to the current file on the usual debounce; Save forces it, Save As branches to a new file and switches to it. The window title shows <code>*</code> while a save is pending.</td></tr>
+            <tr><td>Save / Save As</td><td>Autosave writes the app's working copy of the project (under <code>cache/projects/</code>), never the <code>.tbaw</code>; Save writes the file in the background and Save As branches to a new file. The window title shows <code>*</code> while the working copy is ahead of the file. Closing with unsaved changes asks Save / Discard / Cancel; after a crash, opening the project offers to recover the unsaved session.</td></tr>
             <tr><td>Import Text</td><td>Extracts a <code>.txt</code>, <code>.pdf</code>, or <code>.epub</code> and asks whether to add it at the caret or start a new project from it. The insert is one undo step.</td></tr>
             <tr><td>Import Audio</td><td>Greyed out for now; arrives with ASR-anchored import.</td></tr>
             <tr><td>Export</td><td>The mixdown dialog described next.</td></tr>
@@ -258,6 +258,7 @@
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td>Output folder / Base filename</td><td>Where the mixdown is written and what it's called. Remembered per project.</td></tr>
+            <tr><td>Project: bundle generated audio / Bundle audio format</td><td>Whether Save puts generated segments into the <code>.tbaw</code> (off gives a small file whose clips regenerate on open) and whether new segments are written as wav or flac. Remembered per project.</td></tr>
             <tr><td>Format</td><td>wav, mp3, flac or ogg.</td></tr>
             <tr><td>Also write .srt</td><td>Subtitles timed from each clip's timeline start and duration, one row per generated clip.</td></tr>
             <tr><td>Keep per-clip files</td><td>Writes each clip next to the mixdown as <code>&lt;base&gt;_001_&lt;Character&gt;.&lt;ext&gt;</code>, numbered in timeline order.</td></tr>

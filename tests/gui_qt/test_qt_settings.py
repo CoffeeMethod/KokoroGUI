@@ -16,15 +16,23 @@ def test_save_settings_writes_config_qt_json(qt_app):
     assert data["volume"] == 1.7
 
 
-def test_export_settings_persist_in_the_project_file(qt_app):
+def test_export_settings_persist_in_the_project_file(qt_app, tmp_path):
+    import os
+
+    from kokoro_gui.qt import project as project_io
+
     qt_app.project_settings["export"] = {"filename": "my_output", "format": "flac"}
     qt_app.save_settings()
 
-    with open(qt_app.project_path, "r", encoding="utf-8") as f:
+    with open(os.path.join(qt_app.project_dir, "project.json"), "r", encoding="utf-8") as f:
         data = json.load(f)
-    assert data["project_settings"]["export"]["filename"] == "my_output"
+    assert data["export"]["filename"] == "my_output"
     assert qt_app._assemble_config()["filename"] == "my_output"
     assert qt_app._assemble_config()["format"] == "flac"
+
+    qt_app.save_project_as(str(tmp_path / "exp"))
+    qt_app.wait_for_project_io()
+    assert project_io.load_project(qt_app.project_path).project_settings["export"]["filename"] == "my_output"
 
 
 def test_save_settings_persists_fx_state(qt_app):

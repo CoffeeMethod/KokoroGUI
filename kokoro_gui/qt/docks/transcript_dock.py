@@ -89,7 +89,7 @@ class TranscriptDock(QDockWidget):
         try:
             self.fx_combo.clear()
             self.fx_combo.addItem(FX_NONE_LABEL, "")
-            for name in list_fx_preset_names():
+            for name in list_fx_preset_names(self.app.project_dir):
                 self.fx_combo.addItem(name, name)
             self.fx_combo.insertSeparator(self.fx_combo.count())
             self.fx_combo.addItem(FX_EDIT_LABEL, "__edit__")
@@ -166,7 +166,7 @@ class TranscriptDock(QDockWidget):
         if not preset_name:
             fx_values = None
         else:
-            preset = self.app.engine.load_fx_preset(preset_name)
+            preset = self.app.engine.load_fx_preset(preset_name, self.app.project_dir)
             fx_values = filter_allowed_keys(preset, ALLOWED_FX_PRESET_KEYS) if preset else None
         self.app.document.undo_stack.push(SetClipFxCommand(clip_id, fx_values, preset_name=preset_name or None))
         self.editor.rehighlight()

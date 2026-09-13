@@ -14,7 +14,7 @@ import kokoro_engine
 
 def project_voice_dir(project_dir):
     """Where a `.tbaw` project keeps the custom mixes it bundles
-    (`engines/kokoro/voices/`, see Claude/PLAN_tbaw_bundle.md section 4)."""
+    (`engines/kokoro/voices/`, see Claude/old/PLAN_tbaw_bundle.md section 4)."""
     return os.path.join(project_dir, "engines", "kokoro", "voices")
 
 

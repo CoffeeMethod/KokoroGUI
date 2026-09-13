@@ -11,6 +11,15 @@ live under Options, generate/preview/cancel and the progress line live in
 the Transport dock. A File menu (`kokoro_gui.qt.project`) replaced the
 implicit single `document.json`.
 
+Projects are `.tbaw` bundles (Claude/old/PLAN_tbaw_bundle.md). The live project
+is a directory under `cache/projects/<project_id>/` (`self.project_dir`)
+that autosave writes JSON into and clips generate straight into; Save
+rewrites the zip from it on a background thread behind `is_busy`, Open
+extracts into it the same way with the editor read-only, and Close asks
+Save / Discard / Cancel when the dir is ahead of the file. `project.py`
+holds the steps; this class holds the sequencing, the lock and the dirty
+flag.
+
 `CONFIG_FILE`/`PRESETS_DIR`/`FX_PRESETS_DIR`/`DOCUMENT_FILE` are defined
 here, at module level, before the `kokoro_gui.qt.docks` import below - the
 dock modules do `import kokoro_gui.qt.app as qt_app_module` and read
@@ -23,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import time
 
 import playback
@@ -68,6 +78,11 @@ class QtTTSApp(QMainWindow):
     themeChanged = Signal()
     exportProgress = Signal(float, str)
     exportFinished = Signal(bool, str)
+    # Background project I/O (Open's audio extraction, Save's zip write):
+    # progress as (percent, detail), completion as (callback, result, error)
+    # marshalled onto the GUI thread.
+    projectIoProgress = Signal(float, str)
+    _projectIoFinished = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -84,11 +99,24 @@ class QtTTSApp(QMainWindow):
         # document.json next to the config, else a fresh migration.
         self.project_path: str | None = None
         self.project_settings: dict = {}
-        # The live project directory a `.tbaw` project is extracted into
-        # (Claude/PLAN_tbaw_bundle.md section 3); None until the bundle
-        # format lands for this document. Every config the segment key or
-        # the engine sees carries it as `project_dir`.
+        # The live project directory (Claude/old/PLAN_tbaw_bundle.md section 3):
+        # `cache/projects/<project_id>/`, held under an OS lock for as long
+        # as the project is open. Every config the segment key or the engine
+        # sees carries it as `project_dir`. `_project_dirty` is the
+        # session's "dir is ahead of the file" flag, set by autosave from a
+        # content digest and cleared by Save.
         self.project_dir: str | None = None
+        self.project_id: str | None = None
+        self._project_lock: project_io.ProjectLock | None = None
+        self._project_manifest: dict = {}
+        self._project_dirty = False
+        self._io_thread: threading.Thread | None = None
+        self._pending_open_path: str | None = None
+        self._closing_after_save = False
+        self._closed = False
+        self._asset_backends: dict = {}
+        self.projectIoProgress.connect(self._on_project_io_progress)
+        self._projectIoFinished.connect(self._on_project_io_finished)
         self.document = self._load_initial_document()
 
         self.selection = SelectionModel()
@@ -150,29 +178,67 @@ class QtTTSApp(QMainWindow):
         init_lang_code = self.settings_dock.get_state().get("lang_code", "a")
         self.engine.worker.run_coro(self.engine.init_pipeline_async(init_lang_code, device=self.settings.get("device", "auto")))
 
+        self.backend.on_project_opened(self.project_dir, {})
+        if self._pending_open_path:
+            path, self._pending_open_path = self._pending_open_path, None
+            self.open_project(path)
+
     # --- project bootstrap ------------------------------------------------
 
     def _load_initial_document(self):
+        """The window starts on an Untitled project in a fresh project dir.
+        The last project (or the pre-4.2 `document.json` next to the
+        config, which migrates to `document.tbaw`) is opened right after
+        the docks exist, since Open extracts on a thread with progress on
+        the transport bar. Characters for a first run come from the
+        presets directory, as before."""
         candidates = []
         last = self.settings.get("last_project")
-        if last:
+        if last and os.path.isfile(last):
             candidates.append(last)
-        candidates.append(DOCUMENT_FILE)
-        for path in candidates:
-            try:
-                loaded = project_io.load_project(path)
-            except NotImplementedError:
-                loaded = None
-            if loaded is not None:
-                self.project_path = os.path.abspath(path)
-                self.project_settings = loaded.project_settings
-                project_io.remember_recent(self.settings, self.project_path)
-                return loaded.document
-        # Nothing on disk: the classic first-run migration from presets.
-        self.project_path = os.path.abspath(DOCUMENT_FILE)
+        if os.path.isfile(DOCUMENT_FILE):
+            candidates.append(DOCUMENT_FILE)
+        self._pending_open_path = candidates[0] if candidates else None
+        self.project_path = None
         self.project_settings = {}
-        project_io.remember_recent(self.settings, self.project_path)
-        return document_state.load_or_create_document(DOCUMENT_FILE, self.settings, PRESETS_DIR)
+        if self._pending_open_path:
+            document = project_io.new_document_from(None)
+        else:
+            document = document_state.load_or_create_document(DOCUMENT_FILE, self.settings, PRESETS_DIR)
+        self._begin_untitled_project_dir(document)
+        return document
+
+    def _begin_untitled_project_dir(self, document) -> None:
+        """New: a fresh dir with an empty `document.json` and the lock, so an
+        Untitled project has somewhere to generate into before its first
+        Save (Claude/old/PLAN_tbaw_bundle.md section 3)."""
+        project_dir, project_id = project_io.create_project_dir()
+        self._project_lock = project_io.ProjectLock(project_dir).acquire()
+        self.project_dir = project_dir
+        self.project_id = project_id
+        self._project_manifest = {}
+        digest = project_io.autosave_to_dir(document, self.project_settings, project_dir)
+        project_io.write_session(project_dir, {
+            "source_path": None, "zip_size": None, "zip_mtime": None,
+            "saved_digest": digest, "dirty": False, "asset_index": {},
+        })
+        self._project_dirty = False
+
+    def _backend_for(self, engine_id: str):
+        """The adapter for `engine_id`: the active one when it matches, else
+        one built once and kept (Save collects assets for every engine the
+        document uses; building an adapter starts its worker thread but
+        loads no model), or None for an engine that isn't registered."""
+        if engine_id == self.backend.id:
+            return self.backend
+        if engine_id in self._asset_backends:
+            return self._asset_backends[engine_id]
+        try:
+            backend = engine_registry.get_engine(engine_id)
+        except Exception:  # noqa: BLE001 - an unregistered id is a warning, not a crash
+            return None
+        self._asset_backends[engine_id] = backend
+        return backend
 
     # --- construction -----------------------------------------------------
 
@@ -507,12 +573,39 @@ class QtTTSApp(QMainWindow):
                 self.workspaces.capture()
 
         qt_settings.save_settings(CONFIG_FILE, self.settings)
-        if self.project_path:
-            try:
-                project_io.save_project(self.document, self.project_path, self.project_settings)
-            except Exception as e:  # noqa: BLE001 - autosave must never crash the UI
-                self.set_status(f"Autosave failed: {e}", "error")
+        self._autosave_project_dir()
         self._update_window_title(pending=False)
+
+    def _autosave_project_dir(self) -> None:
+        """Writes `document.json`/`project.json` into the project dir and
+        sets the session's `dirty` iff the digest differs from what the
+        last Save or Open recorded. A content comparison, not an mtime:
+        `_switch_document`'s trailing `schedule_save` would otherwise dirty
+        every project a second after Open. Never touches the `.tbaw`."""
+        if not self.project_dir:
+            return
+        try:
+            digest = project_io.autosave_to_dir(self.document, self.project_settings, self.project_dir)
+        except Exception as e:  # noqa: BLE001 - autosave must never crash the UI
+            self.set_status(f"Autosave failed: {e}", "error")
+            return
+        session = project_io.read_session(self.project_dir) or {}
+        dirty = digest != session.get("saved_digest")
+        if bool(session.get("dirty")) != dirty:
+            session["dirty"] = dirty
+            try:
+                project_io.write_session(self.project_dir, session)
+            except OSError as e:
+                self.set_status(f"Autosave failed: {e}", "error")
+        self._project_dirty = dirty
+
+    def is_project_dirty(self) -> bool:
+        """True when the project dir is ahead of the `.tbaw` on disk (or an
+        Untitled project has edits). Flushes a pending autosave first so a
+        keystroke a moment ago counts."""
+        if self._save_timer.isActive():
+            self.save_settings()
+        return self._project_dirty
 
     def _set_setting(self, key: str, value) -> None:
         self.settings[key] = value
@@ -520,7 +613,8 @@ class QtTTSApp(QMainWindow):
 
     def _update_window_title(self, pending: bool = False) -> None:
         name = project_io.project_title(self.project_path)
-        self.setWindowTitle(f"{name}{'*' if pending else ''} - {APP_NAME}")
+        star = "*" if (pending or self._project_dirty) else ""
+        self.setWindowTitle(f"{name}{star} - {APP_NAME}")
 
     # --- config assembly ----------------
 
@@ -626,6 +720,14 @@ class QtTTSApp(QMainWindow):
             clip_config["trim_silence"] = clip_config.pop("trim")
         config.update(clip_config)
         config.update(self._assemble_generation_config(clip))
+        if self.project_dir:
+            # Clips generate straight into the project dir, once, named by
+            # their segment key (Claude/old/PLAN_tbaw_bundle.md section 3). The
+            # bundle's audio format decides the extension of new segments,
+            # over a preset's `format` (that one is for the export path).
+            config["out_dir"] = os.path.join(self.project_dir, *project_io.AUDIO_GENERATED.split("/"))
+            config["segment_naming"] = "cache_key"
+            config["format"] = project_io.bundle_options(self.project_settings)["audio_format"]
 
         # effective_config_for_clip only ever carries the FX preset's *name*;
         # the resolver turns project values + character preset + clip preset
@@ -637,7 +739,7 @@ class QtTTSApp(QMainWindow):
 
     def _install_segment_key_fn(self) -> None:
         """Sets `Document.segment_key_fn` to a closure over the active
-        backend and project dir (Claude/PLAN_tbaw_bundle.md section 2.3):
+        backend and project dir (Claude/old/PLAN_tbaw_bundle.md section 2.3):
         `key_fn(text, clip, engine_version=None) -> caching.segment_key`
         over `_assemble_generation_config(clip)`. Memoized on the text, the
         config and the version; a hit re-checks the voice file's mtime and
@@ -748,6 +850,7 @@ class QtTTSApp(QMainWindow):
         self.bridge = new_bridge
         self._install_segment_key_fn()
 
+        self.backend.on_project_opened(self.project_dir, self._engine_meta(self.backend.id))
         self.settings_dock.rebuild_schema_form()
         self._sync_mixing_dock()
         self._sync_voice_clone_dock()
@@ -889,6 +992,7 @@ class QtTTSApp(QMainWindow):
         self.project_path = os.path.abspath(path) if path else None
         self.project_settings = dict(project_settings or {})
         self._install_segment_key_fn()
+        self.backend.on_project_opened(self.project_dir, self._engine_meta(self.backend.id))
         self.selection.clear()
         self.selection.set_playing_clip(None)
         if self.project_path:
@@ -908,51 +1012,441 @@ class QtTTSApp(QMainWindow):
         self._update_window_title()
         self.schedule_save()
 
+    def _engine_meta(self, engine_id: str) -> dict:
+        engines = self._project_manifest.get("engines") if isinstance(self._project_manifest, dict) else None
+        block = (engines or {}).get(engine_id) if isinstance(engines, dict) else None
+        meta = block.get("meta") if isinstance(block, dict) else None
+        return dict(meta) if isinstance(meta, dict) else {}
+
+    # -- closing the current project ----------------------------------------
+
+    def _ask_close_choice(self) -> str:
+        """Save / Discard / Cancel for a dirty project (grill TB12). A
+        method so tests can replace it."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Unsaved changes")
+        box.setText(f"{project_io.project_title(self.project_path)} has unsaved changes.")
+        save_btn = box.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
+        discard_btn = box.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(save_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is save_btn:
+            return "save"
+        if clicked is discard_btn:
+            return "discard"
+        return "cancel"
+
+    def _close_current_project(self, then) -> None:
+        """Runs `then()` once the open project is put away: a clean project
+        is GC'd and released; a dirty one asks Save / Discard / Cancel, and
+        Save continues after the background Save succeeds."""
+        if not self.project_dir:
+            then()
+            return
+        if not self.is_project_dirty():
+            self._teardown_project(discard=False)
+            then()
+            return
+        choice = self._ask_close_choice()
+        if choice == "cancel":
+            return
+        if choice == "discard":
+            self._teardown_project(discard=True)
+            then()
+            return
+        path = self.project_path
+        if not path:
+            path = self._save_as_path_dialog()
+            if not path:
+                return
+            self.project_path = path
+
+        def _after_save():
+            self._teardown_project(discard=False)
+            then()
+
+        self._save_bundle(self.project_path, then=_after_save)
+
+    def _teardown_project(self, discard: bool) -> None:
+        """Releases the lock; on Discard deletes the dir (the zip has the
+        last saved state), otherwise GCs orphaned segments (TB11: only at
+        close, when no undo history can point at them any more)."""
+        if self._project_lock is not None:
+            if not discard:
+                try:
+                    project_io.gc_project_dir(self.project_dir, self.document)
+                except OSError:
+                    pass
+            self._project_lock.release()
+            self._project_lock = None
+        if discard and self.project_dir:
+            project_io.delete_project_dir(self.project_dir)
+        self.project_dir = None
+        self.project_id = None
+        self._project_manifest = {}
+        self._project_dirty = False
+
+    def _evict_other_project_dirs(self) -> None:
+        """TB13: only the open project's dir stays; every other clean,
+        unlocked dir under `cache/projects/` goes."""
+        try:
+            project_io.evict_project_dirs(self.project_dir)
+        except OSError:
+            pass
+
+    # -- new ------------------------------------------------------------------
+
     def new_project(self) -> None:
-        document = project_io.new_document_from(self.document)
-        self._switch_document(document, None)
-        self.set_status("New project (characters inherited from the previous one). Save As to name it.")
+        previous = self.document
+
+        def _start():
+            document = project_io.new_document_from(previous)
+            self.project_settings = {}
+            self._begin_untitled_project_dir(document)
+            self._switch_document(document, None)
+            self._evict_other_project_dirs()
+            self.set_status("New project (characters inherited from the previous one). Save As to name it.")
+
+        self._close_current_project(_start)
+
+    # -- open -----------------------------------------------------------------
 
     def open_project(self, path: str) -> None:
-        try:
-            loaded = project_io.load_project(path)
-        except NotImplementedError as e:
-            QMessageBox.information(self, "Not yet", str(e))
+        if self.is_busy():
+            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before opening a project.")
             return
+        if not os.path.isfile(path):
+            QMessageBox.warning(self, "Open failed", f"Couldn't read {path}.")
+            project_io.forget_recent(self.settings, path)
+            self._rebuild_recent_menu()
+            return
+        if project_io.format_for_path(path) != "tbaw":
+            self._open_json_project(path)
+            return
+        try:
+            info = project_io.inspect_bundle(path)
+        except project_io.ProjectError as e:
+            QMessageBox.warning(self, "Open failed", str(e))
+            return
+        if self.project_path and os.path.abspath(path) == self.project_path and self.project_id == info.project_id:
+            return  # already open: the welcome dialog's Resume
+        self._close_current_project(lambda: self._open_bundle(info))
+
+    def _ask_recover_choice(self, session: dict, info: project_io.BundleInfo, project_dir: str) -> str:
+        """Recover prompt (grill TB15): "keep" the unsaved session, "take"
+        the file (wipe and extract fresh) or "cancel". A method so tests can
+        replace it."""
+        stamp = ""
+        try:
+            stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(
+                os.path.getmtime(os.path.join(project_dir, project_io.DOCUMENT))))
+        except OSError:
+            pass
+        lines = [f"Recover unsaved changes{' from ' + stamp if stamp else ''}?"]
+        theirs = session.get("source_path")
+        if theirs and os.path.abspath(theirs) != os.path.abspath(info.path):
+            lines.append(f"They were made on {theirs}.")
+        changed = not project_io.session_matches_file(session, info)
+        if changed:
+            lines.append("The file was changed outside KokoroGUI since.")
+        box = QMessageBox(self)
+        box.setWindowTitle("Recover project")
+        box.setText("\n".join(lines))
+        keep_btn = box.addButton("Keep session", QMessageBox.ButtonRole.AcceptRole)
+        take_btn = box.addButton("Take file" if changed else "Discard session", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is keep_btn:
+            return "keep"
+        if clicked is take_btn:
+            return "take"
+        return "cancel"
+
+    def _open_bundle(self, info: project_io.BundleInfo) -> None:
+        """Steps 1-5 of Open (Claude/old/PLAN_tbaw_bundle.md section 6): the
+        project dir and its lock, the recover prompt, the free-space check,
+        the small entries on this thread, the audio on a background thread
+        behind `is_busy` with the editor read-only."""
+        project_dir = project_io.choose_project_dir(info.project_id, info.path)
+        try:
+            lock = project_io.ProjectLock(project_dir).acquire()
+        except project_io.ProjectLockedError as e:
+            QMessageBox.warning(self, "Already open", str(e))
+            self._start_untitled_after_failed_open()
+            return
+        try:
+            project_io.sweep_orphan_dirs()
+        except OSError:
+            pass
+
+        session = project_io.read_session(project_dir)
+        recovered = False
+        extract = True
+        if session and session.get("dirty") and os.path.isfile(os.path.join(project_dir, project_io.DOCUMENT)):
+            choice = self._ask_recover_choice(session, info, project_dir)
+            if choice == "cancel":
+                lock.release()
+                self._start_untitled_after_failed_open()
+                return
+            if choice == "keep":
+                recovered = True
+                extract = False
+            else:
+                project_io.wipe_project_dir(project_dir)
+        elif session and project_io.session_matches_file(session, info) \
+                and os.path.isfile(os.path.join(project_dir, project_io.DOCUMENT)):
+            extract = False  # a clean extraction of this very file: Resume is fast
+        else:
+            project_io.wipe_project_dir(project_dir)
+
+        if not extract:
+            self._finish_open(info, project_dir, lock, recovered)
+            return
+
+        try:
+            project_io.check_free_space(project_io.projects_root(), info.audio_bytes, "open the project")
+            project_io.extract_small(info, project_dir)
+        except (project_io.ProjectError, OSError) as e:
+            lock.release()
+            QMessageBox.warning(self, "Open failed", str(e))
+            self._start_untitled_after_failed_open()
+            return
+
+        if info.audio_bytes == 0:
+            self._finish_open(info, project_dir, lock, recovered)
+            return
+
+        self._begin_project_io(f"Opening {project_io.project_title(info.path)}...", read_only=True)
+
+        def _work():
+            project_io.extract_audio(info, project_dir, progress=self._io_progress("Extracting audio"))
+
+        def _done(_result, error):
+            self._end_project_io(read_only=True)
+            if error is not None:
+                lock.release()
+                QMessageBox.warning(self, "Open failed", str(error))
+                self._start_untitled_after_failed_open()
+                return
+            self._finish_open(info, project_dir, lock, recovered)
+
+        self._run_project_io(_work, _done)
+
+    def _start_untitled_after_failed_open(self) -> None:
+        """The previous project was already put away when an Open fails
+        partway; the window can't sit on a document with no dir."""
+        if self.project_dir:
+            return
+        document = project_io.new_document_from(self.document)
+        self.project_settings = {}
+        self._begin_untitled_project_dir(document)
+        self._switch_document(document, None)
+
+    def _finish_open(self, info, project_dir: str, lock, recovered: bool) -> None:
+        """Steps 6 and 7: the document, the session record, the TB9 status
+        line, and the backend's `on_project_opened`."""
+        try:
+            loaded = project_io.finish_open(
+                info, project_dir, {self.backend.id: self.backend.engine_version()}, recovered=recovered,
+            )
+        except (OSError, ValueError, KeyError) as e:
+            lock.release()
+            QMessageBox.warning(self, "Open failed", f"Couldn't read the project: {e}")
+            self._start_untitled_after_failed_open()
+            return
+        self._project_lock = lock
+        self.project_dir = project_dir
+        self.project_id = info.project_id
+        self._project_manifest = dict(info.manifest)
+        self._project_dirty = bool(recovered)
+        self._switch_document(loaded.document, info.path, loaded.project_settings)
+        self._evict_other_project_dirs()
+        for notice in loaded.notices:
+            self.set_status(notice, "warning")
+        if not loaded.notices:
+            self.set_status(f"Opened {project_io.project_title(info.path)}.")
+
+    def _open_json_project(self, path: str) -> None:
+        """TB6: a pre-4.2 `.json` project opens, gets a project id and a dir,
+        has its segments rekeyed and copied in (`migrate_segments`), and is
+        saved as `<name>.tbaw` next to the `.json`, which then becomes the
+        recent entry. A `.tbaw` already there from an earlier migration is
+        opened instead. An unwritable directory falls through to Save As."""
+        target = project_io.bundle_path_for(path)
+        if os.path.isfile(target):
+            self.open_project(target)
+            return
+        loaded = project_io.load_json_project(path)
         if loaded is None:
             QMessageBox.warning(self, "Open failed", f"Couldn't read {path}.")
             project_io.forget_recent(self.settings, path)
             self._rebuild_recent_menu()
             return
-        self._switch_document(loaded.document, path, loaded.project_settings)
-        self.set_status(f"Opened {project_io.project_title(path)}.")
+
+        def _migrate():
+            self.project_settings = dict(loaded.project_settings)
+            self._begin_untitled_project_dir(loaded.document)
+            self.document = loaded.document
+            self._install_segment_key_fn()
+            audio_format = project_io.bundle_options(self.project_settings)["audio_format"]
+            counts = project_io.migrate_segments(loaded.document, self.project_dir, self._assemble_generation_config,
+                                                 self.document.segment_key_fn, audio_format)
+            self._switch_document(loaded.document, None, self.project_settings)
+            project_io.forget_recent(self.settings, path)
+            self._rebuild_recent_menu()
+            if counts["adopted"] or counts["dropped"]:
+                self.set_status(f"Migrated {os.path.basename(path)}: {counts['adopted']} segment(s) kept, "
+                                f"{counts['dropped']} will regenerate.", "info")
+            save_to = target
+            if not os.access(os.path.dirname(os.path.abspath(target)) or ".", os.W_OK):
+                save_to = self._save_as_path_dialog()
+                if not save_to:
+                    return
+            self.project_path = os.path.abspath(save_to)
+            project_io.remember_recent(self.settings, self.project_path)
+            self._rebuild_recent_menu()
+            self._update_window_title()
+            self._save_bundle(self.project_path)
+
+        self._close_current_project(_migrate)
 
     def open_project_dialog(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open project", "", project_io.PROJECT_FILTER)
         if path:
             self.open_project(path)
 
+    # -- save -----------------------------------------------------------------
+
     def save_project(self) -> None:
         if not self.project_path:
             self.save_project_as_dialog()
             return
-        self.save_settings()
-        self.set_status(f"Saved {project_io.project_title(self.project_path)}.")
+        if self.is_busy():
+            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before saving.")
+            return
+        self._save_bundle(self.project_path)
 
     def save_project_as(self, path: str) -> None:
-        if not path.lower().endswith((".json", ".tbaw")):
-            path += project_io.DEFAULT_EXTENSION
-        self.project_path = os.path.abspath(path)
+        """Save As keeps the project dir (it's keyed by `project_id`), so no
+        `audio_path` changes; only `source_path` moves."""
+        if self.is_busy():
+            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before saving.")
+            return
+        self.project_path = os.path.abspath(project_io.bundle_path_for(path))
         project_io.remember_recent(self.settings, self.project_path)
         self._rebuild_recent_menu()
-        self.save_settings()
-        self.set_status(f"Saved as {project_io.project_title(self.project_path)}.")
+        self._update_window_title()
+        self._save_bundle(self.project_path)
 
-    def save_project_as_dialog(self) -> None:
+    def _save_as_path_dialog(self) -> str | None:
         start = self.project_path or ""
         path, _ = QFileDialog.getSaveFileName(self, "Save project as", start, project_io.PROJECT_FILTER)
+        return os.path.abspath(project_io.bundle_path_for(path)) if path else None
+
+    def save_project_as_dialog(self) -> None:
+        path = self._save_as_path_dialog()
         if path:
             self.save_project_as(path)
+
+    def _save_bundle(self, path: str, then=None) -> None:
+        """Save (Claude/old/PLAN_tbaw_bundle.md section 3): the document and
+        assets are planned on this thread (a snapshot), the zip is written
+        on a background thread behind `is_busy`, and the session record is
+        written back here. `then()` runs after a successful save."""
+        if self._save_timer.isActive():
+            self.save_settings()
+        try:
+            plan, warnings = project_io.plan_save(
+                self.document, self.project_settings, path, self.project_dir, self.project_id,
+                self._backend_for, FX_PRESETS_DIR, project_io.read_session(self.project_dir), self._project_manifest,
+            )
+        except Exception as e:  # noqa: BLE001 - surfaced, never a crash
+            self.set_status(f"Save failed: {e}", "error")
+            return
+        for warning in warnings:
+            self.set_status(f"Save: {warning}", "warning")
+        known_ids = list(engine_registry.list_engines())
+        self._begin_project_io(f"Saving {project_io.project_title(path)}...", read_only=False)
+
+        def _work():
+            return project_io.write_bundle(plan, known_ids, progress=self._io_progress("Writing bundle"))
+
+        def _done(result, error):
+            self._end_project_io(read_only=False)
+            if error is not None:
+                self.set_status(f"Save failed: {error}", "error")
+                return
+            try:
+                project_io.record_save(self.project_dir, path, result)
+            except OSError as e:
+                self.set_status(f"Saved, but couldn't record the session: {e}", "warning")
+            self._project_manifest = dict(plan.manifest)
+            self._project_dirty = False
+            self._update_window_title()
+            self.set_status(f"Saved {project_io.project_title(path)}.", "success")
+            if then is not None:
+                then()
+
+        self._run_project_io(_work, _done)
+
+    # -- background I/O plumbing ------------------------------------------------
+
+    def _begin_project_io(self, status: str, read_only: bool) -> None:
+        self.set_ui_state(True)
+        self.set_status(status, "busy")
+        self.transport_dock.set_progress(0, "")
+        if read_only and self.editor is not None:
+            self.editor.setReadOnly(True)
+
+    def _end_project_io(self, read_only: bool) -> None:
+        if read_only and self.editor is not None:
+            self.editor.setReadOnly(False)
+        self.set_ui_state(False)
+
+    def _io_progress(self, label: str):
+        def _progress(done, total):
+            percent = (done / total * 100.0) if total else 100.0
+            self.projectIoProgress.emit(percent, f"{label} {int(percent)}%")
+
+        return _progress
+
+    def _on_project_io_progress(self, percent: float, detail: str) -> None:
+        self.transport_dock.set_progress(percent, detail)
+
+    def _run_project_io(self, work, done) -> None:
+        """`work()` on a plain thread (independent of the engine's worker
+        loop, so an engine switch mid-save can't strand it); `done(result,
+        error)` back on the GUI thread."""
+
+        def _target():
+            try:
+                result = work()
+                self._projectIoFinished.emit((done, result, None))
+            except BaseException as e:  # noqa: BLE001 - delivered to the GUI thread
+                self._projectIoFinished.emit((done, None, e))
+
+        self._io_thread = threading.Thread(target=_target, name="project-io", daemon=True)
+        self._io_thread.start()
+
+    def _on_project_io_finished(self, payload) -> None:
+        done, result, error = payload
+        self._io_thread = None
+        done(result, error)
+
+    def wait_for_project_io(self, timeout_s: float = 60.0) -> None:
+        """Blocks until the background Open/Save (if any) has finished and
+        its completion has run on this thread. For tests and scripts."""
+        deadline = time.time() + timeout_s
+        while self._io_thread is not None and time.time() < deadline:
+            thread = self._io_thread
+            if thread is not None:
+                thread.join(0.02)
+            QApplication.processEvents()
+        QApplication.processEvents()
 
     def import_text_dialog(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Import text", filter="Documents (*.txt *.pdf *.epub)")
@@ -1003,7 +1497,7 @@ class QtTTSApp(QMainWindow):
         dialog = ExportDialog(self)
         if dialog.exec() != ExportDialog.DialogCode.Accepted:
             return
-        run_export(self, dialog.values(), parent=self)
+        run_export(self, dialog.values(), parent=self, bundle=dialog.bundle_values())
 
     def _on_export_progress(self, percent: float, detail: str) -> None:
         self.transport_dock.set_progress(percent, detail)
@@ -1277,9 +1771,59 @@ class QtTTSApp(QMainWindow):
     # --- lifecycle -----------------------------------------------------------
 
     def closeEvent(self, event) -> None:
+        """Grill TB12: a dirty project asks Save / Discard / Cancel. Save runs
+        in the background and closes the window when it succeeds; a failure
+        keeps the window open with the error. Then close-time GC, and
+        eviction of every project dir but the one launch resumes (TB13)."""
         try:
             self.transport.stop()
         except Exception:
             pass
+        if self._closed:
+            super().closeEvent(event)
+            return
+        if self._io_thread is not None and not self._closing_after_save:
+            event.ignore()
+            return
         self.save_settings()
+        if self.project_dir and not self._closing_after_save and self._project_dirty:
+            choice = self._ask_close_choice()
+            if choice == "cancel":
+                event.ignore()
+                return
+            if choice == "save":
+                path = self.project_path or self._save_as_path_dialog()
+                if not path:
+                    event.ignore()
+                    return
+                if not self.project_path:
+                    self.project_path = path
+                    project_io.remember_recent(self.settings, path)
+                event.ignore()
+
+                def _then():
+                    self._closing_after_save = True
+                    self.close()
+
+                self._save_bundle(path, then=_then)
+                return
+            self._teardown_project(discard=True)
+        keep = None
+        last = self.settings.get("last_project")
+        if self.project_dir and last and self.project_path and os.path.abspath(last) == self.project_path:
+            keep = self.project_dir
+        if self.project_dir:
+            self._teardown_project(discard=False)
+        try:
+            project_io.evict_project_dirs(keep)
+        except OSError:
+            pass
+        qt_settings.save_settings(CONFIG_FILE, self.settings)
+        self._closed = True
+        for backend in self._asset_backends.values():
+            try:
+                backend.engine.worker.stop()
+            except Exception:
+                pass
+        self._asset_backends.clear()
         super().closeEvent(event)

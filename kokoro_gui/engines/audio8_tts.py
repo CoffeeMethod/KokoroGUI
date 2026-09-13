@@ -60,7 +60,7 @@ TTS_MODEL_ID = "Audio8/Audio8-TTS-Preview-0.6b"
 SAMPLE_RATE = 44100
 
 # Where a `.tbaw` project keeps the references it bundles (relative to the
-# project dir; Claude/PLAN_tbaw_bundle.md section 2).
+# project dir; Claude/old/PLAN_tbaw_bundle.md section 2).
 PROJECT_REFS_SUBDIR = "engines/audio8/refs"
 
 # Saved wav+transcript voice references live as sidecar file pairs here:

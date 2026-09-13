@@ -37,7 +37,7 @@ def test_choosing_a_preset_calls_load_fx_preset_with_the_chosen_name(qt_app):
 
     # Once to resolve the override's values, once more when the FX tab
     # re-renders for the (now selected) clip.
-    qt_app.engine.load_fx_preset.assert_any_call("Telephone")
+    qt_app.engine.load_fx_preset.assert_any_call("Telephone", qt_app.project_dir)
 
 
 def test_clear_fx_on_a_clip_with_an_override_sets_it_back_to_none(qt_app):
@@ -121,7 +121,7 @@ def test_assemble_clip_config_fx_override_wins_over_character_fx_preset(qt_app, 
     character.preset_data["apply_fx"] = True
     character.preset_data["fx_preset"] = "CharacterPreset"
 
-    def _fake_load_fx_preset(name):
+    def _fake_load_fx_preset(name, project_dir=None):
         assert name == "CharacterPreset"
         return {"reverb_enabled": True, "reverb_room_size": 0.2}
 

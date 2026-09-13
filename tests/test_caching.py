@@ -413,7 +413,7 @@ def test_audio8_process_chunk_task_caches_every_segment_in_a_multi_segment_chunk
         engine.worker.stop()
 
 
-# --- segment_naming: "cache_key" (Claude/PLAN_tbaw_bundle.md sections 2.3, 3) ---
+# --- segment_naming: "cache_key" (Claude/old/PLAN_tbaw_bundle.md sections 2.3, 3) ---
 #
 # Every clip generation runs in this mode: `out_dir` is the cache, the file
 # is named by the segment key, `CACHE_DIR` is untouched, and a present file

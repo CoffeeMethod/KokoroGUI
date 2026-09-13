@@ -326,7 +326,7 @@ class FXDock(QDockWidget):
 
     def refresh_presets(self) -> None:
         current = self.preset_combo.currentText()
-        presets = [_PLACEHOLDER] + list_fx_preset_names()
+        presets = [_PLACEHOLDER] + list_fx_preset_names(self.app.project_dir)
         self.preset_combo.blockSignals(True)
         self.preset_combo.clear()
         self.preset_combo.addItems(presets)

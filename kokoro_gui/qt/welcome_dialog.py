@@ -30,6 +30,13 @@ MISSING_SUFFIX = " (missing)"
 TEXT_FILTER = "Documents (*.txt *.pdf *.epub)"
 
 
+def _format_duration(seconds: float) -> str:
+    seconds = int(round(seconds or 0))
+    hours, rest = divmod(seconds, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+
+
 class WelcomeDialog(QDialog):
     def __init__(self, app, parent=None):
         super().__init__(parent or app)
@@ -62,10 +69,14 @@ class WelcomeDialog(QDialog):
         self.modified_label = QLabel("-")
         self.characters_label = QLabel("-")
         self.clips_label = QLabel("-")
+        self.duration_label = QLabel("-")
+        self.engines_label = QLabel("-")
         form.addRow("Path:", self.path_label)
         form.addRow("Modified:", self.modified_label)
         form.addRow("Characters:", self.characters_label)
         form.addRow("Clips:", self.clips_label)
+        form.addRow("Audio:", self.duration_label)
+        form.addRow("Engines:", self.engines_label)
         right.addWidget(details)
 
         self.open_btn = QPushButton("Open")
@@ -128,13 +139,18 @@ class WelcomeDialog(QDialog):
         summary = project_io.project_summary(path) if path else None
         if summary is None:
             self.path_label.setText(path or "-")
-            for label in (self.modified_label, self.characters_label, self.clips_label):
+            for label in (self.modified_label, self.characters_label, self.clips_label,
+                          self.duration_label, self.engines_label):
                 label.setText("-")
         else:
             self.path_label.setText(summary["path"])
             self.modified_label.setText(summary["modified"].strftime("%Y-%m-%d %H:%M"))
             self.characters_label.setText(str(summary["characters"]))
             self.clips_label.setText(str(summary["clips"]))
+            duration = summary.get("duration_s")
+            self.duration_label.setText(_format_duration(duration) if duration is not None else "-")
+            engines = summary.get("engines") or []
+            self.engines_label.setText(", ".join(engines) if engines else "-")
         is_current = bool(path) and self.app.project_path is not None and \
             os.path.abspath(path) == os.path.abspath(self.app.project_path)
         self.open_btn.setText("Resume" if is_current else "Open")

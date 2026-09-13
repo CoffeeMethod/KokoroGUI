@@ -26,8 +26,9 @@ from __future__ import annotations
 import os
 
 
-def list_fx_preset_names() -> list[str]:
-    """Every `presets/fx/*.json` FX preset's name (no extension), sorted.
+def list_fx_preset_names(project_dir: str | None = None) -> list[str]:
+    """Every FX preset's name (no extension), sorted: the open project's
+    `fx/` (grill TB3, project-local first) plus `presets/fx/*.json`.
 
     Reads `kokoro_gui.qt.app.FX_PRESETS_DIR` via a *local* import inside this
     function (not a module-level one) purely to avoid this module ever
@@ -40,8 +41,11 @@ def list_fx_preset_names() -> list[str]:
     """
     import kokoro_gui.qt.app as qt_app_module
 
-    if not os.path.exists(qt_app_module.FX_PRESETS_DIR):
-        return []
-    return sorted(
-        f[:-5] for f in os.listdir(qt_app_module.FX_PRESETS_DIR) if f.endswith(".json")
-    )
+    names = set()
+    dirs = [qt_app_module.FX_PRESETS_DIR]
+    if project_dir:
+        dirs.insert(0, os.path.join(project_dir, "fx"))
+    for directory in dirs:
+        if os.path.isdir(directory):
+            names.update(f[:-5] for f in os.listdir(directory) if f.endswith(".json"))
+    return sorted(names)

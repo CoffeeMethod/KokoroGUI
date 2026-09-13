@@ -11,6 +11,32 @@ by default, with a zero-shot voice-cloning backend also built in.
 
 https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
+## New in Beta 4.2.0
+
+-   **`.tbaw` project bundles.** A project is now one zip file that carries everything: the text
+    and clips, every generated segment, and every named voice mix, voice reference and FX preset
+    it uses, so it opens on another machine with the same engines installed. `.json` projects
+    still open and are converted on the spot (a `.tbaw` is written next to the `.json`, which is
+    left alone); generated audio whose settings still match is carried over, nothing is
+    regenerated for the conversion. Save writes the whole file in the background (the progress
+    line shows it) and never leaves a half-written project behind; Save As keeps the same working
+    copy. Autosave writes only into the app's own working copy (`cache/projects/`), so the file
+    on disk is as new as your last Save. Closing with unsaved changes asks Save / Discard /
+    Cancel, and a crash offers to recover the unsaved session next time the project opens (even
+    after the file was renamed or moved). The Export dialog gained two project options: bundle
+    generated audio (off for a small file that regenerates on open) and the audio format for new
+    segments (wav or flac).
+-   **Generation writes once.** A clip's audio lands straight in the project's working copy
+    under a name derived from what produced it, instead of one copy in `cache/` and another in
+    the output folder. Regenerating a clip that's already up to date (the gutter button) makes a
+    fresh take under a new name and leaves the old file for any other identical clip that plays
+    it; the Voice Reference and Mixing lists show a bundle's own voices first. Opening a project
+    made with another version of an engine keeps its clips clean and says so in the status line;
+    only clips you regenerate use the installed version.
+-   **Segment cache rekeyed.** Cache entries are now keyed on the voice's name and content rather
+    than its path, so the first generate after upgrading misses the old `cache/` entries.
+    Converted `.json` projects don't pay for this: their audio is adopted by the conversion.
+
 ## New in Beta 4.1.2
 
 -   **Welcome screen.** Launch opens the last project as before, then puts a dialog over it:
@@ -44,11 +70,12 @@ The shell now matches the original wireframe: a 2x2 grid of docks, a real timeli
 -   **Menus.** File (New / Open / Recent / Welcome / Save / Save As / Import Text / Export), Edit
     (Undo / Redo / Cut / Copy / Paste / Characters...), Options (Engine, Device, Theme, copy/paste
     behavior, JIT), Workspace. The old Settings dialog folded into Options.
--   **Projects.** A project is a `.json` file in the `document.json` shape plus a
-    `project_settings` block (export defaults). Launch reopens the last project under the welcome
-    dialog (4.1.2); New inherits the previous project's characters; Import Text asks whether to
-    add to the current project or start a new one. Autosave keeps writing to the current file;
-    Save As branches it. The window title names the project and shows `*` while a save is pending.
+-   **Projects.** A project is a `.tbaw` bundle (4.2.0; before that a `.json` in the
+    `document.json` shape plus a `project_settings` block, still readable). Launch reopens the
+    last project under the welcome dialog (4.1.2); New inherits the previous project's
+    characters; Import Text asks whether to add to the current project or start a new one.
+    Autosave writes the working copy; Save writes the file; Save As branches it. The window title
+    names the project and shows `*` while it has unsaved changes.
 -   **A stripped transcript panel.** The Input Source tabs, file path row, legacy preset row and
     Auto-Split row are gone. Above the editor sit two combos, Character and FX, that reflect the
     caret's clip and reassign the selection (or the whole clip) when changed. The gutter labels once
@@ -84,8 +111,8 @@ The shell now matches the original wireframe: a 2x2 grid of docks, a real timeli
 
 -   **A document, not a text box.** The old single "generate this text" input is now a project: a
     `Document` of canonical text, plus the `Clip`/`Track`/`Character` metadata layered on top of it
-    (`kokoro_gui/daw/`). Project state autosaves to `document.json`, separate from the app's
-    `config_qt.json` settings file.
+    (`kokoro_gui/daw/`). Project state autosaves to the project's working copy (since 4.2.0;
+    before that to `document.json`), separate from the app's `config_qt.json` settings file.
 -   **Transcript panel with character highlighting and a live gutter.** The text editor colors each
     run by its assigned character, so speaker boundaries are visible without reading the inline
     `[Speaker:FX]:` syntax - which itself now converts into a real, colored assignment the moment you
@@ -260,7 +287,9 @@ The shell now matches the original wireframe: a 2x2 grid of docks, a real timeli
 
     This launches the PySide6 (Qt) frontend. A welcome dialog lists recent projects with Resume,
     New, New from text file and Open (untick "Show at startup" to skip it; File > Welcome...
-    reopens it). Behind it, a menu bar (File / Edit / Options / Workspace) over a 2x2 grid of docks:
+    reopens it); its details pane reads a project's clip count, audio length and engines straight
+    from the `.tbaw` manifest. Behind it, a menu bar (File / Edit / Options / Workspace) over a
+    2x2 grid of docks:
 
     -   **Transcript** (top-left): the editor, with Character and FX combos above it and a gutter
         that names the speaker and offers a per-clip regenerate button.
@@ -290,6 +319,8 @@ The shell now matches the original wireframe: a 2x2 grid of docks, a real timeli
     -   Drag a clip on the timeline to move it in time, onto another lane to reassign it, or
         Shift+drag inside it to replace a sub-range with new TTS.
     -   File > Export mixes the timeline down to one file (plus optional `.srt` and per-clip files).
+        The same dialog holds the project's bundle options (bundle generated audio, wav or flac).
+    -   File > Save writes the `.tbaw`; Ctrl+S is safe to hit any time, it runs in the background.
     -   Undo/redo any of the above from the Edit menu.
 
 ## Running Tests

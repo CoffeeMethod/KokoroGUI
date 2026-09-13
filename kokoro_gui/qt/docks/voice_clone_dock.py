@@ -257,8 +257,11 @@ class VoiceCloneDock(QDockWidget):
         """Loads a saved reference back into the editable fields above, for
         review/edit/re-save (the user's "edit after if needed" path)."""
         self.name_edit.setText(name)
-        self.wav_path_edit.setText(os.path.abspath(os.path.join(audio8_tts.AUDIO8_REFS_DIR, f"{name}.wav")))
-        self.transcript_edit.setPlainText(Audio8ReferenceStore.get_transcript(name))
+        project_dir = getattr(self.app, "project_dir", None)
+        wav = Audio8ReferenceStore.find_wav(name, project_dir) or os.path.abspath(
+            os.path.join(audio8_tts.AUDIO8_REFS_DIR, f"{name}.wav"))
+        self.wav_path_edit.setText(wav)
+        self.transcript_edit.setPlainText(Audio8ReferenceStore.get_transcript(name, project_dir))
 
     def refresh_list(self) -> None:
         if hasattr(self.app, "settings_dock") and self.app.settings_dock is not None:
@@ -270,7 +273,9 @@ class VoiceCloneDock(QDockWidget):
             if w:
                 w.deleteLater()
 
-        names = Audio8ReferenceStore.list_references()
+        # Project-local references (a .tbaw's engines/audio8/refs/) show
+        # alongside the global store; a name in both is the project's.
+        names = Audio8ReferenceStore.list_references(getattr(self.app, "project_dir", None))
         if not names:
             self._list_layout.addWidget(QLabel("No saved voice references yet."))
             return

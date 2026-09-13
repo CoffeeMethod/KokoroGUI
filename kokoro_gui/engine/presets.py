@@ -62,15 +62,21 @@ class PresetsMixin:
                 print(f"Error loading preset {name}: {e}")
         return None
 
-    def load_fx_preset(self, name):
-        """Loads an FX preset from the presets/fx directory."""
+    def load_fx_preset(self, name, project_dir=None):
+        """Loads an FX preset: the open project's `fx/<name>.json` first
+        (a `.tbaw` bundles the presets it names), then presets/fx."""
         # Sanitize name to prevent path traversal
         safe_name = os.path.basename(name)
-        fx_path = os.path.join("presets", "fx", f"{safe_name}.json")
-        if os.path.exists(fx_path):
-            try:
-                with open(fx_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception as e:
-                print(f"Error loading FX preset {name}: {e}")
+        candidates = []
+        if project_dir:
+            candidates.append(os.path.join(project_dir, "fx", f"{safe_name}.json"))
+        candidates.append(os.path.join("presets", "fx", f"{safe_name}.json"))
+        for fx_path in candidates:
+            if os.path.exists(fx_path):
+                try:
+                    with open(fx_path, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                except Exception as e:
+                    print(f"Error loading FX preset {name}: {e}")
+                    return None
         return None

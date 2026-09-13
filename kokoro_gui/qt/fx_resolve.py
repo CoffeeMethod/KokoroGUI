@@ -46,12 +46,16 @@ def load_fx_preset_values(app, name) -> Optional[dict]:
     name = real_preset_name(name)
     if not name:
         return None
-    preset = app.engine.load_fx_preset(name)
+    project_dir = getattr(app, "project_dir", None)
+    preset = app.engine.load_fx_preset(name, project_dir)
     if not preset:
         import kokoro_gui.qt.app as qt_app_module
 
         safe = os.path.basename(name)
-        fpath = os.path.join(qt_app_module.FX_PRESETS_DIR, f"{safe}.json")
+        candidates = [os.path.join(qt_app_module.FX_PRESETS_DIR, f"{safe}.json")]
+        if project_dir:
+            candidates.insert(0, os.path.join(project_dir, "fx", f"{safe}.json"))
+        fpath = next((c for c in candidates if os.path.exists(c)), candidates[-1])
         if os.path.exists(fpath):
             try:
                 with open(fpath, "r", encoding="utf-8") as fh:

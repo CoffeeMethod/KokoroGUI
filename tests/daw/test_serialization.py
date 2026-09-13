@@ -179,7 +179,7 @@ def test_document_from_dict_migrates_legacy_shape_with_gap_at_start():
 
 
 # ---------------------------------------------------------------------------
-# Unknown fields round-trip (Claude/PLAN_tbaw_bundle.md section 2.2)
+# Unknown fields round-trip (Claude/old/PLAN_tbaw_bundle.md section 2.2)
 # ---------------------------------------------------------------------------
 
 def test_unknown_keys_on_every_object_survive_a_round_trip():

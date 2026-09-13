@@ -24,7 +24,7 @@ one (tests, headless use) `compute_expected_cache_hash` falls back to the
 name-only `compute_cache_key`, which is the same value for a built-in voice
 on Kokoro.
 
-Two rules from the `.tbaw` plan (Claude/PLAN_tbaw_bundle.md section 2.3):
+Two rules from the `.tbaw` plan (Claude/old/PLAN_tbaw_bundle.md section 2.3):
 a segment is compared under the engine version it was generated with while
 its file exists (TB9: a bundle from another machine's model version opens
 clean), and a segment whose `audio_path` is set but whose file is missing is

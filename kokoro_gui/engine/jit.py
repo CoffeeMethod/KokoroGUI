@@ -51,7 +51,7 @@ class JITMixin:
                         seg_config['voice'] = self.resolve_voice_path(seg_config['voice'])
 
                 if fx_name:
-                    fx_preset = self.load_fx_preset(fx_name)
+                    fx_preset = self.load_fx_preset(fx_name, config.get("project_dir"))
                     if fx_preset:
                         seg_config.update(filter_allowed_keys(fx_preset, ALLOWED_FX_PRESET_KEYS))
                         seg_config['apply_fx'] = True

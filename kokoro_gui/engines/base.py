@@ -17,7 +17,7 @@ premature until a second backend actually exists to validate it against
 of over-fit-to-Kokoro abstraction the plan warns against for voice mixing.
 So this Protocol only covers what's true for *any* backend today: identity,
 capabilities, its config schema, its voice list, and cancellation, plus the
-five `.tbaw` hooks (Claude/PLAN_tbaw_bundle.md section 5) that
+five `.tbaw` hooks (Claude/old/PLAN_tbaw_bundle.md section 5) that
 `BackendHooksMixin` gives working defaults for: `engine_version`,
 `cache_key_extra`, `resolve_voice_file` (the segment-key trio, forwarded to
 the wrapped engine because `process_chunk_task` runs there without an

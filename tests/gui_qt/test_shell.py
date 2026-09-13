@@ -235,8 +235,11 @@ def test_space_shortcuts_toggle_the_transport(qt_app):
 
 
 def test_window_title_names_the_project_and_marks_pending_saves(qt_app):
-    assert qt_app.windowTitle() == "document - KokoroGUI"
+    assert qt_app.windowTitle() == "Untitled - KokoroGUI"
     qt_app.schedule_save()
-    assert qt_app.windowTitle() == "document* - KokoroGUI"
+    assert qt_app.windowTitle() == "Untitled* - KokoroGUI"
+    qt_app.save_settings()  # nothing changed: the digest matches, so no star
+    assert qt_app.windowTitle() == "Untitled - KokoroGUI"
+    qt_app.document.text = "an edit"
     qt_app.save_settings()
-    assert qt_app.windowTitle() == "document - KokoroGUI"
+    assert qt_app.windowTitle() == "Untitled* - KokoroGUI"

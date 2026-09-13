@@ -6,6 +6,12 @@ Holds what left the Settings tab: output folder, base filename, format,
 keys (`out_dir`/`filename`/`format`/`export_subtitles`/`separate`) so an
 existing user's choices carry over.
 
+Also the project bundle's two options (grill TB14): whether generated
+audio goes into the `.tbaw` and in which format (wav or flac for new
+segments). They live in `app.project_settings["bundle"]`
+(`kokoro_gui.qt.project.bundle_options`) and are applied on OK, before the
+dirty-clips prompt.
+
 `run_export()` refuses (with the count) while any clip is dirty, offering
 "Generate first" / "Export anyway", then schedules `mixdown()` on the
 engine worker via `run_coro` and reports through the Transport dock's
@@ -25,8 +31,10 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.daw.mixdown import mixdown
+from kokoro_gui.qt import project as project_io
 
 FORMATS = ("wav", "mp3", "flac", "ogg")
+BUNDLE_AUDIO_FORMATS = ("wav", "flac")
 
 
 def export_defaults(app) -> dict:
@@ -76,6 +84,17 @@ class ExportDialog(QDialog):
         self.keep_clips_check.setChecked(values["keep_clip_files"])
         form.addRow("", self.keep_clips_check)
 
+        bundle = project_io.bundle_options(app.project_settings)
+        self.bundle_audio_check = QCheckBox("Bundle generated audio in the project file")
+        self.bundle_audio_check.setChecked(bool(bundle["include_generated_audio"]))
+        self.bundle_audio_check.setToolTip("Off gives a small .tbaw whose every clip regenerates on open.")
+        form.addRow("Project:", self.bundle_audio_check)
+        self.bundle_format_combo = QComboBox()
+        self.bundle_format_combo.addItems(BUNDLE_AUDIO_FORMATS)
+        self.bundle_format_combo.setCurrentText(bundle["audio_format"])
+        self.bundle_format_combo.setToolTip("Format of newly generated segments; existing ones keep theirs.")
+        form.addRow("Bundle audio format:", self.bundle_format_combo)
+
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Export")
         self.buttons.accepted.connect(self.accept)
@@ -86,6 +105,13 @@ class ExportDialog(QDialog):
         d = QFileDialog.getExistingDirectory(self, "Select output folder", self.out_dir_edit.text())
         if d:
             self.out_dir_edit.setText(d)
+
+    def bundle_values(self) -> dict:
+        return {
+            "include_generated_audio": self.bundle_audio_check.isChecked(),
+            "include_imported_audio": True,
+            "audio_format": self.bundle_format_combo.currentText(),
+        }
 
     def values(self) -> dict:
         return {
@@ -99,11 +125,15 @@ class ExportDialog(QDialog):
         }
 
 
-def run_export(app, values: dict, parent=None) -> bool:
-    """Validates, remembers `values` in the project, and schedules the
-    mixdown. Returns False when nothing was scheduled."""
+def run_export(app, values: dict, parent=None, bundle: dict | None = None) -> bool:
+    """Validates, remembers `values` (and the `bundle` options, if given) in
+    the project, and schedules the mixdown. Returns False when nothing was
+    scheduled."""
     parent = parent or app
     document = app.document
+    if bundle is not None:
+        app.project_settings["bundle"] = project_io.bundle_options({"bundle": bundle})
+        app.schedule_save()
     if not document.clips:
         QMessageBox.information(parent, "Nothing to export",
                                 "This project has no clips yet. Assign characters to text and generate first.")

@@ -40,7 +40,7 @@ def test_fx_dock_state_covers_all_fx_preset_keys(qt_app):
     assert set(state.keys()) == set(spec.FX_PRESET_KEYS)
 
 
-# --- generation config and the segment key closure (Claude/PLAN_tbaw_bundle.md 2.3) --
+# --- generation config and the segment key closure (Claude/old/PLAN_tbaw_bundle.md 2.3) --
 
 def _clip_for(qt_app, text="hello world", preset=None):
     from kokoro_gui.daw.models import Character

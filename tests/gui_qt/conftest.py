@@ -51,9 +51,15 @@ def qt_app(tmp_path, monkeypatch, qtbot):
     monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: ("", "")))
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: ""))
 
+    # A dirty project asks Save / Discard / Cancel on close and before New
+    # or Open (grill TB12); nearly every test leaves edits behind, so the
+    # fixture answers Discard. A test about the prompt re-patches this.
+    monkeypatch.setattr(qt_app_module.QtTTSApp, "_ask_close_choice", lambda self: "discard")
+
     app = qt_app_module.QtTTSApp()
     qtbot.addWidget(app)
     yield app
+    app.wait_for_project_io()
     app.close()
 
 

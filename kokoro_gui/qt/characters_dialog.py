@@ -74,7 +74,7 @@ class CharactersDialog(QDialog):
 
         self.fx_combo = QComboBox()
         self.fx_combo.addItem(_FX_NONE)
-        for name in list_fx_preset_names():
+        for name in list_fx_preset_names(self.app.project_dir):
             self.fx_combo.addItem(name)
         self.fx_combo.currentTextChanged.connect(self._on_fx_changed)
         form.addRow("FX preset:", self.fx_combo)
