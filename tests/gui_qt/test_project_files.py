@@ -383,6 +383,16 @@ def test_sweep_removes_clean_dirs_whose_file_is_gone(isolated_dirs, tmp_path):
     assert os.path.isdir(kept)
 
 
+@pytest.mark.parametrize("source", ["moved.tbaw", "C:moved.tbaw", "", 7])
+def test_sweep_leaves_a_dir_whose_session_source_is_not_an_absolute_path(isolated_dirs, source):
+    """A session the app wrote always has an absolute `source_path`; anything
+    else is corrupt and must not drive a delete."""
+    odd, _ = project_io.create_project_dir("odd")
+    project_io.write_session(odd, {"dirty": False, "source_path": source})
+    assert project_io.sweep_orphan_dirs() == []
+    assert os.path.isdir(odd)
+
+
 def test_second_open_of_a_locked_project_is_refused_and_the_lock_clears(isolated_dirs):
     project_dir, _ = project_io.create_project_dir()
     holder = project_io.ProjectLock(project_dir).acquire()

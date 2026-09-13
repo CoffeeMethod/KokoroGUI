@@ -147,6 +147,10 @@ class _FakeVoskModule:
 
     class Model:
         def __init__(self, path):
+            # The real `vosk.Model` raises this for a folder it can't load,
+            # a missing one included.
+            if not os.path.isdir(path):
+                raise Exception("Failed to create a model")
             self.path = path
 
     @staticmethod
@@ -219,11 +223,13 @@ def test_get_vosk_model_requires_a_model_path(monkeypatch):
         asr._get_vosk_model("")
 
 
-def test_get_vosk_model_requires_an_existing_directory(monkeypatch, tmp_path):
+def test_get_vosk_model_names_the_folder_when_vosk_rejects_it(monkeypatch, tmp_path):
+    """The real `vosk.Model` raises for a missing folder and for one without
+    model files alike; the error names the path and what belongs there."""
     monkeypatch.setitem(sys.modules, "vosk", _FakeVoskModule())
     missing = str(tmp_path / "does-not-exist")
 
-    with pytest.raises(RuntimeError, match="not found"):
+    with pytest.raises(RuntimeError, match="does-not-exist.*alphacephei"):
         asr._get_vosk_model(missing)
 
 

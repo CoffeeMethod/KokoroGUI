@@ -1071,7 +1071,15 @@ def sweep_orphan_dirs() -> list:
         if not session or session.get("dirty"):
             continue
         source = session.get("source_path")
-        if source and not os.path.exists(source) and not is_locked(full):
+        if not isinstance(source, str) or not source:
+            continue
+        # `record_save` and `finish_open` write an absolute path; a relative
+        # or drive-relative one is a corrupt session, not grounds to delete.
+        norm = os.path.normpath(source)
+        drive, _tail = os.path.splitdrive(norm)
+        if not norm.startswith(drive + os.sep):
+            continue
+        if not os.path.exists(norm) and not is_locked(full):
             delete_project_dir(full)
             removed.append(full)
     return removed

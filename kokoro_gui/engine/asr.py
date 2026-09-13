@@ -249,14 +249,17 @@ def _get_vosk_model(model_path: str):
                 f"{VOSK_MODEL_PATH_ENV_KEY}=<path> in a .env file at the project "
                 "root (see .env.example)."
             )
-        if not os.path.isdir(model_path):
-            raise RuntimeError(f"Vosk model folder not found: '{model_path}'.")
-
+        # No existence pre-check: `vosk.Model` fails for a missing folder
+        # the same way it fails for a folder without model files, and one
+        # message covers both.
         try:
             vosk.SetLogLevel(-1)  # silence Kaldi's default stderr logging
             model = vosk.Model(model_path)
         except Exception as e:
-            raise RuntimeError(f"Failed to load Vosk model at '{model_path}': {e}") from e
+            raise RuntimeError(
+                f"Couldn't load a Vosk model from '{model_path}' ({e}). The folder must exist "
+                "and hold an unzipped model from https://alphacephei.com/vosk/models."
+            ) from e
 
         _vosk_models[model_path] = model
         return model
