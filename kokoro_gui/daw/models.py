@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from kokoro_gui.daw.undo import UndoStack
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys
@@ -71,6 +71,12 @@ class Character:
     highlight_color: str = DEFAULT_HIGHLIGHT_PALETTE[0]
     backend_id: str = "kokoro"
     id: str = field(default_factory=_new_id)
+    # Fields this version doesn't know, carried through a load/save so an
+    # older KokoroGUI doesn't strip what a newer one wrote (see
+    # serialization.py). Nothing in the app reads it. For a Character it
+    # also holds `extra["preset_data"]`: the preset keys ALLOWED_PRESET_KEYS
+    # strips from what reaches a config dict.
+    extra: dict = field(default_factory=dict)
 
     @classmethod
     def from_preset_dict(cls, name, preset_data, highlight_color=None, backend_id="kokoro", id=None):
@@ -105,6 +111,7 @@ class Track:
     character_id: Optional[str] = None
     order_index: int = 0
     id: str = field(default_factory=_new_id)
+    extra: dict = field(default_factory=dict)  # unknown fields, see Character
 
 
 @dataclass
@@ -127,7 +134,16 @@ class Segment:
     saved segment that predates the flag, and `dirty.is_clip_dirty` reports
     such a clip dirty so it regenerates once (a cache hit when caching is
     on) instead of getting FX applied twice. `duration` is the raw length;
-    the arrangement measures the rendered length itself."""
+    the arrangement measures the rendered length itself.
+
+    `cache_key` is `caching.segment_key` for the clip's text and generation
+    inputs, and it is also the stem of the file `audio_path` names in a
+    project dir (`<cache_key>_<order_index>.<ext>`). `engine_version` is the
+    version string the backend reported when this segment was generated;
+    the dirty check keys with it while the file is present, so a project
+    made with one model version opens clean on a machine with another
+    (grill TB9). `None` means "written before the field", which the dirty
+    check treats as the installed version."""
 
     order_index: int = 0
     text: str = ""
@@ -135,7 +151,9 @@ class Segment:
     audio_path: Optional[str] = None
     duration: Optional[float] = None
     raw: bool = True
+    engine_version: Optional[str] = None
     id: str = field(default_factory=_new_id)
+    extra: dict = field(default_factory=dict)  # unknown fields, see Character
 
 
 @dataclass
@@ -155,6 +173,7 @@ class Clip:
     source: str = "generated"  # "generated" | "imported"
     original_audio_path: Optional[str] = None
     id: str = field(default_factory=_new_id)
+    extra: dict = field(default_factory=dict)  # unknown fields, see Character
 
     def __post_init__(self):
         if self.source not in ("generated", "imported"):
@@ -185,6 +204,7 @@ class Run:
     text: str = ""
     clip_id: Optional[str] = None
     kind: Optional[str] = None
+    extra: dict = field(default_factory=dict)  # unknown fields, see Character
 
 
 @dataclass
@@ -207,6 +227,13 @@ class Document:
     # persistence path) - undo history is not part of a saved project, it's
     # this session's editing history only.
     undo_stack: Optional[UndoStack] = field(default=None, init=False, repr=False)
+    # Runtime-only like `undo_stack`: `(text, clip, engine_version=None) ->
+    # segment key`, set by the app (kokoro_gui/qt/app.py's
+    # `_switch_document`) as a closure over the active backend and the
+    # project dir, since this daw layer has neither. `dirty_clips` hands it
+    # to `dirty.is_clip_dirty`; unset (tests, headless use) the check falls
+    # back to the name-only `compute_cache_key`. Never serialized.
+    segment_key_fn: Optional[Callable] = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         self.undo_stack = UndoStack(self)
@@ -334,7 +361,8 @@ class Document:
         return [
             clip
             for clip in self.clips
-            if is_clip_dirty(clip, self.clip_text(clip), self.effective_config_for_clip(clip))
+            if is_clip_dirty(clip, self.clip_text(clip), self.effective_config_for_clip(clip),
+                             key_fn=self.segment_key_fn)
         ]
 
     # -- run-list maintenance (private) -------------------------------------

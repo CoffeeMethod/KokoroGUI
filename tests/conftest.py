@@ -203,6 +203,8 @@ class StubEngine:
     """Drop-in replacement for KokoroEngine used by GUI tests - never touches
     the real Kokoro pipeline/model."""
 
+    id = "kokoro"
+
     def __init__(self):
         self.pipeline = object()  # truthy - passes the "engine still initializing" gate
         self.worker = SimpleNamespace(run_coro=MagicMock(return_value=concurrent.futures.Future()))
@@ -220,3 +222,22 @@ class StubEngine:
         self.extract_text_from_file = MagicMock(return_value="")
         self.load_fx_preset = MagicMock(return_value=None)
         self.cancel = MagicMock()
+
+    # The segment-key trio CachingMixin gives real engines
+    # (kokoro_gui/engine/caching.py): the adapter forwards to these.
+    def engine_version(self):
+        from kokoro_gui.engine.caching import get_engine_version
+
+        return get_engine_version("kokoro")
+
+    def cache_key_extra(self, config):
+        return {}
+
+    def resolve_voice_path(self, name, project_dir=None):
+        from kokoro_gui.engine.voices import VoiceMixingMixin
+
+        return VoiceMixingMixin.resolve_voice_path(self, name, project_dir)
+
+    def resolve_voice_file(self, name, project_dir=None):
+        resolved = self.resolve_voice_path(name, project_dir)
+        return resolved if os.path.isabs(resolved) and os.path.isfile(resolved) else None

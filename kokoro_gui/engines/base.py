@@ -16,10 +16,18 @@ premature until a second backend actually exists to validate it against
 (see migration step 5); inventing it here, unvalidated, is exactly the kind
 of over-fit-to-Kokoro abstraction the plan warns against for voice mixing.
 So this Protocol only covers what's true for *any* backend today: identity,
-capabilities, its config schema, its voice list, and cancellation.
+capabilities, its config schema, its voice list, and cancellation, plus the
+five `.tbaw` hooks (Claude/PLAN_tbaw_bundle.md section 5) that
+`BackendHooksMixin` gives working defaults for: `engine_version`,
+`cache_key_extra`, `resolve_voice_file` (the segment-key trio, forwarded to
+the wrapped engine because `process_chunk_task` runs there without an
+adapter reference), `collect_project_assets` and `on_project_opened` (adapter
+only). Nothing in this package imports `kokoro_gui/daw/`: the project layer
+walks the document and hands each backend the voice names it uses.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional, Protocol, runtime_checkable
@@ -92,6 +100,83 @@ class VoiceInfo:
     is_custom: bool = False
 
 
+@dataclass(frozen=True)
+class BundleAsset:
+    """One file a backend wants in a `.tbaw` bundle: where it goes inside the
+    zip (`engines/<id>/...`, forward slashes) and where its bytes are now."""
+    bundle_path: str
+    source_path: str
+
+
+class BackendHooksMixin:
+    """Working defaults for the `.tbaw` hooks. An adapter that wraps an
+    engine exposing `engine_version`/`cache_key_extra`/`resolve_voice_file`
+    (every engine built on `CachingMixin`) forwards to it; otherwise the
+    key gets the package version for the adapter's id, no extra inputs, and
+    no voice file. `project_dir` is whatever `on_project_opened` last
+    recorded, for listings that should show project-local assets first."""
+
+    project_dir: Optional[str] = None
+
+    def engine_version(self) -> str:
+        """What goes into the segment key and `manifest.engines[id].version`.
+        A backend that changes output without a package bump must change
+        this string."""
+        engine = getattr(self, "engine", None)
+        hook = getattr(engine, "engine_version", None)
+        if callable(hook):
+            return hook()
+        from kokoro_gui.engine.caching import get_engine_version
+
+        return get_engine_version(self.id)
+
+    def cache_key_extra(self, config: dict) -> dict:
+        """Backend-specific generation inputs folded into `segment_key`."""
+        engine = getattr(self, "engine", None)
+        hook = getattr(engine, "cache_key_extra", None)
+        return dict(hook(config) or {}) if callable(hook) else {}
+
+    def resolve_voice_file(self, name: str, project_dir: Optional[str] = None) -> Optional[str]:
+        """The file `name` resolves to, project-local first, or `None` for a
+        built-in voice."""
+        engine = getattr(self, "engine", None)
+        hook = getattr(engine, "resolve_voice_file", None)
+        return hook(name, project_dir) if callable(hook) else None
+
+    def collect_project_assets(self, voice_names, project_dir=None) -> tuple:
+        """`([BundleAsset, ...], meta)`: every file under `engines/<id>/`
+        needed to reproduce the given voice names, plus the opaque `meta`
+        dict written to `manifest.engines[id]`. A name that resolves to
+        nothing is skipped (the project still saves; the character still
+        names it). Default: no files, empty meta."""
+        return [], {}
+
+    def on_project_opened(self, project_dir: Optional[str], meta: dict) -> None:
+        """Called after a project is opened (or created) with this backend's
+        manifest `meta`. Must not load a model: record what to do and do it
+        on the first generate. The default remembers the dir for listings."""
+        self.project_dir = project_dir
+
+
+def bundle_asset_for(name: str, directory: str, extension: str, bundle_dir: str,
+                     project_dir: Optional[str] = None) -> Optional[BundleAsset]:
+    """Helper for `collect_project_assets`: `<name><extension>` looked up in
+    the project-local `bundle_dir` first, then in the global `directory`,
+    returned as a `BundleAsset` at `<bundle_dir>/<name><extension>`."""
+    safe = os.path.basename(name)
+    if not safe:
+        return None
+    candidates = []
+    if project_dir:
+        candidates.append(os.path.join(project_dir, *bundle_dir.split("/")))
+    candidates.append(directory)
+    for candidate_dir in candidates:
+        path = os.path.join(candidate_dir, f"{safe}{extension}")
+        if os.path.isfile(path):
+            return BundleAsset(f"{bundle_dir}/{safe}{extension}", os.path.abspath(path))
+    return None
+
+
 @runtime_checkable
 class TTSEngineBackend(Protocol):
     id: str
@@ -110,6 +195,23 @@ class TTSEngineBackend(Protocol):
 
     def cancel(self) -> None:
         """Cancel any in-flight generation."""
+        ...
+
+    # `.tbaw` hooks - see BackendHooksMixin for the defaults and docs.
+
+    def engine_version(self) -> str:
+        ...
+
+    def cache_key_extra(self, config: dict) -> dict:
+        ...
+
+    def resolve_voice_file(self, name: str, project_dir: Optional[str] = None) -> Optional[str]:
+        ...
+
+    def collect_project_assets(self, voice_names, project_dir=None) -> tuple:
+        ...
+
+    def on_project_opened(self, project_dir: Optional[str], meta: dict) -> None:
         ...
 
 

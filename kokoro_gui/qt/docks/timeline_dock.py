@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton, QVBoxLayout,
 )
 
-from kokoro_gui.daw.dirty import build_segments_from_results, compute_expected_cache_hash
+from kokoro_gui.daw.dirty import build_segments_from_results, take_from_results
 from kokoro_gui.daw.undo import (
     AssignCharacterCommand, MoveClipBeforeCommand, MoveClipCommand, ReassignTrackCommand,
     SetClipTimestampCommand, TextEditCommand,
@@ -71,16 +71,17 @@ class TimelineDock(QDockWidget):
         self.clipGenerationFinished.connect(self._on_clip_generation_finished)
         self._batchGenerationRaw.connect(self._on_batch_generation_raw)
 
-        # (results, expected_cache_hash) for a clip id whose generation
-        # future hasn't been picked up by _on_clip_generation_finished yet -
-        # avoids widening clipGenerationFinished's argument types just to
-        # carry the result list across the thread-safe emit/handle boundary.
+        # results for a clip id whose generation future hasn't been picked
+        # up by _on_clip_generation_finished yet - avoids widening
+        # clipGenerationFinished's argument types just to carry the result
+        # list across the thread-safe emit/handle boundary. The engine
+        # reports the key, take and engine version it generated under in
+        # each result dict, so nothing is predicted before dispatch.
         self._pending_results: dict = {}
 
-        # {"outcomes": [...], "expected_hashes": {clip_id: hash}} for a
-        # batch whose future hasn't been picked up by
+        # Outcome list for a batch whose future hasn't been picked up by
         # _on_batch_generation_raw yet - same reasoning as _pending_results.
-        self._pending_batch: dict | None = None
+        self._pending_batch: list | None = None
         self._batch_progress_lock = threading.Lock()
         self._batch_completed = 0
 
@@ -137,7 +138,10 @@ class TimelineDock(QDockWidget):
 
     # -- per-clip Generate ---------------------------------------------------
 
-    def on_generate_clip_requested(self, clip_id: str) -> None:
+    def on_generate_clip_requested(self, clip_id: str, regenerate: bool = False) -> None:
+        """`regenerate` is what the gutter button sends for a clip that is
+        already clean; the engine then bumps the take instead of returning
+        the present file (grill TB8). The dirty batch path never sets it."""
         if self.app.is_busy():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before generating a clip.")
             return
@@ -148,7 +152,8 @@ class TimelineDock(QDockWidget):
 
         text = self.app.document.clip_text(clip)
         config = self.app._assemble_clip_config(clip)
-        expected_hash = compute_expected_cache_hash(text, config)
+        if regenerate:
+            config["regenerate"] = True
 
         self.app.set_ui_state(True)
 
@@ -161,7 +166,7 @@ class TimelineDock(QDockWidget):
                 results, success, error = [], False, str(e)
 
             if success:
-                self._pending_results[clip_id] = (results, expected_hash)
+                self._pending_results[clip_id] = results
             self.clipGenerationFinished.emit(clip_id, success, error)
 
         future = self.app.engine.worker.run_coro(self.app.engine.generate_clip_audio((0, text, config)))
@@ -172,14 +177,35 @@ class TimelineDock(QDockWidget):
 
         clip = self.app.document.get_clip(clip_id)
         if success and clip is not None:
-            results, expected_hash = self._pending_results.pop(clip_id)
-            clip.segments = build_segments_from_results(expected_hash, results)
+            results = self._pending_results.pop(clip_id)
+            self._apply_results(clip, results)
             self.app.editor.rehighlight()
             self.app.schedule_save()
             self.app.refresh_timeline()
         elif not success:
             self._pending_results.pop(clip_id, None)
             self.app.set_status(f"Clip generation failed: {error}", "error")
+
+    def _apply_results(self, clip, results: list) -> None:
+        """Stamps `clip.segments` and `clip.overrides["take"]` from what the
+        engine reported. A result without a `cache_key` (a hand-built one
+        in tests) falls back to the key the app would compute now."""
+        fallback = None
+        if any(not r.get("cache_key") for r in results):
+            key_fn = self.app.document.segment_key_fn
+            text = self.app.document.clip_text(clip)
+            if key_fn is not None:
+                fallback = key_fn(text, clip)
+            else:
+                from kokoro_gui.daw.dirty import compute_expected_cache_hash
+
+                fallback = compute_expected_cache_hash(text, self.app._assemble_clip_config(clip))
+        clip.segments = build_segments_from_results(fallback, results)
+        take = take_from_results(results, default=int(clip.overrides.get("take", 0) or 0))
+        if take:
+            clip.overrides["take"] = take
+        else:
+            clip.overrides.pop("take", None)
 
     # -- per-clip FX preset menu (item 5, "Per-clip FX button") --------------
 
@@ -344,12 +370,10 @@ class TimelineDock(QDockWidget):
             return
 
         clips_with_configs = []
-        expected_hashes = {}
         for clip in dirty:
             text = self.app.document.clip_text(clip)
             config = self.app._assemble_clip_config(clip)
             clips_with_configs.append((clip.id, text, config))
-            expected_hashes[clip.id] = compute_expected_cache_hash(text, config)
 
         total = len(clips_with_configs)
         self._batch_completed = 0
@@ -376,7 +400,7 @@ class TimelineDock(QDockWidget):
                     for cid, _text, _cfg in clips_with_configs
                 ]
 
-            self._pending_batch = {"outcomes": outcomes, "expected_hashes": expected_hashes}
+            self._pending_batch = outcomes
             self._batchGenerationRaw.emit()
 
         future = self.app.engine.worker.run_coro(
@@ -396,12 +420,11 @@ class TimelineDock(QDockWidget):
         failed_ids = []
         any_segments_updated = False
 
-        for outcome in pending["outcomes"]:
+        for outcome in pending:
             clip_id = outcome["clip_id"]
             clip = self.app.document.get_clip(clip_id)
             if outcome["success"] and clip is not None:
-                expected_hash = pending["expected_hashes"].get(clip_id)
-                clip.segments = build_segments_from_results(expected_hash, outcome["results"])
+                self._apply_results(clip, outcome["results"])
                 succeeded_ids.append(clip_id)
                 any_segments_updated = True
             else:

@@ -227,7 +227,7 @@ def test_dirty_clips_delegates_to_dirty_module(monkeypatch):
 
     calls = []
 
-    def fake_is_dirty(c, text, config):
+    def fake_is_dirty(c, text, config, key_fn=None):
         calls.append(c)
         return c is clip
 

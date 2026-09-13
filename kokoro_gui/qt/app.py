@@ -20,6 +20,7 @@ it safe.
 """
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import time
@@ -33,6 +34,7 @@ from kokoro_engine import KokoroEngine
 from kokoro_gui.daw.arrangement import compute_arrangement
 from kokoro_gui.daw.auto_split import plan_auto_split_clips
 from kokoro_gui.daw.undo import AssignCharacterCommand
+from kokoro_gui.engine import caching
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
 from kokoro_gui.qt import settings as qt_settings
@@ -82,6 +84,11 @@ class QtTTSApp(QMainWindow):
         # document.json next to the config, else a fresh migration.
         self.project_path: str | None = None
         self.project_settings: dict = {}
+        # The live project directory a `.tbaw` project is extracted into
+        # (Claude/PLAN_tbaw_bundle.md section 3); None until the bundle
+        # format lands for this document. Every config the segment key or
+        # the engine sees carries it as `project_dir`.
+        self.project_dir: str | None = None
         self.document = self._load_initial_document()
 
         self.selection = SelectionModel()
@@ -111,6 +118,7 @@ class QtTTSApp(QMainWindow):
         wire_engine(self.engine, self.bridge)
         self.backend = engine_registry.get_engine("kokoro", engine=self.engine)
         self._connect_bridge(self.bridge)
+        self._install_segment_key_fn()
 
         self.previewFinished.connect(self._on_preview_finished)
         self.exportProgress.connect(self._on_export_progress)
@@ -552,11 +560,44 @@ class QtTTSApp(QMainWindow):
             config.update(self.fx_dock.project_fx_state())
         return config
 
+    def _assemble_generation_config(self, clip) -> dict:
+        """Exactly the inputs that decide what a clip's audio *is*: the
+        segment key hashes these and nothing else, and `_assemble_clip_config`
+        is built on top. App defaults from the Settings tab, the backend's
+        "Model" schema group (Audio8's sampling knobs), then the clip's
+        `effective_config_for_clip` (character preset, then overrides) on
+        top, then `project_dir` and the clip's take. The take is read off
+        `clip.overrides` directly, not through the `ALLOWED_PRESET_KEYS`
+        whitelist, which is for untrusted preset files and shouldn't widen
+        for a runtime counter. One method decides what both the dirty check
+        and a Generate hash, so they can't drift."""
+        gen_state = self.settings_dock.get_state()
+        config = {
+            "engine_id": self.backend.id,
+            "lang_code": gen_state["lang_code"],
+            "voice": gen_state["voice"],
+            "speed": gen_state["speed"],
+            "pitch": gen_state["pitch"],
+            "split_pattern": gen_state["split_pattern"],
+        }
+        for field in self.backend.get_config_schema():
+            if field.group == "Model" and field.key in gen_state:
+                config[field.key] = gen_state[field.key]
+        clip_config = dict(self.document.effective_config_for_clip(clip))
+        for key in ("voice", "speed", "pitch", "split_pattern", "lang_code"):
+            if key in clip_config:
+                config[key] = clip_config[key]
+        config["project_dir"] = self.project_dir
+        config["take"] = int(clip.overrides.get("take", 0) or 0)
+        return config
+
     def _assemble_clip_config(self, clip) -> dict:
         """The config dict for a per-clip Generate action and, through
-        `post_config_for_clip`, for read-time post-processing - app-level
-        defaults with `clip`'s character/override settings merged on top,
-        so the clip's own values win. Defaults must come first:
+        `post_config_for_clip`, for read-time post-processing:
+        `_assemble_generation_config` plus everything that doesn't change
+        the audio (output location and naming, threads, caching, the post
+        keys) with `clip`'s character/override settings merged on top, so
+        the clip's own values win. Defaults must come first:
         `process_chunk_task` reads `config['voice']`/`config['split_pattern']`
         by direct indexing, so a clip with no character must still end up
         with usable defaults. FX come from `fx_resolve.resolve_fx`, the same
@@ -564,22 +605,19 @@ class QtTTSApp(QMainWindow):
         gen_state = self.settings_dock.get_state()
         export = self._export_values()
         config = {
-            "engine_id": self.backend.id,
-            "lang_code": gen_state["lang_code"],
-            "voice": gen_state["voice"],
-            "speed": gen_state["speed"],
-            "split_pattern": gen_state["split_pattern"],
             "format": export["format"],
             "out_dir": export["out_dir"],
             "caching": gen_state["caching"],
             "time_id": time.strftime(self.timecode_format),
             "num_threads": gen_state["num_threads"],
             "volume": gen_state["volume"],
-            "pitch": gen_state["pitch"],
             "normalize": gen_state["normalize"],
             "trim_silence": gen_state["trim_silence"],
             "filename": os.path.basename(export["filename"]),
         }
+        for key in ("cache_reference_codes",):
+            if key in gen_state:
+                config[key] = gen_state[key]
 
         clip_config = dict(self.document.effective_config_for_clip(clip))
         # ALLOWED_PRESET_KEYS whitelists "trim", but process_audio reads
@@ -587,6 +625,7 @@ class QtTTSApp(QMainWindow):
         if "trim" in clip_config:
             clip_config["trim_silence"] = clip_config.pop("trim")
         config.update(clip_config)
+        config.update(self._assemble_generation_config(clip))
 
         # effective_config_for_clip only ever carries the FX preset's *name*;
         # the resolver turns project values + character preset + clip preset
@@ -595,6 +634,38 @@ class QtTTSApp(QMainWindow):
         config.update(resolution.values)
         config["apply_fx"] = resolution.apply_fx
         return config
+
+    def _install_segment_key_fn(self) -> None:
+        """Sets `Document.segment_key_fn` to a closure over the active
+        backend and project dir (Claude/PLAN_tbaw_bundle.md section 2.3):
+        `key_fn(text, clip, engine_version=None) -> caching.segment_key`
+        over `_assemble_generation_config(clip)`. Memoized on the text, the
+        config and the version; a hit re-checks the voice file's mtime and
+        the backend's `cache_key_extra` (Audio8's transcript, itself cached
+        by mtime), which is the only way a key changes without its inputs
+        changing (a re-saved mix, a re-recorded reference). So a rehighlight
+        of a book costs about two stats per clip and no hashing or reads."""
+        backend = self.backend
+        memo: dict = {}
+
+        def key_fn(text, clip, engine_version=None):
+            config = self._assemble_generation_config(clip)
+            memo_key = (text, json.dumps(config, sort_keys=True, default=str), engine_version)
+            name, _fp = caching.normalize_voice(config.get("voice"), backend, config.get("project_dir"))
+            voice_file = backend.resolve_voice_file(name, config.get("project_dir")) if name else None
+            try:
+                stamp = os.path.getmtime(voice_file) if voice_file else None
+            except OSError:
+                stamp = None
+            extra = backend.cache_key_extra(config)
+            hit = memo.get(memo_key)
+            if hit is not None and hit[0] == stamp and hit[1] == extra:
+                return hit[2]
+            key = caching.segment_key(text, config, backend, engine_version)
+            memo[memo_key] = (stamp, extra, key)
+            return key
+
+        self.document.segment_key_fn = key_fn
 
     # --- read-time post-processing (kokoro_gui/audio/post.py) ---------------
 
@@ -675,6 +746,7 @@ class QtTTSApp(QMainWindow):
         self.engine = new_engine
         self.backend = new_backend
         self.bridge = new_bridge
+        self._install_segment_key_fn()
 
         self.settings_dock.rebuild_schema_form()
         self._sync_mixing_dock()
@@ -816,6 +888,7 @@ class QtTTSApp(QMainWindow):
         self.document = document
         self.project_path = os.path.abspath(path) if path else None
         self.project_settings = dict(project_settings or {})
+        self._install_segment_key_fn()
         self.selection.clear()
         self.selection.set_playing_clip(None)
         if self.project_path:
@@ -1059,8 +1132,13 @@ class QtTTSApp(QMainWindow):
 
     def generate_clip(self, clip_id: str) -> None:
         """UI3: the gutter's per-clip play button and the timeline's
-        context menu both land here."""
-        self.timeline_dock.on_generate_clip_requested(clip_id)
+        context menu both land here. On a clip that is already clean the
+        request means "regenerate": the engine bumps the clip's take and
+        writes fresh audio under a new key instead of serving the cached
+        file (grill TB8)."""
+        clip = self.document.get_clip(clip_id)
+        regenerate = clip is not None and clip not in self.document.dirty_clips()
+        self.timeline_dock.on_generate_clip_requested(clip_id, regenerate=regenerate)
 
     def on_batch_generation_progress(self, completed: int, total: int, current_clip_label: str) -> None:
         percent = int((completed / total) * 100) if total else 0

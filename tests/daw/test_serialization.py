@@ -176,3 +176,53 @@ def test_document_from_dict_migrates_legacy_shape_with_gap_at_start():
     assert doc.clip_covering(0) is None
     assert doc.clip_covering(5).id == "clip-a"
     assert doc.clip_extent("clip-a") == (5, 10)
+
+
+# ---------------------------------------------------------------------------
+# Unknown fields round-trip (Claude/PLAN_tbaw_bundle.md section 2.2)
+# ---------------------------------------------------------------------------
+
+def test_unknown_keys_on_every_object_survive_a_round_trip():
+    data = {
+        "runs": [{"text": "hello", "clip_id": "c1", "kind": "generated", "future_run_key": 1}],
+        "clips": [{
+            "id": "c1", "character_id": "ch1", "future_clip_key": {"nested": True},
+            "segments": [{"order_index": 0, "text": "hello", "cache_key": "k", "raw": True,
+                          "word_timings": [[0, 0.5]]}],
+        }],
+        "tracks": [{"name": "T", "id": "t1", "future_track_key": "x"}],
+        "characters": [{
+            "name": "Alice", "id": "ch1", "library_id": "lib-1",
+            "preset_data": {"voice": "af_bella", "unknown_preset_key": 7},
+        }],
+        "settings": {},
+    }
+    doc = document_from_dict(data)
+
+    # The whitelist still guards what reaches a config dict.
+    assert doc.characters[0].preset_data == {"voice": "af_bella"}
+    assert doc.characters[0].extra == {"library_id": "lib-1", "preset_data": {"unknown_preset_key": 7}}
+    assert doc.clips[0].extra == {"future_clip_key": {"nested": True}}
+    assert doc.clips[0].segments[0].extra == {"word_timings": [[0, 0.5]]}
+    assert doc.runs[0].extra == {"future_run_key": 1}
+    assert doc.tracks[0].extra == {"future_track_key": "x"}
+
+    out = document_to_dict(doc)
+    assert out["runs"][0]["future_run_key"] == 1
+    assert out["clips"][0]["future_clip_key"] == {"nested": True}
+    assert out["clips"][0]["segments"][0]["word_timings"] == [[0, 0.5]]
+    assert out["tracks"][0]["future_track_key"] == "x"
+    assert out["characters"][0]["library_id"] == "lib-1"
+    assert out["characters"][0]["preset_data"] == {"voice": "af_bella", "unknown_preset_key": 7}
+    assert "extra" not in out["clips"][0] and "extra" not in out["characters"][0]
+
+    # And it reads back the same at the dict level.
+    assert document_to_dict(document_from_dict(out)) == out
+
+
+def test_segment_engine_version_round_trips():
+    segment = Segment(order_index=0, text="x", cache_key="k", engine_version="0.9.4")
+    clip = Clip(segments=[segment])
+    doc = Document(runs=[Run(text="x", clip_id=clip.id)], clips=[clip])
+    restored = document_from_dict(document_to_dict(doc))
+    assert restored.clips[0].segments[0].engine_version == "0.9.4"

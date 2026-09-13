@@ -33,9 +33,14 @@ def _repaint_gutter(editor):
 
 
 def _mark_generated(qt_app, clip, path="x.wav"):
+    """A clean clip needs a key that matches and a file that exists (a
+    segment whose file is missing is dirty, grill TB11); the qt_app fixture
+    chdirs into tmp_path so the relative `path` lands there."""
     text = qt_app.document.clip_text(clip)
     config = qt_app.document.effective_config_for_clip(clip)
     expected = compute_expected_cache_hash(text, config)
+    with open(path, "wb") as f:
+        f.write(b"RIFF")
     clip.segments = build_segments_from_results(expected, [{"text": text, "path": path, "duration": 1.0}])
 
 

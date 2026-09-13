@@ -164,7 +164,8 @@ def test_compute_cache_key_takes_only_what_it_needs():
     import inspect
 
     params = list(inspect.signature(compute_cache_key).parameters)
-    assert params == ["text", "voice", "eff_speed", "lang_code", "engine_id", "engine_version", "extra"]
+    assert params == ["text", "voice", "eff_speed", "lang_code", "engine_id", "engine_version", "extra",
+                      "schema_version", "voice_fingerprint_value"]
 
 
 def test_compute_cache_key_differs_by_each_input():
@@ -408,5 +409,147 @@ def test_audio8_process_chunk_task_caches_every_segment_in_a_multi_segment_chunk
 
         files_hit = engine.process_chunk_task((0, text, config), None)
         assert len(files_hit) == 2
+    finally:
+        engine.worker.stop()
+
+
+# --- segment_naming: "cache_key" (Claude/PLAN_tbaw_bundle.md sections 2.3, 3) ---
+#
+# Every clip generation runs in this mode: `out_dir` is the cache, the file
+# is named by the segment key, `CACHE_DIR` is untouched, and a present file
+# is never overwritten - the take bumps instead (TB8).
+
+def _project_config(make_config, project_dir, **overrides):
+    return make_config(out_dir=str(project_dir), segment_naming="cache_key", raw_output=True, **overrides)
+
+
+def test_cache_key_naming_writes_one_file_named_by_the_key_and_nothing_in_cache_dir(
+        engine, fake_pipeline, isolated_dirs, make_config, tmp_path):
+    from kokoro_gui.engine.caching import segment_key
+
+    project = tmp_path / "audio"
+    project.mkdir()
+    config = _project_config(make_config, project)
+
+    results = engine.process_chunk_task((0, "Hello world.", config), None)
+
+    key = segment_key("Hello world.", config, engine)
+    assert len(results) == 1
+    assert results[0]["path"] == os.path.join(str(project), f"{key}_0.wav")
+    assert results[0]["cache_key"] == key
+    assert results[0]["take"] == 0
+    assert results[0]["engine_version"] == engine.engine_version()
+    assert results[0]["raw"] is True
+    assert sorted(os.listdir(project)) == [f"{key}_0.wav"]
+    assert list(isolated_dirs.cache_dir.iterdir()) == []
+
+
+def test_cache_key_naming_hit_returns_the_present_files_without_a_write(
+        engine, fake_pipeline, isolated_dirs, make_config, tmp_path, monkeypatch):
+    project = tmp_path / "audio"
+    project.mkdir()
+    config = _project_config(make_config, project)
+    first = engine.process_chunk_task((0, "Hello world.", config), None)
+    mtime = os.path.getmtime(first[0]["path"])
+
+    def _boom(lang_code="a"):
+        raise AssertionError("pipeline should not be called on a hit")
+
+    monkeypatch.setattr(kokoro_engine, "get_thread_pipeline", _boom)
+    second = engine.process_chunk_task((0, "Hello world.", config), None)
+
+    assert [r["path"] for r in second] == [r["path"] for r in first]
+    assert os.path.getmtime(second[0]["path"]) == mtime
+    assert second[0]["duration"] == pytest.approx(first[0]["duration"], abs=1e-3)
+
+
+def test_regenerate_bumps_the_take_and_leaves_the_present_file_alone(
+        engine, fake_pipeline, isolated_dirs, make_config, tmp_path):
+    project = tmp_path / "audio"
+    project.mkdir()
+    config = _project_config(make_config, project)
+    first = engine.process_chunk_task((0, "Hello world.", config), None)
+    before = open(first[0]["path"], "rb").read()
+
+    second = engine.process_chunk_task((0, "Hello world.", {**config, "regenerate": True}), None)
+
+    assert second[0]["take"] == 1
+    assert second[0]["path"] != first[0]["path"]
+    assert second[0]["cache_key"] != first[0]["cache_key"]
+    assert open(first[0]["path"], "rb").read() == before
+    assert len(os.listdir(project)) == 2
+
+    # The dirty path for the bumped clip (take 1, no regenerate) is a hit.
+    third = engine.process_chunk_task((0, "Hello world.", {**config, "take": 1}), None)
+    assert third[0]["path"] == second[0]["path"]
+    assert len(os.listdir(project)) == 2
+
+
+def test_two_identical_clips_in_one_batch_never_clobber_each_other(
+        engine, fake_pipeline, isolated_dirs, make_config, tmp_path, monkeypatch):
+    """With num_threads=2 both clips see the file absent at the same time.
+    The `O_EXCL` reservation makes the second one land on take 1 (or, when
+    the first finishes before the second checks, share the file); either
+    way nothing writes over a file another clip references."""
+    import threading
+
+    project = tmp_path / "audio"
+    project.mkdir()
+    config = _project_config(make_config, project, num_threads=2)
+
+    gate = threading.Barrier(2, timeout=10)
+    real_pipeline = fake_pipeline
+
+    class _SlowPipeline:
+        def __call__(self, *args, **kwargs):
+            gate.wait()  # both clips are past the hit check before either writes
+            yield from real_pipeline(*args, **kwargs)
+
+        lang_code = "a"
+
+    monkeypatch.setattr(kokoro_engine, "get_thread_pipeline", lambda lang_code="a": _SlowPipeline())
+
+    outcomes = asyncio.run(engine.generate_dirty_clips([
+        ("clip-a", "Hello world.", config), ("clip-b", "Hello world.", config),
+    ]))
+
+    assert all(o["success"] for o in outcomes)
+    paths = {o["results"][0]["path"] for o in outcomes}
+    takes = sorted(o["results"][0]["take"] for o in outcomes)
+    assert takes == [0, 1]
+    assert len(paths) == 2
+    assert all(os.path.getsize(p) > 100 for p in paths)
+    assert not any(f.endswith(".reserved") for f in os.listdir(project))
+
+
+def test_audio8_cache_key_naming_names_files_by_the_shared_key(isolated_dirs, tmp_path, monkeypatch):
+    """Audio8's key folds the transcript in through `cache_key_extra`; the
+    file stem is that same key (one function for both, section 2.3)."""
+    import numpy as np
+
+    from kokoro_gui.engine.caching import segment_key
+
+    monkeypatch.setattr(audio8_tts, "AUDIO8_REFS_DIR", str(tmp_path / "audio8_refs"))
+    wav_path = tmp_path / "ref.wav"
+    sf.write(str(wav_path), (0.1 * np.sin(np.arange(1600) / 10)).astype(np.float32), 16000)
+    Audio8ReferenceStore.save_reference("Eve", str(wav_path), "Original transcript.")
+    project = tmp_path / "audio"
+    project.mkdir()
+
+    engine = Audio8Engine()
+    try:
+        monkeypatch.setattr(engine, "generate_segment",
+                            lambda *a, **k: (0.1 * np.sin(np.arange(2200) / 10)).astype(np.float32))
+        config = {
+            "lang_code": "English", "voice": "Eve", "speed": 1.0, "split_pattern": r"\n+",
+            "out_dir": str(project), "format": "wav", "segment_naming": "cache_key", "engine_id": "audio8",
+        }
+        results = engine.process_chunk_task((0, "Hello there.", {**config, "voice": engine.resolve_voice_path("Eve")}), None)
+        key = segment_key("Hello there.", config, engine)
+        assert os.path.basename(results[0]["path"]) == f"{key}_0.wav"
+        assert results[0]["engine_version"] == audio8_tts.TTS_MODEL_ID
+
+        Audio8ReferenceStore.save_reference("Eve", str(wav_path), "Corrected transcript!")
+        assert segment_key("Hello there.", config, engine) != key
     finally:
         engine.worker.stop()

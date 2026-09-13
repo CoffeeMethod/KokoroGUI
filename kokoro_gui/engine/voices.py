@@ -12,18 +12,29 @@ import torch
 import kokoro_engine
 
 
+def project_voice_dir(project_dir):
+    """Where a `.tbaw` project keeps the custom mixes it bundles
+    (`engines/kokoro/voices/`, see Claude/PLAN_tbaw_bundle.md section 4)."""
+    return os.path.join(project_dir, "engines", "kokoro", "voices")
+
+
 class VoiceMixingMixin:
-    def resolve_voice_path(self, voice_name):
+    def resolve_voice_path(self, voice_name, project_dir=None):
         """
         Returns the absolute path if it's a custom voice,
         otherwise returns the name as-is (for standard voices).
+        A project-local mix (`<project_dir>/engines/kokoro/voices/<name>.pt`)
+        shadows the global `custom_voices/<name>.pt` (grill TB3).
         """
         # Sanitize voice_name to prevent path traversal
         safe_voice_name = os.path.basename(voice_name)
-        # Check if it's a custom voice file
-        custom_path = os.path.join(kokoro_engine.CUSTOM_VOICES_DIR, f"{safe_voice_name}.pt")
-        if os.path.exists(custom_path):
-            return os.path.abspath(custom_path)
+        search_dirs = [kokoro_engine.CUSTOM_VOICES_DIR]
+        if project_dir:
+            search_dirs.insert(0, project_voice_dir(project_dir))
+        for directory in search_dirs:
+            custom_path = os.path.join(directory, f"{safe_voice_name}.pt")
+            if os.path.exists(custom_path):
+                return os.path.abspath(custom_path)
         # Not a custom voice: return the sanitized name (not the raw
         # `voice_name`) so a preset-supplied path/UNC string can't reach
         # `KPipeline`/torch.load as a literal path (see Claude/SECURITY_AUDIT.md).

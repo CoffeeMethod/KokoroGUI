@@ -21,15 +21,16 @@ import os
 from typing import Optional
 
 import kokoro_engine
+from kokoro_gui.engine.voices import project_voice_dir
 from kokoro_gui.engines.base import (
-    ConfigField, ConfigFieldType, EngineCapabilities, VoiceInfo,
+    BackendHooksMixin, ConfigField, ConfigFieldType, EngineCapabilities, VoiceInfo,
     COMMON_SPLIT_PATTERN_CHOICES as SPLIT_PATTERN_CHOICES,
-    COMMON_OUTPUT_FORMAT_CHOICES as OUTPUT_FORMAT_CHOICES,
+    COMMON_OUTPUT_FORMAT_CHOICES as OUTPUT_FORMAT_CHOICES, bundle_asset_for,
 )
 from kokoro_gui.engines.registry import register_engine
 
 
-class KokoroBackendAdapter:
+class KokoroBackendAdapter(BackendHooksMixin):
     id = "kokoro"
     display_name = "Kokoro (local)"
     capabilities = EngineCapabilities(
@@ -92,17 +93,35 @@ class KokoroBackendAdapter:
         ]
 
     def get_voices(self, lang_code: Optional[str] = None) -> list:
-        """Custom voices discovered under `CUSTOM_VOICES_DIR` - the built-in
-        named voices (af_heart, bm_daniel, ...) aren't listed here; see the
-        `get_config_schema` docstring for why."""
-        custom_dir = kokoro_engine.CUSTOM_VOICES_DIR
-        if not os.path.isdir(custom_dir):
-            return []
-        return [
-            VoiceInfo(id=f[:-3], display_name=f[:-3], lang_code=None, is_custom=True)
-            for f in sorted(os.listdir(custom_dir))
-            if f.endswith(".pt")
-        ]
+        """Custom voices: the open project's `engines/kokoro/voices/` first,
+        then `CUSTOM_VOICES_DIR`; a name in both shows once and resolves to
+        the project copy (grill TB3). The built-in named voices (af_heart,
+        bm_daniel, ...) aren't listed here; see the `get_config_schema`
+        docstring for why."""
+        dirs = []
+        if self.project_dir:
+            dirs.append(project_voice_dir(self.project_dir))
+        dirs.append(kokoro_engine.CUSTOM_VOICES_DIR)
+        seen = []
+        for directory in dirs:
+            if not os.path.isdir(directory):
+                continue
+            for f in sorted(os.listdir(directory)):
+                if f.endswith(".pt") and f[:-3] not in seen:
+                    seen.append(f[:-3])
+        return [VoiceInfo(id=name, display_name=name, lang_code=None, is_custom=True) for name in seen]
+
+    def collect_project_assets(self, voice_names, project_dir=None) -> tuple:
+        """The custom `.pt` mixes among `voice_names`, as
+        `engines/kokoro/voices/<name>.pt`. Built-in voices resolve to no
+        file and are skipped; so is a mix the user has deleted."""
+        assets = []
+        for name in sorted(voice_names):
+            asset = bundle_asset_for(name, kokoro_engine.CUSTOM_VOICES_DIR, ".pt",
+                                     "engines/kokoro/voices", project_dir)
+            if asset is not None:
+                assets.append(asset)
+        return assets, {}
 
     async def mix_voices(self, v1_name: str, v2_name: str, ratio: float,
                           new_name: str, op: str = "mix"):

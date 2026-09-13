@@ -14,31 +14,96 @@ offset-tracked object. `document_from_dict` still reads the old
 `{"text": ..., "clips": [{"start_offset": ..., "end_offset": ..., ...}]}`
 shape for any `document.json` written before this rework - see
 `_runs_from_legacy_offsets` below.
+
+Unknown fields round-trip. Every model object has an `extra` dict:
+`document_from_dict` splits each object's dict into the fields the running
+version knows and the rest, and `document_to_dict` merges the rest back at
+the same level, so a `document.json` written by a newer KokoroGUI survives a
+load and save through an older one with its extra fields intact (the `.tbaw`
+plan's version policy depends on this). `Character.preset_data` is filtered
+through `ALLOWED_PRESET_KEYS` on the way in, and the stripped keys ride in
+`extra["preset_data"]`.
 """
 import dataclasses
 import json
 import os
 
 from kokoro_gui.daw.models import Character, Clip, Document, Run, Segment, Track
+from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys
+
+
+def _known_fields(cls) -> set:
+    return {f.name for f in dataclasses.fields(cls) if f.init}
+
+
+def _split_unknown(cls, data: dict) -> tuple:
+    """`(known, extra)`: `data`'s keys the dataclass `cls` accepts, and the
+    rest. An `extra` key already in `data` (a file written by this version)
+    is folded into the returned extra rather than nested twice."""
+    known_names = _known_fields(cls) - {"extra"}
+    known = {}
+    extra = {}
+    for key, value in data.items():
+        if key == "extra" and isinstance(value, dict):
+            extra.update(value)
+        elif key in known_names:
+            known[key] = value
+        else:
+            extra[key] = value
+    return known, extra
+
+
+def _to_dict(obj) -> dict:
+    """`dataclasses.asdict` minus `extra`, whose contents are merged back at
+    the same level. A known field always wins over a stale `extra` entry of
+    the same name."""
+    data = dataclasses.asdict(obj)
+    extra = data.pop("extra", {}) or {}
+    return {**extra, **data}
+
+
+def _character_to_dict(character: Character) -> dict:
+    data = _to_dict(character)
+    stripped = (character.extra or {}).get("preset_data")
+    if isinstance(stripped, dict):
+        data.pop("preset_data", None)
+        data["preset_data"] = {**stripped, **character.preset_data}
+    return data
 
 
 def document_to_dict(doc: Document) -> dict:
-    """Plain-JSON-serializable shape for `doc` - dataclasses become dicts via
-    `dataclasses.asdict`, which already handles the nested `Segment` objects
-    inside each `Clip`.
+    """Plain-JSON-serializable shape for `doc`.
 
     Deliberately built field-by-field rather than via a blanket
     `dataclasses.asdict(doc)` - this is what keeps `doc.undo_stack` (item 4,
-    "Undo/redo") out of the saved file for free: it's runtime/session-only
-    editing history, not part of the persisted project, and isn't even
-    JSON-serializable (it holds `Command` objects, not plain data)."""
+    "Undo/redo") and `doc.segment_key_fn` out of the saved file for free:
+    both are runtime/session-only and neither is JSON-serializable."""
+    clips = []
+    for clip in doc.clips:
+        data = _to_dict(clip)
+        data["segments"] = [_to_dict(s) for s in clip.segments]
+        clips.append(data)
     return {
-        "runs": [dataclasses.asdict(r) for r in doc.runs],
-        "clips": [dataclasses.asdict(c) for c in doc.clips],
-        "tracks": [dataclasses.asdict(t) for t in doc.tracks],
-        "characters": [dataclasses.asdict(c) for c in doc.characters],
+        "runs": [_to_dict(r) for r in doc.runs],
+        "clips": clips,
+        "tracks": [_to_dict(t) for t in doc.tracks],
+        "characters": [_character_to_dict(c) for c in doc.characters],
         "settings": dict(doc.settings),
     }
+
+
+def rewrite_audio_paths(data: dict, fn) -> dict:
+    """Applies `fn(path) -> path` to every `Segment.audio_path` and
+    `Clip.original_audio_path` in a `document_to_dict`-shaped dict, in
+    place, skipping `None`. Used in both directions by the `.tbaw` bundle
+    (absolute inside the project dir <-> bundle-relative)."""
+    for clip in data.get("clips", []):
+        if clip.get("original_audio_path"):
+            clip["original_audio_path"] = fn(clip["original_audio_path"])
+        for segment in clip.get("segments", []):
+            if segment.get("audio_path"):
+                segment["audio_path"] = fn(segment["audio_path"])
+    return data
 
 
 def _runs_from_legacy_offsets(text: str, clips: list, legacy_offsets: dict) -> list:
@@ -83,19 +148,39 @@ def document_from_dict(data: dict) -> Document:
         # A saved segment without "raw" predates read-time FX: its file has
         # FX baked in, so it must not be post-processed again (see
         # Segment's docstring; dirty.is_clip_dirty regenerates it).
-        segments = [Segment(**{"raw": False, **seg}) for seg in clip_data.pop("segments", [])]
+        segments = []
+        for seg in clip_data.pop("segments", []):
+            known, extra = _split_unknown(Segment, {"raw": False, **seg})
+            segments.append(Segment(extra=extra, **known))
         start_offset = clip_data.pop("start_offset", None)
         end_offset = clip_data.pop("end_offset", None)
-        clip = Clip(segments=segments, **clip_data)
+        known, extra = _split_unknown(Clip, clip_data)
+        clip = Clip(segments=segments, extra=extra, **known)
         clips.append(clip)
         if start_offset is not None and end_offset is not None:
             legacy_offsets[clip.id] = (start_offset, end_offset)
 
-    tracks = [Track(**t) for t in data.get("tracks", [])]
-    characters = [Character(**c) for c in data.get("characters", [])]
+    tracks = []
+    for t in data.get("tracks", []):
+        known, extra = _split_unknown(Track, t)
+        tracks.append(Track(extra=extra, **known))
+
+    characters = []
+    for c in data.get("characters", []):
+        known, extra = _split_unknown(Character, c)
+        preset_data = known.get("preset_data") or {}
+        if isinstance(preset_data, dict):
+            stripped = {k: v for k, v in preset_data.items() if k not in ALLOWED_PRESET_KEYS}
+            known["preset_data"] = filter_allowed_keys(preset_data, ALLOWED_PRESET_KEYS)
+            if stripped:
+                extra["preset_data"] = stripped
+        characters.append(Character(extra=extra, **known))
 
     if "runs" in data:
-        runs = [Run(**r) for r in data["runs"]]
+        runs = []
+        for r in data["runs"]:
+            known, extra = _split_unknown(Run, r)
+            runs.append(Run(extra=extra, **known))
     else:
         runs = _runs_from_legacy_offsets(data.get("text", ""), clips, legacy_offsets)
 

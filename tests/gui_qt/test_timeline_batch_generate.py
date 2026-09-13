@@ -23,13 +23,16 @@ def _make_two_dirty_clips(qt_app):
     return clip_a, clip_b
 
 
-def _mark_not_dirty(qt_app, clip):
+def _mark_not_dirty(qt_app, clip, tmp_path):
     """Populates `clip.segments` so `Document.dirty_clips()` no longer
-    reports it - a fake-but-consistent "already generated" state."""
+    reports it - a fake-but-consistent "already generated" state. The file
+    has to exist: a segment whose file is missing is dirty (grill TB11)."""
     text = qt_app.document.clip_text(clip)
     config = qt_app._assemble_clip_config(clip)
     expected_hash = compute_expected_cache_hash(text, config)
-    fake_results = [{"text": text, "path": "/fake/clip.wav", "duration": 1.0, "seg_idx": 0}]
+    path = tmp_path / "clip.wav"
+    path.write_bytes(b"RIFF")
+    fake_results = [{"text": text, "path": str(path), "duration": 1.0, "seg_idx": 0}]
     clip.segments = build_segments_from_results(expected_hash, fake_results)
 
 
@@ -55,9 +58,9 @@ def test_on_generate_clicked_with_no_clips_calls_start_conversion(qt_app, monkey
     assert not qt_app.engine.generate_dirty_clips.called
 
 
-def test_on_generate_clicked_with_clips_present_but_none_dirty_calls_neither(qt_app, monkeypatch):
+def test_on_generate_clicked_with_clips_present_but_none_dirty_calls_neither(qt_app, monkeypatch, tmp_path):
     clip = _make_clip(qt_app)
-    _mark_not_dirty(qt_app, clip)
+    _mark_not_dirty(qt_app, clip, tmp_path)
     assert qt_app.document.dirty_clips() == []
 
     set_ui_state_calls = []

@@ -43,24 +43,25 @@ import threading
 from typing import Optional
 
 import numpy as np
-import soundfile as sf
-from pedalboard.io import AudioFile
 
-import kokoro_engine
 from kokoro_engine import AsyncLoopThread
 from kokoro_gui.engine import (
-    AudioFXMixin, ConversionMixin, JITMixin, LexiconMixin, PresetsMixin,
+    AudioFXMixin, CachingMixin, ConversionMixin, JITMixin, LexiconMixin, PresetsMixin,
     SrtMixin, TextExtractionMixin,
 )
-from kokoro_gui.engine.caching import compute_cache_key, voice_fingerprint
+from kokoro_gui.engine.caching import voice_fingerprint
 from kokoro_gui.engines.base import (
-    ConfigField, ConfigFieldType, EngineCapabilities, VoiceInfo,
-    COMMON_SPLIT_PATTERN_CHOICES, COMMON_OUTPUT_FORMAT_CHOICES,
+    BackendHooksMixin, ConfigField, ConfigFieldType, EngineCapabilities, VoiceInfo,
+    COMMON_SPLIT_PATTERN_CHOICES, COMMON_OUTPUT_FORMAT_CHOICES, bundle_asset_for,
 )
 from kokoro_gui.engines.registry import register_engine
 
 TTS_MODEL_ID = "Audio8/Audio8-TTS-Preview-0.6b"
 SAMPLE_RATE = 44100
+
+# Where a `.tbaw` project keeps the references it bundles (relative to the
+# project dir; Claude/PLAN_tbaw_bundle.md section 2).
+PROJECT_REFS_SUBDIR = "engines/audio8/refs"
 
 # Saved wav+transcript voice references live as sidecar file pairs here:
 # <AUDIO8_REFS_DIR>/<name>.wav and <AUDIO8_REFS_DIR>/<name>.txt. Mirrors
@@ -112,13 +113,63 @@ class Audio8ReferenceStore:
     `AUDIO8_REFS_DIR`. Plain functions, not a mixin - unlike custom-voice
     resolution (which needs a live pipeline to load a `.pt` tensor through),
     saving/listing/deleting these sidecar files needs no model, so there's
-    no reason to route it through `Audio8Engine`."""
+    no reason to route it through `Audio8Engine`.
+
+    Reads take `project_dir`: a reference in the open project's
+    `engines/audio8/refs/` shadows the global one of the same name (grill
+    TB3). Writes (`save_reference`, `delete_reference`) always go to the
+    global store; nothing writes into a project dir except Open's
+    extraction. Transcripts are cached by `(path, mtime)` so the dirty check,
+    which reads them through `cache_key_extra`, costs a stat per clip."""
+
+    _transcript_cache: dict = {}
 
     @staticmethod
     def _safe_name(name: str) -> str:
         # Same path-traversal guard as VoiceMixingMixin.resolve_voice_path/
         # mix_voices (kokoro_gui/engine/voices.py).
         return os.path.basename(name)
+
+    @staticmethod
+    def search_dirs(project_dir: Optional[str] = None) -> list:
+        dirs = []
+        if project_dir:
+            dirs.append(os.path.join(project_dir, *PROJECT_REFS_SUBDIR.split("/")))
+        dirs.append(AUDIO8_REFS_DIR)
+        return dirs
+
+    @staticmethod
+    def find_wav(name: str, project_dir: Optional[str] = None) -> Optional[str]:
+        """Absolute path of `<name>.wav`, project-local first, or `None`."""
+        safe_name = Audio8ReferenceStore._safe_name(name)
+        if not safe_name:
+            return None
+        for directory in Audio8ReferenceStore.search_dirs(project_dir):
+            path = os.path.join(directory, f"{safe_name}.wav")
+            if os.path.isfile(path):
+                return os.path.abspath(path)
+        return None
+
+    @staticmethod
+    def read_transcript_file(txt_path: str) -> str:
+        """The stripped text of `txt_path`, memoized on the file's
+        `(mtime, size)` (size too, so a rewrite inside one mtime tick still
+        misses); `""` when the file is missing."""
+        try:
+            stat = os.stat(txt_path)
+        except OSError:
+            return ""
+        stamp = (stat.st_mtime, stat.st_size)
+        cached = Audio8ReferenceStore._transcript_cache.get(txt_path)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        try:
+            with open(txt_path, "r", encoding="utf-8") as f:
+                text = f.read().strip()
+        except OSError:
+            return ""
+        Audio8ReferenceStore._transcript_cache[txt_path] = (stamp, text)
+        return text
 
     @staticmethod
     def save_reference(name: str, wav_path: str, transcript: str) -> str:
@@ -137,29 +188,29 @@ class Audio8ReferenceStore:
         return os.path.abspath(out_wav)
 
     @staticmethod
-    def list_references() -> list:
+    def list_references(project_dir: Optional[str] = None) -> list:
         """Returns sorted `[name, ...]` for every wav+txt sidecar pair found
-        (a lone `.wav` or `.txt` without its partner is skipped - an
-        incomplete/interrupted save, not a usable reference)."""
-        if not os.path.isdir(AUDIO8_REFS_DIR):
-            return []
-        names = []
-        for f in os.listdir(AUDIO8_REFS_DIR):
-            if not f.endswith(".wav"):
+        in the project dir or the global store (a lone `.wav` or `.txt`
+        without its partner is skipped - an incomplete/interrupted save, not
+        a usable reference)."""
+        names = set()
+        for directory in Audio8ReferenceStore.search_dirs(project_dir):
+            if not os.path.isdir(directory):
                 continue
-            name = f[:-4]
-            if os.path.isfile(os.path.join(AUDIO8_REFS_DIR, f"{name}.txt")):
-                names.append(name)
+            for f in os.listdir(directory):
+                if not f.endswith(".wav"):
+                    continue
+                name = f[:-4]
+                if os.path.isfile(os.path.join(directory, f"{name}.txt")):
+                    names.add(name)
         return sorted(names)
 
     @staticmethod
-    def get_transcript(name: str) -> str:
-        safe_name = Audio8ReferenceStore._safe_name(name)
-        txt_path = os.path.join(AUDIO8_REFS_DIR, f"{safe_name}.txt")
-        if not os.path.isfile(txt_path):
+    def get_transcript(name: str, project_dir: Optional[str] = None) -> str:
+        wav = Audio8ReferenceStore.find_wav(name, project_dir)
+        if wav is None:
             return ""
-        with open(txt_path, "r", encoding="utf-8") as f:
-            return f.read().strip()
+        return Audio8ReferenceStore.read_transcript_file(os.path.splitext(wav)[0] + ".txt")
 
     @staticmethod
     def delete_reference(name: str) -> None:
@@ -243,15 +294,18 @@ class _Audio8Pipeline:
 
 
 class Audio8Engine(
-    AudioFXMixin, ConversionMixin, JITMixin, LexiconMixin, PresetsMixin,
+    AudioFXMixin, CachingMixin, ConversionMixin, JITMixin, LexiconMixin, PresetsMixin,
     SrtMixin, TextExtractionMixin,
 ):
     """KokoroEngine-shaped enough for the GUI to drive directly - same
     required surface as `DummyEngine` (worker/cancel_event/pipeline/
     on_progress/on_status/on_finish/init_pipeline_async/get_thread_pipeline/
-    resolve_voice_path/cancel), plus `SAMPLE_RATE=44100` and its own
-    `process_chunk_task` (see module docstring for both)."""
+    resolve_voice_path/cancel), plus `SAMPLE_RATE=44100`, which
+    `CachingMixin.process_chunk_task` reads instead of assuming 24000, and
+    the two segment-key hooks that differ from Kokoro: `engine_version` (the
+    model id) and `cache_key_extra` (reference transcript + sampling knobs)."""
 
+    id = "audio8"
     SAMPLE_RATE = SAMPLE_RATE
 
     def __init__(self):
@@ -286,6 +340,9 @@ class Audio8Engine(
         self.top_k = 50
 
         self._lexicon_cache = {}
+        # Project dir whose bundled references were last encoded into the
+        # ref-codes cache (see `warm_reference_codes`).
+        self._warmed_project_dir = None
 
         os.makedirs(AUDIO8_REFS_DIR, exist_ok=True)
 
@@ -307,10 +364,48 @@ class Audio8Engine(
     def get_thread_pipeline(self, lang_code="English"):
         return _Audio8Pipeline(self, lang_code)
 
-    def resolve_voice_path(self, voice_name: str) -> str:
+    # -- segment_key hooks (see kokoro_gui/engine/caching.py) --------------
+
+    def engine_version(self) -> str:
+        """The model id, not a package version: `transformers` is the
+        package and its version says nothing about these weights."""
+        return TTS_MODEL_ID
+
+    def cache_key_extra(self, config: dict) -> dict:
+        """The reference transcript (the same wav with a corrected
+        transcript generates differently) and the sampling knobs. Read from
+        `config`, with the schema defaults, so the dirty check and the
+        engine see one set of values."""
+        ref_wav = config.get("voice")
+        if ref_wav and not (os.path.isabs(ref_wav) and os.path.isfile(ref_wav)):
+            ref_wav = self.resolve_voice_path(ref_wav, config.get("project_dir"))
+        return {
+            "ref_transcript": self.resolve_voice_transcript(ref_wav),
+            "max_new_tokens": config.get("max_new_tokens", 1024),
+            "temperature": config.get("temperature", 0.8),
+            "top_p": config.get("top_p", 0.95),
+            "top_k": config.get("top_k", 50),
+        }
+
+    def warm_reference_codes(self, project_dir: Optional[str]) -> None:
+        """Encodes every reference the project carries into
+        `_ref_codes_cache_dir()` if it isn't there yet. Called from the
+        first generate after a project opens (`process_chunk_task`), when
+        the model is loaded anyway; never from `on_project_opened`."""
+        if not project_dir or not self.cache_reference_codes:
+            return
+        refs_dir = os.path.join(project_dir, *PROJECT_REFS_SUBDIR.split("/"))
+        if not os.path.isdir(refs_dir):
+            return
+        for f in os.listdir(refs_dir):
+            if f.endswith(".wav"):
+                wav = os.path.abspath(os.path.join(refs_dir, f))
+                self._reference_codes_path(wav, self.resolve_voice_transcript(wav))
+
+    def resolve_voice_path(self, voice_name: str, project_dir: Optional[str] = None) -> str:
         """Resolves a saved reference name to its absolute wav path
         (sanitized-basename convention, matching
-        `VoiceMixingMixin.resolve_voice_path`). Falls back to treating
+        `VoiceMixingMixin.resolve_voice_path`), project-local first. Falls back to treating
         `voice_name` as a literal existing file path (a wav dropped straight
         into the Voice Reference dock and generated with before ever being
         saved under a name), and finally to returning it unchanged (will
@@ -324,9 +419,9 @@ class Audio8Engine(
         if not voice_name:
             return voice_name
         safe_name = os.path.basename(voice_name)
-        saved_path = os.path.join(AUDIO8_REFS_DIR, f"{safe_name}.wav")
-        if os.path.exists(saved_path):
-            return os.path.abspath(saved_path)
+        saved_path = Audio8ReferenceStore.find_wav(safe_name, project_dir)
+        if saved_path:
+            return saved_path
         if os.path.isabs(voice_name) and os.path.isfile(voice_name):
             return voice_name
         # Neither a saved reference nor an existing absolute file: return the
@@ -345,11 +440,7 @@ class Audio8Engine(
         exists (including when `resolved_voice_path` itself is falsy)."""
         if not resolved_voice_path:
             return ""
-        txt_path = os.path.splitext(resolved_voice_path)[0] + ".txt"
-        if os.path.isfile(txt_path):
-            with open(txt_path, "r", encoding="utf-8") as f:
-                return f.read().strip()
-        return ""
+        return Audio8ReferenceStore.read_transcript_file(os.path.splitext(resolved_voice_path)[0] + ".txt")
 
     def _reference_codes_path(self, ref_wav_path: str, ref_transcript: str) -> Optional[str]:
         """Returns the path to a persisted `.npy` of `ref_wav_path`'s
@@ -470,136 +561,34 @@ class Audio8Engine(
         return audio
 
     def process_chunk_task(self, chunk_data, progress_callback):
-        """Same shape/return contract, and the same "predict the segment
-        split, check every expected file exists" cache-validity check, as
-        `CachingMixin.process_chunk_task` (kokoro_gui/engine/caching.py) -
-        hand-rolled rather than inherited because that mixin hardcodes
-        24000Hz in several places and this engine outputs 44100Hz. Calls
-        `compute_cache_key` directly as a library function instead, passing
-        `extra={"ref_transcript": ...}` so a reference's transcript is part
-        of the cache key too - changing just the transcript for the same wav
-        (a real "the auto-transcript was wrong, I fixed it" workflow)
-        correctly invalidates old cache entries.
-        """
-        index, text, config = chunk_data
-        if self.cancel_event.is_set():
-            return []
-
-        lang_code = config.get('lang_code', 'English')
-        eff_speed = config['speed']
-        ref_wav = config['voice']  # already resolved by ConversionMixin.start_conversion
-        ref_transcript = self.resolve_voice_transcript(ref_wav)
-        split_pattern = config.get('split_pattern', r"\n+")
-        # See `_reference_codes_path`/module docstring - independent of the
-        # per-segment WAV cache below (`use_cache`/`caching`).
+        """`CachingMixin.process_chunk_task` with this engine's per-run
+        state read off `config` first: `cache_reference_codes` and the
+        sampling knobs `generate_segment` uses (also what `cache_key_extra`
+        folds into the key, so a stale segment cached under old values
+        misses rather than serving old audio). The first chunk after a
+        project opens also warms the reference-codes cache from the
+        project's own refs (grill TB7, revised: derived data lives in this
+        machine's cache, so a flag written on another machine is ignored)."""
+        _index, _text, config = chunk_data
         self.cache_reference_codes = config.get('cache_reference_codes', True)
-        # `ArkttsModel.generate` sampling knobs - see `__init__`'s docstring
-        # on these same attributes. Read into `extra` below too: they change
-        # what gets generated, so a stale segment cached under old values
-        # must miss rather than silently keep serving old audio.
         self.max_new_tokens = config.get('max_new_tokens', 1024)
         self.temperature = config.get('temperature', 0.8)
         self.top_p = config.get('top_p', 0.95)
         self.top_k = config.get('top_k', 50)
-
-        use_cache = config.get('caching', False)
-        cache_hash = None
-        cached_segments = []  # [(graphemes, audio), ...]
-
-        if use_cache:
-            cache_hash = compute_cache_key(
-                text, ref_wav, eff_speed, lang_code, engine_id="audio8",
-                extra={
-                    "ref_transcript": ref_transcript,
-                    "max_new_tokens": self.max_new_tokens, "temperature": self.temperature,
-                    "top_p": self.top_p, "top_k": self.top_k,
-                },
-            )
+        project_dir = config.get("project_dir")
+        if project_dir and project_dir != self._warmed_project_dir:
+            self._warmed_project_dir = project_dir
             try:
-                predicted_texts = [t.strip() for t in re.split(split_pattern, text) if t.strip()]
-            except re.error:
-                predicted_texts = []
-            if not predicted_texts and text.strip():
-                predicted_texts = [text.strip()]
-
-            if predicted_texts:
-                loaded = []
-                all_exist = True
-                for i, seg_text in enumerate(predicted_texts):
-                    f_path = os.path.join(kokoro_engine.CACHE_DIR, f"{cache_hash}_{i}.wav")
-                    if not os.path.exists(f_path):
-                        all_exist = False
-                        break
-                    try:
-                        audio_data, _ = sf.read(f_path)
-                    except Exception as e:
-                        print(f"Audio8 cache read error: {e}")
-                        all_exist = False
-                        break
-                    loaded.append((seg_text, audio_data))
-                if all_exist:
-                    cached_segments = loaded
-
-        chunk_files = []
-        base_name = f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_part{index}"
-
-        # Same raw_output contract as CachingMixin.process_chunk_task: the
-        # clip paths keep the segment raw and post-process on read.
-        raw_output = bool(config.get('raw_output', False))
-
-        def write_output(graphemes, audio, sub_idx):
-            processed = audio if raw_output else self.process_audio(audio, self.SAMPLE_RATE, config)
-            fmt = config.get('format', 'wav').lower()
-            if fmt not in ('wav', 'flac', 'mp3', 'ogg'):
-                fmt = 'wav'
-            file_name = f"{base_name}_{sub_idx}.{fmt}"
-            path = os.path.join(config['out_dir'], file_name)
-            try:
-                with AudioFile(path, 'w', samplerate=self.SAMPLE_RATE, num_channels=1) as f:
-                    f.write(processed)
+                self.warm_reference_codes(project_dir)
             except Exception as e:
-                print(f"Audio8 write failed: {e}. Fallback to soundfile.")
-                sf.write(path, processed, self.SAMPLE_RATE)
-            return {
-                "path": path, "text": graphemes,
-                "duration": len(processed) / self.SAMPLE_RATE, "seg_idx": index,
-                "raw": raw_output,
-            }
-
-        if cached_segments:
-            for sub_idx, (graphemes, audio) in enumerate(cached_segments):
-                if self.cancel_event.is_set():
-                    break
-                if progress_callback:
-                    progress_callback(len(graphemes), graphemes)
-                chunk_files.append(write_output(graphemes, audio, sub_idx))
-        else:
-            pipeline = self.get_thread_pipeline(lang_code)
-            generator = pipeline(text, voice=ref_wav, speed=eff_speed, split_pattern=split_pattern)
-            for sub_idx, (graphemes, _phonemes, audio) in enumerate(generator):
-                if self.cancel_event.is_set():
-                    break
-                if progress_callback:
-                    progress_callback(len(graphemes), graphemes)
-
-                if use_cache and cache_hash:
-                    try:
-                        sf.write(
-                            os.path.join(kokoro_engine.CACHE_DIR, f"{cache_hash}_{sub_idx}.wav"),
-                            audio, self.SAMPLE_RATE,
-                        )
-                    except Exception as e:
-                        print(f"Audio8 cache write error: {e}")
-
-                chunk_files.append(write_output(graphemes, audio, sub_idx))
-
-        return chunk_files
+                print(f"Audio8 reference warm-up skipped: {e}")
+        return super().process_chunk_task(chunk_data, progress_callback)
 
     def cancel(self) -> None:
         self.cancel_event.set()
 
 
-class Audio8BackendAdapter:
+class Audio8BackendAdapter(BackendHooksMixin):
     id = "audio8"
     display_name = "Audio8 TTS (voice cloning)"
     capabilities = EngineCapabilities(
@@ -654,13 +643,26 @@ class Audio8BackendAdapter:
         ]
 
     def get_voices(self, lang_code: Optional[str] = None) -> list:
-        """Saved wav+transcript references - see `Audio8ReferenceStore`.
-        Unlike Kokoro, there are no built-in named voices at all; every
-        selectable "voice" here is a user-saved reference."""
+        """Saved wav+transcript references, the open project's first - see
+        `Audio8ReferenceStore`. Unlike Kokoro, there are no built-in named
+        voices at all; every selectable "voice" here is a saved reference."""
         return [
             VoiceInfo(id=name, display_name=name, lang_code=None, is_custom=True)
-            for name in Audio8ReferenceStore.list_references()
+            for name in Audio8ReferenceStore.list_references(self.project_dir)
         ]
+
+    def collect_project_assets(self, voice_names, project_dir=None) -> tuple:
+        """The wav + txt pair for every named reference, as
+        `engines/audio8/refs/<name>.{wav,txt}`. `meta` is empty: the
+        reference-codes cache is derived data that lives in this machine's
+        cache and is rebuilt on the first generate after open."""
+        assets = []
+        for name in sorted(voice_names):
+            for ext in (".wav", ".txt"):
+                asset = bundle_asset_for(name, AUDIO8_REFS_DIR, ext, PROJECT_REFS_SUBDIR, project_dir)
+                if asset is not None:
+                    assets.append(asset)
+        return assets, {}
 
     def cancel(self) -> None:
         self._engine.cancel()

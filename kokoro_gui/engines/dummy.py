@@ -4,16 +4,13 @@ without a real model - PLAN_qt_and_engine_abstraction.md workstream 1, step 5:
 isn't over-fit to Kokoro".
 
 `DummyEngine` reuses every mixin in `kokoro_gui/engine/` that turned out to be
-genuinely model-agnostic (FX, conversion orchestration, JIT streaming,
-lexicon, presets, SRT export, text extraction) unmodified, and only supplies
-its own `get_thread_pipeline` (a fake generator that yields short sine-wave
-tones instead of real speech) and its own `process_chunk_task` (same shape as
-`CachingMixin`'s, minus the cache: writing dummy audio into the same
-`CACHE_DIR`/hash keyed only on text|voice|speed|lang_code would let a later
-real-Kokoro run for the same tuple collide with a cached dummy tone, exactly
-the cross-engine cache collision workstream 2 of the plan calls out - so this
-backend simply never touches the shared cache rather than needing that fix
-early).
+genuinely model-agnostic (FX, caching, conversion orchestration, JIT
+streaming, lexicon, presets, SRT export, text extraction) unmodified, and
+only supplies its own `get_thread_pipeline` (a fake generator that yields
+short sine-wave tones instead of real speech). `CachingMixin` keys every
+entry on `engine_id`, so a dummy tone can't collide with a Kokoro segment
+for the same text; its schema still defaults `caching` off, since there's
+nothing worth caching.
 
 No `VoiceMixingMixin` - `capabilities.supports_voice_mixing=False`, so the
 Mixing dock is not shown while this backend is active (see the Qt frontend's
@@ -22,21 +19,18 @@ actually works.
 """
 from __future__ import annotations
 
-import os
 import re
 import threading
 
 import numpy as np
-import soundfile as sf
-from pedalboard.io import AudioFile
 
 from kokoro_engine import AsyncLoopThread
 from kokoro_gui.engine import (
-    AudioFXMixin, ConversionMixin, JITMixin, LexiconMixin, PresetsMixin,
+    AudioFXMixin, CachingMixin, ConversionMixin, JITMixin, LexiconMixin, PresetsMixin,
     SrtMixin, TextExtractionMixin,
 )
 from kokoro_gui.engines.base import (
-    ConfigField, ConfigFieldType, EngineCapabilities, VoiceInfo,
+    BackendHooksMixin, ConfigField, ConfigFieldType, EngineCapabilities, VoiceInfo,
     COMMON_SPLIT_PATTERN_CHOICES, COMMON_OUTPUT_FORMAT_CHOICES,
 )
 from kokoro_gui.engines.registry import register_engine
@@ -79,13 +73,16 @@ def _tone_for(text, speed, voice):
 
 
 class DummyEngine(
-    AudioFXMixin, ConversionMixin, JITMixin, LexiconMixin, PresetsMixin,
+    AudioFXMixin, CachingMixin, ConversionMixin, JITMixin, LexiconMixin, PresetsMixin,
     SrtMixin, TextExtractionMixin,
 ):
     """KokoroEngine-shaped enough for the GUI to drive directly (same
     `worker`/`cancel_event`/`pipeline`/`on_progress`/`on_status`/`on_finish`/
     `start_conversion`/`start_jit_conversion`/`generate_preview`/`cancel`
-    surface), but with no real synthesis or caching underneath."""
+    surface), but with no real synthesis underneath."""
+
+    id = "dummy"
+    SAMPLE_RATE = SAMPLE_RATE
 
     def __init__(self):
         self.worker = AsyncLoopThread()
@@ -108,66 +105,16 @@ class DummyEngine(
     def get_thread_pipeline(self, lang_code="a"):
         return DummyPipeline(lang_code)
 
-    def resolve_voice_path(self, voice_name):
+    def resolve_voice_path(self, voice_name, project_dir=None):
         # No custom-voice directory concept for the dummy backend - voice
         # names are just labels that pick a tone pitch (see _tone_for).
         return voice_name
-
-    def process_chunk_task(self, chunk_data, progress_callback):
-        """Same shape as CachingMixin.process_chunk_task, deliberately
-        without the cache - see this module's docstring for why."""
-        index, text, config = chunk_data
-        if self.cancel_event.is_set():
-            return []
-
-        lang_code = config.get('lang_code', 'a')
-        pipeline = self.get_thread_pipeline(lang_code)
-        generator = pipeline(
-            text, voice=config['voice'], speed=config['speed'],
-            split_pattern=config.get('split_pattern', r"\n+"),
-        )
-
-        chunk_files = []
-        sub_idx = 0
-        base_name = f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_part{index}"
-
-        for graphemes, phonemes, audio in generator:
-            if self.cancel_event.is_set():
-                break
-            if progress_callback:
-                progress_callback(len(graphemes), graphemes)
-
-            # Same raw_output contract as CachingMixin.process_chunk_task.
-            raw_output = bool(config.get('raw_output', False))
-            processed_audio = audio if raw_output else self.process_audio(audio, SAMPLE_RATE, config)
-
-            fmt = config.get('format', 'wav').lower()
-            if fmt not in ('wav', 'flac', 'mp3', 'ogg'):
-                fmt = 'wav'
-            file_name = f"{base_name}_{sub_idx}.{fmt}"
-            path = os.path.join(config['out_dir'], file_name)
-
-            try:
-                with AudioFile(path, 'w', samplerate=SAMPLE_RATE, num_channels=1) as f:
-                    f.write(processed_audio)
-            except Exception as e:
-                print(f"Dummy engine write failed: {e}. Fallback to soundfile.")
-                sf.write(path, processed_audio, SAMPLE_RATE)
-
-            chunk_files.append({
-                "path": path, "text": graphemes,
-                "duration": len(processed_audio) / SAMPLE_RATE, "seg_idx": index,
-                "raw": raw_output,
-            })
-            sub_idx += 1
-
-        return chunk_files
 
     def cancel(self):
         self.cancel_event.set()
 
 
-class DummyBackendAdapter:
+class DummyBackendAdapter(BackendHooksMixin):
     id = "dummy"
     display_name = "Dummy (offline test tone)"
     capabilities = EngineCapabilities(
