@@ -7,21 +7,28 @@ it's headed.
 
 ## Where it stands today
 
-Three pages, still no build step: `docs/index.html` (the pitch), `docs/scripting.html` (the
-`[Preset:FXPreset]: Text` inline syntax, worked example included), and `docs/settings.html` (every
-field in every dock, including the two Audio8 fields that are silently inert and why JIT streaming
-only exists for engines that can generate faster than real time). Shared tokens, nav, and
-components live in `docs/assets/site.css` and `docs/assets/site.js` so the three pages stay visually
-consistent without copy-pasting a few hundred lines of CSS into each one.
+Four pages, no build step: `docs/index.html` (the pitch: hero, three-step walkthrough, bento
+feature grid, engine comparison table, signal chain, the `.tbaw` pitch, a changelog back to 4.0,
+install), `docs/scripting.html` (the `[Preset:FXPreset]: Text` inline syntax, worked example
+included), `docs/settings.html` (every field in every dock, including the two Audio8 fields that
+are silently inert, the welcome dialog, and why JIT streaming only exists for engines that can
+generate faster than real time) and `docs/format.html` (the `.tbaw` bundle: manifest keys,
+`document.json` shape, segment key inputs, per-engine asset paths, the working copy, what Open
+refuses). Shared tokens, nav, footer components and reference-page styles live in
+`docs/assets/site.css`; `docs/assets/site.js` holds the theme toggle, the mobile menu and the
+copy buttons.
 
-Content was pulled from the actual code, not just `README.md`/`CLAUDE.md`, since a couple of things
-those docs claim turned out to be stale (the FX chain has five groups and seventeen sliders now, not
-the "Reverb/Compressor/shelf" subset CLAUDE.md still describes; the actual post-FX processing order
-is Trim → Volume → Pitch → FX → Normalize, not the order this site originally shipped with; and the
-README's "adjustable interface scaling and theme" line doesn't match anything in `kokoro_gui/qt/`
-today, that control doesn't exist in the Qt frontend). Treat "New in X.Y.Z" entries in the README as
-the trigger to revisit all three pages, the same way CLAUDE.md already asks for ROADMAP.md, but
-don't assume the README's older feature-list prose is still accurate either; check the code.
+The 2026-09-13 pass restyled the site along current SaaS lines: Inter and JetBrains Mono instead
+of Unbounded and IBM Plex, one violet accent instead of the teal/violet/coral gradient, dark as
+the default palette with light as the override, an announcement pill over a centered hero, a
+framed screenshot with a glow that swaps between `shell_dark.png` and `shell_light.png` with
+the theme, and a four-column footer. Page-local `<style>` blocks now hold only layouts unique
+to that page; anything two pages share belongs in `site.css`.
+
+Content was pulled from the actual code, not just `README.md`/`CLAUDE.md`. Treat "New in X.Y.Z"
+entries in the README as the trigger to revisit all four pages, but check the code too; the
+README's older feature-list prose has drifted before (its "adjustable interface scaling" line
+still doesn't match anything in `kokoro_gui/qt/`).
 
 ## Turning the repo on for Pages
 
@@ -41,18 +48,18 @@ Revisit once one of the phases below actually needs a build step.
 
 Low effort, no new infrastructure:
 
-- **Open Graph and Twitter card meta tags.** `og:title`, `og:description`, `og:image`, so a link to
-  the site renders a real preview card when shared instead of a bare URL. Needs a dedicated
-  1200×630 social image, not a cropped screenshot.
+- **A real social image.** `index.html` now carries `og:*` and `twitter:card` tags, but
+  `og:image` points at `assets/shell_dark.png`, which is 1600×1000 and relative. Make a dedicated
+  1200×630 image and give it an absolute URL once the Pages hostname is known.
 - **Real audio samples.** The page currently only describes the difference between Kokoro and
   Audio8. A handful of short, pre-rendered `.wav`/`.mp3` clips checked into `docs/assets/audio/`,
   the same line read by a Kokoro voice, an Audio8 clone, and both generation modes, would turn the
   engine-comparison section into something a visitor can actually listen to via `<audio controls>`.
   This is the highest-impact addition on this list: a TTS project's landing page without audio
   undersells the product.
-- **A second and third screenshot.** Right now there's one framed screenshot, the Generation dock.
-  Add the FX dock and the Voice Reference dock so the "five docks" section has visual backing, not
-  just prose. Reuse the existing `.console-frame` component.
+- **A second and third screenshot.** The bento cards on `index.html` fake the transcript gutter
+  and timeline with CSS mockups. Real crops of the Audio FX tab and the Voice Reference dock,
+  rendered by `scripts/render_screenshot.py`, would replace the two weakest ones.
 - **Favicon polish.** The current favicon is a generated inline SVG. Fine for now, worth revisiting
   once there's a real logo mark.
 
@@ -64,24 +71,22 @@ Still static-hostable, no server required:
   combinations, in any mix) and hear pre-rendered before/after clips instead of just reading a
   static node chain. Keep the real order from `process_audio` as the source of truth; the demo
   should make that order audible, not reinvent it.
-- **Copy-to-clipboard on the install code block.** Small UX win, no dependency needed since the
-  Clipboard API already covers it.
-- **A changelog section.** Generate it from the README's "New in X.Y.Z" headers so the site stops
-  needing manual updates every release. A small build step that greps `README.md` into a
-  `<section>` at publish time would do it, and this is the point where the GitHub Actions workflow
-  from option 2 above starts paying for itself.
+- **Generate the changelog.** `index.html#changelog` is hand-written from the README's "New in
+  X.Y.Z" sections (4.0.0 through 4.2.0). A small build step that greps `README.md` into that
+  `<section>` at publish time would stop it drifting, and is the point where the GitHub Actions
+  workflow from option 2 above starts paying for itself.
 
 ## Phase 3: multi-page docs site
 
-Partially done: `scripting.html` and `settings.html` already cover the inline-syntax walkthrough and
-the full settings breakdown, as flat files next to `index.html` rather than a `docs/guide/`
-subdirectory (not worth the extra nesting at three pages). What's left:
+Partially done: `scripting.html`, `settings.html` and `format.html` cover the inline syntax, the
+settings breakdown and the bundle format, as flat files next to `index.html` rather than a
+`docs/guide/` subdirectory (not worth the extra nesting at four pages). What's left:
 
 - Installation troubleshooting (common eSpeak NG / PyTorch setup failures and their fixes).
 - A lexicon cookbook (real find-and-replace examples for acronyms, names, numbers).
 - Preset-sharing conventions, if the project ever wants people to exchange `presets/*.json` files.
 - Move to a static-site generator only once hand-written HTML becomes the bottleneck, not before
-  (Eleventy, or plain Jekyll, which ships free on GitHub Pages with zero extra config). Three pages
+  (Eleventy, or plain Jekyll, which ships free on GitHub Pages with zero extra config). Four pages
   sharing `assets/site.css` is still easier to keep in sync with the app than a generator would be
   at this size; revisit this once there are enough pages that the shared-CSS-file approach itself
   starts to strain.
@@ -97,22 +102,21 @@ subdirectory (not worth the extra nesting at three pages). What's left:
   project actually wants to run and pay for.
 - **Analytics.** If it gets added later, keep it privacy-respecting and cookie-free (GoatCounter or
   Plausible, for example) and say so on the page. Don't add a tracker silently.
-- **A waveform/timeline preview.** The app's own waveform view and multi-track timeline are still
-  unbuilt (see the local planning doc for those workstreams), so the site shouldn't promise UI the
-  app doesn't have yet. Add this section only after those workstreams ship.
+- **An interactive timeline demo.** The app's timeline shipped in 4.1.0 and the bento card mocks
+  it in CSS. A draggable in-browser version would be a second implementation of `arrangement.py`
+  to keep in sync; the screenshot is enough.
 
 ## Maintenance note
 
 Whenever the README's "New in X.Y.Z" section grows, do a pass over `docs/index.html`. The engine
-comparison, dock grid, and feature strip are the sections most likely to go stale first, since they
+comparison, bento grid, and changelog are the sections most likely to go stale first, since they
 enumerate specific capabilities.
 
-Pending from the README's 4.1.2 entry: the welcome dialog (recent projects, Resume/New/New from
-text/Open, "Show at startup") isn't on `index.html`'s dock-grid walkthrough yet, and
-`settings.html` doesn't list the `show_welcome` key or the File ▸ Welcome… item.
+Nothing pending from the README's 4.1.2 and 4.2.0 entries: the welcome dialog and `show_welcome`
+are on `settings.html`, `index.html` pitches `.tbaw` in the bento grid, the Projects section and
+the changelog, and `format.html` documents the bundle. The next "New in" section reopens this
+list.
 
-Pending from the README's 4.2.0 entry: `settings.html`'s File menu section and Export table now
-describe `.tbaw` bundles and the two bundle options; `index.html`'s feature strip still says
-nothing about projects being portable bundles, and there is no page on what a `.tbaw` contains
-(the manifest, `audio/generated/`, `engines/<id>/`, `fx/`), which anyone writing a tool against
-the format would want.
+Preview with `python -m http.server 8765 --directory docs` and open `http://localhost:8765/`;
+opening `docs/index.html` straight from the filesystem works too, but a browser pane that
+snapshots the file won't resolve `assets/`.

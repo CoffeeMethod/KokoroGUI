@@ -5,21 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Kokoro GUI · Settings reference</title>
 <meta name="description" content="Every field in every dock, what it actually does, how the Settings dock's fields scope to a clip or character, which settings Audio8 silently ignores, and why JIT streaming only exists for engines that can generate faster than real time." />
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2335e6c6'/%3E%3Cstop offset='.55' stop-color='%239d7bff'/%3E%3Cstop offset='1' stop-color='%23ff7a59'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='%230a0d14'/%3E%3Cg fill='url(%23g)'%3E%3Crect x='10' y='26' width='7' height='12' rx='2'/%3E%3Crect x='21' y='16' width='7' height='32' rx='2'/%3E%3Crect x='32' y='22' width='7' height='20' rx='2'/%3E%3Crect x='43' y='10' width='7' height='44' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230b0b10'/%3E%3Cg fill='%23a78bfa'%3E%3Crect x='10' y='26' width='7' height='12' rx='2'/%3E%3Crect x='21' y='16' width='7' height='32' rx='2'/%3E%3Crect x='32' y='22' width='7' height='20' rx='2'/%3E%3Crect x='43' y='10' width='7' height='44' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="assets/site.css" />
-<style>
-  .prose{ max-width: 760px; display:flex; flex-direction:column; gap: 1.1rem; margin-bottom: 1.4rem; }
-  .prose p{ font-size: 1rem; }
-  .doc-section{ padding: clamp(2.2rem, 5vw, 3.5rem) 0; border-top: 1px solid var(--border); }
-  .doc-section:first-of-type{ border-top: none; }
-  .doc-section h2{ font-size: 1.6rem; }
-  .doc-section h2 .idx{ font-family: var(--font-mono); font-size: .75rem; color: var(--text-muted); display:block; letter-spacing:.08em; text-transform:uppercase; margin-bottom:.4rem; font-weight: 500; }
-  .doc-section > .wrap > p.dek{ color: var(--text-muted); font-size: .95rem; max-width: 720px; margin-top: .6rem; margin-bottom: 1.4rem; }
-  .engine-note{ display:inline-flex; align-items:center; gap:.4em; font-family: var(--font-mono); font-size:.72rem; padding:.25em .6em; border-radius:999px; border:1px solid var(--border); background:var(--surface); color: var(--text-muted); }
-</style>
 </head>
 <body>
 
@@ -27,36 +17,33 @@
   <nav class="wrap">
     <a class="brand" href="index.html">
       <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
-        <rect width="64" height="64" rx="16" fill="var(--bg)" stroke="var(--border)"/>
-        <g fill="url(#navgrad)">
+        <rect width="64" height="64" rx="16" fill="var(--surface-2)" stroke="var(--border-2)"/>
+        <g fill="var(--accent)">
           <rect x="10" y="26" width="7" height="12" rx="2"/>
           <rect x="21" y="16" width="7" height="32" rx="2"/>
           <rect x="32" y="22" width="7" height="20" rx="2"/>
           <rect x="43" y="10" width="7" height="44" rx="2"/>
         </g>
-        <defs>
-          <linearGradient id="navgrad" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#35E6C6"/>
-            <stop offset=".55" stop-color="#9D7BFF"/>
-            <stop offset="1" stop-color="#FF7A59"/>
-          </linearGradient>
-        </defs>
       </svg>
-      <span class="brand-word">Kokoro GUI<span class="beta">BETA 4.0.0</span></span>
+      <span class="brand-word">Kokoro GUI<span class="ver">v4.2.0</span></span>
     </a>
     <div class="navlinks">
-      <a href="index.html#features">Docks</a>
+      <a href="index.html#features">Features</a>
       <a href="index.html#engines">Engines</a>
+      <a href="index.html#changelog">Changelog</a>
       <a href="scripting.html">Scripting</a>
       <a href="settings.html" aria-current="page">Settings</a>
-      <a href="index.html#install">Install</a>
+      <a href="format.html">.tbaw format</a>
     </div>
     <div class="navctas">
-      <button class="theme-toggle" id="themeToggle" aria-label="Toggle color theme" title="Toggle color theme">
-        <svg id="iconSun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
-        <svg id="iconMoon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
+      <button class="icon-btn" id="themeToggle" aria-label="Toggle color theme" title="Toggle color theme">
+        <svg id="iconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg id="iconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
       </button>
-      <a class="btn btn-ghost" href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">GitHub ↗</a>
+      <button class="icon-btn menu-btn" id="menuToggle" aria-label="Open menu" aria-expanded="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <a class="btn btn-primary" href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">GitHub</a>
     </div>
   </nav>
 </header>
@@ -93,7 +80,7 @@
       <div class="prose reveal">
         <h2><span class="idx">Options menu</span>Engine, device, theme</h2>
         <p><strong>Options &gt; Engine</strong> is the one setting that changes what every other setting on this page looks like: switching it rebuilds the Settings tab's fields from the new engine's schema and swaps what sits behind the Voices tab (Mixing for Kokoro, Voice Reference for Audio8, nothing for the Dummy engine). Everything below is written per-engine where the two differ.</p>
-        <p><strong>Options &gt; Device</strong> picks CPU / CUDA / Auto for the Kokoro pipeline (the CUDA entry is greyed out when torch reports no device) and re-initializes the engine. <strong>Options &gt; Theme</strong> switches between the light and dark palettes. The three checkable entries under them are the old Settings dialog: whether copying text carries its character/FX along, whether a paste splits off its own run, and JIT streaming for clip-free documents.</p>
+        <p><strong>Options &gt; Device</strong> picks CPU / CUDA / Auto for the Kokoro pipeline (the CUDA entry is greyed out when torch reports no device) and re-initializes the engine. <strong>Options &gt; Theme</strong> switches between the light and dark palettes. The three checkable entries under them are the old Settings dialog: whether copying text carries its character/FX along, whether a paste splits off its own run, and JIT streaming for clip-free documents. The welcome dialog's "Show at startup" box is the one launch setting that isn't here; it lives on the dialog itself (File &gt; Welcome…).</p>
       </div>
     </div>
   </section>
@@ -103,7 +90,7 @@
       <div class="prose reveal">
         <h2><span class="idx">Transcript dock</span>The transcript</h2>
         <p>The Transcript dock is a syntax-highlighting editor over the document's canonical text, not a plain input field. Two combos sit above it: <strong>Character</strong> and <strong>FX</strong>, both reflecting the clip under the caret. Changing Character reassigns the selection (or the caret's whole clip, or its line for untagged text); changing FX sets a named FX override on the caret's clip, undoable like everything else. The left gutter names the speaker once per character/FX change (<code>Narrator</code> on one line, <code>FX: Echo</code> under it) and shows a small play button beside each out-of-date clip that regenerates just that clip. Out-of-date text is dash-underlined; thin rules mark clip boundaries and where Auto-split would cut.</p>
-        <p> Every run of text is colored by its assigned character and FX, so the boundaries between speakers and effects are visible at a glance, without reading the inline <a href="scripting.html" style="color:var(--violet); font-weight:600;"><code>[Speaker:FX]:</code></a> syntax.</p>
+        <p> Every run of text is colored by its assigned character and FX, so the boundaries between speakers and effects are visible at a glance, without reading the inline <a href="scripting.html" class="link"><code>[Speaker:FX]:</code></a> syntax.</p>
         <p>Selecting a range and opening the Characters menu reassigns that range's character/FX directly. Placing the caret inside an existing run instead shows that run's currently active voice/FX in the Settings dock. Copying a range carries its character/FX metadata with it; pasting into a run belonging to a different character splits the paste into its own run rather than silently overwriting the destination's assignment, unless "character/FX paste splits" is turned off, in which case a paste inherits whatever it lands on.</p>
       </div>
     </div>
@@ -159,7 +146,7 @@
   <section class="doc-section" id="audio-control">
     <div class="wrap">
       <h2><span class="idx">Settings tab</span>Audio control</h2>
-      <p class="dek">Hand-coded, not schema-driven, so every engine gets the same fields here, still subject to the same three-scope rules above. These are the post-processing steps from the <a href="index.html#signal-chain" style="color:var(--violet); font-weight:600;">signal chain</a> on the home page.</p>
+      <p class="dek">Hand-coded, not schema-driven, so every engine gets the same fields here, still subject to the same three-scope rules above. These are the post-processing steps from the <a href="index.html#signal-chain" class="link">signal chain</a> on the home page.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Audio control</caption>
@@ -230,12 +217,13 @@
   <section class="doc-section" id="generation">
     <div class="wrap">
       <h2><span class="idx">File menu</span>Projects</h2>
-      <p class="dek">A project is a <code>.tbaw</code> bundle: one zip with the text and clips, every generated segment, and the voice mixes, voice references and FX presets it names, so it opens on another machine with the same engines installed. Older <code>.json</code> projects open and are converted next to the original. Launch reopens the last project you had open.</p>
+      <p class="dek">A project is a <code>.tbaw</code> bundle (text based audio workflow): one zip with the text and clips, every generated segment, and the voice mixes, voice references and FX presets it names, so it opens on another machine with the same engines installed. The layout is on the <a class="link" href="format.html">format page</a>. Older <code>.json</code> projects open and are converted next to the original. Launch reopens the last project you had open, then shows the welcome dialog over it.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>File menu</caption>
           <thead><tr><th>Action</th><th>What it does</th></tr></thead>
           <tbody>
+            <tr><td>Welcome…</td><td>The dialog launch shows: recent projects with the open one first and Resume as the default button, New project, New from text file, Open other, right-click a row to drop it, Clear list, and a details pane (path, modified time, character and clip counts, audio length, engines) read from the <code>.tbaw</code> manifest without extracting it. "Show at startup" is <code>show_welcome</code> in <code>config_qt.json</code>; untick it for a silent resume.</td></tr>
             <tr><td>New</td><td>An empty project that inherits the current project's characters (a copy, until the global character library exists).</td></tr>
             <tr><td>Open / Recent</td><td>Opens a project file; Recent lists the last ten.</td></tr>
             <tr><td>Save / Save As</td><td>Autosave writes the app's working copy of the project (under <code>cache/projects/</code>), never the <code>.tbaw</code>; Save writes the file in the background and Save As branches to a new file. The window title shows <code>*</code> while the working copy is ahead of the file. Closing with unsaved changes asks Save / Discard / Cancel; after a crash, opening the project offers to recover the unsaved session.</td></tr>
@@ -352,7 +340,7 @@
           </tbody>
         </table>
       </div>
-      <p class="dek">Rules apply regardless of which preset or FX preset an <a href="scripting.html" style="color:var(--violet); font-weight:600;">inline script tag</a> switches to; Lexicon is global, not per-speaker.</p>
+      <p class="dek">Rules apply regardless of which preset or FX preset an <a href="scripting.html" class="link">inline script tag</a> switches to; Lexicon is global, not per-speaker.</p>
     </div>
   </section>
 
@@ -399,7 +387,7 @@
       <div class="prose reveal">
         <p>Two preset systems, both plain JSON on disk. <code>presets/&lt;name&gt;.json</code> files are whole-config snapshots (voice, speed, split pattern, and the rest); since 4.1 nothing in the GUI writes them any more, because Edit &gt; Characters... is where a named voice/FX bundle is edited now, but existing files still load. "Save FX Preset..." in the Audio FX tab snapshots just the FX sliders, as <code>presets/fx/&lt;name&gt;.json</code>.</p>
         <p>Every file in <code>presets/</code> also becomes a <code>Character</code> on first load, one per file, with a highlight color assigned from a small fixed palette. If you had no presets saved yet, one "Default" character is seeded from your last-used settings instead, so a returning user's config isn't discarded. The preset files themselves are untouched either way, characters are read from them, not a replacement for them.</p>
-        <p>These aren't a separate feature from <a href="scripting.html" style="color:var(--violet); font-weight:600;">inline scripting</a>, they're the same thing. A <code>[Name]:</code> tag in the transcript looks up a character by exactly that name, case-insensitively, and a character's name starts out as whatever the preset file it came from was called.</p>
+        <p>These aren't a separate feature from <a href="scripting.html" class="link">inline scripting</a>, they're the same thing. A <code>[Name]:</code> tag in the transcript looks up a character by exactly that name, case-insensitively, and a character's name starts out as whatever the preset file it came from was called.</p>
       </div>
     </div>
   </section>
@@ -430,12 +418,44 @@
 
 <footer class="site">
   <div class="wrap">
-    <span class="fine">Apache-2.0 licensed. Not affiliated with the Kokoro or Audio8 model authors.</span>
-    <div class="fl">
-      <a href="index.html">Home</a>
-      <a href="scripting.html">Scripting guide</a>
-      <a href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">Repository ↗</a>
-      <a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/README.md" target="_blank" rel="noopener">README ↗</a>
+    <div class="cols">
+      <div>
+        <a class="brand" href="index.html" style="margin-bottom:.4rem;">
+          <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="var(--surface-2)" stroke="var(--border-2)"/><g fill="var(--accent)"><rect x="10" y="26" width="7" height="12" rx="2"/><rect x="21" y="16" width="7" height="32" rx="2"/><rect x="32" y="22" width="7" height="20" rx="2"/><rect x="43" y="10" width="7" height="44" rx="2"/></g></svg>
+          <span class="brand-word">Kokoro GUI</span>
+        </a>
+        <p class="blurb">A desktop text-to-speech workstation. Not affiliated with the Kokoro or Audio8 model authors.</p>
+      </div>
+      <div>
+        <h5>Product</h5>
+        <ul>
+          <li><a href="index.html#features">Features</a></li>
+          <li><a href="index.html#engines">Engines</a></li>
+          <li><a href="index.html#changelog">Changelog</a></li>
+          <li><a href="index.html#install">Install</a></li>
+        </ul>
+      </div>
+      <div>
+        <h5>Docs</h5>
+        <ul>
+          <li><a href="scripting.html">Scripting guide</a></li>
+          <li><a href="settings.html">Settings reference</a></li>
+          <li><a href="format.html">.tbaw format</a></li>
+        </ul>
+      </div>
+      <div>
+        <h5>Project</h5>
+        <ul>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">GitHub</a></li>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/README.md" target="_blank" rel="noopener">README</a></li>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/LICENSE" target="_blank" rel="noopener">License</a></li>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI/issues" target="_blank" rel="noopener">Issues</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="bottom">
+      <span>Apache-2.0. Kokoro GUI 4.2.0.</span>
+      <span>Kokoro by hexgrad · Audio8 models by Audio8 · Pedalboard by Spotify</span>
     </div>
   </div>
 </footer>
