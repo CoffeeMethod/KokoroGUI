@@ -262,13 +262,15 @@ def _get_vosk_model(model_path: str):
         return model
 
 
-def _ensure_pcm16_mono(wav_path: str) -> tuple[str, bool]:
-    """Returns a path to a 16-bit mono PCM WAV holding `wav_path`'s audio -
-    the exact format `vosk.KaldiRecognizer` requires - converting into a
-    temp file first if the original isn't already in that format (stereo,
-    float samples, 8/24/32-bit PCM, etc.). The second return value says
-    whether that's a temp file the caller must delete when done; the common
-    case (already-correct input) returns `wav_path` itself unchanged.
+def _ensure_pcm16_mono(wav_path: str) -> tuple[str, str | None]:
+    """Returns `(path, temp_path)`: a path to a 16-bit mono PCM WAV holding
+    `wav_path`'s audio - the exact format `vosk.KaldiRecognizer` requires -
+    converting into a temp file first if the original isn't already in that
+    format (stereo, float samples, 8/24/32-bit PCM, etc.). `temp_path` is
+    that temp file, for the caller to delete when done, and `None` in the
+    common case (already-correct input), where `path` is `wav_path` itself
+    unchanged. The caller only ever deletes `temp_path`, so the original
+    can't be removed by mistake.
 
     The initial probe goes through the stdlib `wave` module rather than
     `soundfile`, since a plain `wave.open` + `getnchannels`/`getsampwidth`
@@ -279,7 +281,7 @@ def _ensure_pcm16_mono(wav_path: str) -> tuple[str, bool]:
     try:
         with wave.open(wav_path, "rb") as wf:
             if wf.getnchannels() == 1 and wf.getsampwidth() == 2:
-                return wav_path, False
+                return wav_path, None
     except wave.Error:
         pass  # not something `wave` can parse at all - fall through and convert
 
@@ -306,7 +308,7 @@ def _ensure_pcm16_mono(wav_path: str) -> tuple[str, bool]:
     except Exception:
         os.remove(tmp_path)
         raise
-    return tmp_path, True
+    return tmp_path, tmp_path
 
 
 def _transcribe_wav_vosk(wav_path: str, model_path: str) -> str:
@@ -316,7 +318,7 @@ def _transcribe_wav_vosk(wav_path: str, model_path: str) -> str:
     model = _get_vosk_model(model_path)
     import vosk
 
-    converted_path, is_temp = _ensure_pcm16_mono(wav_path)
+    converted_path, temp_path = _ensure_pcm16_mono(wav_path)
     try:
         with wave.open(converted_path, "rb") as wf:
             recognizer = vosk.KaldiRecognizer(model, wf.getframerate())
@@ -333,9 +335,9 @@ def _transcribe_wav_vosk(wav_path: str, model_path: str) -> str:
     except Exception as e:
         raise RuntimeError(f"Transcription failed: {e}") from e
     finally:
-        if is_temp:
+        if temp_path is not None:
             try:
-                os.remove(converted_path)
+                os.remove(temp_path)
             except OSError:
                 pass
 

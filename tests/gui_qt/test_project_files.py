@@ -167,6 +167,61 @@ def test_missing_audio_on_open_leaves_the_segment_pathless_and_says_so(tmp_path,
     assert loaded.document.dirty_clips() == [loaded.document.clips[0]]
 
 
+def test_open_drops_an_audio_path_that_points_outside_the_project_dir(tmp_path, isolated_dirs):
+    """A `document.json` is untrusted input: a segment naming a file
+    elsewhere on the machine reads as missing rather than as that file,
+    which the next Save would otherwise copy into the bundle."""
+    secret = tmp_path / "secret.txt"
+    secret.write_bytes(b"not audio")
+    other = str(tmp_path / "other")
+    os.makedirs(other)
+    with open(os.path.join(other, "document.json"), "w", encoding="utf-8") as f:
+        json.dump({"runs": [], "characters": [],
+                   "clips": [{"id": "c1", "character_id": "a", "segments": [
+                       {"order_index": 0, "text": "hi", "cache_key": "k", "audio_path": str(secret),
+                        "duration": 1.0}]}]}, f)
+    info = project_io.BundleInfo(path=str(tmp_path / "x.tbaw"), manifest={}, project_id="x", entries=[],
+                                 audio_bytes=0, zip_size=0, zip_mtime=0.0)
+    loaded = project_io.finish_open(info, other)
+    assert loaded.document.clips[0].segments[0].audio_path is None
+    assert any("missing" in n for n in loaded.notices)
+    assert secret.read_bytes() == b"not audio"
+
+
+def test_save_bundles_only_audio_inside_the_project_dir(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _seg = _document_with_audio(project_dir)
+    outside = tmp_path / "elsewhere.wav"
+    outside.write_bytes(b"RIFF" + b"\0" * 60)
+    doc.clips[0].segments[0].audio_path = str(outside)
+    path = str(tmp_path / "proj.tbaw")
+
+    project_io.save_project(doc, path, {}, project_dir, project_id)
+
+    with zipfile.ZipFile(path) as zf:
+        assert not any(n.startswith("audio/") for n in zf.namelist())
+        document = json.loads(zf.read("document.json"))
+    assert document["clips"][0]["segments"][0]["audio_path"] == str(outside).replace("\\", "/")
+
+
+def test_open_never_extracts_the_dirs_own_session_or_lock(tmp_path, isolated_dirs):
+    path = str(tmp_path / "planted.tbaw")
+    _write_bundle(path, _manifest(), {"session.json": b'{"dirty": true, "source_path": "/elsewhere"}',
+                                      "lock": b"x", "session.json.tmp": b"{}"})
+    info = project_io.inspect_bundle(path)
+    project_dir = project_io.choose_project_dir(info.project_id, info.path)
+    lock = project_io.ProjectLock(project_dir).acquire()
+    try:
+        project_io.extract_small(info, project_dir)
+        loaded = project_io.finish_open(info, project_dir)
+    finally:
+        lock.release()
+    assert loaded.document.text == ""
+    session = project_io.read_session(project_dir)
+    assert session["source_path"] == info.path and session["dirty"] is False
+    assert not os.path.exists(os.path.join(project_dir, "session.json.tmp"))
+
+
 def _write_bundle(path, manifest, extra_entries=None):
     with zipfile.ZipFile(path, "w") as zf:
         zf.writestr("manifest.json", json.dumps(manifest))

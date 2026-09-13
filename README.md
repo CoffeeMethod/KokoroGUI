@@ -70,9 +70,11 @@ real backend, and projects that live in one file.
     session next time the project opens, even after the file was renamed or moved. Launch reopens
     the last project; New inherits the previous project's characters; Import Text asks whether to
     add to the current project or start a new one. The window title names the project and shows
-    `*` while it has unsaved changes. (`.json` projects from the 4.0 previews still open and are
-    converted on the spot, a `.tbaw` written next to the untouched `.json`, with matching audio
-    carried over.)
+    `*` while it has unsaved changes. A bundle only ever names audio inside itself: a
+    `document.json` pointing at some other file on the machine reads as a missing segment, and
+    Save never copies a file from outside the project's working copy into the bundle. (`.json`
+    projects from the 4.0 previews still open and are converted on the spot, a `.tbaw` written
+    next to the untouched `.json`, with matching audio carried over.)
 -   **Generation writes once.** A clip's audio lands straight in the project's working copy under
     a name derived from what produced it, instead of one copy in `cache/` and another in the
     output folder. Regenerating a clip that's already up to date (the gutter button) makes a fresh
@@ -324,8 +326,8 @@ for a 3.2.0 install other than cloning 4.0.0 alongside it; there is nothing to m
 The project has a `pytest` suite under `tests/` covering the DAW document model (`tests/daw/`), the
 Qt frontend (`tests/gui_qt/`), and `kokoro_engine.py`. Playback isn't Windows-only (see
 [`playback.py`](playback.py)), and CI (`.github/workflows/tests.yml`) runs the suite on both
-`windows-latest` and `ubuntu-latest` (the Linux leg installs `libportaudio2` for `sounddevice`; the
-Qt suite runs headless via `QT_QPA_PLATFORM=offscreen`, no virtual display needed). `macos-latest`
+`windows-latest` and `ubuntu-latest` (the Linux leg installs `libportaudio2` for `sounddevice` and
+the libEGL/libGL/xkbcommon/fontconfig/dbus libraries PySide6 links against; the Qt suite runs headless via `QT_QPA_PLATFORM=offscreen`, no virtual display needed). `macos-latest`
 isn't set up yet.
 
 1.  **Install test dependencies** (on top of `requirements.txt`):
@@ -354,8 +356,8 @@ isn't set up yet.
 ### CI
 
 [.github/workflows/tests.yml](.github/workflows/tests.yml) runs step 2 above (`pytest`) on push/PR
-against `windows-latest` and `ubuntu-latest` (the Linux leg additionally installs `libportaudio2`, as
-noted above) after installing `requirements.txt` + `requirements-test.txt`. The fast suite needs no
+against `windows-latest` and `ubuntu-latest` (the Linux leg additionally installs `libportaudio2` and
+PySide6's runtime libraries, as noted above) after installing `requirements.txt` + `requirements-test.txt`. The fast suite needs no
 eSpeak NG or model download, so it's safe to run on every push/PR. The integration suite is slow and
 pulls model weights, so it's intentionally left out as a manual/opt-in run rather than part of the
 default pipeline.

@@ -188,7 +188,7 @@ def test_transcribe_wav_vosk_cleans_up_the_converted_temp_file(monkeypatch, tmp_
     converted_path = tmp_path / "converted.wav"
     _write_pcm16_mono_wav(converted_path, n_frames=8000)
 
-    monkeypatch.setattr(asr, "_ensure_pcm16_mono", lambda path: (str(converted_path), True))
+    monkeypatch.setattr(asr, "_ensure_pcm16_mono", lambda path: (str(converted_path), str(converted_path)))
     monkeypatch.setitem(sys.modules, "vosk", _FakeVoskModule())
     monkeypatch.setattr(asr, "_get_vosk_model", lambda path: object())
 
@@ -231,10 +231,10 @@ def test_ensure_pcm16_mono_passes_already_correct_wav_through_unchanged(tmp_path
     wav_path = tmp_path / "ref.wav"
     _write_pcm16_mono_wav(wav_path)
 
-    result_path, is_temp = asr._ensure_pcm16_mono(str(wav_path))
+    result_path, temp_path = asr._ensure_pcm16_mono(str(wav_path))
 
     assert result_path == str(wav_path)
-    assert is_temp is False
+    assert temp_path is None
 
 
 def test_ensure_pcm16_mono_downmixes_stereo(tmp_path):
@@ -245,9 +245,9 @@ def test_ensure_pcm16_mono_downmixes_stereo(tmp_path):
         wf.setframerate(16000)
         wf.writeframes(b"\x00\x00\x00\x00" * 100)
 
-    result_path, is_temp = asr._ensure_pcm16_mono(str(wav_path))
+    result_path, temp_path = asr._ensure_pcm16_mono(str(wav_path))
     try:
-        assert is_temp is True
+        assert temp_path == result_path
         assert result_path != str(wav_path)
         with wave.open(result_path, "rb") as wf:
             assert wf.getnchannels() == 1
@@ -260,9 +260,9 @@ def test_ensure_pcm16_mono_converts_float_samples(tmp_path):
     wav_path = tmp_path / "float.wav"
     sf.write(str(wav_path), np.zeros(100, dtype=np.float32), 16000, subtype="FLOAT")
 
-    result_path, is_temp = asr._ensure_pcm16_mono(str(wav_path))
+    result_path, temp_path = asr._ensure_pcm16_mono(str(wav_path))
     try:
-        assert is_temp is True
+        assert temp_path == result_path
         with wave.open(result_path, "rb") as wf:
             assert wf.getnchannels() == 1
             assert wf.getsampwidth() == 2
