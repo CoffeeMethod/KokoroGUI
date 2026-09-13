@@ -57,7 +57,11 @@ jobs:
       - name: Run fast test suite
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest
+        # -X faulthandler from interpreter start: pytest's own faulthandler
+        # only switches on at pytest_configure, after tests/conftest.py
+        # (and torch, pedalboard, PySide6 with it) has already been
+        # imported, so a native crash during those imports printed nothing.
+        run: python -X faulthandler -m pytest
         # Runs the mocked-pipeline suite only (pytest.ini already sets
         # `-m "not integration"` by default). No eSpeak NG or model
         # download needed. The real-synthesis integration suite
