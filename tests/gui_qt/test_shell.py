@@ -20,8 +20,8 @@ def test_menu_bar_has_the_four_menus(qt_app):
 
 def test_file_menu_actions(qt_app):
     texts = _action_texts(qt_app.file_menu)
-    assert texts == ["New", "Open...", "Recent", "Save", "Save As...", "Import Text...", "Import Audio...",
-                     "Export...", "Quit"]
+    assert texts == ["New", "Open...", "Recent", "Welcome...", "Save", "Save As...", "Import Text...",
+                     "Import Audio...", "Export...", "Quit"]
     assert qt_app.import_audio_action.isEnabled() is False
     assert "ASR" in qt_app.import_audio_action.toolTip()
 

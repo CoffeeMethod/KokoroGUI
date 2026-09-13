@@ -106,3 +106,7 @@ subdirectory (not worth the extra nesting at three pages). What's left:
 Whenever the README's "New in X.Y.Z" section grows, do a pass over `docs/index.html`. The engine
 comparison, dock grid, and feature strip are the sections most likely to go stale first, since they
 enumerate specific capabilities.
+
+Pending from the README's 4.1.2 entry: the welcome dialog (recent projects, Resume/New/New from
+text/Open, "Show at startup") isn't on `index.html`'s dock-grid walkthrough yet, and
+`settings.html` doesn't list the `show_welcome` key or the File ▸ Welcome… item.

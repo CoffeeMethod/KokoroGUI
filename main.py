@@ -12,4 +12,5 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = QtTTSApp()
     window.show()
+    window.show_welcome_if_enabled()
     sys.exit(app.exec())

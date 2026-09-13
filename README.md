@@ -11,6 +11,14 @@ by default, with a zero-shot voice-cloning backend also built in.
 
 https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
+## New in Beta 4.1.2
+
+-   **Welcome screen.** Launch opens the last project as before, then puts a dialog over it:
+    recent projects (the open one first, Resume as the default button), New project, New from
+    text file, Open other, right-click to drop a row, Clear list, and a details pane with the
+    file's path, modified time, character and clip counts. Untick "Show at startup" to go back to
+    a silent resume; File > Welcome... brings it up any time.
+
 ## New in Beta 4.1.1
 
 -   **Audio FX are non-destructive.** Clips are generated as raw model output and the FX chain,
@@ -33,14 +41,14 @@ The shell now matches the original wireframe: a 2x2 grid of docks, a real timeli
     can drag; **Workspace > Advanced / Simple / Reset layout** are saved layouts. Simple hides the
     timeline and gives the transcript the full height, nothing else changes. The toolbar and the
     central button block are gone.
--   **Menus.** File (New / Open / Recent / Save / Save As / Import Text / Export), Edit (Undo / Redo /
-    Cut / Copy / Paste / Characters...), Options (Engine, Device, Theme, copy/paste behavior, JIT),
-    Workspace. The old Settings dialog folded into Options.
+-   **Menus.** File (New / Open / Recent / Welcome / Save / Save As / Import Text / Export), Edit
+    (Undo / Redo / Cut / Copy / Paste / Characters...), Options (Engine, Device, Theme, copy/paste
+    behavior, JIT), Workspace. The old Settings dialog folded into Options.
 -   **Projects.** A project is a `.json` file in the `document.json` shape plus a
-    `project_settings` block (export defaults). Launch reopens the last project; New inherits the
-    previous project's characters; Import Text asks whether to add to the current project or start
-    a new one. Autosave keeps writing to the current file; Save As branches it. The window title
-    names the project and shows `*` while a save is pending.
+    `project_settings` block (export defaults). Launch reopens the last project under the welcome
+    dialog (4.1.2); New inherits the previous project's characters; Import Text asks whether to
+    add to the current project or start a new one. Autosave keeps writing to the current file;
+    Save As branches it. The window title names the project and shows `*` while a save is pending.
 -   **A stripped transcript panel.** The Input Source tabs, file path row, legacy preset row and
     Auto-Split row are gone. Above the editor sit two combos, Character and FX, that reflect the
     caret's clip and reassign the selection (or the whole clip) when changed. The gutter labels once
@@ -250,8 +258,9 @@ The shell now matches the original wireframe: a 2x2 grid of docks, a real timeli
     -   **Windows:** double-click `run.bat` or run `python main.py`
     -   **Other:** run `python main.py`
 
-    This launches the PySide6 (Qt) frontend: a menu bar (File / Edit / Options / Workspace) over a
-    2x2 grid of docks:
+    This launches the PySide6 (Qt) frontend. A welcome dialog lists recent projects with Resume,
+    New, New from text file and Open (untick "Show at startup" to skip it; File > Welcome...
+    reopens it). Behind it, a menu bar (File / Edit / Options / Workspace) over a 2x2 grid of docks:
 
     -   **Transcript** (top-left): the editor, with Character and FX combos above it and a gutter
         that names the speaker and offers a per-clip regenerate button.

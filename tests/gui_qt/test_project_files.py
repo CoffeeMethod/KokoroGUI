@@ -69,6 +69,29 @@ def test_new_document_inherits_characters_as_copies():
     assert fresh.tracks[0].character_id == fresh.characters[0].id
 
 
+def test_clear_recent_empties_list_but_keeps_last_project(tmp_path):
+    settings = {}
+    project_io.remember_recent(settings, str(tmp_path / "a.json"))
+    project_io.clear_recent(settings)
+    assert settings["recent_projects"] == []
+    assert settings["last_project"].endswith("a.json")
+
+
+def test_project_summary_counts_and_tolerates_ghosts(tmp_path):
+    path = str(tmp_path / "s.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"runs": [], "clips": [{}, {}], "characters": [{}, {}, {}]}, f)
+    summary = project_io.project_summary(path)
+    assert summary["clips"] == 2
+    assert summary["characters"] == 3
+    assert summary["path"] == os.path.abspath(path)
+    assert summary["modified"].year >= 2024
+    assert project_io.project_summary(str(tmp_path / "ghost.json")) is None
+    bad = tmp_path / "bad.json"
+    bad.write_text("not json", encoding="utf-8")
+    assert project_io.project_summary(str(bad)) is None
+
+
 # -- app-level --------------------------------------------------------------------------
 
 

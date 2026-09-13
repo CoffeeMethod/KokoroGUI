@@ -55,6 +55,7 @@ from kokoro_gui.qt.docks import (  # noqa: E402
     VoiceCloneDock,
 )
 from kokoro_gui.qt.docks.export_dialog import ExportDialog, run_export  # noqa: E402
+from kokoro_gui.qt.welcome_dialog import WelcomeDialog  # noqa: E402
 
 APP_NAME = "KokoroGUI"
 SCHEDULE_REBUILD_DEBOUNCE_MS = 100
@@ -94,6 +95,7 @@ class QtTTSApp(QMainWindow):
         self._schedule_timer.setInterval(SCHEDULE_REBUILD_DEBOUNCE_MS)
         self._schedule_timer.timeout.connect(self._rebuild_transport_schedule)
 
+        self.welcome_dialog: WelcomeDialog | None = None
         self.transcript_dock: TranscriptDock | None = None
         self.settings_dock: SettingsDock | None = None
         self.fx_dock: FXDock | None = None
@@ -187,10 +189,13 @@ class QtTTSApp(QMainWindow):
         self.new_action = self._action("&New", self.new_project, QKeySequence.StandardKey.New)
         self.open_action = self._action("&Open...", self.open_project_dialog, QKeySequence.StandardKey.Open)
         self.recent_menu = self.file_menu.addMenu("Recent")
+        self.welcome_action = self._action("&Welcome...", self.show_welcome)
         self.save_action = self._action("&Save", self.save_project, QKeySequence.StandardKey.Save)
         self.save_as_action = self._action("Save &As...", self.save_project_as_dialog, QKeySequence.StandardKey.SaveAs)
         self.file_menu.insertAction(self.recent_menu.menuAction(), self.new_action)
         self.file_menu.insertAction(self.recent_menu.menuAction(), self.open_action)
+        self.file_menu.addAction(self.welcome_action)
+        self.file_menu.addSeparator()
         self.file_menu.addAction(self.save_action)
         self.file_menu.addAction(self.save_as_action)
         self.file_menu.addSeparator()
@@ -785,6 +790,26 @@ class QtTTSApp(QMainWindow):
             action = self.recent_menu.addAction(project_io.project_title(path))
             action.setToolTip(path)
             action.triggered.connect(lambda checked=False, p=path: self.open_project(p))
+
+    def show_welcome(self) -> WelcomeDialog:
+        """Window-modal via `open()`, not `exec()`, so engine init keeps
+        reporting underneath and tests can drive it."""
+        if self.welcome_dialog is None:
+            self.welcome_dialog = WelcomeDialog(self)
+        else:
+            self.welcome_dialog.reload()
+        if self.welcome_dialog.isVisible():
+            self.welcome_dialog.raise_()
+        else:
+            self.welcome_dialog.open()
+        return self.welcome_dialog
+
+    def show_welcome_if_enabled(self) -> WelcomeDialog | None:
+        """The launch-time trigger; `main.py` is its only caller, so the
+        test fixture and the screenshot script never get a dialog."""
+        if not self.settings.get("show_welcome", True):
+            return None
+        return self.show_welcome()
 
     def _switch_document(self, document, path: str | None, project_settings: dict | None = None) -> None:
         self.transport.stop()

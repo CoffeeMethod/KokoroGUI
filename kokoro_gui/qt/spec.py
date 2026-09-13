@@ -167,6 +167,7 @@ SETTINGS_DEFAULTS = {
     "device": "auto",           # Options > Device: "auto" | "cpu" | "cuda"
     "last_project": None,       # File menu: the project launch reopens
     "recent_projects": [],      # File > Recent, most recent first (max 10)
+    "show_welcome": True,       # Welcome dialog on launch (File > Welcome... reopens it)
     "normalize": False,
     "trim": False,
     "apply_fx": True,

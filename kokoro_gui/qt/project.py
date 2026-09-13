@@ -5,8 +5,9 @@ A project is a `.json` file in `document.json`'s shape
 (`kokoro_gui.daw.serialization`) plus a top-level `"project_settings"`
 block for per-project things that don't belong in `config_qt.json` (last
 export settings, workspace override). `settings["last_project"]` is what
-launch reopens (WF2); `settings["recent_projects"]` is the File > Recent
-list, most recent first, at most `MAX_RECENT` entries.
+launch reopens (WF2, revised: the welcome dialog offers it as Resume);
+`settings["recent_projects"]` is the File > Recent list and the welcome
+dialog's rows, most recent first, at most `MAX_RECENT` entries.
 
 `format_for_path` exists so the `.tbaw` zip bundle (section 8, spec only
 for now) can plug in later without touching the menu code: everything
@@ -15,6 +16,7 @@ extension.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 from dataclasses import dataclass, field
@@ -91,6 +93,36 @@ def remember_recent(settings: dict, path: str) -> list:
 def forget_recent(settings: dict, path: str) -> None:
     path = os.path.abspath(path)
     settings["recent_projects"] = [p for p in settings.get("recent_projects", []) if os.path.abspath(p) != path]
+
+
+def clear_recent(settings: dict) -> None:
+    """Empties the list. `last_project` stays: the open project is still the
+    one launch resumes, it just isn't listed any more."""
+    settings["recent_projects"] = []
+
+
+def project_summary(path: str) -> dict | None:
+    """What the welcome dialog's details pane shows for a row. Reads the raw
+    JSON rather than building a `Document` - counts are all it needs, and
+    it runs on every selection change. `None` when missing or unreadable."""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        modified = datetime.datetime.fromtimestamp(os.path.getmtime(path))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    characters = data.get("characters", [])
+    clips = data.get("clips", [])
+    return {
+        "path": os.path.abspath(path),
+        "modified": modified,
+        "characters": len(characters) if isinstance(characters, list) else 0,
+        "clips": len(clips) if isinstance(clips, list) else 0,
+    }
 
 
 def new_document_from(previous: Document | None) -> Document:
