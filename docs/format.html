@@ -29,7 +29,7 @@
           <rect x="43" y="10" width="7" height="44" rx="2"/>
         </g>
       </svg>
-      <span class="brand-word">Kokoro GUI<span class="ver">v4.2.0</span></span>
+      <span class="brand-word">Kokoro GUI<span class="ver">v4.0.0 beta</span></span>
     </a>
     <div class="navlinks">
       <a href="index.html#features">Features</a>
@@ -114,7 +114,7 @@
             <tr><td>version</td><td>Integer, currently <code>1</code>. A reader refuses a bundle whose version is higher than the one it implements.</td></tr>
             <tr><td>requires</td><td>List of feature names the bundle depends on. Empty today. A reader refuses, by name, any feature it doesn't implement, which is how a future version can add something an old build can't fake.</td></tr>
             <tr><td>project_id</td><td>Random id, stable across Save As. It names the working copy under <code>cache/projects/</code> and is what crash recovery keys on, not the path.</td></tr>
-            <tr><td>created_by</td><td>e.g. <code>"KokoroGUI 4.2.0"</code>.</td></tr>
+            <tr><td>created_by</td><td>e.g. <code>"KokoroGUI 4.0.0"</code>.</td></tr>
             <tr><td>created / modified</td><td>ISO 8601 local timestamps, seconds precision. <code>created</code> is carried from the previous manifest.</td></tr>
             <tr><td>includes</td><td><code>{"generated_audio": bool, "imported_audio": bool}</code>. Whether the audio directories were bundled. A bundle saved without generated audio regenerates its clips on open.</td></tr>
             <tr><td>audio.format</td><td><code>"wav"</code> or <code>"flac"</code>: the format new segments are written in.</td></tr>
@@ -139,7 +139,7 @@
           <tbody>
             <tr><td>runs</td><td>The text, in order, as a list of <code>{text, clip_id, kind}</code>. The document's full text is the join of every run's <code>text</code>. <code>clip_id</code> is null for narration nobody has assigned; <code>kind</code> mirrors the clip's <code>source</code>.</td></tr>
             <tr><td>clips</td><td><code>{id, character_id, track_id, overrides, fx_override, timeline_timestamp, source, original_audio_path, segments}</code>. A clip has no offsets of its own: its extent is wherever <code>runs</code> tags its id. <code>overrides</code> holds per-clip settings (<code>voice</code>, <code>speed</code>, <code>take</code>, <code>fx_preset</code>, <code>apply_fx</code>…); <code>timeline_timestamp</code> is null while the clip flows after its predecessor. <code>source</code> is <code>"generated"</code> or <code>"imported"</code>.</td></tr>
-            <tr><td>clips[].segments</td><td><code>{id, order_index, text, cache_key, audio_path, duration, raw, engine_version}</code>. One per engine-level chunk. <code>cache_key</code> is the <a href="#keys" class="link">segment key</a>, and <code>audio_path</code> is <code>audio/generated/&lt;cache_key&gt;_&lt;order_index&gt;.&lt;ext&gt;</code>. <code>raw</code> is true for every segment generated since 4.1.1 (FX are applied at read time); a segment without the field is treated as baked and regenerated once. <code>engine_version</code> is the version that produced it.</td></tr>
+            <tr><td>clips[].segments</td><td><code>{id, order_index, text, cache_key, audio_path, duration, raw, engine_version}</code>. One per engine-level chunk. <code>cache_key</code> is the <a href="#keys" class="link">segment key</a>, and <code>audio_path</code> is <code>audio/generated/&lt;cache_key&gt;_&lt;order_index&gt;.&lt;ext&gt;</code>. <code>raw</code> is true for every segment 4.0.0 generates (FX are applied at read time); a segment without the field, from a 4.0 preview build, is treated as baked and regenerated once. <code>engine_version</code> is the version that produced it.</td></tr>
             <tr><td>tracks</td><td><code>{id, name, character_id, order_index}</code>. A lane. Kept separate from characters so a clip can sit on another character's track.</td></tr>
             <tr><td>characters</td><td><code>{id, name, preset_data, highlight_color, backend_id}</code>. <code>preset_data</code> is the <code>presets/*.json</code> shape: voice, speed, split pattern, <code>fx_preset</code>, <code>apply_fx</code>, and so on. <code>backend_id</code> is the engine the voice belongs to.</td></tr>
             <tr><td>settings</td><td>The document's own defaults, the "nothing selected" scope of the Settings tab.</td></tr>
@@ -237,7 +237,7 @@
       <h2><span class="idx">08 · Compatibility</span>Versions, engines, and the .json past</h2>
       <div class="prose reveal">
         <p><strong>Engine versions.</strong> A segment is compared under the <code>engine_version</code> it stores while its file is present. So a project made with one Kokoro release opens clean on a machine with another, and the status line says which version the clips came from. Only a clip you regenerate uses the installed version.</p>
-        <p><strong>Pre-4.2 projects.</strong> A <code>.json</code> project (the <code>document.json</code> shape plus a top-level <code>project_settings</code>) still opens. The app builds a working copy, adopts any segment whose stored key matches the schema-2 formula and whose file exists (copying it in under its schema-3 key), and saves a <code>.tbaw</code> next to the original. The <code>.json</code> is left alone.</p>
+        <p><strong>Preview-era projects.</strong> A <code>.json</code> project from the 4.0 previews (the <code>document.json</code> shape plus a top-level <code>project_settings</code>) still opens. The app builds a working copy, adopts any segment whose stored key matches the schema-2 formula and whose file exists (copying it in under its schema-3 key), and saves a <code>.tbaw</code> next to the original. The <code>.json</code> is left alone.</p>
         <p><strong>Forward compatibility.</strong> <code>version</code> and <code>requires</code> are the two gates. A reader refuses a higher version outright, and refuses a bundle that <code>requires</code> a feature it doesn't know, by name. Everything else, unknown entries, unknown manifest keys, unknown object fields, is carried through.</p>
       </div>
     </div>
@@ -303,7 +303,7 @@
       </div>
     </div>
     <div class="bottom">
-      <span>Apache-2.0. Kokoro GUI 4.2.0.</span>
+      <span>Apache-2.0. Kokoro GUI 4.0.0 beta.</span>
       <span>Kokoro by hexgrad · Audio8 models by Audio8 · Pedalboard by Spotify</span>
     </div>
   </div>

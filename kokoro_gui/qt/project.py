@@ -6,7 +6,7 @@ TB1-TB15): one zip holding `manifest.json`, `document.json`
 `project_settings` block: export defaults, workspace override, bundle
 options), every generated segment under `audio/generated/` named by its
 segment key, and every named asset a character or clip points at (`fx/`,
-`engines/<id>/...`). A `.json` project (the pre-4.2 format, the document
+`engines/<id>/...`). A `.json` project (the 4.0-preview format, the document
 shape plus a top-level `"project_settings"`) still opens and is migrated to
 `.tbaw` on open (`migrate_json_project`).
 
@@ -217,7 +217,7 @@ def load_json_project(path: str) -> LoadedProject | None:
 
 
 def save_json_project(document: Document, path: str, project_settings: dict | None = None) -> None:
-    """The pre-4.2 format, kept for the migration tests and for anyone who
+    """The 4.0-preview format, kept for the migration tests and for anyone who
     wants a plain-JSON export; the app never writes it any more."""
     data = serialization.document_to_dict(document)
     data["project_settings"] = dict(project_settings or {})

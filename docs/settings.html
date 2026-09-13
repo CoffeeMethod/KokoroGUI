@@ -25,7 +25,7 @@
           <rect x="43" y="10" width="7" height="44" rx="2"/>
         </g>
       </svg>
-      <span class="brand-word">Kokoro GUI<span class="ver">v4.2.0</span></span>
+      <span class="brand-word">Kokoro GUI<span class="ver">v4.0.0 beta</span></span>
     </a>
     <div class="navlinks">
       <a href="index.html#features">Features</a>
@@ -385,7 +385,7 @@
     <div class="wrap">
       <h2><span class="idx">Presets</span>Presets, characters, and how they relate to inline scripting</h2>
       <div class="prose reveal">
-        <p>Two preset systems, both plain JSON on disk. <code>presets/&lt;name&gt;.json</code> files are whole-config snapshots (voice, speed, split pattern, and the rest); since 4.1 nothing in the GUI writes them any more, because Edit &gt; Characters... is where a named voice/FX bundle is edited now, but existing files still load. "Save FX Preset..." in the Audio FX tab snapshots just the FX sliders, as <code>presets/fx/&lt;name&gt;.json</code>.</p>
+        <p>Two preset systems, both plain JSON on disk. <code>presets/&lt;name&gt;.json</code> files are whole-config snapshots (voice, speed, split pattern, and the rest); since 4.0 nothing in the GUI writes them any more, because Edit &gt; Characters... is where a named voice/FX bundle is edited now, but existing files still load. "Save FX Preset..." in the Audio FX tab snapshots just the FX sliders, as <code>presets/fx/&lt;name&gt;.json</code>.</p>
         <p>Every file in <code>presets/</code> also becomes a <code>Character</code> on first load, one per file, with a highlight color assigned from a small fixed palette. If you had no presets saved yet, one "Default" character is seeded from your last-used settings instead, so a returning user's config isn't discarded. The preset files themselves are untouched either way, characters are read from them, not a replacement for them.</p>
         <p>These aren't a separate feature from <a href="scripting.html" class="link">inline scripting</a>, they're the same thing. A <code>[Name]:</code> tag in the transcript looks up a character by exactly that name, case-insensitively, and a character's name starts out as whatever the preset file it came from was called.</p>
       </div>
@@ -454,7 +454,7 @@
       </div>
     </div>
     <div class="bottom">
-      <span>Apache-2.0. Kokoro GUI 4.2.0.</span>
+      <span>Apache-2.0. Kokoro GUI 4.0.0 beta.</span>
       <span>Kokoro by hexgrad · Audio8 models by Audio8 · Pedalboard by Spotify</span>
     </div>
   </div>

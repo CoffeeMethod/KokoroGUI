@@ -8,7 +8,7 @@ it's headed.
 ## Where it stands today
 
 Four pages, no build step: `docs/index.html` (the pitch: hero, three-step walkthrough, bento
-feature grid, engine comparison table, signal chain, the `.tbaw` pitch, a changelog back to 4.0,
+feature grid, engine comparison table, signal chain, the `.tbaw` pitch, a changelog (4.0.0, then the README for older),
 install), `docs/scripting.html` (the `[Preset:FXPreset]: Text` inline syntax, worked example
 included), `docs/settings.html` (every field in every dock, including the two Audio8 fields that
 are silently inert, the welcome dialog, and why JIT streaming only exists for engines that can
@@ -72,7 +72,7 @@ Still static-hostable, no server required:
   static node chain. Keep the real order from `process_audio` as the source of truth; the demo
   should make that order audible, not reinvent it.
 - **Generate the changelog.** `index.html#changelog` is hand-written from the README's "New in
-  X.Y.Z" sections (4.0.0 through 4.2.0). A small build step that greps `README.md` into that
+  X.Y.Z" section (4.0.0 for now). A small build step that greps `README.md` into that
   `<section>` at publish time would stop it drifting, and is the point where the GitHub Actions
   workflow from option 2 above starts paying for itself.
 
@@ -102,7 +102,7 @@ settings breakdown and the bundle format, as flat files next to `index.html` rat
   project actually wants to run and pay for.
 - **Analytics.** If it gets added later, keep it privacy-respecting and cookie-free (GoatCounter or
   Plausible, for example) and say so on the page. Don't add a tracker silently.
-- **An interactive timeline demo.** The app's timeline shipped in 4.1.0 and the bento card mocks
+- **An interactive timeline demo.** The app's timeline shipped in 4.0.0 and the bento card mocks
   it in CSS. A draggable in-browser version would be a second implementation of `arrangement.py`
   to keep in sync; the screenshot is enough.
 
@@ -112,7 +112,7 @@ Whenever the README's "New in X.Y.Z" section grows, do a pass over `docs/index.h
 comparison, bento grid, and changelog are the sections most likely to go stale first, since they
 enumerate specific capabilities.
 
-Nothing pending from the README's 4.1.2 and 4.2.0 entries: the welcome dialog and `show_welcome`
+Nothing pending from the README's 4.0.0 entry: the welcome dialog and `show_welcome`
 are on `settings.html`, `index.html` pitches `.tbaw` in the bento grid, the Projects section and
 the changelog, and `format.html` documents the bundle. The next "New in" section reopens this
 list.

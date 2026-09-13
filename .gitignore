@@ -182,4 +182,5 @@ cython_debug/
 /Claude/
 /.claude/
 document.json
+document.tbaw
 config_qt.json

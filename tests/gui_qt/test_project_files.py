@@ -706,7 +706,7 @@ def test_open_of_a_bundle_with_another_engine_version_is_clean_with_a_status_lin
 def test_json_project_migrates_to_tbaw_adopting_matching_segments(qt_app, tmp_path):
     from kokoro_gui.engine.caching import effective_speed
 
-    # A pre-4.2 project: one clean clip (legacy key, file present), one whose
+    # A 4.0-preview project: one clean clip (legacy key, file present), one whose
     # key already disagreed, one whose file is gone.
     audio_dir = tmp_path / "audio_output"
     audio_dir.mkdir()

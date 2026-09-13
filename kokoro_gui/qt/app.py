@@ -187,7 +187,7 @@ class QtTTSApp(QMainWindow):
 
     def _load_initial_document(self):
         """The window starts on an Untitled project in a fresh project dir.
-        The last project (or the pre-4.2 `document.json` next to the
+        The last project (or the 4.0-preview `document.json` next to the
         config, which migrates to `document.tbaw`) is opened right after
         the docks exist, since Open extracts on a thread with progress on
         the transport bar. Characters for a first run come from the
@@ -1271,7 +1271,7 @@ class QtTTSApp(QMainWindow):
             self.set_status(f"Opened {project_io.project_title(info.path)}.")
 
     def _open_json_project(self, path: str) -> None:
-        """TB6: a pre-4.2 `.json` project opens, gets a project id and a dir,
+        """TB6: a 4.0-preview `.json` project opens, gets a project id and a dir,
         has its segments rekeyed and copied in (`migrate_segments`), and is
         saved as `<name>.tbaw` next to the `.json`, which then becomes the
         recent entry. A `.tbaw` already there from an earlier migration is

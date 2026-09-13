@@ -1,191 +1,151 @@
 # Kokoro TTS GUI
 
+[![Tests](https://github.com/CoffeeMethod/KokoroGUI/actions/workflows/tests.yml/badge.svg)](https://github.com/CoffeeMethod/KokoroGUI/actions/workflows/tests.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+
 A desktop text-to-speech app built with Python: a dockable PySide6 (Qt) interface over a pluggable
 synthesis backend, edited less like a form and more like a DAW project, with a document of text,
 timed clips on character tracks, and undo/redo. Powered by [Kokoro](https://github.com/hexgrad/kokoro)
 by default, with a zero-shot voice-cloning backend also built in.
 
-<img width="1600" height="1000" alt="KokoroGUI 4.2: transcript and settings tabs over a seconds-axis timeline and transport, dark theme" src="docs/assets/shell_dark.png" />
+<img width="1600" height="1000" alt="KokoroGUI 4.0: transcript and settings tabs over a seconds-axis timeline and transport, dark theme" src="docs/assets/shell_dark.png" />
 
 *(demo sounds better in `.wav` but GitHub doesn't support that so it's kinda bad)*
 
 https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
-## New in Beta 4.2.0
+## New in Beta 4.0.0
 
--   **`.tbaw` project bundles.** A project is now one zip file that carries everything: the text
-    and clips, every generated segment, and every named voice mix, voice reference and FX preset
-    it uses, so it opens on another machine with the same engines installed. `.json` projects
-    still open and are converted on the spot (a `.tbaw` is written next to the `.json`, which is
-    left alone); generated audio whose settings still match is carried over, nothing is
-    regenerated for the conversion. Save writes the whole file in the background (the progress
-    line shows it) and never leaves a half-written project behind; Save As keeps the same working
-    copy. Autosave writes only into the app's own working copy (`cache/projects/`), so the file
-    on disk is as new as your last Save. Closing with unsaved changes asks Save / Discard /
-    Cancel, and a crash offers to recover the unsaved session next time the project opens (even
-    after the file was renamed or moved). The Export dialog gained two project options: bundle
-    generated audio (off for a small file that regenerates on open) and the audio format for new
-    segments (wav or flac).
--   **Generation writes once.** A clip's audio lands straight in the project's working copy
-    under a name derived from what produced it, instead of one copy in `cache/` and another in
-    the output folder. Regenerating a clip that's already up to date (the gutter button) makes a
-    fresh take under a new name and leaves the old file for any other identical clip that plays
-    it; the Voice Reference and Mixing lists show a bundle's own voices first. Opening a project
-    made with another version of an engine keeps its clips clean and says so in the status line;
-    only clips you regenerate use the installed version.
--   **Segment cache rekeyed.** Cache entries are now keyed on the voice's name and content rather
-    than its path, so the first generate after upgrading misses the old `cache/` entries.
-    Converted `.json` projects don't pay for this: their audio is adopted by the conversion.
--   **Flat shell.** Dark is the default theme (Options > Theme still has Light). Both themes now
-    style every control from one stylesheet: borderless setting groups, rounded inputs and
-    buttons, an underlined tab strip, thin scrollbars, a flat progress line, painted play /
-    pause / stop glyphs and a filled Generate button. The UI font is Segoe UI / Inter / Noto
-    Sans at 10pt, the transcript one point larger. Timeline clips have rounded corners, a
-    waveform in the clip's own darker shade and a label in black or white by contrast;
-    transcript highlights are a tint over the text instead of a solid block; the default
-    character palette is eight hues at one lightness and doubles as the color picker's presets.
-    Panel spacing is unchanged.
+The rebuild. 3.2.0 was a CustomTkinter form over one `kokoro_engine.py`; 4.0.0 is a PySide6
+shell over a document with clips, tracks and characters, a pluggable engine layer with a second
+real backend, and projects that live in one file.
 
-## New in Beta 4.1.2
-
--   **Welcome screen.** Launch opens the last project as before, then puts a dialog over it:
-    recent projects (the open one first, Resume as the default button), New project, New from
-    text file, Open other, right-click to drop a row, Clear list, and a details pane with the
-    file's path, modified time, character and clip counts. Untick "Show at startup" to go back to
-    a silent resume; File > Welcome... brings it up any time.
-
-## New in Beta 4.1.1
-
+-   **Qt frontend, the only frontend.** `python main.py`/`run.bat` launches a PySide6 shell of
+    dockable panels (`kokoro_gui/qt/`) in a 2x2 grid: Transcript | Settings / Audio FX / Lexicon /
+    Voices tabs on top, Timeline | Transport underneath, under File / Edit / Options / Workspace
+    menus. Every panel is a dock you can drag; **Workspace > Advanced / Simple / Reset layout** are
+    saved layouts (Simple hides the timeline and gives the transcript the full height). The
+    CustomTkinter app (`gui.py`) is gone; PySide6 is a regular dependency in `requirements.txt`.
+-   **A document, not a text box.** The old "generate this text" input is a project: a `Document`
+    of canonical text with `Clip`/`Track`/`Character` metadata layered on top (`kokoro_gui/daw/`).
+    The transcript is the source of truth and generated audio is a render of it, tracked per clip
+    with hash-based dirty detection. Generate regenerates every out-of-date clip in one pass with
+    bounded concurrency instead of the whole document every time; a document with no clips yet
+    still uses the whole-document pipeline. Auto-split turns a `[Speaker:FX]`-tagged document
+    (optionally per paragraph) into clips and generates them in one action.
+-   **Transcript panel with character highlighting and a live gutter.** Each run is tinted by its
+    character, so speaker boundaries are visible without reading the inline `[Speaker:FX]:`
+    syntax, which converts into a real assignment the moment you finish a tagged line. Above the
+    editor sit two combos, Character and FX, that reflect the caret's clip and reassign the
+    selection (or the whole clip). The gutter labels once per character/FX change (`Narrator` /
+    `FX: Echo`) and shows a play button beside each out-of-date clip; click it to regenerate just
+    that clip. Out-of-date text is dash-underlined, thin rules show where clips end and where
+    Auto-split would cut. Copy/paste carries the character assignment along (with a setting for
+    whether a paste splits off its own run or inherits the destination's).
+-   **A multi-track timeline on a real seconds axis.** One lane per character; clips sit end to end
+    in text order at their real duration once generated and an estimated one (dashed outline, no
+    waveform) before, learned from `generation_stats.json`. A ruler with a playhead, a fixed
+    track-header column, Ctrl+wheel zoom. Dragging a clip pins it to a time or moves it to another
+    character's track; dragging it before an earlier clip also moves its text there. Shift+drag
+    inside a clip carves out a sub-range and replaces it with fresh TTS under any character. Each
+    clip has its own FX button for overrides to its character's preset.
+-   **Playback.** Play / pause / stop, click the ruler to seek, a playhead across all lanes, and
+    the transcript highlights and scrolls to the clip being played. Space toggles playback
+    anywhere but the text editor; Ctrl+Space toggles everywhere. Built on one
+    `sounddevice.OutputStream` that mixes the arrangement in the callback
+    (`kokoro_gui/audio/transport.py`), so the position is sample accurate. Loop toggle included.
+-   **Export.** File > Export mixes every clip down to one file (wav/mp3/flac/ogg) at its timeline
+    position, optionally with a `.srt` and per-clip files (`<base>_001_Narrator.wav`). It warns
+    when clips are out of date and offers to generate first. The dialog also holds the project's
+    two bundle options: whether to bundle generated audio, and the audio format for new segments
+    (wav or flac).
+-   **`.tbaw` project bundles.** A project is one zip file that carries everything: the text and
+    clips, every generated segment, and every named voice mix, voice reference and FX preset it
+    uses, so it opens on another machine with the same engines installed. Save writes the whole
+    file in the background (the progress line shows it) and never leaves a half-written project
+    behind; Save As keeps the same working copy. Autosave writes only into the app's own working
+    copy (`cache/projects/`), so the file on disk is as new as your last Save. Closing with
+    unsaved changes asks Save / Discard / Cancel, and a crash offers to recover the unsaved
+    session next time the project opens, even after the file was renamed or moved. Launch reopens
+    the last project; New inherits the previous project's characters; Import Text asks whether to
+    add to the current project or start a new one. The window title names the project and shows
+    `*` while it has unsaved changes. (`.json` projects from the 4.0 previews still open and are
+    converted on the spot, a `.tbaw` written next to the untouched `.json`, with matching audio
+    carried over.)
+-   **Generation writes once.** A clip's audio lands straight in the project's working copy under
+    a name derived from what produced it, instead of one copy in `cache/` and another in the
+    output folder. Regenerating a clip that's already up to date (the gutter button) makes a fresh
+    take under a new name and leaves the old file for any other identical clip that plays it.
+    Opening a project made with another version of an engine keeps its clips clean and says so in
+    the status line; only clips you regenerate use the installed version.
+-   **Welcome screen.** Launch opens the last project, then puts a dialog over it: recent projects
+    (the open one first, Resume as the default button), New project, New from text file, Open
+    other, right-click to drop a row, Clear list, and a details pane with the file's path,
+    modified time, character and clip counts, audio length and engines. Untick "Show at startup"
+    for a silent resume; File > Welcome... brings it up any time.
+-   **Undo/redo.** Edit > Undo/Redo over a plain-Python undo stack. Typing undoes like a normal
+    text editor; character/FX assignments and timeline moves have their own history, and Ctrl+Z
+    reverts whichever happened most recently.
+-   **Settings and Audio FX follow the selection.** The old always-global Generation fields
+    (voice, speed, split pattern, plus volume/pitch/normalize/trim) live in a Settings dock that
+    reads and writes whatever's selected: the whole document's defaults, one clip's overrides, or
+    a character's preset. Editing a character affects every clip using it unless that clip has
+    its own override. Audio FX works the same way (project defaults, a character's preset with a
+    prompt before changing one that several clips share, or a clip override where slider drags
+    become one undoable step); the timeline's FX button selects the clip and raises the tab.
 -   **Audio FX are non-destructive.** Clips are generated as raw model output and the FX chain,
     volume, pitch, normalize and trim are applied when the transport, the export or the timeline
     waveform reads them. Move a slider, pick a preset, toggle "Apply": you hear it on the next
-    play, the clip stays generated, nothing is marked out of date. Project-level FX now reach every
-    clip (they used to apply only to whole-document generation), the Audio FX tab and playback
-    resolve a clip's stack through one function (`kokoro_gui/qt/fx_resolve.py`), and a clip with its
-    own FX override counts as FX-on even if its character's preset says off. The timeline's
-    right-click Play now plays through the transport (with FX) instead of the raw file. Clips
-    generated before this release have FX baked into their files and show as out of date once;
-    regenerating them is a cache hit.
-
-## New in Beta 4.1.0
-
-The shell now matches the original wireframe: a 2x2 grid of docks, a real timeline, and playback.
-
--   **The 2x2 grid.** Transcript (top-left) | Settings / Audio FX / Lexicon / Voices tabs
-    (top-right), Timeline (bottom-left) | Transport (bottom-right). Everything is still a dock you
-    can drag; **Workspace > Advanced / Simple / Reset layout** are saved layouts. Simple hides the
-    timeline and gives the transcript the full height, nothing else changes. The toolbar and the
-    central button block are gone.
--   **Menus.** File (New / Open / Recent / Welcome / Save / Save As / Import Text / Export), Edit
-    (Undo / Redo / Cut / Copy / Paste / Characters...), Options (Engine, Device, Theme, copy/paste
-    behavior, JIT), Workspace. The old Settings dialog folded into Options.
--   **Projects.** A project is a `.tbaw` bundle (4.2.0; before that a `.json` in the
-    `document.json` shape plus a `project_settings` block, still readable). Launch reopens the
-    last project under the welcome dialog (4.1.2); New inherits the previous project's
-    characters; Import Text asks whether to add to the current project or start a new one.
-    Autosave writes the working copy; Save writes the file; Save As branches it. The window title
-    names the project and shows `*` while it has unsaved changes.
--   **A stripped transcript panel.** The Input Source tabs, file path row, legacy preset row and
-    Auto-Split row are gone. Above the editor sit two combos, Character and FX, that reflect the
-    caret's clip and reassign the selection (or the whole clip) when changed. The gutter labels once
-    per character/FX change, two lines (`Narrator` / `FX: Echo`), and shows a small play button
-    beside each out-of-date clip: click it to regenerate just that clip. Out-of-date text is
-    dash-underlined, and thin rules show where clips end and where Auto-split would cut.
--   **A timeline on a real seconds axis.** Clips sit end to end in text order across all tracks, at
-    their real duration once generated and an estimated one (dashed outline, no waveform) before.
-    The estimate learns from `generation_stats.json`. A ruler with a playhead, a fixed track-header
-    column, Ctrl+wheel zoom. Dragging a clip pins it to a time; dragging it before an earlier clip
-    also moves its text there. Shift+drag inside a clip still carves out a sub-range for TTS
-    replacement.
--   **Playback.** Play / pause / stop, click the ruler to seek, a playhead across all lanes, and the
-    transcript highlights and scrolls to the clip being played. Space toggles playback anywhere but
-    the text editor; Ctrl+Space toggles everywhere. Built on one `sounddevice.OutputStream` that
-    mixes the arrangement in the callback (`kokoro_gui/audio/transport.py`), so the position is
-    sample accurate. Loop toggle included.
--   **Export.** File > Export mixes every clip down to one file (wav/mp3/flac/ogg) at its timeline
-    position, optionally with a `.srt` and per-clip files (`<base>_001_Narrator.wav`). It warns when
-    clips are out of date and offers to generate first. Output folder / filename / format moved here
-    from the Settings tab.
--   **Audio FX follows the selection** like Settings does: project defaults, a character's preset
-    (asks once before changing a preset every clip using that character shares), or a clip's
-    override (slider drags become one undoable override). The timeline's FX button selects the clip
-    and raises the tab.
+    play, the clip stays generated, nothing is marked out of date. The Audio FX tab and playback
+    resolve a clip's stack through one function (`kokoro_gui/qt/fx_resolve.py`), and a clip with
+    its own FX override counts as FX-on even if its character's preset says off.
+-   **Characters replace bare presets.** Existing `presets/*.json` files migrate into `Character`
+    objects on first load (one per file, or a single "Default" character seeded from your last
+    settings if you had none), each with its own highlight color; Edit > Characters... edits
+    name, color, voice and FX preset. The preset files themselves are untouched, so this is a safe
+    downgrade path. Output folder, filename and format moved from the Settings tab to Export.
 -   **Dark and light themes** (Options > Theme, dark by default). One palette module feeds the
-    custom-painted widgets, the Qt palette and the stylesheet.
--   **Edit > Characters...** edits name, color, voice and FX preset for the project's characters.
--   Removed: the wall-clock playhead spike (`playhead_calc.py`, `WaveformPanel`). Tests that reached
-    for `app.start_btn` / `app.generation_dock` now use `app.transport_dock` /
-    `app.transcript_dock.editor`.
-
-## New in Beta 4.0.0
-
--   **A document, not a text box.** The old single "generate this text" input is now a project: a
-    `Document` of canonical text, plus the `Clip`/`Track`/`Character` metadata layered on top of it
-    (`kokoro_gui/daw/`). Project state autosaves to the project's working copy (since 4.2.0;
-    before that to `document.json`), separate from the app's `config_qt.json` settings file.
--   **Transcript panel with character highlighting and a live gutter.** The text editor colors each
-    run by its assigned character, so speaker boundaries are visible without reading the inline
-    `[Speaker:FX]:` syntax - which itself now converts into a real, colored assignment the moment you
-    finish a tagged line (press Enter), not just when you generate. A left gutter shows "Character: X"
-    (plus an FX marker) wherever it changes down the document, and its labels are clickable dropdowns
-    for reassigning that clip on the spot - a right-click Characters menu remains as a secondary path.
-    Copy/paste carries a selection's character assignment along (with a setting for whether a paste
-    splits off its own run or inherits the destination's). Typing undoes/redoes like a normal text
-    editor; character/FX assignments have their own undo history, and Ctrl+Z always reverts whichever
-    happened most recently.
--   **A multi-track timeline.** One lane per character, clips rendered as colored blocks sized to
-    their real audio duration once generated. Right-click a clip to generate or play it. Drag a clip
-    onto a different character's track to reassign or move it. Drag inside a clip's waveform to carve
-    out a sub-range and replace it with fresh TTS under any character, editable transcript included.
-    Each clip has its own FX button (50%/90% opacity marks whether FX is active) for FX that override
-    its character's preset.
--   **Auto-split on generation.** Turns a `[Speaker:FX]`-tagged document (optionally split further
-    per paragraph) into clips automatically and generates them in one action, instead of assigning
-    characters by hand first.
--   **Batch generation, scoped to what's actually stale.** Generate now regenerates every dirty clip
-    in one pass, with bounded concurrency, rather than the whole document every time. A document with
-    no clips yet still falls back to the original whole-document pipeline.
--   **Undo/redo.** The app's first menu bar (Edit > Undo/Redo) sits on top of a plain-Python
-    undo stack backing text edits and character reassignments.
--   **A settings panel scoped to your selection.** The old always-global Generation fields
-    (voice/speed/split pattern/format/etc., plus the volume/pitch/FX-preset/normalize/trim controls)
-    now live in a dedicated Settings dock that reads and writes whatever's selected: the whole
-    document's defaults, one clip's overrides, or a character's preset. Editing a character
-    retroactively affects every clip using it, unless that clip has its own override.
--   **Characters replace bare presets in the UI.** Existing `presets/*.json` files migrate into
-    `Character` objects on first load (one per file, or a single "Default" character seeded from
-    your last settings if you had none), each with its own highlight color. The preset files
-    themselves are untouched, so this is a safe downgrade path.
--   Not yet shipped: importing an existing audio recording and anchoring it to a transcript
-    (ASR-anchored import) is planned as a follow-up, not part of this release.
+    custom-painted widgets, the Qt palette and a stylesheet that styles every control: borderless
+    setting groups, rounded inputs and buttons, an underlined tab strip, thin scrollbars, a flat
+    progress line, painted play / pause / stop glyphs and a filled Generate button. The UI font
+    is Segoe UI / Inter / Noto Sans at 10pt, the transcript one point larger. Timeline clips have
+    rounded corners, a waveform in the clip's own darker shade and a label in black or white by
+    contrast; the default character palette is eight hues at one lightness and doubles as the
+    color picker's presets.
+-   **Pluggable engines.** `kokoro_gui/engines/` defines a backend interface (config schema,
+    voices, capabilities, project hooks) with three registered backends: Kokoro, Audio8 and a
+    sine-tone Dummy that exists to prove the abstraction isn't Kokoro-shaped. Options > Engine
+    swaps the Settings tab's fields and the Voices tab live. `kokoro_engine.py` is a slim core
+    backed by a `kokoro_gui/engine/` package split by feature area (text extraction, caching,
+    lexicon, presets, voice mixing, conversion, JIT, SRT).
 -   **Second TTS engine, Audio8 (voice cloning).**
     [Audio8-TTS-Preview-0.6b](https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b), a zero-shot
-    voice-cloning model, is now selectable from the engine picker alongside Kokoro. Unlike Kokoro's
-    named voices, it clones a voice from a **reference WAV plus a transcript of what's said in it**,
+    voice-cloning model, is selectable from Options > Engine alongside Kokoro. Unlike Kokoro's
+    named voices, it clones a voice from a **reference WAV plus a transcript of what's said in it**;
     a Voice Reference dock (shown only for engines that support this) lets you browse a WAV,
     auto-transcribe it, edit the transcript, and save it under a name that then shows up in the
-    normal Voice dropdown. The TTS model pulls in `transformers`/`torchaudio` (new `requirements.txt`
-    entries) and loads with `trust_remote_code=True`. First use downloads it from Hugging Face.
+    normal Voice dropdown. The TTS model pulls in `transformers`/`torchaudio` (new
+    `requirements.txt` entries) and loads with `trust_remote_code=True`. First use downloads it
+    from Hugging Face.
 -   **Two auto-transcription engines for Audio8's voice reference.** The Voice Reference dock's
-    "Auto-Transcribe" button now has an engine picker (`kokoro_gui/engine/asr.py`, also runnable
+    "Auto-Transcribe" button has an engine picker (`kokoro_gui/engine/asr.py`, also runnable
     standalone as `python -m kokoro_gui.engine.asr <wav>`). Default is
     [Audio8-ASR-0.1B](https://huggingface.co/Audio8/Audio8-ASR-0.1B), online, higher quality, but
     CC-BY-NC-4.0 (non-commercial), worth knowing if you build on this fork commercially. The
     alternative is [Vosk](https://alphacephei.com/vosk), fully offline and Apache-2.0. Vosk needs a
-    model folder downloaded from https://alphacephei.com/vosk/models; the dock has a field for it with
-    Browse/Save/Reload buttons, but the value itself lives in `VOSK_MODEL_PATH` in a `.env` file at
-    the project root (copy `.env.example`) rather than in `config_qt.json` like every other setting,
-    since it's a one-time deployment detail rather than a per-session preference. Whatever WAV format
-    the reference audio is in, it's converted to the 16-bit mono PCM Vosk requires before recognition
-    runs, so you don't have to pre-convert it.
--   **Qt frontend, now the only frontend.** `python main.py`/`run.bat` launches a PySide6-based
-    dockable-panel shell (`kokoro_gui/qt/`). The previous CustomTkinter app (`gui.py`) has been
-    retired now that Qt reached parity. PySide6 is a regular dependency in `requirements.txt`.
--   **Modular codebase.** `kokoro_engine.py` is a slim core module backed by a `kokoro_gui/engine/`
-    package split out by feature area (text extraction, caching, lexicon, presets, voice mixing),
-    making the codebase easier to navigate and extend.
+    model folder downloaded from https://alphacephei.com/vosk/models; the dock has a field for it
+    with Browse/Save/Reload buttons, but the value itself lives in `VOSK_MODEL_PATH` in a `.env`
+    file at the project root (copy `.env.example`) rather than in `config_qt.json` like every other
+    setting, since it's a one-time deployment detail rather than a per-session preference. Whatever
+    WAV format the reference audio is in, it's converted to the 16-bit mono PCM Vosk requires
+    before recognition runs, so you don't have to pre-convert it.
+-   **Segment cache rekeyed.** Cache entries are keyed on the voice's name and content rather than
+    its path, so the first generate after upgrading from 3.2.0 misses the old `cache/` entries.
+-   Not yet shipped: importing an existing audio recording and anchoring it to a transcript
+    (ASR-anchored import) is a planned follow-up, not part of this release.
 
-## New in Beta 3.2.0
+## New in 3.2.0
 
 -   **Cross-platform audio playback.** Preview and JIT playback now go through `sounddevice`/
     `soundfile` instead of the Windows-only `winsound` module, removing a hard Windows dependency
@@ -262,11 +222,37 @@ The shell now matches the original wireframe: a 2x2 grid of docks, a real timeli
 
 ## Installation
 
-1.  **Clone the repository:**
+Two lines are available. Pick one before cloning.
+
+| | 4.0.0 beta (recommended) | 3.2.0 (old stable) |
+|---|---|---|
+| What it is | The DAW-style rebuild described above: PySide6, characters and clips on a timeline, `.tbaw` projects, Kokoro + Audio8 | The previous CustomTkinter app: one text box, one voice, generate to a folder |
+| Status | Beta. Under active development; bugs are expected and reports are welcome | Frozen. No further fixes |
+| Project files | `.tbaw`. The plan is for every 4.x release to open a `.tbaw` from any earlier 4.x, with the beta included (that's a goal, not a guarantee, until 4.0.0 final) | None. Output is loose `.wav` files, nothing to carry forward |
+| Presets, mixes, lexicon | `presets/*.json` load as characters; `custom_voices/` mixes and the lexicon carry over | As-is |
+
+The two are separate codebases that share a name and the Kokoro model. There is no upgrade path
+for a 3.2.0 install other than cloning 4.0.0 alongside it; there is nothing to migrate except the
+`presets/` and `custom_voices/` folders, which you can copy across.
+
+1.  **Clone the version you want:**
+
+    4.0.0 beta:
     ```bash
-    git clone https://github.com/CoffeeMethod/KokoroGUI.git
+    git clone --branch 4.0.0-beta.1 --depth 1 https://github.com/CoffeeMethod/KokoroGUI.git
     cd KokoroGUI
     ```
+    `4.0.0-beta.1` is the tag of the current beta; the
+    [Releases](https://github.com/CoffeeMethod/KokoroGUI/releases) page lists every version and
+    has a source zip for each. Drop `--branch` to run the development branch instead.
+
+    3.2.0:
+    ```bash
+    git clone --branch 3.2.0 --depth 1 https://github.com/CoffeeMethod/KokoroGUI.git
+    cd KokoroGUI
+    ```
+    Then follow the README in that checkout, not this one: its dependencies, prerequisites and
+    launch command differ.
 
 2.  **Create a virtual environment (recommended):**
     ```bash
@@ -373,6 +359,11 @@ noted above) after installing `requirements.txt` + `requirements-test.txt`. The 
 eSpeak NG or model download, so it's safe to run on every push/PR. The integration suite is slow and
 pulls model weights, so it's intentionally left out as a manual/opt-in run rather than part of the
 default pipeline.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the test conventions and what a PR needs.
+Security reports go through the repository's Security tab, not Issues ([SECURITY.md](SECURITY.md)).
 
 ## Technologies Used
 

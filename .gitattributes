@@ -1,0 +1,16 @@
+# Normalize line endings: LF in the repo and on checkout, on every OS.
+* text=auto eol=lf
+
+# Windows launcher needs CRLF for cmd.exe.
+*.bat text eol=crlf
+
+# Binary assets, never touched by the text filters.
+*.png binary
+*.jpg binary
+*.gif binary
+*.wav binary
+*.flac binary
+*.mp3 binary
+*.ogg binary
+*.pt binary
+*.tbaw binary

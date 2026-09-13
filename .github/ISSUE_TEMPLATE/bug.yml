@@ -1,0 +1,80 @@
+name: Bug report
+description: Something crashed, sounded wrong, or didn't do what the docs say.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Installation questions and "how do I" belong in Discussions. This form is for things that are broken.
+  - type: input
+    id: version
+    attributes:
+      label: KokoroGUI version
+      description: The "New in" heading at the top of the README, or `kokoro_gui/__init__.py`'s `APP_VERSION`.
+      placeholder: "4.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - Linux
+        - macOS
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.11.9 (python --version)"
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Engine (Options > Engine)
+      options:
+        - Kokoro
+        - Audio8
+        - Dummy
+        - Not engine-related
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: Options > Device, plus the GPU if any.
+      placeholder: "cuda, RTX 3060 / cpu"
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you clicked or typed, in order. If a specific text triggers it, paste the text (or the smallest part that still does).
+      placeholder: |
+        1. New project, paste "[Narrator]: Hello."
+        2. Generate
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Traceback or log
+      description: The terminal output from `python main.py`, if any. Pasted as text, not a screenshot.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I ran `pip install -r requirements.txt` on this version before reporting.
+        - label: The `.tbaw` or text that triggers this is something I can share if asked.

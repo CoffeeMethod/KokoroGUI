@@ -46,7 +46,7 @@ def test_document_persists_across_app_construction(qt_app, tmp_path):
 
 
 def test_legacy_document_json_next_to_the_config_migrates_on_launch(qt_app, tmp_path):
-    """The pre-4.2 implicit `document.json` becomes `document.tbaw` on the
+    """The 4.0-preview implicit `document.json` becomes `document.tbaw` on the
     first launch that finds it."""
     from kokoro_gui.daw.models import Character, Document
     from kokoro_gui.qt import project as project_io
