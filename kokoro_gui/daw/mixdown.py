@@ -2,9 +2,11 @@
 Claude/PLAN_ui_shell_redesign.md, WF8).
 
 `mixdown()` walks `compute_arrangement` (the same placement the timeline
-and transport use), sums every clip's segments at its start time with the
-same plain-gain-sum rule the live `Transport` applies (grill Q21), and
-writes one file. SRT rows come straight from each `PlacedClip`'s
+and transport use), reads every clip's segments through the same read-time
+post-processing the transport plays (`kokoro_gui.audio.post`, via
+`post_config_for_clip`), sums them at their start times with the same
+plain-gain-sum rule the live `Transport` applies (grill Q21), and writes one
+file. SRT rows come straight from each `PlacedClip`'s
 start/duration and the clip's text, replacing `SrtMixin`'s segment-timing
 walk for clip documents (that mixin stays for the no-clips whole-document
 path).
@@ -78,15 +80,15 @@ def _safe_component(name: str) -> str:
     return name or "clip"
 
 
-def _clip_samples(clip, sample_rate: int) -> Optional[np.ndarray]:
-    """All of a clip's segments concatenated at `sample_rate`, or None if
-    none of them can be read."""
+def _clip_samples(clip, sample_rate: int, post_config: Optional[dict] = None) -> Optional[np.ndarray]:
+    """All of a clip's segments concatenated at `sample_rate`, post-processed
+    per `post_config`, or None if none of them can be read."""
     parts = []
     for segment in sorted(clip.segments, key=lambda s: s.order_index):
         if not segment.audio_path:
             continue
         try:
-            parts.append(mixer.load_clip_samples(segment.audio_path, sample_rate))
+            parts.append(mixer.load_clip_samples(segment.audio_path, sample_rate, post_config))
         except Exception:
             continue
     if not parts:
@@ -112,7 +114,11 @@ def write_audio(path: str, samples: np.ndarray, sample_rate: int, fmt: str) -> N
 def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
             include_srt: bool = False, keep_clip_files: bool = False,
             arrangement: Optional[Arrangement] = None, engine_id: Optional[str] = None,
-            progress: Optional[Callable[[float, str], None]] = None) -> ExportResult:
+            progress: Optional[Callable[[float, str], None]] = None,
+            post_config_for_clip: Optional[Callable] = None) -> ExportResult:
+    """`post_config_for_clip(clip)` returns the clip's resolved read-time
+    post-processing config (the app passes `QtTTSApp.post_config_for_clip`);
+    None exports the raw segment files as they are."""
     if arrangement is None:
         arrangement = compute_arrangement(document, engine_id=engine_id)
     sample_rate = int(sample_rate)
@@ -128,7 +134,8 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
     for index, placed in enumerate(arrangement.placed):
         if progress:
             progress(index / total * 0.8, f"Reading clip {index + 1}/{total}")
-        samples = _clip_samples(placed.clip, sample_rate)
+        post_config = post_config_for_clip(placed.clip) if post_config_for_clip else None
+        samples = _clip_samples(placed.clip, sample_rate, post_config)
         if samples is None:
             skipped.append(placed.clip.id)
             continue

@@ -116,13 +116,25 @@ class Segment:
     `compute_cache_key` returns for the clip's full text (see
     kokoro_gui/daw/dirty.py), and `order_index` is that hash's `_{i}` file
     suffix (`caching.py`'s `sub_idx`) - multiple segments of one clip share
-    the same `cache_key` and differ only by `order_index`."""
+    the same `cache_key` and differ only by `order_index`.
+
+    `raw` is True when `audio_path` holds unprocessed model output
+    (`process_chunk_task` with `config['raw_output']`), which is what every
+    clip generated since non-destructive FX landed is, so it defaults True;
+    FX, volume, pitch, normalize and trim are applied on read by
+    `kokoro_gui.audio.post`. `raw=False` marks a segment baked with its FX at
+    generation time: `serialization.document_from_dict` assigns it to a
+    saved segment that predates the flag, and `dirty.is_clip_dirty` reports
+    such a clip dirty so it regenerates once (a cache hit when caching is
+    on) instead of getting FX applied twice. `duration` is the raw length;
+    the arrangement measures the rendered length itself."""
 
     order_index: int = 0
     text: str = ""
     cache_key: Optional[str] = None
     audio_path: Optional[str] = None
     duration: Optional[float] = None
+    raw: bool = True
     id: str = field(default_factory=_new_id)
 
 

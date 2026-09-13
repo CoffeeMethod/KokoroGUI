@@ -205,12 +205,21 @@ class CachingMixin:
         sub_idx = 0
         base_name = f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_part{index}"
 
+        # config['raw_output'] (set by generate_clip_audio for the clip
+        # paths) skips process_audio: the segment file is the raw model
+        # output and kokoro_gui/audio/post.py applies FX/volume/pitch/
+        # normalize/trim at read time, so changing them never regenerates.
+        raw_output = bool(config.get('raw_output', False))
+
         # Function to process raw audio (from cache or gen) into final output
         def process_and_save(graphemes, raw_audio):
             nonlocal sub_idx
 
             # Post Process
-            processed_audio = self.process_audio(raw_audio, 24000, config)
+            if raw_output:
+                processed_audio = raw_audio
+            else:
+                processed_audio = self.process_audio(raw_audio, 24000, config)
 
             # Determine format
             fmt = config.get('format', 'wav').lower()
@@ -231,7 +240,8 @@ class CachingMixin:
                 "path": path,
                 "text": graphemes,
                 "duration": len(processed_audio) / 24000.0,
-                "seg_idx": index
+                "seg_idx": index,
+                "raw": raw_output,
             }
 
         if cached_segments:

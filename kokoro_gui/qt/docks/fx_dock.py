@@ -4,8 +4,10 @@ and loads/saves FX presets under `presets/fx/`.
 UI6 (Claude/PLAN_ui_shell_redesign.md section 3): the tab follows the
 selection the way the Settings tab does, with the same three modes:
 
-- "none": the project-wide FX state, persisted in `config_qt.json` and fed
-  into whole-document generation. Edits schedule an autosave.
+- "none": the project-wide FX state, persisted in `config_qt.json`, fed
+  into whole-document generation and the bottom layer of every clip's
+  resolved stack. Edits schedule an autosave and a debounced timeline
+  re-render.
 - "clip": the selected clip's resolved FX (project state, then the
   character's preset, then `clip.fx_override` on top). Edits are collected
   and pushed as one `SetClipFxCommand` per 300ms of quiet, so a slider drag
@@ -17,7 +19,11 @@ selection the way the Settings tab does, with the same three modes:
 `project_fx_state()` always returns the "none" values regardless of what's
 rendered (what `_assemble_config`/`preview_conversion` need); `get_state()`
 is whatever the widgets currently show. The preset combo names the preset
-the current scope resolves to.
+the current scope resolves to. Scope resolution is
+`kokoro_gui.qt.fx_resolve.resolve_fx`, shared with `_assemble_clip_config`.
+
+FX are read-time post-processing (kokoro_gui/audio/post.py): every edit here
+is audible on the next transport rebuild and never dirties a clip.
 
 Seven FX_PRESET_KEYS fields have no widget here (see spec.py's docstring);
 their values live in `self._hidden_values` and only change via preset load.
@@ -38,11 +44,12 @@ from PySide6.QtWidgets import (
 import kokoro_gui.qt.app as qt_app_module
 from kokoro_gui.daw.undo import SetClipFxCommand
 from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, filter_allowed_keys
-from kokoro_gui.qt import spec
+from kokoro_gui.qt import fx_resolve, spec
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
+from kokoro_gui.qt.fx_resolve import PLACEHOLDER as _PLACEHOLDER
 
-_PLACEHOLDER = "Select FX Preset..."
 CLIP_EDIT_DEBOUNCE_MS = 300
+PROJECT_EDIT_DEBOUNCE_MS = 300
 
 
 class FXDock(QDockWidget):
@@ -66,6 +73,13 @@ class FXDock(QDockWidget):
         self._clip_timer.setSingleShot(True)
         self._clip_timer.setInterval(CLIP_EDIT_DEBOUNCE_MS)
         self._clip_timer.timeout.connect(self._flush_clip_edit)
+
+        # Project-scope edits re-render the timeline/transport (read-time
+        # FX); debounced so a run of spinbox steps is one re-render.
+        self._project_timer = QTimer(self)
+        self._project_timer.setSingleShot(True)
+        self._project_timer.setInterval(PROJECT_EDIT_DEBOUNCE_MS)
+        self._project_timer.timeout.connect(self.app.refresh_timeline)
 
         content = QWidget()
         outer = QVBoxLayout(content)
@@ -194,55 +208,18 @@ class FXDock(QDockWidget):
             self.scope_label.setText("Project FX")
 
     def _character_preset_name(self, character):
-        name = character.preset_data.get("fx_preset") if character is not None else None
-        return name if name and name != _PLACEHOLDER else None
-
-    def _load_preset_values(self, name):
-        if not name:
-            return None
-        preset = self.app.engine.load_fx_preset(name)
-        if not preset:
-            # Read the file directly when the engine can't (tests stub
-            # load_fx_preset to None).
-            safe = os.path.basename(name)
-            fpath = os.path.join(qt_app_module.FX_PRESETS_DIR, f"{safe}.json")
-            if os.path.exists(fpath):
-                try:
-                    with open(fpath, "r", encoding="utf-8") as fh:
-                        preset = json.load(fh)
-                except Exception:
-                    preset = None
-        return filter_allowed_keys(preset, ALLOWED_FX_PRESET_KEYS) if preset else None
+        return fx_resolve.real_preset_name(character.preset_data.get("fx_preset")) if character is not None else None
 
     def _resolved_values(self):
-        """`(values, preset_name)` for the current scope."""
-        values = dict(self._none_values)
+        """`(values, preset_name)` for the current scope - the same
+        resolution `_assemble_clip_config` generates and plays with."""
         if self._mode == "none":
-            return values, self.app.settings.get("fx_preset") or None
+            return dict(self._none_values), self.app.settings.get("fx_preset") or None
         if self._mode == "character":
-            name = self._character_preset_name(self._target)
-            preset = self._load_preset_values(name)
-            if preset:
-                values.update(preset)
-            return values, name
-        clip = self._target
-        character = self.app.document.get_character(clip.character_id)
-        name = clip.overrides.get("fx_preset")
-        if not name or name == _PLACEHOLDER:
-            name = self._character_preset_name(character)
-        preset = self._load_preset_values(self._character_preset_name(character))
-        if preset:
-            values.update(preset)
-        own_name = clip.overrides.get("fx_preset")
-        if own_name and own_name != _PLACEHOLDER:
-            own = self._load_preset_values(own_name)
-            if own:
-                values.update(own)
-        if clip.fx_override:
-            values.update(filter_allowed_keys(clip.fx_override, ALLOWED_FX_PRESET_KEYS))
-            if not own_name:
-                name = "custom"
-        return values, name
+            resolution = fx_resolve.resolve_fx(self.app, character=self._target)
+        else:
+            resolution = fx_resolve.resolve_fx(self.app, clip=self._target)
+        return resolution.values, resolution.preset_name
 
     def _set_combo_text(self, name) -> None:
         self.preset_combo.blockSignals(True)
@@ -265,6 +242,7 @@ class FXDock(QDockWidget):
             return
         if self._mode == "none":
             self.app.schedule_save()
+            self._project_timer.start()
             return
         if self._mode == "clip":
             self._clip_timer.start()
@@ -409,6 +387,7 @@ class FXDock(QDockWidget):
         if getattr(self.app, "settings_dock", None) is not None:
             self.app.settings_dock.set_fx_preset_display(safe_name)
         self.app.schedule_save()
+        self.app.refresh_timeline()
 
     def _on_preset_activated(self, index: int) -> None:
         name = self.preset_combo.itemText(index)

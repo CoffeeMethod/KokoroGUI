@@ -36,7 +36,6 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-import playback
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
@@ -325,6 +324,7 @@ class TrackHeaderView(QGraphicsView):
 
 class TimelineView(QGraphicsView):
     generateClipRequested = Signal(str)
+    playClipRequested = Signal(str)  # context-menu Play: seek the transport to the clip and play
     fxPresetRequested = Signal(str, str)  # (clip_id, preset_name); "" clears
     clipDragReassigned = Signal(str, str, bool)  # (clip_id, target_track_id, reassign_character)
     subRangeTtsRequested = Signal(str, int, int)  # (clip_id, sub_start, sub_end) text offsets
@@ -344,6 +344,10 @@ class TimelineView(QGraphicsView):
         self._selected_block: Optional[ClipBlockItem] = None
         self._document = None
         self._arrangement: Optional[Arrangement] = None
+        # Optional `(clip) -> (samples, rate) | None` the owner passes so the
+        # waveform shows the post-processed audio the transport plays
+        # (`QtTTSApp.rendered_clip_samples`); None draws the raw file.
+        self._clip_samples = None
         self._zoom = DEFAULT_PIXELS_PER_SECOND
         self._playhead_s: Optional[float] = None
         self._playhead_item: Optional[QGraphicsLineItem] = None
@@ -417,7 +421,7 @@ class TimelineView(QGraphicsView):
         if block.audio_path:
             play_action = menu.addAction("Play")
             play_action.triggered.connect(
-                lambda checked=False, path=block.audio_path: playback.play(path, blocking=False)
+                lambda checked=False, cid=block.clip_id: self.playClipRequested.emit(cid)
             )
 
         clip = self._document.get_clip(block.clip_id) if self._document is not None else None
@@ -655,12 +659,26 @@ class TimelineView(QGraphicsView):
             return
         self.render_document(self._document, arrangement)
 
-    def render_document(self, document, arrangement: Optional[Arrangement] = None) -> None:
+    def _peaks_for(self, clip, fallback_path: str, bucket_count: int):
+        """Waveform peaks from the owner's rendered samples when it gave us a
+        `clip_samples` callable, else from the raw first-segment file."""
+        if self._clip_samples is not None:
+            rendered = self._clip_samples(clip)
+            if rendered is not None:
+                samples, rate = rendered
+                return waveform_data.compute_peaks(samples, rate, bucket_count)
+        peaks, _duration = waveform_data.load_peaks_from_file(fallback_path, bucket_count)
+        return peaks
+
+    def render_document(self, document, arrangement: Optional[Arrangement] = None,
+                        clip_samples=None) -> None:
         pal = theme.current()
         self._document = document
         if arrangement is None:
             arrangement = compute_arrangement(document)
         self._arrangement = arrangement
+        if clip_samples is not None:
+            self._clip_samples = clip_samples
 
         self._scene.clear()
         self._blocks_by_clip_id = {}
@@ -729,12 +747,10 @@ class TimelineView(QGraphicsView):
             block.set_audio_path(audio_segment.audio_path if audio_segment is not None else None)
             if audio_segment is not None and not placed.estimated:
                 try:
-                    peaks, _duration = waveform_data.load_peaks_from_file(
-                        audio_segment.audio_path, max(1, int(width))
-                    )
+                    peaks = self._peaks_for(clip, audio_segment.audio_path, max(1, int(width)))
                 except Exception:
-                    pass
-                else:
+                    peaks = None
+                if peaks is not None:
                     block.set_waveform(peaks, width, height)
 
         self._ruler = _RulerItem()
@@ -773,5 +789,6 @@ class TimelineWidget(QWidget):
         layout.addWidget(self.view, 1)
         self.view.verticalScrollBar().valueChanged.connect(self.header.verticalScrollBar().setValue)
 
-    def render_document(self, document, arrangement: Optional[Arrangement] = None) -> None:
-        self.view.render_document(document, arrangement)
+    def render_document(self, document, arrangement: Optional[Arrangement] = None,
+                        clip_samples=None) -> None:
+        self.view.render_document(document, arrangement, clip_samples=clip_samples)

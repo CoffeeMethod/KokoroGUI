@@ -335,7 +335,10 @@ class SettingsDock(QDockWidget):
 
     def _on_hand_built_changed(self, key: str, value) -> None:
         if self._mode == "none":
+            # Volume/pitch/normalize/trim/apply_fx are read-time
+            # post-processing for clips: re-render, nothing to regenerate.
             self.app.schedule_save()
+            self.app.refresh_timeline()
             return
         if key not in ALLOWED_PRESET_KEYS:
             return  # defense in depth - every hand-built field is in ALLOWED_PRESET_KEYS today

@@ -80,7 +80,10 @@ def document_from_dict(data: dict) -> Document:
     legacy_offsets = {}
     for clip_data in data.get("clips", []):
         clip_data = dict(clip_data)
-        segments = [Segment(**seg) for seg in clip_data.pop("segments", [])]
+        # A saved segment without "raw" predates read-time FX: its file has
+        # FX baked in, so it must not be post-processed again (see
+        # Segment's docstring; dirty.is_clip_dirty regenerates it).
+        segments = [Segment(**{"raw": False, **seg}) for seg in clip_data.pop("segments", [])]
         start_offset = clip_data.pop("start_offset", None)
         end_offset = clip_data.pop("end_offset", None)
         clip = Clip(segments=segments, **clip_data)

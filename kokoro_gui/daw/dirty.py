@@ -10,6 +10,11 @@ actually recorded from the last successful generation. This keeps dirtiness
 a pure function of current state instead of a flag that some code path could
 forget to set or clear.
 
+Only generation inputs count. FX, volume, pitch's resample, normalize and
+trim are read-time post-processing (kokoro_gui/audio/post.py) and changing
+them never dirties a clip; `Segment.raw` is the one post-related check here,
+and it only catches segments generated before that was true.
+
 Deliberately reuses `compute_cache_key` and `clamp_pitch_semitones`
 unmodified rather than inventing a parallel hashing scheme - see
 `compute_expected_cache_hash` below, which mirrors
@@ -69,6 +74,10 @@ def is_clip_dirty(clip, text: str, config: dict) -> bool:
     *same* object in the first place - see Q18)."""
     if not clip.segments:
         return True
+    # A segment baked with its FX at generation time (pre non-destructive
+    # FX) can't be post-processed again without doubling the effect.
+    if any(not segment.raw for segment in clip.segments):
+        return True
 
     expected_hash = compute_expected_cache_hash(text, config)
     expected_count = len(predict_segment_texts(text, config))
@@ -90,9 +99,14 @@ def build_segments_from_results(expected_hash: str, results: list) -> list:
     shares the same `seg_idx` (the chunk's outer index), so using it
     directly would give every `Segment` in a multi-segment clip
     `order_index=0`, breaking `is_clip_dirty`'s segment-count comparison.
+
+    `raw` comes from each result's "raw" field (every backend's
+    `process_chunk_task` sets it; `generate_clip_audio` always requests raw
+    output) and defaults True for a result dict built by hand.
     """
     return [
         Segment(order_index=i, text=result["text"], cache_key=expected_hash,
-                audio_path=result["path"], duration=result["duration"])
+                audio_path=result["path"], duration=result["duration"],
+                raw=bool(result.get("raw", True)))
         for i, result in enumerate(results)
     ]

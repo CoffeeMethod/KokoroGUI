@@ -6,7 +6,10 @@ ruler, the clip renderer, the transport's playback schedule and the exporter
 all read from. Qt-free, like the rest of `kokoro_gui/daw/`.
 
 Placement rule: walk clips in text order (`Document.clip_extent` start).
-A clip with generated audio is as long as its segments say; one without is
+A clip with generated audio is as long as its segments say (or as long as
+the caller's `clip_duration` measures them - the app passes one that
+renders each segment through `kokoro_gui.audio.post`, since trim and pitch
+change the length the raw file has); one without is
 estimated from its text length at the engine's recorded chars/sec (UI11:
 learned from `generation_stats.json`, 15 chars/s when there's no history),
 divided by the clip's effective speed. A clip starts at its own
@@ -17,7 +20,7 @@ one continuous read-through no matter how many lanes there are.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 FALLBACK_CHARS_PER_SECOND = 15.0
 
@@ -80,11 +83,16 @@ def clip_audio_duration_s(clip) -> Optional[float]:
 
 
 def compute_arrangement(document, engine_id: Optional[str] = None,
-                        chars_per_second: Optional[float] = None) -> Arrangement:
+                        chars_per_second: Optional[float] = None,
+                        clip_duration: Optional[Callable] = None) -> Arrangement:
     """Pass `chars_per_second` to bypass the stats lookup (tests, or a
-    caller that already has the number)."""
+    caller that already has the number). `clip_duration(clip)` replaces
+    `clip_audio_duration_s` when given: it returns the clip's audible
+    length in seconds, or None for a clip with no audio yet."""
     if chars_per_second is None:
         chars_per_second = recorded_chars_per_second(engine_id)
+    if clip_duration is None:
+        clip_duration = clip_audio_duration_s
 
     with_extent = []
     for clip in document.clips:
@@ -97,7 +105,7 @@ def compute_arrangement(document, engine_id: Optional[str] = None,
     placed = []
     cursor = 0.0
     for _start_offset, clip in with_extent:
-        audio_duration = clip_audio_duration_s(clip)
+        audio_duration = clip_duration(clip)
         if audio_duration is not None:
             duration = audio_duration
             estimated = False

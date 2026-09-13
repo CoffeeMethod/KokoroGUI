@@ -137,7 +137,9 @@ class DummyEngine(
             if progress_callback:
                 progress_callback(len(graphemes), graphemes)
 
-            processed_audio = self.process_audio(audio, SAMPLE_RATE, config)
+            # Same raw_output contract as CachingMixin.process_chunk_task.
+            raw_output = bool(config.get('raw_output', False))
+            processed_audio = audio if raw_output else self.process_audio(audio, SAMPLE_RATE, config)
 
             fmt = config.get('format', 'wav').lower()
             if fmt not in ('wav', 'flac', 'mp3', 'ogg'):
@@ -155,6 +157,7 @@ class DummyEngine(
             chunk_files.append({
                 "path": path, "text": graphemes,
                 "duration": len(processed_audio) / SAMPLE_RATE, "seg_idx": index,
+                "raw": raw_output,
             })
             sub_idx += 1
 

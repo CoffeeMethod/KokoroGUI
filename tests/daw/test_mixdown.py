@@ -118,3 +118,19 @@ def test_write_srt_skips_estimated_and_empty_clips(tmp_path):
     write_srt(doc, arrangement, str(tmp_path / "x.srt"))
 
     assert open(tmp_path / "x.srt", encoding="utf-8").read().count("-->") == 1
+
+
+def test_mixdown_applies_post_config_per_clip(tmp_path):
+    """Export reads the raw segment files through the same read-time
+    post-processing the transport plays (kokoro_gui/audio/post.py)."""
+    doc, a, _b = _two_generated_clips(tmp_path)
+    out = tmp_path / "out" / "mix.wav"
+
+    def post_for(clip):
+        return {"volume": 2.0, "apply_fx": False} if clip.id == a.id else None
+
+    mixdown(doc, str(out), fmt="wav", sample_rate=8000, post_config_for_clip=post_for)
+
+    data, _rate = sf.read(str(out), dtype="float32")
+    assert np.allclose(data[:8000], 0.5, atol=1e-3)  # a: 0.25 * 2
+    assert np.allclose(data[8000:], 0.5, atol=1e-3)  # b: untouched

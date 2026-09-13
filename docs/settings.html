@@ -279,7 +279,7 @@
   <section class="doc-section" id="fx">
     <div class="wrap">
       <h2><span class="idx">Audio FX tab</span>FX</h2>
-      <p class="dek">Five groups, each section gated behind its own enable checkbox except EQ, which is always live (a slider left at 0 dB is simply a no-op). All of it runs through one Pedalboard chain together as step 4 of the signal chain.</p>
+      <p class="dek">Five groups, each section gated behind its own enable checkbox except EQ, which is always live (a slider left at 0 dB is simply a no-op). All of it runs through one Pedalboard chain together as step 4 of the signal chain. The whole chain (and volume, pitch, normalize, trim) is applied on playback and export over the clip's raw generated audio: edit anything here and the timeline plays the change, with no regeneration and no clip marked out of date. The tab follows the selection: project defaults, a character's preset, or one clip's override, layered in that order.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Dynamics</caption>

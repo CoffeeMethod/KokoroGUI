@@ -154,10 +154,16 @@ class ConversionMixin:
         - Clears `self.cancel_event` - left set by an earlier cancelled run,
           `process_chunk_task`'s first line would otherwise silently return
           `[]` for what looks like a fresh request.
+
+        Also sets `config["raw_output"]`: clip segments are stored as raw
+        model output and post-processed on read (kokoro_gui/audio/post.py),
+        so an FX change is audible without regenerating. Only the no-clips
+        whole-document path still bakes FX into its files.
         """
         index, text, config = chunk_data
         config = dict(config)
         config["voice"] = self.resolve_voice_path(config["voice"])
+        config["raw_output"] = True
         os.makedirs(config["out_dir"], exist_ok=True)
         self.cancel_event.clear()
         return await asyncio.to_thread(self.process_chunk_task, (index, text, config), progress_callback)

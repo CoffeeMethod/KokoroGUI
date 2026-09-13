@@ -136,10 +136,14 @@ def test_assemble_clip_config_fx_override_wins_over_character_fx_preset(qt_app, 
     assert config["reverb_room_size"] == 0.9
 
 
-def test_assemble_clip_config_with_no_fx_override_is_unaffected(qt_app):
+def test_assemble_clip_config_with_no_fx_override_carries_the_project_fx(qt_app):
+    """A clip with no preset and no override plays the Audio FX tab's
+    project values (the bottom layer of fx_resolve.resolve_fx)."""
     clip = _make_clip(qt_app)
     assert clip.fx_override is None
+    qt_app.fx_dock._value_widgets["gain_db"].setValue(4.0)
 
     config = qt_app._assemble_clip_config(clip)
 
-    assert "reverb_enabled" not in config
+    assert config["gain_db"] == 4.0
+    assert config["reverb_enabled"] == qt_app.fx_dock.project_fx_state()["reverb_enabled"]

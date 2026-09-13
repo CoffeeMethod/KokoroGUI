@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QPushButton, QVBoxLayout,
 )
 
-from kokoro_gui.daw.arrangement import compute_arrangement
 from kokoro_gui.daw.dirty import build_segments_from_results, compute_expected_cache_hash
 from kokoro_gui.daw.undo import (
     AssignCharacterCommand, MoveClipBeforeCommand, MoveClipCommand, ReassignTrackCommand,
@@ -64,6 +63,7 @@ class TimelineDock(QDockWidget):
         self.timeline_view.subRangeTtsRequested.connect(self.on_sub_range_tts_requested)
         self.timeline_view.clipMoved.connect(self.on_clip_moved)
         self.timeline_view.unpinRequested.connect(self.on_clip_unpin_requested)
+        self.timeline_view.playClipRequested.connect(self.on_play_clip_requested)
         self.setWidget(self.timeline_widget)
         if hasattr(self.app, "themeChanged"):
             self.app.themeChanged.connect(self.refresh)
@@ -87,8 +87,9 @@ class TimelineDock(QDockWidget):
         self.refresh()
 
     def refresh(self) -> None:
-        arrangement = compute_arrangement(self.app.document, engine_id=self.app.backend.id)
-        self.timeline_view.render_document(self.app.document, arrangement)
+        arrangement = self.app.build_arrangement()
+        self.timeline_view.render_document(self.app.document, arrangement,
+                                           clip_samples=self.app.rendered_clip_samples)
 
     # -- seconds-axis drags (UI9) ------------------------------------------------
 
@@ -101,7 +102,7 @@ class TimelineDock(QDockWidget):
         clip = document.get_clip(clip_id)
         if clip is None:
             return
-        arrangement = compute_arrangement(document, engine_id=self.app.backend.id)
+        arrangement = self.app.build_arrangement()
         order = [p for p in arrangement.placed]
         index = next((i for i, p in enumerate(order) if p.clip.id == clip_id), None)
         predecessor = order[index - 1] if index is not None and index > 0 else None
@@ -117,6 +118,15 @@ class TimelineDock(QDockWidget):
         document.undo_stack.push(SetClipTimestampCommand(clip_id, new_start_s))
         self.app.schedule_save()
         self.app.refresh_timeline()
+
+    def on_play_clip_requested(self, clip_id: str) -> None:
+        """Context-menu Play: seek the transport to the clip and play, so
+        the clip is heard with its read-time post-processing."""
+        placed = self.app.current_arrangement().by_clip_id().get(clip_id)
+        if placed is None:
+            return
+        self.app.transport.seek(placed.start_s)
+        self.app.transport.play()
 
     def on_clip_unpin_requested(self, clip_id: str) -> None:
         if self.app.document.get_clip(clip_id) is None:

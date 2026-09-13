@@ -111,3 +111,15 @@ def test_clip_without_runs_is_skipped():
 
     assert arr.placed == []
     assert arr.total_duration_s == 0.0
+
+
+def test_clip_duration_callable_replaces_segment_durations():
+    alice = Character.from_preset_dict("Alice", {})
+    clip = Clip(character_id=alice.id, segments=[Segment(order_index=0, duration=4.0, audio_path="x.wav")])
+    doc = _doc("hello", [(0, 5, clip)], characters=[alice])
+
+    placed = compute_arrangement(doc, chars_per_second=10.0, clip_duration=lambda c: 1.25).placed[0]
+    assert placed.duration_s == 1.25 and not placed.estimated
+
+    placed = compute_arrangement(doc, chars_per_second=10.0, clip_duration=lambda c: None).placed[0]
+    assert placed.estimated

@@ -11,6 +11,19 @@ by default, with a zero-shot voice-cloning backend also built in.
 
 https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
+## New in Beta 4.1.1
+
+-   **Audio FX are non-destructive.** Clips are generated as raw model output and the FX chain,
+    volume, pitch, normalize and trim are applied when the transport, the export or the timeline
+    waveform reads them. Move a slider, pick a preset, toggle "Apply": you hear it on the next
+    play, the clip stays generated, nothing is marked out of date. Project-level FX now reach every
+    clip (they used to apply only to whole-document generation), the Audio FX tab and playback
+    resolve a clip's stack through one function (`kokoro_gui/qt/fx_resolve.py`), and a clip with its
+    own FX override counts as FX-on even if its character's preset says off. The timeline's
+    right-click Play now plays through the transport (with FX) instead of the raw file. Clips
+    generated before this release have FX baked into their files and show as out of date once;
+    regenerating them is a cache hit.
+
 ## New in Beta 4.1.0
 
 The shell now matches the original wireframe: a 2x2 grid of docks, a real timeline, and playback.
@@ -174,10 +187,12 @@ The shell now matches the original wireframe: a 2x2 grid of docks, a real timeli
     -   **Standard:** parallel batch processing across a thread pool.
     -   **JIT (real-time):** streamed generation with immediate playback, for engines fast enough
         to outrun playback.
--   **Audio FX and post-processing:**
+-   **Audio FX and post-processing** (non-destructive: applied on playback and export, never
+    written into a generated clip, so changing them never regenerates anything):
     -   **Live FX (Pedalboard):** Compressor, Limiter, Gain, shelf EQ, high/low-pass filters, Reverb,
         Delay, Chorus, Distortion, Phaser, Clipping, Pitch Shift, Bitcrush, GSM Compressor.
-    -   **Per-clip FX override**, layered on top of a character's own FX preset.
+    -   **Per-clip FX override**, layered on top of a character's own FX preset, on top of the
+        project's FX.
     -   **Traditional controls:** Speed (0.5x-2.0x), Volume, Pitch.
     -   **Cleanup:** Normalize and trim silence.
 -   **Smart splitting:** split text by newlines, paragraphs, or sentences for better prosody at the

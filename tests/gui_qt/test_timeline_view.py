@@ -297,12 +297,13 @@ def test_context_menu_over_clip_without_audio_shows_generate_only(qtbot):
     assert _menu_action_texts(menu) == ["Generate"]
 
 
-def test_triggering_play_calls_playback_play_with_clip_audio_path(qtbot, tmp_path, monkeypatch):
-    calls = []
-    monkeypatch.setattr("kokoro_gui.qt.timeline_view.playback.play", lambda path, blocking=False: calls.append((path, blocking)))
-
+def test_triggering_play_emits_play_clip_requested(qtbot, tmp_path):
+    """Play goes through the owner's transport (seek + play) so the clip is
+    heard with its read-time post-processing, not the raw segment file."""
     view = TimelineView()
     qtbot.addWidget(view)
+    calls = []
+    view.playClipRequested.connect(calls.append)
     wav_path = tmp_path / "tone.wav"
     _write_tone_wav(wav_path)
     alice = Character.from_preset_dict("Alice", {})
@@ -318,7 +319,7 @@ def test_triggering_play_calls_playback_play_with_clip_audio_path(qtbot, tmp_pat
     play_action = next(a for a in menu.actions() if a.text() == "Play")
     play_action.trigger()
 
-    assert calls == [(str(wav_path), False)]
+    assert calls == [clip.id]
 
 
 # ---------------------------------------------------------------------------

@@ -33,9 +33,8 @@ from kokoro_engine import KokoroEngine
 from kokoro_gui.daw.arrangement import compute_arrangement
 from kokoro_gui.daw.auto_split import plan_auto_split_clips
 from kokoro_gui.daw.undo import AssignCharacterCommand
-from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, filter_allowed_keys
 from kokoro_gui.engines import registry as engine_registry
-from kokoro_gui.qt import document_state, project as project_io, spec, theme
+from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
 from kokoro_gui.qt import settings as qt_settings
 from kokoro_gui.qt.selection import SelectionModel
 from kokoro_gui.qt.signals import EngineSignalBridge, wire_engine
@@ -47,7 +46,9 @@ FX_PRESETS_DIR = os.path.join(PRESETS_DIR, "fx")
 # The project a fresh install (or a config with no last_project) opens.
 DOCUMENT_FILE = "document.json"
 
+from kokoro_gui.audio import post  # noqa: E402
 from kokoro_gui.audio.transport import ScheduledClip, Transport  # noqa: E402
+from kokoro_gui.daw.arrangement import clip_audio_duration_s  # noqa: E402
 from kokoro_gui.qt.characters_dialog import CharactersDialog  # noqa: E402
 from kokoro_gui.qt.docks import (  # noqa: E402
     FXDock, LexiconDock, MixingDock, SettingsDock, TimelineDock, TranscriptDock, TransportDock,
@@ -547,12 +548,14 @@ class QtTTSApp(QMainWindow):
         return config
 
     def _assemble_clip_config(self, clip) -> dict:
-        """The config dict for a per-clip Generate action - app-level
+        """The config dict for a per-clip Generate action and, through
+        `post_config_for_clip`, for read-time post-processing - app-level
         defaults with `clip`'s character/override settings merged on top,
         so the clip's own values win. Defaults must come first:
         `process_chunk_task` reads `config['voice']`/`config['split_pattern']`
         by direct indexing, so a clip with no character must still end up
-        with usable defaults."""
+        with usable defaults. FX come from `fx_resolve.resolve_fx`, the same
+        resolver the Audio FX tab renders."""
         gen_state = self.settings_dock.get_state()
         export = self._export_values()
         config = {
@@ -580,20 +583,67 @@ class QtTTSApp(QMainWindow):
             clip_config["trim_silence"] = clip_config.pop("trim")
         config.update(clip_config)
 
-        # effective_config_for_clip only ever returns the FX preset's name -
-        # resolve it into actual FX values, or a character's attached FX
-        # preset would have no audible effect.
-        if config.get("apply_fx") and config.get("fx_preset"):
-            fx_preset = self.engine.load_fx_preset(config["fx_preset"])
-            if fx_preset:
-                config.update(filter_allowed_keys(fx_preset, ALLOWED_FX_PRESET_KEYS))
-
-        # A clip's own fx_override (resolved values) always wins over the
-        # character's preset. Merged last, deliberately.
-        if clip.fx_override:
-            config.update(filter_allowed_keys(clip.fx_override, ALLOWED_FX_PRESET_KEYS))
-
+        # effective_config_for_clip only ever carries the FX preset's *name*;
+        # the resolver turns project values + character preset + clip preset
+        # + clip.fx_override into the actual FX keys and the ANDed apply_fx.
+        resolution = fx_resolve.resolve_fx(self, clip=clip)
+        config.update(resolution.values)
+        config["apply_fx"] = resolution.apply_fx
         return config
+
+    # --- read-time post-processing (kokoro_gui/audio/post.py) ---------------
+
+    def post_config_for_clip(self, clip) -> dict:
+        """The `POST_KEYS` subset of the clip's resolved config: what the
+        transport, the exporter and the timeline waveform apply on top of
+        the raw segment files. Changing any of it never dirties the clip."""
+        return post.extract_post_config(self._assemble_clip_config(clip))
+
+    def clip_duration_s(self, clip):
+        """`compute_arrangement`'s `clip_duration`: the clip's rendered
+        length (trim and pitch change it), or the raw `Segment.duration`
+        for a file that can't be read, or None with no audio at all. Falls
+        back to the raw durations while the docks are still being built."""
+        segments = [s for s in clip.segments if s.audio_path]
+        if not segments:
+            return None
+        if self.settings_dock is None or self.fx_dock is None:
+            return clip_audio_duration_s(clip)
+        post_config = self.post_config_for_clip(clip)
+        rate = self.project_sample_rate()
+        total = 0.0
+        for segment in segments:
+            try:
+                total += post.rendered_duration_s(segment.audio_path, post_config, rate)
+            except Exception:
+                total += segment.duration or 0.0
+        return total
+
+    def rendered_clip_samples(self, clip):
+        """`(samples, rate)` for the clip's segments concatenated and
+        post-processed, or None. The timeline draws its waveform from this
+        so it shows what the transport plays."""
+        segments = sorted((s for s in clip.segments if s.audio_path), key=lambda s: s.order_index)
+        if not segments:
+            return None
+        post_config = self.post_config_for_clip(clip)
+        rate = self.project_sample_rate()
+        parts = []
+        for segment in segments:
+            try:
+                parts.append(post.render(segment.audio_path, post_config, rate))
+            except Exception:
+                continue
+        if not parts:
+            return None
+        import numpy as np
+
+        return np.concatenate(parts), rate
+
+    def build_arrangement(self):
+        """Every `compute_arrangement` call for the live document goes
+        through here so they all measure clips the same way."""
+        return compute_arrangement(self.document, engine_id=self.backend.id, clip_duration=self.clip_duration_s)
 
     # --- Options: engine / device / theme ---------------------------------
 
@@ -1065,23 +1115,29 @@ class QtTTSApp(QMainWindow):
 
     def current_arrangement(self):
         if self._arrangement is None:
-            self._arrangement = compute_arrangement(self.document, engine_id=self.backend.id)
+            self._arrangement = self.build_arrangement()
         return self._arrangement
 
     def _rebuild_transport_schedule(self) -> None:
-        self._arrangement = compute_arrangement(self.document, engine_id=self.backend.id)
+        self._arrangement = self.build_arrangement()
+        rate = self.project_sample_rate()
         schedule = []
         for placed in self._arrangement.placed:
             if placed.estimated:
                 continue
+            post_config = self.post_config_for_clip(placed.clip)
             # One ScheduledClip per segment so multi-segment clips play
-            # back to back at their real offsets.
+            # back to back at their real (rendered) offsets.
             offset = placed.start_s
             for segment in sorted(placed.clip.segments, key=lambda s: s.order_index):
                 if not segment.audio_path:
                     continue
-                schedule.append(ScheduledClip(clip_id=placed.clip.id, start_s=offset, path=segment.audio_path))
-                offset += segment.duration or 0.0
+                schedule.append(ScheduledClip(clip_id=placed.clip.id, start_s=offset, path=segment.audio_path,
+                                              post_config=post_config))
+                try:
+                    offset += post.rendered_duration_s(segment.audio_path, post_config, rate)
+                except Exception:
+                    offset += segment.duration or 0.0
         self.transport.load(schedule, sample_rate=self.project_sample_rate(),
                             total_duration_s=self._arrangement.total_duration_s)
         if self.timeline_dock is not None:

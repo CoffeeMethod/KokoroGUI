@@ -41,6 +41,9 @@ class ScheduledClip:
     start_s: float
     path: Optional[str]
     gain: float = 1.0
+    # Read-time post-processing (kokoro_gui/audio/post.py) applied to
+    # `path` on load; None plays the file as is.
+    post_config: Optional[dict] = None
 
 
 class _NullStream:
@@ -129,7 +132,7 @@ class Transport(QObject):
             if not item.path:
                 continue
             try:
-                samples = mixer.load_clip_samples(item.path, new_rate)
+                samples = mixer.load_clip_samples(item.path, new_rate, item.post_config)
             except Exception:
                 continue
             clips.append(mixer.LoadedClip(

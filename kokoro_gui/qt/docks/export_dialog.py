@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QMessageBox, QPushButton, QWidget,
 )
 
-from kokoro_gui.daw.arrangement import compute_arrangement
 from kokoro_gui.daw.mixdown import mixdown
 
 FORMATS = ("wav", "mp3", "flac", "ogg")
@@ -133,8 +132,11 @@ def run_export(app, values: dict, parent=None) -> bool:
     app.schedule_save()
 
     out_path = os.path.join(values["out_dir"], f"{values['filename']}.{values['format']}")
-    arrangement = compute_arrangement(document, engine_id=app.backend.id)
+    arrangement = app.build_arrangement()
     sample_rate = app.project_sample_rate()
+    # Resolved on the GUI thread (it reads dock state); the export thread
+    # only applies them.
+    post_configs = {p.clip.id: app.post_config_for_clip(p.clip) for p in arrangement.placed}
 
     app.transport_dock.set_busy(True)
     app.transport_dock.set_status("Exporting...", "busy")
@@ -147,6 +149,7 @@ def run_export(app, values: dict, parent=None) -> bool:
         return await asyncio.to_thread(
             mixdown, document, out_path, values["format"], sample_rate,
             values["srt"], values["keep_clip_files"], arrangement, app.backend.id, _progress,
+            lambda clip: post_configs.get(clip.id),
         )
 
     def _done(future):

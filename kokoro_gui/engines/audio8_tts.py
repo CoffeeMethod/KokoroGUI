@@ -543,8 +543,12 @@ class Audio8Engine(
         chunk_files = []
         base_name = f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_part{index}"
 
+        # Same raw_output contract as CachingMixin.process_chunk_task: the
+        # clip paths keep the segment raw and post-process on read.
+        raw_output = bool(config.get('raw_output', False))
+
         def write_output(graphemes, audio, sub_idx):
-            processed = self.process_audio(audio, self.SAMPLE_RATE, config)
+            processed = audio if raw_output else self.process_audio(audio, self.SAMPLE_RATE, config)
             fmt = config.get('format', 'wav').lower()
             if fmt not in ('wav', 'flac', 'mp3', 'ogg'):
                 fmt = 'wav'
@@ -559,6 +563,7 @@ class Audio8Engine(
             return {
                 "path": path, "text": graphemes,
                 "duration": len(processed) / self.SAMPLE_RATE, "seg_idx": index,
+                "raw": raw_output,
             }
 
         if cached_segments:
