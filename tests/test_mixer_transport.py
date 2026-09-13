@@ -45,7 +45,27 @@ class FakeStream:
 @pytest.fixture
 def fake_factory():
     FakeStream.instances = []
-    return lambda rate, cb: FakeStream(rate, cb)
+    yield lambda rate, cb: FakeStream(rate, cb)
+    FakeStream.instances = []
+
+
+@pytest.fixture
+def make_transport(fake_factory):
+    """Every `Transport` a test builds is stopped at teardown. A test that
+    leaves one playing (the loop test does) leaves its 30Hz `QTimer`
+    running; a later test's `processEvents` then ticks it while the
+    object is being garbage-collected, which crashed the Windows CI leg
+    with an access violation."""
+    made = []
+
+    def _make():
+        transport = Transport(stream_factory=fake_factory)
+        made.append(transport)
+        return transport
+
+    yield _make
+    for transport in made:
+        transport.stop()
 
 
 # -- mixer -----------------------------------------------------------------------
@@ -92,9 +112,9 @@ def test_total_frames_is_the_latest_end():
 # -- transport --------------------------------------------------------------------
 
 
-def test_transport_load_positions_clips_and_reports_duration(tmp_path, fake_factory):
+def test_transport_load_positions_clips_and_reports_duration(tmp_path, make_transport):
     path = _write(tmp_path / "a.wav", np.ones(8000), rate=8000)  # 1s
-    transport = Transport(stream_factory=fake_factory)
+    transport = make_transport()
 
     transport.load([ScheduledClip("c1", 2.0, path)], sample_rate=8000, total_duration_s=5.0)
 
@@ -104,9 +124,9 @@ def test_transport_load_positions_clips_and_reports_duration(tmp_path, fake_fact
     assert transport.state == "stopped"
 
 
-def test_transport_callback_mixes_at_the_right_frames(tmp_path, fake_factory):
+def test_transport_callback_mixes_at_the_right_frames(tmp_path, make_transport):
     path = _write(tmp_path / "a.wav", np.full(8000, 0.5), rate=8000)
-    transport = Transport(stream_factory=fake_factory)
+    transport = make_transport()
     transport.load([ScheduledClip("c1", 1.0, path)], sample_rate=8000)
 
     silence = render_block_for_test(transport, 4000)  # frames 0..4000: before the clip
@@ -117,9 +137,9 @@ def test_transport_callback_mixes_at_the_right_frames(tmp_path, fake_factory):
     assert abs(transport.position() - 1.5) < 1e-6
 
 
-def test_transport_play_pause_stop_state_machine(tmp_path, fake_factory):
+def test_transport_play_pause_stop_state_machine(tmp_path, make_transport):
     path = _write(tmp_path / "a.wav", np.ones(8000), rate=8000)
-    transport = Transport(stream_factory=fake_factory)
+    transport = make_transport()
     transport.load([ScheduledClip("c1", 0.0, path)], sample_rate=8000)
     states = []
     transport.stateChanged.connect(states.append)
@@ -137,9 +157,9 @@ def test_transport_play_pause_stop_state_machine(tmp_path, fake_factory):
     assert states == ["playing", "paused", "playing", "stopped"]
 
 
-def test_transport_reaching_the_end_stops_and_emits_finished(tmp_path, fake_factory):
+def test_transport_reaching_the_end_stops_and_emits_finished(tmp_path, make_transport):
     path = _write(tmp_path / "a.wav", np.ones(800), rate=8000)  # 0.1s
-    transport = Transport(stream_factory=fake_factory)
+    transport = make_transport()
     transport.load([ScheduledClip("c1", 0.0, path)], sample_rate=8000)
     finished = []
     transport.finished.connect(lambda: finished.append(True))
@@ -153,9 +173,9 @@ def test_transport_reaching_the_end_stops_and_emits_finished(tmp_path, fake_fact
     assert transport.position() == 0.1
 
 
-def test_transport_loop_wraps_instead_of_stopping(tmp_path, fake_factory):
+def test_transport_loop_wraps_instead_of_stopping(tmp_path, make_transport):
     path = _write(tmp_path / "a.wav", np.ones(800), rate=8000)
-    transport = Transport(stream_factory=fake_factory)
+    transport = make_transport()
     transport.load([ScheduledClip("c1", 0.0, path)], sample_rate=8000)
     transport.loop = True
 
@@ -167,16 +187,16 @@ def test_transport_loop_wraps_instead_of_stopping(tmp_path, fake_factory):
     assert transport.position() == 200 / 8000
 
 
-def test_transport_play_with_nothing_loaded_is_a_noop(fake_factory):
-    transport = Transport(stream_factory=fake_factory)
+def test_transport_play_with_nothing_loaded_is_a_noop(make_transport):
+    transport = make_transport()
     transport.play()
     assert transport.state == "stopped"
     assert FakeStream.instances == []
 
 
-def test_transport_reload_keeps_position_and_skips_unreadable_paths(tmp_path, fake_factory):
+def test_transport_reload_keeps_position_and_skips_unreadable_paths(tmp_path, make_transport):
     path = _write(tmp_path / "a.wav", np.ones(8000), rate=8000)
-    transport = Transport(stream_factory=fake_factory)
+    transport = make_transport()
     transport.load([ScheduledClip("c1", 0.0, path)], sample_rate=8000)
     transport.seek(0.5)
 
