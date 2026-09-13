@@ -325,10 +325,10 @@ for a 3.2.0 install other than cloning 4.0.0 alongside it; there is nothing to m
 
 The project has a `pytest` suite under `tests/` covering the DAW document model (`tests/daw/`), the
 Qt frontend (`tests/gui_qt/`), and `kokoro_engine.py`. Playback isn't Windows-only (see
-[`playback.py`](playback.py)), and CI (`.github/workflows/tests.yml`) runs the suite on both
-`windows-latest` and `ubuntu-latest` (the Linux leg installs `libportaudio2` for `sounddevice` and
-the libEGL/libGL/xkbcommon/fontconfig/dbus libraries PySide6 links against; the Qt suite runs headless via `QT_QPA_PLATFORM=offscreen`, no virtual display needed). `macos-latest`
-isn't set up yet.
+[`playback.py`](playback.py)), and CI (`.github/workflows/tests.yml`) runs the engine, DAW and
+audio suites on both `windows-latest` and `ubuntu-latest` (the Linux leg installs `libportaudio2`
+for `sounddevice`). The Qt suite runs headless via `QT_QPA_PLATFORM=offscreen`, no virtual display
+needed, but only locally; CI skips `tests/gui_qt/`. `macos-latest` isn't set up yet.
 
 1.  **Install test dependencies** (on top of `requirements.txt`):
     ```bash
@@ -355,12 +355,13 @@ isn't set up yet.
 
 ### CI
 
-[.github/workflows/tests.yml](.github/workflows/tests.yml) runs step 2 above (`pytest`) on push/PR
-against `windows-latest` and `ubuntu-latest` (the Linux leg additionally installs `libportaudio2` and
-PySide6's runtime libraries, as noted above) after installing `requirements.txt` + `requirements-test.txt`. The fast suite needs no
-eSpeak NG or model download, so it's safe to run on every push/PR. The integration suite is slow and
-pulls model weights, so it's intentionally left out as a manual/opt-in run rather than part of the
-default pipeline.
+[.github/workflows/tests.yml](.github/workflows/tests.yml) runs step 2 above on push/PR against
+`windows-latest` and `ubuntu-latest` (the Linux leg additionally installs `libportaudio2`) after
+installing `requirements.txt` + `requirements-test.txt`, as
+`pytest --ignore=tests/gui_qt -p no:pytest-qt`: the engine, caching, DAW model, mixer and
+transport tests, without the Qt widget suite. The fast suite needs no eSpeak NG or model download,
+so it's safe to run on every push/PR. The integration suite is slow and pulls model weights, so
+it's intentionally left out as a manual/opt-in run rather than part of the default pipeline.
 
 ## Contributing
 
