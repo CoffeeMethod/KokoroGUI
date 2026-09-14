@@ -1,0 +1,499 @@
+"""Batch conversion lifecycle: single-clip preview generation, the parallel
+chunked "Standard" batch pipeline (`start_conversion` -> `_process_text_async`),
+and the WAV-segment combiner shared with JIT mode.
+
+`generate_preview` calls `self.get_thread_pipeline(lang_code)` rather than
+`kokoro_engine.get_thread_pipeline` directly - that's the one genuinely
+model-specific piece of this otherwise-generic mixin, and going through
+`self` lets a non-Kokoro backend (kokoro_gui/engines/dummy.py) reuse this
+whole mixin by supplying its own `get_thread_pipeline`. `KokoroEngine.get_thread_pipeline`
+(kokoro_engine.py) itself still calls the module-level thread-local getter by
+name, so `monkeypatch.setattr(kokoro_engine, "get_thread_pipeline", ...)` in
+tests still takes effect.
+"""
+import asyncio
+import concurrent.futures
+import os
+import threading
+import time
+
+import numpy as np
+import soundfile as sf
+import torch
+from pedalboard.io import AudioFile
+
+from kokoro_gui.engine import stats as generation_stats
+from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, ALLOWED_PRESET_KEYS, filter_allowed_keys
+from kokoro_gui.engine.time_utils import format_duration
+
+# Below this fraction of the *current* run's own chars processed, the
+# observed-this-run rate is too noisy (one slow/fast chunk dominates it) to
+# trust on its own - blend it with the historical per-engine rate instead of
+# switching to it outright. See `on_chunk_progress` below.
+_OBSERVED_RATE_TRUST_FRACTION = 0.15
+
+
+class ConversionMixin:
+    async def generate_preview(self, text, voice, speed, output_path, extra_config=None, voice_tensor=None, lang_code='a'):
+        def _gen():
+            # Use specific lang code for preview
+            p = self.get_thread_pipeline(lang_code)
+            if not p: return False
+
+            # Kokoro/Dummy both output 24000Hz; a backend whose model outputs a
+            # different rate (e.g. Audio8Engine's 44100Hz) sets an instance
+            # `SAMPLE_RATE` attribute to override this default.
+            sr = getattr(self, "SAMPLE_RATE", 24000)
+
+            try:
+                ms_segments = self.parse_multispeaker_text(text)
+                # Truncate to first 2 segments for preview if many
+                if len(ms_segments) > 2:
+                    ms_segments = ms_segments[:2]
+
+                all_pieces = []
+
+                for speaker_name, fx_name, segment_text in ms_segments:
+                    # Apply Lexicon if provided in extra_config
+                    if extra_config and 'lexicon' in extra_config:
+                        segment_text = self.apply_lexicon(segment_text, extra_config['lexicon'])
+
+                    # Truncate segment text if too long for preview
+                    if len(segment_text) > 500:
+                        segment_text = segment_text[:500]
+
+                    target_voice = voice
+                    target_speed = speed
+                    target_extra = extra_config.copy() if extra_config else {}
+
+                    if speaker_name:
+                        preset = self.load_preset(speaker_name)
+                        if preset:
+                            target_voice = preset.get('voice', target_voice)
+                            target_speed = preset.get('speed', target_speed)
+                            if 'volume' in preset: target_extra['volume'] = preset['volume']
+                            if 'pitch' in preset: target_extra['pitch'] = preset['pitch']
+                            if 'normalize' in preset: target_extra['normalize'] = preset['normalize']
+                            if 'trim' in preset: target_extra['trim_silence'] = preset['trim']
+                            # If speaker preset has an FX preset, it can be overridden by the colon syntax
+                            if 'fx_preset' in preset:
+                                target_extra['fx_preset'] = preset['fx_preset']
+                            if 'apply_fx' in preset:
+                                target_extra['apply_fx'] = preset['apply_fx']
+
+                    if fx_name:
+                        fx_preset = self.load_fx_preset(fx_name, (extra_config or {}).get("project_dir"))
+                        if fx_preset:
+                            target_extra.update(filter_allowed_keys(fx_preset, ALLOWED_FX_PRESET_KEYS))
+                            target_extra['apply_fx'] = True
+                            target_extra['fx_preset'] = fx_name
+
+                    # Resolve voice
+                    if voice_tensor is not None and not speaker_name:
+                        # Only use voice_tensor if no speaker name (direct preview of mix)
+                        actual_voice = "_preview_temp"
+                        p.voices[actual_voice] = voice_tensor
+                    else:
+                        actual_voice = self.resolve_voice_path(target_voice)
+
+                    # Pitch Compensation
+                    eff_speed = target_speed
+                    pitch_st = target_extra.get('pitch', 0.0)
+                    if pitch_st != 0.0:
+                        factor = 2 ** (pitch_st / 12.0)
+                        eff_speed = target_speed / factor
+
+                    # Generate
+                    generator = p(segment_text, voice=actual_voice, speed=eff_speed, split_pattern=r"\n+")
+                    for _, _, audio in generator:
+                        if isinstance(audio, torch.Tensor):
+                            audio = audio.cpu().numpy()
+                        # Post Process
+                        audio = self.process_audio(audio, sr, target_extra)
+                        all_pieces.append(audio)
+
+                if not all_pieces:
+                    return False
+
+                full_audio = np.concatenate(all_pieces)
+
+                try:
+                    with AudioFile(output_path, 'w', samplerate=sr, num_channels=1) as f:
+                        f.write(full_audio)
+                    return True
+                except Exception as e:
+                    print(f"Preview write error: {e}")
+                    # Fallback
+                    sf.write(output_path, full_audio, sr)
+                    return True
+            except Exception as e:
+                print(f"Preview error: {e}")
+                return False
+
+        return await asyncio.to_thread(_gen)
+
+    async def generate_clip_audio(self, chunk_data, progress_callback=None):
+        """Generates (or cache-hits) audio for a single already-resolved
+        `(index, text, config)` chunk via the existing, unmodified
+        `process_chunk_task` (kokoro_gui/engine/caching.py) - the per-clip
+        Generate entry point for the DAW redesign's timeline dock
+        (Claude/PLAN_daw_ui_ux_redesign.md). A thin wrapper, not a
+        reimplementation: `process_chunk_task`'s signature and `chunk_data`
+        shape are untouched.
+
+        Replicates three things every other caller of `process_chunk_task`
+        (namely `start_conversion`/`_process_text_async`) already does
+        before dispatch, which a lone per-clip call has no one else to do
+        for it:
+        - Resolves `config['voice']` - `process_chunk_task` uses it verbatim
+          in both the cache key and the pipeline call, so skipping this
+          would silently break custom voices.
+        - Creates `config['out_dir']` if it doesn't exist yet - a document
+          whose output folder was never created by a prior whole-document
+          run would otherwise crash on write.
+        - Clears `self.cancel_event` - left set by an earlier cancelled run,
+          `process_chunk_task`'s first line would otherwise silently return
+          `[]` for what looks like a fresh request.
+
+        Also sets `config["raw_output"]`: clip segments are stored as raw
+        model output and post-processed on read (kokoro_gui/audio/post.py),
+        so an FX change is audible without regenerating. Only the no-clips
+        whole-document path still bakes FX into its files.
+        """
+        index, text, config = chunk_data
+        config = dict(config)
+        config["voice"] = self.resolve_voice_path(config["voice"])
+        config["raw_output"] = True
+        os.makedirs(config["out_dir"], exist_ok=True)
+        self.cancel_event.clear()
+        return await asyncio.to_thread(self.process_chunk_task, (index, text, config), progress_callback)
+
+    async def generate_dirty_clips(self, clips_with_configs, progress_callback=None):
+        """Batch dirty-scoped generation for the DAW timeline's consolidated
+        "Generate" action (item 3 of the DAW-for-text remaining-work
+        roadmap). `clips_with_configs` is `list[(clip_id, text, config)]`,
+        one entry per `Document.dirty_clips()` clip already resolved into an
+        engine config by the caller (`kokoro_gui/qt/app.py`'s
+        `_assemble_clip_config`) - kept Document-agnostic on this side.
+
+        Assigns each entry a batch-local unique `index` via `enumerate()` -
+        required, not cosmetic: every clip's config in one batch shares the
+        same `filename`/`time_id`, and `process_chunk_task`'s output
+        filenames are `{filename}_{time_id}_part{index}_{sub_idx}.{fmt}`, so
+        reusing one `index` (e.g. always 0) across clips would collide on
+        disk.
+
+        Bounds concurrency with `asyncio.Semaphore(num_threads)` (read from
+        the first entry's config, defaulting to 1 if absent) wrapping
+        per-clip calls to the existing `generate_clip_audio` - not
+        reimplementing its voice-resolution/out_dir-creation/
+        cancel_event-clearing.
+
+        Gathers with `return_exceptions=True`: one clip's exception never
+        aborts the batch, mirroring `_process_text_async`'s existing policy
+        for chunk failures within a single run.
+
+        Cancel-mid-batch race (specific to batching, and the reason this
+        isn't just "call generate_clip_audio in a loop"):
+        `generate_clip_audio` unconditionally clears `self.cancel_event` as
+        its first action - correct for a lone call, but in a batch a clip
+        still queued behind a full semaphore when the user cancels
+        (`cancel_event.set()`) would otherwise reach its turn, clear the
+        shared event, and run to completion (and let everything queued
+        behind it run too) as if nothing had been cancelled. Each per-clip
+        wrapper checks `cancel_event.is_set()` immediately before calling
+        `generate_clip_audio` and skips the call entirely when set,
+        recording a distinct "cancelled" outcome instead of a generic
+        failure.
+
+        `progress_callback`, if given, is called once per completed clip as
+        `progress_callback(clip_id, success)` - deliberately NOT forwarded
+        into `generate_clip_audio`'s own char-level progress_callback (whose
+        `(char_count, snippet)` signature means something different); a
+        caller wanting per-clip batch progress (e.g. `TimelineDock`'s
+        `batchGenerationProgress` signal) gets one call per clip rather than
+        a burst of sub-segment character counts.
+
+        Returns one outcome dict per clip, in the same order as
+        `clips_with_configs`:
+        `{"clip_id", "success", "results", "error", "cancelled"}`.
+        """
+        if not clips_with_configs:
+            return []
+
+        num_threads = clips_with_configs[0][2].get("num_threads", 1) or 1
+        semaphore = asyncio.Semaphore(max(1, num_threads))
+
+        async def _run_one(index, clip_id, text, config):
+            async with semaphore:
+                if self.cancel_event.is_set():
+                    if progress_callback:
+                        progress_callback(clip_id, False)
+                    return {
+                        "clip_id": clip_id, "success": False, "results": [],
+                        "error": "Cancelled.", "cancelled": True,
+                    }
+                try:
+                    results = await self.generate_clip_audio((index, text, config))
+                    success = bool(results)
+                    error = "" if success else "Generation produced no audio (cancelled or empty text)."
+                    if progress_callback:
+                        progress_callback(clip_id, success)
+                    return {
+                        "clip_id": clip_id, "success": success, "results": results,
+                        "error": error, "cancelled": False,
+                    }
+                except Exception as e:
+                    if progress_callback:
+                        progress_callback(clip_id, False)
+                    return {
+                        "clip_id": clip_id, "success": False, "results": [],
+                        "error": str(e), "cancelled": False,
+                    }
+
+        tasks = [
+            _run_one(index, clip_id, text, config)
+            for index, (clip_id, text, config) in enumerate(clips_with_configs)
+        ]
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        outcomes = []
+        for i, result in enumerate(raw_results):
+            if isinstance(result, Exception):
+                clip_id = clips_with_configs[i][0]
+                outcomes.append({
+                    "clip_id": clip_id, "success": False, "results": [],
+                    "error": str(result), "cancelled": False,
+                })
+            else:
+                outcomes.append(result)
+        return outcomes
+
+    async def smart_combine(self, file_paths, output_path, update_callback):
+        def combine_worker():
+            total_files = len(file_paths)
+            sr = getattr(self, "SAMPLE_RATE", 24000)
+            try:
+                # Use Pedalboard AudioFile
+                with AudioFile(output_path, 'w', samplerate=sr, num_channels=1) as out_f:
+                    for i, fp in enumerate(file_paths):
+                        if self.cancel_event.is_set(): break
+                        try:
+                            # Read with SoundFile (reliable for reading various formats)
+                            data, _ = sf.read(fp)
+                            out_f.write(data)
+                            if update_callback: update_callback((i + 1) / total_files)
+                        except Exception as e:
+                            print(f"Failed to read segment {fp}: {e}")
+            except Exception as e:
+                print(f"Combine failed: {e}")
+        await asyncio.to_thread(combine_worker)
+
+    def start_conversion(self, text, config):
+        # Resolve voice path once before distribution
+        config['voice'] = self.resolve_voice_path(config['voice'])
+
+        self.cancel_event.clear()
+        self.worker.run_coro(self._process_text_async(text, config))
+
+    async def _process_text_async(self, text, config):
+        # Bound outside the try so the `finally` below can always report a
+        # completed (or partially-completed, e.g. cancelled) generation to
+        # generation_stats - even a run that dies before `start_time` is set
+        # leaves these at their no-op defaults (record_generation skips
+        # zero/negative input).
+        engine_id = config.get('engine_id', 'unknown')
+        start_time = None
+        total_chars = 0
+        total_words = 0
+        processed_chars = 0
+        try:
+            if self.on_status: self.on_status("Preparing text...", False)
+            os.makedirs(config['out_dir'], exist_ok=True)
+
+            num_workers = config.get('num_threads', 1)
+
+            # Multispeaker Support
+            ms_segments = self.parse_multispeaker_text(text)
+            tasks_data = []
+
+            lexicon = config.get('lexicon', {})
+
+            for speaker_name, fx_name, segment_text in ms_segments:
+                # Apply Lexicon
+                segment_text = self.apply_lexicon(segment_text, lexicon)
+
+                seg_config = config.copy()
+                if speaker_name:
+                    preset = self.load_preset(speaker_name)
+                    if preset:
+                        seg_config.update(filter_allowed_keys(preset, ALLOWED_PRESET_KEYS))
+                        if 'trim' in preset:
+                            seg_config['trim_silence'] = preset['trim']
+                        # Resolve voice path for the new voice
+                        seg_config['voice'] = self.resolve_voice_path(seg_config['voice'])
+                    else:
+                        if self.on_status: self.on_status(f"Warning: Preset '{speaker_name}' not found.", False)
+
+                if fx_name:
+                    fx_preset = self.load_fx_preset(fx_name, config.get("project_dir"))
+                    if fx_preset:
+                        seg_config.update(filter_allowed_keys(fx_preset, ALLOWED_FX_PRESET_KEYS))
+                        seg_config['apply_fx'] = True
+                        seg_config['fx_preset'] = fx_name
+                    else:
+                        if self.on_status: self.on_status(f"Warning: FX Preset '{fx_name}' not found.", False)
+
+                # Split this segment into sub-chunks for parallel processing
+                # Use same character limit as original
+                seg_chunks = self.smart_split(segment_text, chunk_size=5000 if num_workers > 1 else 1000000)
+                for chunk in seg_chunks:
+                    # (index, text, config)
+                    tasks_data.append((len(tasks_data), chunk, seg_config))
+
+            total_chunks = len(tasks_data)
+            if total_chunks == 0:
+                if self.on_status: self.on_status("No text to process.", False)
+                if self.on_finish: self.on_finish()
+                return
+
+            total_chars = sum(len(d[1]) for d in tasks_data)
+            total_words = sum(len(d[1].split()) for d in tasks_data)
+            start_time = time.time()
+            phase_weight = 0.9 if config.get('combine', True) else 1.0
+
+            # Seed the ETA from this engine's own generation history (see
+            # kokoro_gui/engine/stats.py) so there's a real estimate from the
+            # very first progress tick instead of "--:--" until enough of
+            # *this* run has completed to extrapolate from. Kept separate per
+            # engine_id since e.g. Audio8's single-lock throughput is nowhere
+            # near Kokoro's per-thread pipelines.
+            historical_rate = generation_stats.estimate_chars_per_sec(engine_id)
+
+            if self.on_status: self.on_status(f"Queued {total_chunks} blocks. Starting {num_workers} workers...", False)
+
+            if historical_rate and total_chars > 0 and self.on_progress:
+                initial_eta = format_duration(total_chars / (historical_rate * phase_weight))
+                self.on_progress(0, 0.0, initial_eta, "Estimating from past runs...")
+
+            # Progress tracker
+            progress_lock = threading.Lock()
+
+            def on_chunk_progress(char_count, snippet):
+                nonlocal processed_chars
+                with progress_lock:
+                    processed_chars += char_count
+
+                # Calculate progress and call main callback
+                elapsed = time.time() - start_time
+                gen_fraction = min(processed_chars / total_chars, 1.0)
+                total_fraction = gen_fraction * phase_weight
+
+                # Estimate ETA. Blend this run's own observed rate with the
+                # historical per-engine rate, trusting the observed rate more
+                # as more of *this* run's chars have actually gone through -
+                # early on, one slow or fast chunk would otherwise swing a
+                # purely-observed estimate wildly.
+                eta_str = "--:--"
+                observed_rate = (processed_chars / elapsed) if elapsed > 0 else 0.0
+                if historical_rate:
+                    confidence = min(gen_fraction / _OBSERVED_RATE_TRUST_FRACTION, 1.0)
+                    rate = confidence * observed_rate + (1 - confidence) * historical_rate
+                elif gen_fraction > 0.01:
+                    # No history for this engine yet - fall back to the
+                    # original behavior of extrapolating from this run alone,
+                    # gated to a sliver of progress so one noisy first chunk
+                    # can't produce a wild estimate.
+                    rate = observed_rate
+                else:
+                    rate = 0.0
+
+                if rate > 0:
+                    total_est = total_chars / (rate * phase_weight)
+                    rem = max(0.0, total_est - elapsed)
+                    eta_str = format_duration(rem)
+
+                clean_snip = snippet.replace("\n", " ").strip()
+                if len(clean_snip) > 40: clean_snip = clean_snip[:37] + "..."
+
+                if self.on_progress:
+                    self.on_progress(total_fraction * 100, elapsed, eta_str, f"Processing: {clean_snip}")
+
+            # All generated files list
+            all_generated_files = [None] * total_chunks
+
+            loop = asyncio.get_running_loop()
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = []
+                for i, data in enumerate(tasks_data):
+                    fut = loop.run_in_executor(executor, self.process_chunk_task, data, on_chunk_progress)
+                    futures.append(fut)
+
+                results = await asyncio.gather(*futures, return_exceptions=True)
+
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        print(f"Chunk {i} failed: {result}")
+                        if self.on_status: self.on_status(f"Error in chunk {i}", True)
+                    else:
+                        all_generated_files[i] = result
+
+            if self.cancel_event.is_set():
+                if self.on_status: self.on_status("Conversion Cancelled.", False)
+                if self.on_finish: self.on_finish()
+                return
+
+            final_segment_list = []
+            for sublist in all_generated_files:
+                if sublist: final_segment_list.extend(sublist)
+
+            final_file_paths = [seg['path'] for seg in final_segment_list]
+
+            if self.on_status: self.on_status(f"Generated {len(final_segment_list)} segments. Processing outputs...", False)
+
+            if config.get('export_subtitles', False) and final_segment_list:
+                srt_path = os.path.join(config['out_dir'], f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_combined.srt")
+                self.generate_srt(final_segment_list, srt_path)
+
+            if config.get('combine', True) and final_file_paths:
+                if self.on_status: self.on_status("Merging audio files...", False)
+
+                fmt = config.get('format', 'wav').lower()
+                combine_path = os.path.join(config['out_dir'], f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_combined.{fmt}")
+
+                def on_merge_progress(frac):
+                    total_fraction = (1.0 * phase_weight) + (frac * (1.0 - phase_weight))
+                    elapsed = time.time() - start_time
+                    if self.on_progress:
+                        self.on_progress(total_fraction * 100, elapsed, "00:00", f"Merging... {int(frac*100)}%")
+
+                await self.smart_combine(final_file_paths, combine_path, on_merge_progress)
+
+                if not config.get('separate', True):
+                    for p in final_file_paths:
+                        try: os.remove(p)
+                        except Exception: pass
+
+                if self.on_status: self.on_status(f"Done! Saved: {combine_path}", False)
+            else:
+                 if self.on_status: self.on_status("Conversion Complete!", False)
+
+            if self.on_progress:
+                self.on_progress(100, time.time() - start_time, "00:00", "Completed")
+
+        except Exception as e:
+            print(e)
+            if self.on_status: self.on_status(f"Critical Error: {e}", True)
+        finally:
+            # Feed this run's actual throughput back into the per-engine
+            # history, whether it finished, errored, or was cancelled
+            # partway - `processed_chars`/`start_time` reflect however much
+            # actually got generated, and record_generation() itself skips
+            # storing anything if that turned out to be zero/nothing timed.
+            if start_time is not None:
+                elapsed_total = time.time() - start_time
+                chars_for_stats = min(processed_chars, total_chars) if total_chars else processed_chars
+                words_for_stats = int(total_words * (chars_for_stats / total_chars)) if total_chars else 0
+                generation_stats.record_generation(engine_id, chars_for_stats, words_for_stats, elapsed_total)
+            if self.on_finish: self.on_finish()

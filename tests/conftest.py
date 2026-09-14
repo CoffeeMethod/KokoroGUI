@@ -9,7 +9,6 @@ without every test having to remember to pass it explicitly.
 """
 import os
 import re
-import sys
 import time
 import threading
 import concurrent.futures
@@ -25,20 +24,8 @@ import torch
 import kokoro_engine
 from kokoro_engine import KokoroEngine
 
-# On some Windows Store ("WindowsApps") Python installs, Tcl/Tk's own
-# init.tcl discovery intermittently fails against the package-virtualized
-# path when many Tk() roots are created/destroyed across a test session
-# (each GUI test builds a real TTSApp). Pointing TCL_LIBRARY/TK_LIBRARY at
-# the known-good path once avoids repeated, occasionally-flaky rediscovery.
-_tcl_dir = os.path.join(sys.base_prefix, "tcl", "tcl8.6")
-_tk_dir = os.path.join(sys.base_prefix, "tcl", "tk8.6")
-if os.path.isdir(_tcl_dir):
-    os.environ.setdefault("TCL_LIBRARY", _tcl_dir)
-if os.path.isdir(_tk_dir):
-    os.environ.setdefault("TK_LIBRARY", _tk_dir)
-
-# One shared timestamp per pytest invocation, mirroring gui.py's
-# self.timecode_format = "%Y%m%d%H%M%S" convention (gui.py:96).
+# One shared timestamp per pytest invocation, mirroring the Qt frontend's
+# "%Y%m%d%H%M%S" timecode convention (kokoro_gui/qt/app.py).
 _RUN_TS = time.strftime("%Y%m%d%H%M%S")
 
 
@@ -56,6 +43,11 @@ def isolated_dirs(tmp_path, monkeypatch):
         d.mkdir()
     monkeypatch.setattr(kokoro_engine, "CUSTOM_VOICES_DIR", str(custom_voices))
     monkeypatch.setattr(kokoro_engine, "CACHE_DIR", str(cache_dir))
+    # generation_stats.py reads/writes this qualified through kokoro_engine
+    # (same convention as CACHE_DIR above) - redirect it too, or every real
+    # _process_text_async run in the suite would write a real
+    # generation_stats.json into the repo working directory.
+    monkeypatch.setattr(kokoro_engine, "STATS_FILE", str(tmp_path / "generation_stats.json"))
     return SimpleNamespace(custom_voices=custom_voices, cache_dir=cache_dir, out_dir=out_dir)
 
 
@@ -182,13 +174,36 @@ def espeak_available():
         return False
 
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_ansi(text: str) -> str:
+    """Strips ANSI color/reset escape sequences from `text`. Some
+    subprocess-spawning tests (test_asr.py/test_engines_audio8.py's
+    `test_importing_module_does_not_load_the_model`) assert an exact match on
+    a child process's captured stdout; under some runners (e.g. PyCharm's
+    test runner, which sets env vars that make libraries in the import chain
+    think they're attached to a color-capable console) a trailing `\x1b[0m`
+    reset code leaks into that output even though nothing in the actual
+    assertion cares about color. Plain terminal/CI runs don't hit this, so
+    it's invisible there - this just makes the assertion robust either way."""
+    return _ANSI_ESCAPE_RE.sub("", text)
+
+
 # ---------------------------------------------------------------------------
 # GUI-level fixtures
 # ---------------------------------------------------------------------------
+#
+# The Tk frontend (gui.py, kokoro_gui/ui/) has been retired now that the Qt
+# frontend (kokoro_gui/qt/) reached parity - see PLAN_qt_and_engine_abstraction.md.
+# StubEngine stays here (not moved into tests/gui_qt/) because it's imported
+# by tests/gui_qt/conftest.py's `qt_app` fixture too.
 
 class StubEngine:
     """Drop-in replacement for KokoroEngine used by GUI tests - never touches
     the real Kokoro pipeline/model."""
+
+    id = "kokoro"
 
     def __init__(self):
         self.pipeline = object()  # truthy - passes the "engine still initializing" gate
@@ -201,39 +216,28 @@ class StubEngine:
         self.start_conversion = MagicMock()
         self.start_jit_conversion = MagicMock()
         self.generate_preview = MagicMock()
+        self.generate_clip_audio = MagicMock()
+        self.generate_dirty_clips = MagicMock()
         self.mix_voices = MagicMock()
         self.extract_text_from_file = MagicMock(return_value="")
+        self.load_fx_preset = MagicMock(return_value=None)
         self.cancel = MagicMock()
 
+    # The segment-key trio CachingMixin gives real engines
+    # (kokoro_gui/engine/caching.py): the adapter forwards to these.
+    def engine_version(self):
+        from kokoro_gui.engine.caching import get_engine_version
 
-@pytest.fixture
-def tts_app(tmp_path, monkeypatch):
-    import gui
-    import tkinter
+        return get_engine_version("kokoro")
 
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(gui, "CONFIG_FILE", str(tmp_path / "config.json"))
-    monkeypatch.setattr(gui, "PRESETS_DIR", str(tmp_path / "presets"))
-    monkeypatch.setattr(gui, "FX_PRESETS_DIR", str(tmp_path / "presets" / "fx"))
-    monkeypatch.setattr(gui, "KokoroEngine", StubEngine)
-    monkeypatch.setattr(gui, "messagebox", MagicMock())
-    monkeypatch.setattr(gui, "filedialog", MagicMock())
-    (tmp_path / "custom_voices").mkdir()
+    def cache_key_extra(self, config):
+        return {}
 
-    # Creating many real Tk() interpreters across a test session intermittently
-    # hits the same WindowsApps init.tcl read glitch as above - retry a few
-    # times rather than failing the whole test on a transient hiccup.
-    app = None
-    last_err = None
-    for _ in range(5):
-        try:
-            app = gui.TTSApp()
-            break
-        except tkinter.TclError as e:
-            last_err = e
-            time.sleep(0.2)
-    if app is None:
-        raise last_err
+    def resolve_voice_path(self, name, project_dir=None):
+        from kokoro_gui.engine.voices import VoiceMixingMixin
 
-    yield app
-    app.destroy()
+        return VoiceMixingMixin.resolve_voice_path(self, name, project_dir)
+
+    def resolve_voice_file(self, name, project_dir=None):
+        resolved = self.resolve_voice_path(name, project_dir)
+        return resolved if os.path.isabs(resolved) and os.path.isfile(resolved) else None

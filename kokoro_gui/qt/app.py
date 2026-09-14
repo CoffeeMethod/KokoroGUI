@@ -1,0 +1,1829 @@
+"""QtTTSApp: the PySide6 shell, the sole GUI frontend since the CustomTkinter
+app (`gui.py`, `kokoro_gui/ui/*.py`) was retired.
+
+Reshaped by Claude/PLAN_ui_shell_redesign.md into the wireframe's 2x2 grid:
+Transcript (top-left) | Settings / Audio FX / Lexicon / Voices tabs
+(top-right), Timeline (bottom-left) | Transport (bottom-right). Every panel
+is still a `QDockWidget`; `arrange_docks_default()` builds the grid and
+`kokoro_gui.qt.workspace` saves/restores named layouts (Workspace menu).
+The old toolbar and the central action bar are gone - engine/device/theme
+live under Options, generate/preview/cancel and the progress line live in
+the Transport dock. A File menu (`kokoro_gui.qt.project`) replaced the
+implicit single `document.json`.
+
+Projects are `.tbaw` bundles (Claude/old/PLAN_tbaw_bundle.md). The live project
+is a directory under `cache/projects/<project_id>/` (`self.project_dir`)
+that autosave writes JSON into and clips generate straight into; Save
+rewrites the zip from it on a background thread behind `is_busy`, Open
+extracts into it the same way with the editor read-only, and Close asks
+Save / Discard / Cancel when the dir is ahead of the file. `project.py`
+holds the steps; this class holds the sequencing, the lock and the dirty
+flag.
+
+`CONFIG_FILE`/`PRESETS_DIR`/`FX_PRESETS_DIR`/`DOCUMENT_FILE` are defined
+here, at module level, before the `kokoro_gui.qt.docks` import below - the
+dock modules do `import kokoro_gui.qt.app as qt_app_module` and read
+`qt_app_module.PRESETS_DIR` etc. qualified at call time, which makes this a
+circular import; defining these names before triggering that import keeps
+it safe.
+"""
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+import threading
+import time
+
+import playback
+from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
+from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QWidget
+
+from kokoro_engine import KokoroEngine
+from kokoro_gui.daw.arrangement import compute_arrangement
+from kokoro_gui.daw.auto_split import plan_auto_split_clips
+from kokoro_gui.daw.undo import AssignCharacterCommand
+from kokoro_gui.engine import caching
+from kokoro_gui.engines import registry as engine_registry
+from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
+from kokoro_gui.qt import settings as qt_settings
+from kokoro_gui.qt.selection import SelectionModel
+from kokoro_gui.qt.signals import EngineSignalBridge, wire_engine
+from kokoro_gui.qt.workspace import ADVANCED, SIMPLE, WorkspaceManager
+
+CONFIG_FILE = "config_qt.json"
+PRESETS_DIR = "presets"
+FX_PRESETS_DIR = os.path.join(PRESETS_DIR, "fx")
+# The project a fresh install (or a config with no last_project) opens.
+DOCUMENT_FILE = "document.json"
+
+from kokoro_gui.audio import post  # noqa: E402
+from kokoro_gui.audio.transport import ScheduledClip, Transport  # noqa: E402
+from kokoro_gui.daw.arrangement import clip_audio_duration_s  # noqa: E402
+from kokoro_gui.qt.characters_dialog import CharactersDialog  # noqa: E402
+from kokoro_gui.qt.docks import (  # noqa: E402
+    FXDock, LexiconDock, MixingDock, SettingsDock, TimelineDock, TranscriptDock, TransportDock,
+    VoiceCloneDock,
+)
+from kokoro_gui.qt.docks.export_dialog import ExportDialog, run_export  # noqa: E402
+from kokoro_gui.qt.welcome_dialog import WelcomeDialog  # noqa: E402
+
+APP_NAME = "KokoroGUI"
+SCHEDULE_REBUILD_DEBOUNCE_MS = 100
+
+
+class QtTTSApp(QMainWindow):
+    previewFinished = Signal(bool, str)
+    themeChanged = Signal()
+    exportProgress = Signal(float, str)
+    exportFinished = Signal(bool, str)
+    # Background project I/O (Open's audio extraction, Save's zip write):
+    # progress as (percent, detail), completion as (callback, result, error)
+    # marshalled onto the GUI thread.
+    projectIoProgress = Signal(float, str)
+    _projectIoFinished = Signal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.resize(1600, 1000)
+
+        os.makedirs(PRESETS_DIR, exist_ok=True)
+        os.makedirs(FX_PRESETS_DIR, exist_ok=True)
+
+        self.settings = qt_settings.load_settings(CONFIG_FILE)
+        self.jit_enabled = self.settings.get("jit_enabled", False)
+        self.timecode_format = "%Y%m%d%H%M%S"
+
+        # Project (section 7): the last-opened project, else the classic
+        # document.json next to the config, else a fresh migration.
+        self.project_path: str | None = None
+        self.project_settings: dict = {}
+        # The live project directory (Claude/old/PLAN_tbaw_bundle.md section 3):
+        # `cache/projects/<project_id>/`, held under an OS lock for as long
+        # as the project is open. Every config the segment key or the engine
+        # sees carries it as `project_dir`. `_project_dirty` is the
+        # session's "dir is ahead of the file" flag, set by autosave from a
+        # content digest and cleared by Save.
+        self.project_dir: str | None = None
+        self.project_id: str | None = None
+        self._project_lock: project_io.ProjectLock | None = None
+        self._project_manifest: dict = {}
+        self._project_dirty = False
+        self._io_thread: threading.Thread | None = None
+        self._pending_open_path: str | None = None
+        self._closing_after_save = False
+        self._closed = False
+        self._asset_backends: dict = {}
+        self.projectIoProgress.connect(self._on_project_io_progress)
+        self._projectIoFinished.connect(self._on_project_io_finished)
+        self.document = self._load_initial_document()
+
+        self.selection = SelectionModel()
+
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self.save_settings)
+
+        self._schedule_timer = QTimer(self)
+        self._schedule_timer.setSingleShot(True)
+        self._schedule_timer.setInterval(SCHEDULE_REBUILD_DEBOUNCE_MS)
+        self._schedule_timer.timeout.connect(self._rebuild_transport_schedule)
+
+        self.welcome_dialog: WelcomeDialog | None = None
+        self.transcript_dock: TranscriptDock | None = None
+        self.settings_dock: SettingsDock | None = None
+        self.fx_dock: FXDock | None = None
+        self.lexicon_dock: LexiconDock | None = None
+        self.mixing_dock: MixingDock | None = None
+        self.voice_clone_dock: VoiceCloneDock | None = None
+        self.timeline_dock: TimelineDock | None = None
+        self.transport_dock: TransportDock | None = None
+
+        # --- Engine / backend ---
+        self.engine = KokoroEngine()
+        self.bridge = EngineSignalBridge()
+        wire_engine(self.engine, self.bridge)
+        self.backend = engine_registry.get_engine("kokoro", engine=self.engine)
+        self._connect_bridge(self.bridge)
+        self._install_segment_key_fn()
+
+        self.previewFinished.connect(self._on_preview_finished)
+        self.exportProgress.connect(self._on_export_progress)
+        self.exportFinished.connect(self._on_export_finished)
+
+        # Theme before any custom-painted widget exists, so their first
+        # paint already reads the right palette.
+        theme.apply(QApplication.instance(), self.settings.get("theme", theme.DEFAULT_THEME))
+
+        # Transport (section 5) before the docks: the Timeline dock wires
+        # its playhead to transport.positionChanged at construction.
+        self.transport = Transport(self)
+        self.transport.positionChanged.connect(self._on_transport_position)
+        self.transport.stateChanged.connect(self._on_transport_state)
+
+        self._build_menu_bar()
+        self._build_docks()
+        self._build_shortcuts()
+
+        self.workspaces = WorkspaceManager(self, self.settings)
+        self.workspaces.restore_on_launch()
+        self._sync_workspace_actions()
+
+        self._arrangement = None
+        self._rebuild_transport_schedule()
+        self._update_window_title()
+
+        self.set_status("Initializing engine...")
+        init_lang_code = self.settings_dock.get_state().get("lang_code", "a")
+        self.engine.worker.run_coro(self.engine.init_pipeline_async(init_lang_code, device=self.settings.get("device", "auto")))
+
+        self.backend.on_project_opened(self.project_dir, {})
+        if self._pending_open_path:
+            path, self._pending_open_path = self._pending_open_path, None
+            self.open_project(path)
+
+    # --- project bootstrap ------------------------------------------------
+
+    def _load_initial_document(self):
+        """The window starts on an Untitled project in a fresh project dir.
+        The last project (or the 4.0-preview `document.json` next to the
+        config, which migrates to `document.tbaw`) is opened right after
+        the docks exist, since Open extracts on a thread with progress on
+        the transport bar. Characters for a first run come from the
+        presets directory, as before."""
+        candidates = []
+        last = self.settings.get("last_project")
+        if last and os.path.isfile(last):
+            candidates.append(last)
+        if os.path.isfile(DOCUMENT_FILE):
+            candidates.append(DOCUMENT_FILE)
+        self._pending_open_path = candidates[0] if candidates else None
+        self.project_path = None
+        self.project_settings = {}
+        if self._pending_open_path:
+            document = project_io.new_document_from(None)
+        else:
+            document = document_state.load_or_create_document(DOCUMENT_FILE, self.settings, PRESETS_DIR)
+        self._begin_untitled_project_dir(document)
+        return document
+
+    def _begin_untitled_project_dir(self, document) -> None:
+        """New: a fresh dir with an empty `document.json` and the lock, so an
+        Untitled project has somewhere to generate into before its first
+        Save (Claude/old/PLAN_tbaw_bundle.md section 3)."""
+        project_dir, project_id = project_io.create_project_dir()
+        self._project_lock = project_io.ProjectLock(project_dir).acquire()
+        self.project_dir = project_dir
+        self.project_id = project_id
+        self._project_manifest = {}
+        digest = project_io.autosave_to_dir(document, self.project_settings, project_dir)
+        project_io.write_session(project_dir, {
+            "source_path": None, "zip_size": None, "zip_mtime": None,
+            "saved_digest": digest, "dirty": False, "asset_index": {},
+        })
+        self._project_dirty = False
+
+    def _backend_for(self, engine_id: str):
+        """The adapter for `engine_id`: the active one when it matches, else
+        one built once and kept (Save collects assets for every engine the
+        document uses; building an adapter starts its worker thread but
+        loads no model), or None for an engine that isn't registered."""
+        if engine_id == self.backend.id:
+            return self.backend
+        if engine_id in self._asset_backends:
+            return self._asset_backends[engine_id]
+        try:
+            backend = engine_registry.get_engine(engine_id)
+        except Exception:  # noqa: BLE001 - an unregistered id is a warning, not a crash
+            return None
+        self._asset_backends[engine_id] = backend
+        return backend
+
+    # --- construction -----------------------------------------------------
+
+    def _connect_bridge(self, bridge: EngineSignalBridge) -> None:
+        bridge.status.connect(self.on_engine_status)
+        bridge.progress.connect(self.on_engine_progress)
+        bridge.finished.connect(self.on_engine_finish)
+
+    def _disconnect_bridge(self, bridge: EngineSignalBridge) -> None:
+        try:
+            bridge.status.disconnect(self.on_engine_status)
+            bridge.progress.disconnect(self.on_engine_progress)
+            bridge.finished.disconnect(self.on_engine_finish)
+        except Exception:
+            pass
+
+    def _build_menu_bar(self) -> None:
+        bar = self.menuBar()
+
+        # File
+        self.file_menu = bar.addMenu("&File")
+        self.new_action = self._action("&New", self.new_project, QKeySequence.StandardKey.New)
+        self.open_action = self._action("&Open...", self.open_project_dialog, QKeySequence.StandardKey.Open)
+        self.recent_menu = self.file_menu.addMenu("Recent")
+        self.welcome_action = self._action("&Welcome...", self.show_welcome)
+        self.save_action = self._action("&Save", self.save_project, QKeySequence.StandardKey.Save)
+        self.save_as_action = self._action("Save &As...", self.save_project_as_dialog, QKeySequence.StandardKey.SaveAs)
+        self.file_menu.insertAction(self.recent_menu.menuAction(), self.new_action)
+        self.file_menu.insertAction(self.recent_menu.menuAction(), self.open_action)
+        self.file_menu.addAction(self.welcome_action)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.save_action)
+        self.file_menu.addAction(self.save_as_action)
+        self.file_menu.addSeparator()
+        self.import_text_action = self._action("Import &Text...", self.import_text_dialog)
+        self.file_menu.addAction(self.import_text_action)
+        self.import_audio_action = QAction("Import Audio...", self)
+        self.import_audio_action.setEnabled(False)
+        self.import_audio_action.setToolTip("coming with ASR-anchored import")
+        self.file_menu.addAction(self.import_audio_action)
+        self.export_action = self._action("&Export...", self.export_dialog, "Ctrl+E")
+        self.file_menu.addAction(self.export_action)
+        self.file_menu.addSeparator()
+        self.quit_action = self._action("&Quit", self.close, QKeySequence.StandardKey.Quit)
+        self.file_menu.addAction(self.quit_action)
+        self._rebuild_recent_menu()
+
+        # Edit
+        self.edit_menu = bar.addMenu("&Edit")
+        self.undo_action = self._action("Undo", self.undo, QKeySequence.StandardKey.Undo)
+        self.redo_action = self._action("Redo", self.redo, QKeySequence.StandardKey.Redo)
+        self.edit_menu.addAction(self.undo_action)
+        self.edit_menu.addAction(self.redo_action)
+        self.edit_menu.addSeparator()
+        self.cut_action = self._action("Cu&t", lambda: self._editor_call("cut"))
+        self.copy_action = self._action("&Copy", lambda: self._editor_call("copy"))
+        self.paste_action = self._action("&Paste", lambda: self._editor_call("paste"))
+        for a in (self.cut_action, self.copy_action, self.paste_action):
+            self.edit_menu.addAction(a)
+        self.edit_menu.addSeparator()
+        self.characters_action = self._action("&Characters...", self.open_characters_dialog)
+        self.edit_menu.addAction(self.characters_action)
+
+        # Options
+        self.options_menu = bar.addMenu("&Options")
+        self.engine_menu = self.options_menu.addMenu("Engine")
+        self.engine_group = QActionGroup(self)
+        self.engine_group.setExclusive(True)
+        self.engine_actions: dict = {}
+        for engine_id in engine_registry.list_engines():
+            action = QAction(engine_registry.get_display_name(engine_id), self)
+            action.setCheckable(True)
+            action.setChecked(engine_id == self.backend.id)
+            action.triggered.connect(lambda checked=False, eid=engine_id: self.on_engine_action(eid))
+            self.engine_group.addAction(action)
+            self.engine_menu.addAction(action)
+            self.engine_actions[engine_id] = action
+
+        self.device_menu = self.options_menu.addMenu("Device")
+        self.device_group = QActionGroup(self)
+        self.device_group.setExclusive(True)
+        self.device_actions: dict = {}
+        cuda_ok = self._cuda_available()
+        for device_id, label in (("auto", "Auto"), ("cpu", "CPU"), ("cuda", "CUDA")):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(self.settings.get("device", "auto") == device_id)
+            if device_id == "cuda" and not cuda_ok:
+                action.setEnabled(False)
+                action.setToolTip("torch reports no CUDA device")
+            action.triggered.connect(lambda checked=False, d=device_id: self.set_device(d))
+            self.device_group.addAction(action)
+            self.device_menu.addAction(action)
+            self.device_actions[device_id] = action
+
+        self.theme_menu = self.options_menu.addMenu("Theme")
+        self.theme_group = QActionGroup(self)
+        self.theme_group.setExclusive(True)
+        self.theme_actions: dict = {}
+        for theme_id, label in (("light", "Light"), ("dark", "Dark")):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(self.settings.get("theme", theme.DEFAULT_THEME) == theme_id)
+            action.triggered.connect(lambda checked=False, t=theme_id: self.set_theme(t))
+            self.theme_group.addAction(action)
+            self.theme_menu.addAction(action)
+            self.theme_actions[theme_id] = action
+
+        self.options_menu.addSeparator()
+        self.copy_carries_action = QAction("Copy carries character/FX", self)
+        self.copy_carries_action.setCheckable(True)
+        self.copy_carries_action.setChecked(bool(self.settings.get("character_fx_copy", True)))
+        self.copy_carries_action.toggled.connect(lambda v: self._set_setting("character_fx_copy", v))
+        self.options_menu.addAction(self.copy_carries_action)
+
+        self.paste_splits_action = QAction("Paste splits character/FX", self)
+        self.paste_splits_action.setCheckable(True)
+        self.paste_splits_action.setChecked(bool(self.settings.get("character_fx_paste_splits", True)))
+        self.paste_splits_action.toggled.connect(lambda v: self._set_setting("character_fx_paste_splits", v))
+        self.options_menu.addAction(self.paste_splits_action)
+
+        self.jit_action = QAction("JIT streaming (no-clips fallback only)", self)
+        self.jit_action.setCheckable(True)
+        self.jit_action.setChecked(bool(self.jit_enabled))
+        self.jit_action.toggled.connect(self._on_jit_toggled)
+        self.options_menu.addAction(self.jit_action)
+        self._sync_jit_action_enabled()
+
+        # Workspace
+        self.workspace_menu = bar.addMenu("&Workspace")
+        self.workspace_group = QActionGroup(self)
+        self.workspace_group.setExclusive(True)
+        self.workspace_actions: dict = {}
+        for name in (ADVANCED, SIMPLE):
+            action = QAction(name, self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked=False, n=name: self.activate_workspace(n))
+            self.workspace_group.addAction(action)
+            self.workspace_menu.addAction(action)
+            self.workspace_actions[name] = action
+        self.workspace_menu.addSeparator()
+        self.reset_layout_action = self._action("Reset layout", self.reset_workspace)
+        self.workspace_menu.addAction(self.reset_layout_action)
+
+    def _action(self, text: str, slot, shortcut=None) -> QAction:
+        action = QAction(text, self)
+        if shortcut is not None:
+            action.setShortcut(QKeySequence(shortcut) if isinstance(shortcut, str) else shortcut)
+        action.triggered.connect(slot)
+        return action
+
+    @staticmethod
+    def _cuda_available() -> bool:
+        try:
+            import torch
+
+            return bool(torch.cuda.is_available())
+        except Exception:
+            return False
+
+    def _build_docks(self) -> None:
+        self.transcript_dock = TranscriptDock(self)
+        self.settings_dock = SettingsDock(self)
+        self.fx_dock = FXDock(self)
+        self.lexicon_dock = LexiconDock(self)
+        self.timeline_dock = TimelineDock(self)
+        self.transport_dock = TransportDock(self)
+
+        self.timeline_dock.batchGenerationProgress.connect(self.on_batch_generation_progress)
+        self.timeline_dock.batchGenerationFinished.connect(self.on_batch_generation_finished)
+        self.timeline_dock.timeline_view.seekRequested.connect(self.transport.seek)
+
+        self.transport_dock.playRequested.connect(self.transport.play)
+        self.transport_dock.pauseRequested.connect(self.transport.pause)
+        self.transport_dock.stopRequested.connect(self.transport.stop)
+        self.transport_dock.loopToggled.connect(self._on_loop_toggled)
+
+        # A QMainWindow needs a central widget; the docks fill everything.
+        # Hidden with an Ignored size policy, NOT setFixedSize(0, 0): a fixed
+        # 0x0 central widget caps the maximum height of the row it sits in,
+        # so the docks sharing that row (the timeline) could never be made
+        # taller than their minimum by dragging the separator above them.
+        central = QWidget()
+        central.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        central.hide()
+        self.setCentralWidget(central)
+        self.setDockNestingEnabled(True)
+
+        self.arrange_docks_default()
+
+    def arrange_docks_default(self) -> None:
+        """The drawing's 2x2 grid. Also what Workspace > Reset rebuilds.
+
+        Top row (transcript | settings tabs) in the Top dock area, bottom row
+        (timeline | transport) in the Left area next to the hidden central
+        widget. Two areas, one separator between the rows, both rows
+        resizable - the arrangement the maintainer settled on by dragging."""
+        for dock in self._all_docks():
+            self.removeDockWidget(dock)
+
+        top = Qt.DockWidgetArea.TopDockWidgetArea
+        bottom = Qt.DockWidgetArea.LeftDockWidgetArea
+        self.addDockWidget(top, self.transcript_dock)
+        self.addDockWidget(top, self.settings_dock)
+        for dock in (self.fx_dock, self.lexicon_dock):
+            self.addDockWidget(top, dock)
+            self.tabifyDockWidget(self.settings_dock, dock)
+        self._sync_mixing_dock()
+        self._sync_voice_clone_dock()
+        for voices_dock in (self.mixing_dock, self.voice_clone_dock):
+            if voices_dock is not None:
+                self._place_voices_dock(voices_dock)
+        self.addDockWidget(bottom, self.timeline_dock)
+        self.addDockWidget(bottom, self.transport_dock)
+        self.splitDockWidget(self.timeline_dock, self.transport_dock, Qt.Orientation.Horizontal)
+
+        for dock in self._all_docks():
+            dock.setFloating(False)
+            dock.setVisible(True)
+        self.settings_dock.raise_()
+        self.apply_default_proportions()
+
+    def apply_default_proportions(self) -> None:
+        """Left column ~65% of the width, top row ~65% of the height.
+        `resizeDocks` only sticks once the dock layout is active, so this
+        runs again from the first `showEvent`."""
+        width = max(self.width(), 800)
+        height = max(self.height(), 600)
+        left_w, right_w = int(width * 0.65), int(width * 0.35)
+        top_h, bottom_h = int(height * 0.65), int(height * 0.35)
+        self.resizeDocks([self.transcript_dock, self.settings_dock], [left_w, right_w], Qt.Orientation.Horizontal)
+        self.resizeDocks([self.timeline_dock, self.transport_dock], [left_w, right_w], Qt.Orientation.Horizontal)
+        self.resizeDocks([self.transcript_dock, self.timeline_dock], [top_h, bottom_h], Qt.Orientation.Vertical)
+
+    def apply_simple_proportions(self) -> None:
+        """Workspace > Simple: the timeline is hidden, so the bottom row only
+        needs the transport's three rows."""
+        height = max(self.height(), 600)
+        bottom_h = 140
+        self.resizeDocks([self.transcript_dock, self.transport_dock], [height - bottom_h, bottom_h],
+                         Qt.Orientation.Vertical)
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        if not getattr(self, "_shown_once", False):
+            self._shown_once = True
+            if hasattr(self, "workspaces") and self.workspaces.saved(self.workspaces.active) is None:
+                QTimer.singleShot(0, lambda: self.workspaces.apply_default(self.workspaces.active))
+
+    def _all_docks(self) -> list:
+        docks = [self.transcript_dock, self.settings_dock, self.fx_dock, self.lexicon_dock,
+                 self.mixing_dock, self.voice_clone_dock, self.timeline_dock, self.transport_dock]
+        return [d for d in docks if d is not None]
+
+    def _build_shortcuts(self) -> None:
+        # UI12: plain Space toggles playback anywhere the focus widget
+        # doesn't claim it (the editor and line edits accept it as text via
+        # ShortcutOverride); Ctrl+Space always toggles.
+        self.space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
+        self.space_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self.space_shortcut.activated.connect(self.transport.toggle)
+        self.ctrl_space_shortcut = QShortcut(QKeySequence("Ctrl+Space"), self)
+        self.ctrl_space_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.ctrl_space_shortcut.activated.connect(self.transport.toggle)
+
+    # --- status helpers ---------------------------------------------------
+
+    def set_status(self, message: str, kind: str = "info") -> None:
+        if self.transport_dock is not None:
+            self.transport_dock.set_status(message, kind)
+
+    def is_busy(self) -> bool:
+        return self.transport_dock is not None and self.transport_dock.is_busy()
+
+    @property
+    def editor(self):
+        return self.transcript_dock.editor if self.transcript_dock is not None else None
+
+    def _editor_call(self, method: str) -> None:
+        editor = self.editor
+        if editor is not None:
+            getattr(editor, method)()
+
+    def raise_fx_tab(self) -> None:
+        if self.fx_dock is not None:
+            self.fx_dock.show()
+            self.fx_dock.raise_()
+
+    # --- voice listing --
+
+    def get_all_voices(self, lang_code: str | None = None) -> list:
+        """`spec.VOICE_DB` is Kokoro's built-in named-voice table; the
+        backend-provided half comes from `self.backend.get_voices(...)`."""
+        if lang_code is None:
+            lang_code = self.settings.get("lang_code", "a")
+        standard = spec.VOICE_DB.get(lang_code, [])
+        custom = [v.id for v in self.backend.get_voices(lang_code)]
+        return sorted(set(standard + custom))
+
+    # --- settings persistence -
+
+    def schedule_save(self) -> None:
+        self._save_timer.start(1000)
+        self._update_window_title(pending=True)
+
+    def refresh_timeline(self) -> None:
+        """App-owned cross-dock coordination point: re-render the timeline
+        and (debounced) rebuild the transport's schedule."""
+        if self.timeline_dock is not None:
+            self.timeline_dock.refresh()
+        self._schedule_timer.start()
+        if self.transcript_dock is not None:
+            self.transcript_dock.sync_header()
+
+    def save_settings(self) -> None:
+        self._save_timer.stop()
+
+        if self.settings_dock is not None:
+            gen_state = self.settings_dock.get_state()
+            for key in ("lang_code", "voice", "speed", "volume", "pitch", "num_threads", "split_pattern",
+                        "caching", "normalize", "format"):
+                if key in gen_state:
+                    self.settings[key] = gen_state[key]
+            self.settings["trim"] = gen_state.get("trim_silence", self.settings.get("trim", False))
+            self.settings["apply_fx"] = self.settings_dock.apply_fx_enabled()
+            self.settings["jit_enabled"] = self.jit_enabled
+            self.settings["engine_id"] = self.backend.id
+            self.settings.update(self.fx_dock.project_fx_state())
+            if self.voice_clone_dock is not None:
+                self.settings.update(self.voice_clone_dock.get_state())
+            if hasattr(self, "workspaces"):
+                self.workspaces.capture()
+
+        qt_settings.save_settings(CONFIG_FILE, self.settings)
+        self._autosave_project_dir()
+        self._update_window_title(pending=False)
+
+    def _autosave_project_dir(self) -> None:
+        """Writes `document.json`/`project.json` into the project dir and
+        sets the session's `dirty` iff the digest differs from what the
+        last Save or Open recorded. A content comparison, not an mtime:
+        `_switch_document`'s trailing `schedule_save` would otherwise dirty
+        every project a second after Open. Never touches the `.tbaw`."""
+        if not self.project_dir:
+            return
+        try:
+            digest = project_io.autosave_to_dir(self.document, self.project_settings, self.project_dir)
+        except Exception as e:  # noqa: BLE001 - autosave must never crash the UI
+            self.set_status(f"Autosave failed: {e}", "error")
+            return
+        session = project_io.read_session(self.project_dir) or {}
+        dirty = digest != session.get("saved_digest")
+        if bool(session.get("dirty")) != dirty:
+            session["dirty"] = dirty
+            try:
+                project_io.write_session(self.project_dir, session)
+            except OSError as e:
+                self.set_status(f"Autosave failed: {e}", "error")
+        self._project_dirty = dirty
+
+    def is_project_dirty(self) -> bool:
+        """True when the project dir is ahead of the `.tbaw` on disk (or an
+        Untitled project has edits). Flushes a pending autosave first so a
+        keystroke a moment ago counts."""
+        if self._save_timer.isActive():
+            self.save_settings()
+        return self._project_dirty
+
+    def _set_setting(self, key: str, value) -> None:
+        self.settings[key] = value
+        self.schedule_save()
+
+    def _update_window_title(self, pending: bool = False) -> None:
+        name = project_io.project_title(self.project_path)
+        star = "*" if (pending or self._project_dirty) else ""
+        self.setWindowTitle(f"{name}{star} - {APP_NAME}")
+
+    # --- config assembly ----------------
+
+    def _export_values(self) -> dict:
+        from kokoro_gui.qt.docks.export_dialog import export_defaults
+
+        return export_defaults(self)
+
+    def _assemble_config(self) -> dict:
+        gen_state = self.settings_dock.get_state()
+        export = self._export_values()
+        config = {
+            "engine_id": self.backend.id,
+            "lang_code": gen_state["lang_code"],
+            "voice": gen_state["voice"],
+            "speed": gen_state["speed"],
+            "split_pattern": gen_state["split_pattern"],
+            # Sanitize the free-text filename field the same way voice/preset
+            # names are sanitized elsewhere - it flows unvalidated into an
+            # os.path.join sink in caching.py otherwise.
+            "filename": os.path.basename(export["filename"]),
+            "format": export["format"],
+            "out_dir": export["out_dir"],
+            "separate": export["keep_clip_files"],
+            "combine": True,
+            "export_subtitles": export["srt"],
+            "caching": gen_state["caching"],
+            "time_id": time.strftime(self.timecode_format),
+            "num_threads": gen_state["num_threads"],
+            "volume": gen_state["volume"],
+            "pitch": gen_state["pitch"],
+            "normalize": gen_state["normalize"],
+            "trim_silence": gen_state["trim_silence"],
+            "lexicon": self.settings.get("lexicon", {}),
+        }
+        if self.settings_dock.apply_fx_enabled():
+            config.update(self.fx_dock.project_fx_state())
+        return config
+
+    def _assemble_generation_config(self, clip) -> dict:
+        """Exactly the inputs that decide what a clip's audio *is*: the
+        segment key hashes these and nothing else, and `_assemble_clip_config`
+        is built on top. App defaults from the Settings tab, the backend's
+        "Model" schema group (Audio8's sampling knobs), then the clip's
+        `effective_config_for_clip` (character preset, then overrides) on
+        top, then `project_dir` and the clip's take. The take is read off
+        `clip.overrides` directly, not through the `ALLOWED_PRESET_KEYS`
+        whitelist, which is for untrusted preset files and shouldn't widen
+        for a runtime counter. One method decides what both the dirty check
+        and a Generate hash, so they can't drift."""
+        gen_state = self.settings_dock.get_state()
+        config = {
+            "engine_id": self.backend.id,
+            "lang_code": gen_state["lang_code"],
+            "voice": gen_state["voice"],
+            "speed": gen_state["speed"],
+            "pitch": gen_state["pitch"],
+            "split_pattern": gen_state["split_pattern"],
+        }
+        for field in self.backend.get_config_schema():
+            if field.group == "Model" and field.key in gen_state:
+                config[field.key] = gen_state[field.key]
+        clip_config = dict(self.document.effective_config_for_clip(clip))
+        for key in ("voice", "speed", "pitch", "split_pattern", "lang_code"):
+            if key in clip_config:
+                config[key] = clip_config[key]
+        config["project_dir"] = self.project_dir
+        config["take"] = int(clip.overrides.get("take", 0) or 0)
+        return config
+
+    def _assemble_clip_config(self, clip) -> dict:
+        """The config dict for a per-clip Generate action and, through
+        `post_config_for_clip`, for read-time post-processing:
+        `_assemble_generation_config` plus everything that doesn't change
+        the audio (output location and naming, threads, caching, the post
+        keys) with `clip`'s character/override settings merged on top, so
+        the clip's own values win. Defaults must come first:
+        `process_chunk_task` reads `config['voice']`/`config['split_pattern']`
+        by direct indexing, so a clip with no character must still end up
+        with usable defaults. FX come from `fx_resolve.resolve_fx`, the same
+        resolver the Audio FX tab renders."""
+        gen_state = self.settings_dock.get_state()
+        export = self._export_values()
+        config = {
+            "format": export["format"],
+            "out_dir": export["out_dir"],
+            "caching": gen_state["caching"],
+            "time_id": time.strftime(self.timecode_format),
+            "num_threads": gen_state["num_threads"],
+            "volume": gen_state["volume"],
+            "normalize": gen_state["normalize"],
+            "trim_silence": gen_state["trim_silence"],
+            "filename": os.path.basename(export["filename"]),
+        }
+        for key in ("cache_reference_codes",):
+            if key in gen_state:
+                config[key] = gen_state[key]
+
+        clip_config = dict(self.document.effective_config_for_clip(clip))
+        # ALLOWED_PRESET_KEYS whitelists "trim", but process_audio reads
+        # "trim_silence" - same inline rename every other caller does.
+        if "trim" in clip_config:
+            clip_config["trim_silence"] = clip_config.pop("trim")
+        config.update(clip_config)
+        config.update(self._assemble_generation_config(clip))
+        if self.project_dir:
+            # Clips generate straight into the project dir, once, named by
+            # their segment key (Claude/old/PLAN_tbaw_bundle.md section 3). The
+            # bundle's audio format decides the extension of new segments,
+            # over a preset's `format` (that one is for the export path).
+            config["out_dir"] = os.path.join(self.project_dir, *project_io.AUDIO_GENERATED.split("/"))
+            config["segment_naming"] = "cache_key"
+            config["format"] = project_io.bundle_options(self.project_settings)["audio_format"]
+
+        # effective_config_for_clip only ever carries the FX preset's *name*;
+        # the resolver turns project values + character preset + clip preset
+        # + clip.fx_override into the actual FX keys and the ANDed apply_fx.
+        resolution = fx_resolve.resolve_fx(self, clip=clip)
+        config.update(resolution.values)
+        config["apply_fx"] = resolution.apply_fx
+        return config
+
+    def _install_segment_key_fn(self) -> None:
+        """Sets `Document.segment_key_fn` to a closure over the active
+        backend and project dir (Claude/old/PLAN_tbaw_bundle.md section 2.3):
+        `key_fn(text, clip, engine_version=None) -> caching.segment_key`
+        over `_assemble_generation_config(clip)`. Memoized on the text, the
+        config and the version; a hit re-checks the voice file's mtime and
+        the backend's `cache_key_extra` (Audio8's transcript, itself cached
+        by mtime), which is the only way a key changes without its inputs
+        changing (a re-saved mix, a re-recorded reference). So a rehighlight
+        of a book costs about two stats per clip and no hashing or reads."""
+        backend = self.backend
+        memo: dict = {}
+
+        def key_fn(text, clip, engine_version=None):
+            config = self._assemble_generation_config(clip)
+            memo_key = (text, json.dumps(config, sort_keys=True, default=str), engine_version)
+            name, _fp = caching.normalize_voice(config.get("voice"), backend, config.get("project_dir"))
+            voice_file = backend.resolve_voice_file(name, config.get("project_dir")) if name else None
+            try:
+                stamp = os.path.getmtime(voice_file) if voice_file else None
+            except OSError:
+                stamp = None
+            extra = backend.cache_key_extra(config)
+            hit = memo.get(memo_key)
+            if hit is not None and hit[0] == stamp and hit[1] == extra:
+                return hit[2]
+            key = caching.segment_key(text, config, backend, engine_version)
+            memo[memo_key] = (stamp, extra, key)
+            return key
+
+        self.document.segment_key_fn = key_fn
+
+    # --- read-time post-processing (kokoro_gui/audio/post.py) ---------------
+
+    def post_config_for_clip(self, clip) -> dict:
+        """The `POST_KEYS` subset of the clip's resolved config: what the
+        transport, the exporter and the timeline waveform apply on top of
+        the raw segment files. Changing any of it never dirties the clip."""
+        return post.extract_post_config(self._assemble_clip_config(clip))
+
+    def clip_duration_s(self, clip):
+        """`compute_arrangement`'s `clip_duration`: the clip's rendered
+        length (trim and pitch change it), or the raw `Segment.duration`
+        for a file that can't be read, or None with no audio at all. Falls
+        back to the raw durations while the docks are still being built."""
+        segments = [s for s in clip.segments if s.audio_path]
+        if not segments:
+            return None
+        if self.settings_dock is None or self.fx_dock is None:
+            return clip_audio_duration_s(clip)
+        post_config = self.post_config_for_clip(clip)
+        rate = self.project_sample_rate()
+        total = 0.0
+        for segment in segments:
+            try:
+                total += post.rendered_duration_s(segment.audio_path, post_config, rate)
+            except Exception:
+                total += segment.duration or 0.0
+        return total
+
+    def rendered_clip_samples(self, clip):
+        """`(samples, rate)` for the clip's segments concatenated and
+        post-processed, or None. The timeline draws its waveform from this
+        so it shows what the transport plays."""
+        segments = sorted((s for s in clip.segments if s.audio_path), key=lambda s: s.order_index)
+        if not segments:
+            return None
+        post_config = self.post_config_for_clip(clip)
+        rate = self.project_sample_rate()
+        parts = []
+        for segment in segments:
+            try:
+                parts.append(post.render(segment.audio_path, post_config, rate))
+            except Exception:
+                continue
+        if not parts:
+            return None
+        import numpy as np
+
+        return np.concatenate(parts), rate
+
+    def build_arrangement(self):
+        """Every `compute_arrangement` call for the live document goes
+        through here so they all measure clips the same way."""
+        return compute_arrangement(self.document, engine_id=self.backend.id, clip_duration=self.clip_duration_s)
+
+    # --- Options: engine / device / theme ---------------------------------
+
+    def on_engine_action(self, engine_id: str) -> None:
+        if engine_id == self.backend.id:
+            return
+        self.switch_engine(engine_id)
+
+    def switch_engine(self, engine_id: str) -> None:
+        if self.is_busy():
+            QMessageBox.warning(self, "Busy", "Cancel the current job before switching engines.")
+            self._sync_engine_actions()
+            return
+
+        old_engine = self.engine
+        self._disconnect_bridge(self.bridge)
+
+        new_backend = engine_registry.get_engine(engine_id)
+        new_engine = new_backend.engine
+        new_bridge = EngineSignalBridge()
+        wire_engine(new_engine, new_bridge)
+        self._connect_bridge(new_bridge)
+
+        self.engine = new_engine
+        self.backend = new_backend
+        self.bridge = new_bridge
+        self._install_segment_key_fn()
+
+        self.backend.on_project_opened(self.project_dir, self._engine_meta(self.backend.id))
+        self.settings_dock.rebuild_schema_form()
+        self._sync_mixing_dock()
+        self._sync_voice_clone_dock()
+        self._sync_engine_actions()
+        self._sync_jit_action_enabled()
+
+        try:
+            old_engine.worker.stop()
+        except Exception:
+            pass
+
+        self.set_status(f"Switched engine to {new_backend.display_name}. Initializing...")
+        new_lang_code = self.settings_dock.get_state().get("lang_code", "a")
+        self.settings["lang_code"] = new_lang_code
+        self.engine.worker.run_coro(self.engine.init_pipeline_async(new_lang_code, device=self.settings.get("device", "auto")))
+        self.schedule_save()
+
+    def _sync_engine_actions(self) -> None:
+        for engine_id, action in self.engine_actions.items():
+            action.setChecked(engine_id == self.backend.id)
+
+    def _sync_jit_action_enabled(self) -> None:
+        supported = self.backend.capabilities.supports_jit_streaming
+        self.jit_action.setEnabled(supported)
+        self.jit_action.setToolTip("" if supported else f"{self.backend.display_name} doesn't support streaming - runs as Standard.")
+
+    def _on_jit_toggled(self, checked: bool) -> None:
+        self.jit_enabled = checked
+        self.settings["jit_enabled"] = checked
+        self.schedule_save()
+
+    def set_device(self, device: str) -> None:
+        self.settings["device"] = device
+        for device_id, action in self.device_actions.items():
+            action.setChecked(device_id == device)
+        self.schedule_save()
+        if self.is_busy():
+            return
+        lang_code = self.settings_dock.get_state().get("lang_code", "a")
+        self.set_status(f"Re-initializing engine on {device}...")
+        self.engine.worker.run_coro(self.engine.init_pipeline_async(lang_code, device=device))
+
+    def set_theme(self, name: str) -> None:
+        self.settings["theme"] = name
+        theme.apply(QApplication.instance(), name)
+        for theme_id, action in self.theme_actions.items():
+            action.setChecked(theme_id == name)
+        self.themeChanged.emit()
+        self.schedule_save()
+
+    def _sync_mixing_dock(self) -> None:
+        wants = self.backend.capabilities.supports_voice_mixing
+        if wants and self.mixing_dock is None:
+            self.mixing_dock = MixingDock(self)
+            self._place_voices_dock(self.mixing_dock)
+        elif not wants and self.mixing_dock is not None:
+            self.removeDockWidget(self.mixing_dock)
+            self.mixing_dock.deleteLater()
+            self.mixing_dock = None
+        elif wants and self.mixing_dock is not None and self.mixing_dock.parent() is None:
+            self._place_voices_dock(self.mixing_dock)
+
+    def _sync_voice_clone_dock(self) -> None:
+        wants = self.backend.capabilities.supports_voice_cloning
+        if wants and self.voice_clone_dock is None:
+            self.voice_clone_dock = VoiceCloneDock(self)
+            self._place_voices_dock(self.voice_clone_dock)
+        elif not wants and self.voice_clone_dock is not None:
+            self.removeDockWidget(self.voice_clone_dock)
+            self.voice_clone_dock.deleteLater()
+            self.voice_clone_dock = None
+        elif wants and self.voice_clone_dock is not None and self.voice_clone_dock.parent() is None:
+            self._place_voices_dock(self.voice_clone_dock)
+
+    def _place_voices_dock(self, dock) -> None:
+        """Both capability-gated voice docks share the "Voices" tab title and
+        objectName, so the tab strip doesn't jump when the engine changes
+        and a saved layout places either one in the same slot."""
+        dock.setWindowTitle("Voices")
+        dock.setObjectName("dock_voices")
+        self.addDockWidget(self.dockWidgetArea(self.settings_dock), dock)
+        self.tabifyDockWidget(self.lexicon_dock, dock)
+        if self.settings_dock is not None:
+            self.settings_dock.raise_()
+
+    # --- Workspace ----------------------------------------------------------
+
+    def activate_workspace(self, name: str) -> None:
+        self.workspaces.activate(name)
+        self._sync_workspace_actions()
+        self.schedule_save()
+
+    def reset_workspace(self) -> None:
+        self.workspaces.reset()
+        self._sync_workspace_actions()
+        self.schedule_save()
+
+    def _sync_workspace_actions(self) -> None:
+        for name, action in self.workspace_actions.items():
+            action.setChecked(name == self.workspaces.active)
+
+    # --- File menu ----------------------------------------------------------
+
+    def _rebuild_recent_menu(self) -> None:
+        self.recent_menu.clear()
+        recent = [p for p in self.settings.get("recent_projects", []) if isinstance(p, str)]
+        if not recent:
+            empty = self.recent_menu.addAction("(empty)")
+            empty.setEnabled(False)
+            return
+        for path in recent:
+            action = self.recent_menu.addAction(project_io.project_title(path))
+            action.setToolTip(path)
+            action.triggered.connect(lambda checked=False, p=path: self.open_project(p))
+
+    def show_welcome(self) -> WelcomeDialog:
+        """Window-modal via `open()`, not `exec()`, so engine init keeps
+        reporting underneath and tests can drive it."""
+        if self.welcome_dialog is None:
+            self.welcome_dialog = WelcomeDialog(self)
+        else:
+            self.welcome_dialog.reload()
+        if self.welcome_dialog.isVisible():
+            self.welcome_dialog.raise_()
+        else:
+            self.welcome_dialog.open()
+        return self.welcome_dialog
+
+    def show_welcome_if_enabled(self) -> WelcomeDialog | None:
+        """The launch-time trigger; `main.py` is its only caller, so the
+        test fixture and the screenshot script never get a dialog."""
+        if not self.settings.get("show_welcome", True):
+            return None
+        return self.show_welcome()
+
+    def _switch_document(self, document, path: str | None, project_settings: dict | None = None) -> None:
+        self.transport.stop()
+        self.document = document
+        self.project_path = os.path.abspath(path) if path else None
+        self.project_settings = dict(project_settings or {})
+        self._install_segment_key_fn()
+        self.backend.on_project_opened(self.project_dir, self._engine_meta(self.backend.id))
+        self.selection.clear()
+        self.selection.set_playing_clip(None)
+        if self.project_path:
+            project_io.remember_recent(self.settings, self.project_path)
+        else:
+            self.settings["last_project"] = None
+        self._rebuild_recent_menu()
+        if self.editor is not None:
+            self.editor.rebind_document()
+        if self.transcript_dock is not None:
+            self.transcript_dock.refresh_character_choices()
+        if self.settings_dock is not None:
+            self.settings_dock.rebuild_schema_form()
+        if self.fx_dock is not None:
+            self.fx_dock.refresh_for_selection()
+        self.refresh_timeline()
+        self._update_window_title()
+        self.schedule_save()
+
+    def _engine_meta(self, engine_id: str) -> dict:
+        engines = self._project_manifest.get("engines") if isinstance(self._project_manifest, dict) else None
+        block = (engines or {}).get(engine_id) if isinstance(engines, dict) else None
+        meta = block.get("meta") if isinstance(block, dict) else None
+        return dict(meta) if isinstance(meta, dict) else {}
+
+    # -- closing the current project ----------------------------------------
+
+    def _ask_close_choice(self) -> str:
+        """Save / Discard / Cancel for a dirty project (grill TB12). A
+        method so tests can replace it."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Unsaved changes")
+        box.setText(f"{project_io.project_title(self.project_path)} has unsaved changes.")
+        save_btn = box.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
+        discard_btn = box.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(save_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is save_btn:
+            return "save"
+        if clicked is discard_btn:
+            return "discard"
+        return "cancel"
+
+    def _close_current_project(self, then) -> None:
+        """Runs `then()` once the open project is put away: a clean project
+        is GC'd and released; a dirty one asks Save / Discard / Cancel, and
+        Save continues after the background Save succeeds."""
+        if not self.project_dir:
+            then()
+            return
+        if not self.is_project_dirty():
+            self._teardown_project(discard=False)
+            then()
+            return
+        choice = self._ask_close_choice()
+        if choice == "cancel":
+            return
+        if choice == "discard":
+            self._teardown_project(discard=True)
+            then()
+            return
+        path = self.project_path
+        if not path:
+            path = self._save_as_path_dialog()
+            if not path:
+                return
+            self.project_path = path
+
+        def _after_save():
+            self._teardown_project(discard=False)
+            then()
+
+        self._save_bundle(self.project_path, then=_after_save)
+
+    def _teardown_project(self, discard: bool) -> None:
+        """Releases the lock; on Discard deletes the dir (the zip has the
+        last saved state), otherwise GCs orphaned segments (TB11: only at
+        close, when no undo history can point at them any more)."""
+        if self._project_lock is not None:
+            if not discard:
+                try:
+                    project_io.gc_project_dir(self.project_dir, self.document)
+                except OSError:
+                    pass
+            self._project_lock.release()
+            self._project_lock = None
+        if discard and self.project_dir:
+            project_io.delete_project_dir(self.project_dir)
+        self.project_dir = None
+        self.project_id = None
+        self._project_manifest = {}
+        self._project_dirty = False
+
+    def _evict_other_project_dirs(self) -> None:
+        """TB13: only the open project's dir stays; every other clean,
+        unlocked dir under `cache/projects/` goes."""
+        try:
+            project_io.evict_project_dirs(self.project_dir)
+        except OSError:
+            pass
+
+    # -- new ------------------------------------------------------------------
+
+    def new_project(self) -> None:
+        previous = self.document
+
+        def _start():
+            document = project_io.new_document_from(previous)
+            self.project_settings = {}
+            self._begin_untitled_project_dir(document)
+            self._switch_document(document, None)
+            self._evict_other_project_dirs()
+            self.set_status("New project (characters inherited from the previous one). Save As to name it.")
+
+        self._close_current_project(_start)
+
+    # -- open -----------------------------------------------------------------
+
+    def open_project(self, path: str) -> None:
+        if self.is_busy():
+            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before opening a project.")
+            return
+        if not os.path.isfile(path):
+            QMessageBox.warning(self, "Open failed", f"Couldn't read {path}.")
+            project_io.forget_recent(self.settings, path)
+            self._rebuild_recent_menu()
+            return
+        if project_io.format_for_path(path) != "tbaw":
+            self._open_json_project(path)
+            return
+        try:
+            info = project_io.inspect_bundle(path)
+        except project_io.ProjectError as e:
+            QMessageBox.warning(self, "Open failed", str(e))
+            return
+        if self.project_path and os.path.abspath(path) == self.project_path and self.project_id == info.project_id:
+            return  # already open: the welcome dialog's Resume
+        self._close_current_project(lambda: self._open_bundle(info))
+
+    def _ask_recover_choice(self, session: dict, info: project_io.BundleInfo, project_dir: str) -> str:
+        """Recover prompt (grill TB15): "keep" the unsaved session, "take"
+        the file (wipe and extract fresh) or "cancel". A method so tests can
+        replace it."""
+        stamp = ""
+        try:
+            stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(
+                os.path.getmtime(os.path.join(project_dir, project_io.DOCUMENT))))
+        except OSError:
+            pass
+        lines = [f"Recover unsaved changes{' from ' + stamp if stamp else ''}?"]
+        theirs = session.get("source_path")
+        if theirs and os.path.abspath(theirs) != os.path.abspath(info.path):
+            lines.append(f"They were made on {theirs}.")
+        changed = not project_io.session_matches_file(session, info)
+        if changed:
+            lines.append("The file was changed outside KokoroGUI since.")
+        box = QMessageBox(self)
+        box.setWindowTitle("Recover project")
+        box.setText("\n".join(lines))
+        keep_btn = box.addButton("Keep session", QMessageBox.ButtonRole.AcceptRole)
+        take_btn = box.addButton("Take file" if changed else "Discard session", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is keep_btn:
+            return "keep"
+        if clicked is take_btn:
+            return "take"
+        return "cancel"
+
+    def _open_bundle(self, info: project_io.BundleInfo) -> None:
+        """Steps 1-5 of Open (Claude/old/PLAN_tbaw_bundle.md section 6): the
+        project dir and its lock, the recover prompt, the free-space check,
+        the small entries on this thread, the audio on a background thread
+        behind `is_busy` with the editor read-only."""
+        project_dir = project_io.choose_project_dir(info.project_id, info.path)
+        try:
+            lock = project_io.ProjectLock(project_dir).acquire()
+        except project_io.ProjectLockedError as e:
+            QMessageBox.warning(self, "Already open", str(e))
+            self._start_untitled_after_failed_open()
+            return
+        try:
+            project_io.sweep_orphan_dirs()
+        except OSError:
+            pass
+
+        session = project_io.read_session(project_dir)
+        recovered = False
+        extract = True
+        if session and session.get("dirty") and os.path.isfile(os.path.join(project_dir, project_io.DOCUMENT)):
+            choice = self._ask_recover_choice(session, info, project_dir)
+            if choice == "cancel":
+                lock.release()
+                self._start_untitled_after_failed_open()
+                return
+            if choice == "keep":
+                recovered = True
+                extract = False
+            else:
+                project_io.wipe_project_dir(project_dir)
+        elif session and project_io.session_matches_file(session, info) \
+                and os.path.isfile(os.path.join(project_dir, project_io.DOCUMENT)):
+            extract = False  # a clean extraction of this very file: Resume is fast
+        else:
+            project_io.wipe_project_dir(project_dir)
+
+        if not extract:
+            self._finish_open(info, project_dir, lock, recovered)
+            return
+
+        try:
+            project_io.check_free_space(project_io.projects_root(), info.audio_bytes, "open the project")
+            project_io.extract_small(info, project_dir)
+        except (project_io.ProjectError, OSError) as e:
+            lock.release()
+            QMessageBox.warning(self, "Open failed", str(e))
+            self._start_untitled_after_failed_open()
+            return
+
+        if info.audio_bytes == 0:
+            self._finish_open(info, project_dir, lock, recovered)
+            return
+
+        self._begin_project_io(f"Opening {project_io.project_title(info.path)}...", read_only=True)
+
+        def _work():
+            project_io.extract_audio(info, project_dir, progress=self._io_progress("Extracting audio"))
+
+        def _done(_result, error):
+            self._end_project_io(read_only=True)
+            if error is not None:
+                lock.release()
+                QMessageBox.warning(self, "Open failed", str(error))
+                self._start_untitled_after_failed_open()
+                return
+            self._finish_open(info, project_dir, lock, recovered)
+
+        self._run_project_io(_work, _done)
+
+    def _start_untitled_after_failed_open(self) -> None:
+        """The previous project was already put away when an Open fails
+        partway; the window can't sit on a document with no dir."""
+        if self.project_dir:
+            return
+        document = project_io.new_document_from(self.document)
+        self.project_settings = {}
+        self._begin_untitled_project_dir(document)
+        self._switch_document(document, None)
+
+    def _finish_open(self, info, project_dir: str, lock, recovered: bool) -> None:
+        """Steps 6 and 7: the document, the session record, the TB9 status
+        line, and the backend's `on_project_opened`."""
+        try:
+            loaded = project_io.finish_open(
+                info, project_dir, {self.backend.id: self.backend.engine_version()}, recovered=recovered,
+            )
+        except (OSError, ValueError, KeyError) as e:
+            lock.release()
+            QMessageBox.warning(self, "Open failed", f"Couldn't read the project: {e}")
+            self._start_untitled_after_failed_open()
+            return
+        self._project_lock = lock
+        self.project_dir = project_dir
+        self.project_id = info.project_id
+        self._project_manifest = dict(info.manifest)
+        self._project_dirty = bool(recovered)
+        self._switch_document(loaded.document, info.path, loaded.project_settings)
+        self._evict_other_project_dirs()
+        for notice in loaded.notices:
+            self.set_status(notice, "warning")
+        if not loaded.notices:
+            self.set_status(f"Opened {project_io.project_title(info.path)}.")
+
+    def _open_json_project(self, path: str) -> None:
+        """TB6: a 4.0-preview `.json` project opens, gets a project id and a dir,
+        has its segments rekeyed and copied in (`migrate_segments`), and is
+        saved as `<name>.tbaw` next to the `.json`, which then becomes the
+        recent entry. A `.tbaw` already there from an earlier migration is
+        opened instead. An unwritable directory falls through to Save As."""
+        target = project_io.bundle_path_for(path)
+        if os.path.isfile(target):
+            self.open_project(target)
+            return
+        loaded = project_io.load_json_project(path)
+        if loaded is None:
+            QMessageBox.warning(self, "Open failed", f"Couldn't read {path}.")
+            project_io.forget_recent(self.settings, path)
+            self._rebuild_recent_menu()
+            return
+
+        def _migrate():
+            self.project_settings = dict(loaded.project_settings)
+            self._begin_untitled_project_dir(loaded.document)
+            self.document = loaded.document
+            self._install_segment_key_fn()
+            audio_format = project_io.bundle_options(self.project_settings)["audio_format"]
+            counts = project_io.migrate_segments(loaded.document, self.project_dir, self._assemble_generation_config,
+                                                 self.document.segment_key_fn, audio_format)
+            self._switch_document(loaded.document, None, self.project_settings)
+            project_io.forget_recent(self.settings, path)
+            self._rebuild_recent_menu()
+            if counts["adopted"] or counts["dropped"]:
+                self.set_status(f"Migrated {os.path.basename(path)}: {counts['adopted']} segment(s) kept, "
+                                f"{counts['dropped']} will regenerate.", "info")
+            save_to = target
+            if not os.access(os.path.dirname(os.path.abspath(target)) or ".", os.W_OK):
+                save_to = self._save_as_path_dialog()
+                if not save_to:
+                    return
+            self.project_path = os.path.abspath(save_to)
+            project_io.remember_recent(self.settings, self.project_path)
+            self._rebuild_recent_menu()
+            self._update_window_title()
+            self._save_bundle(self.project_path)
+
+        self._close_current_project(_migrate)
+
+    def open_project_dialog(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Open project", "", project_io.PROJECT_FILTER)
+        if path:
+            self.open_project(path)
+
+    # -- save -----------------------------------------------------------------
+
+    def save_project(self) -> None:
+        if not self.project_path:
+            self.save_project_as_dialog()
+            return
+        if self.is_busy():
+            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before saving.")
+            return
+        self._save_bundle(self.project_path)
+
+    def save_project_as(self, path: str) -> None:
+        """Save As keeps the project dir (it's keyed by `project_id`), so no
+        `audio_path` changes; only `source_path` moves."""
+        if self.is_busy():
+            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before saving.")
+            return
+        self.project_path = os.path.abspath(project_io.bundle_path_for(path))
+        project_io.remember_recent(self.settings, self.project_path)
+        self._rebuild_recent_menu()
+        self._update_window_title()
+        self._save_bundle(self.project_path)
+
+    def _save_as_path_dialog(self) -> str | None:
+        start = self.project_path or ""
+        path, _ = QFileDialog.getSaveFileName(self, "Save project as", start, project_io.PROJECT_FILTER)
+        return os.path.abspath(project_io.bundle_path_for(path)) if path else None
+
+    def save_project_as_dialog(self) -> None:
+        path = self._save_as_path_dialog()
+        if path:
+            self.save_project_as(path)
+
+    def _save_bundle(self, path: str, then=None) -> None:
+        """Save (Claude/old/PLAN_tbaw_bundle.md section 3): the document and
+        assets are planned on this thread (a snapshot), the zip is written
+        on a background thread behind `is_busy`, and the session record is
+        written back here. `then()` runs after a successful save."""
+        if self._save_timer.isActive():
+            self.save_settings()
+        try:
+            plan, warnings = project_io.plan_save(
+                self.document, self.project_settings, path, self.project_dir, self.project_id,
+                self._backend_for, FX_PRESETS_DIR, project_io.read_session(self.project_dir), self._project_manifest,
+            )
+        except Exception as e:  # noqa: BLE001 - surfaced, never a crash
+            self.set_status(f"Save failed: {e}", "error")
+            return
+        for warning in warnings:
+            self.set_status(f"Save: {warning}", "warning")
+        known_ids = list(engine_registry.list_engines())
+        self._begin_project_io(f"Saving {project_io.project_title(path)}...", read_only=False)
+
+        def _work():
+            return project_io.write_bundle(plan, known_ids, progress=self._io_progress("Writing bundle"))
+
+        def _done(result, error):
+            self._end_project_io(read_only=False)
+            if error is not None:
+                self.set_status(f"Save failed: {error}", "error")
+                return
+            try:
+                project_io.record_save(self.project_dir, path, result)
+            except OSError as e:
+                self.set_status(f"Saved, but couldn't record the session: {e}", "warning")
+            self._project_manifest = dict(plan.manifest)
+            self._project_dirty = False
+            self._update_window_title()
+            self.set_status(f"Saved {project_io.project_title(path)}.", "success")
+            if then is not None:
+                then()
+
+        self._run_project_io(_work, _done)
+
+    # -- background I/O plumbing ------------------------------------------------
+
+    def _begin_project_io(self, status: str, read_only: bool) -> None:
+        self.set_ui_state(True)
+        self.set_status(status, "busy")
+        self.transport_dock.set_progress(0, "")
+        if read_only and self.editor is not None:
+            self.editor.setReadOnly(True)
+
+    def _end_project_io(self, read_only: bool) -> None:
+        if read_only and self.editor is not None:
+            self.editor.setReadOnly(False)
+        self.set_ui_state(False)
+
+    def _io_progress(self, label: str):
+        def _progress(done, total):
+            percent = (done / total * 100.0) if total else 100.0
+            self.projectIoProgress.emit(percent, f"{label} {int(percent)}%")
+
+        return _progress
+
+    def _on_project_io_progress(self, percent: float, detail: str) -> None:
+        self.transport_dock.set_progress(percent, detail)
+
+    def _run_project_io(self, work, done) -> None:
+        """`work()` on a plain thread (independent of the engine's worker
+        loop, so an engine switch mid-save can't strand it); `done(result,
+        error)` back on the GUI thread."""
+
+        def _target():
+            try:
+                result = work()
+                self._projectIoFinished.emit((done, result, None))
+            except BaseException as e:  # noqa: BLE001 - delivered to the GUI thread
+                self._projectIoFinished.emit((done, None, e))
+
+        self._io_thread = threading.Thread(target=_target, name="project-io", daemon=True)
+        self._io_thread.start()
+
+    def _on_project_io_finished(self, payload) -> None:
+        done, result, error = payload
+        self._io_thread = None
+        done(result, error)
+
+    def wait_for_project_io(self, timeout_s: float = 60.0) -> None:
+        """Blocks until the background Open/Save (if any) has finished and
+        its completion has run on this thread. For tests and scripts."""
+        deadline = time.time() + timeout_s
+        while self._io_thread is not None and time.time() < deadline:
+            thread = self._io_thread
+            if thread is not None:
+                thread.join(0.02)
+            QApplication.processEvents()
+        QApplication.processEvents()
+
+    def import_text_dialog(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Import text", filter="Documents (*.txt *.pdf *.epub)")
+        if path:
+            self.import_text(path)
+
+    def import_text(self, path: str, target: str | None = None) -> None:
+        """WF10: prompts "Add to current project" / "New project" unless
+        `target` ("add" | "new") is given."""
+        try:
+            text = self.engine.extract_text_from_file(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Import failed", f"Read failed: {e}")
+            return
+        if not text:
+            QMessageBox.warning(self, "Empty", "No text found in that file.")
+            return
+        if target is None:
+            box = QMessageBox(self)
+            box.setWindowTitle("Import text")
+            box.setText("Add the text to the current project, or start a new project from it?")
+            add_btn = box.addButton("Add to current project", QMessageBox.ButtonRole.AcceptRole)
+            new_btn = box.addButton("New project", QMessageBox.ButtonRole.ActionRole)
+            box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is add_btn:
+                target = "add"
+            elif clicked is new_btn:
+                target = "new"
+            else:
+                return
+        if target == "new":
+            self.new_project()
+        editor = self.editor
+        cursor = editor.textCursor()
+        # A real editor insert: goes through contentsChange -> replace_text
+        # and lands on the native undo stack like a paste would. The edit
+        # block keeps Qt from coalescing it with whatever was typed just
+        # before, so one Ctrl+Z removes exactly the import.
+        cursor.beginEditBlock()
+        cursor.insertText(text)
+        cursor.endEditBlock()
+        editor.setTextCursor(cursor)
+        self.set_status(f"Imported {os.path.basename(path)}.")
+
+    def export_dialog(self) -> None:
+        dialog = ExportDialog(self)
+        if dialog.exec() != ExportDialog.DialogCode.Accepted:
+            return
+        run_export(self, dialog.values(), parent=self, bundle=dialog.bundle_values())
+
+    def _on_export_progress(self, percent: float, detail: str) -> None:
+        self.transport_dock.set_progress(percent, detail)
+
+    def _on_export_finished(self, success: bool, message: str) -> None:
+        self.transport_dock.set_busy(False)
+        self.transport_dock.set_progress_value(100 if success else 0)
+        self.set_status(message, "success" if success else "error")
+
+    def project_sample_rate(self) -> int:
+        """The mix rate for transport and export: the active engine's
+        output rate (44.1k for Audio8, 24k otherwise). Clips rendered at
+        another rate are resampled once on load."""
+        return int(getattr(self.engine, "SAMPLE_RATE", 24000) or 24000)
+
+    # --- Edit menu ------------------------------------------------------------
+
+    def open_characters_dialog(self) -> None:
+        dialog = CharactersDialog(self)
+        dialog.exec()
+
+    def on_characters_changed(self) -> None:
+        if self.editor is not None:
+            self.editor.rehighlight()
+        if self.transcript_dock is not None:
+            self.transcript_dock.refresh_character_choices()
+        self.refresh_timeline()
+        self.schedule_save()
+
+    # --- engine callbacks (queued automatically across threads - see signals.py) -
+
+    def on_engine_status(self, msg: str, is_error: bool) -> None:
+        self.set_status(msg, "error" if is_error else "info")
+        if is_error and "pip install" in msg:
+            QMessageBox.critical(self, "Missing Dependencies", msg)
+
+    def on_engine_progress(self, percent: float, elapsed: float, eta: str, detail: str) -> None:
+        self.transport_dock.set_progress(percent, detail, elapsed=elapsed, eta=eta)
+
+    def on_engine_finish(self) -> None:
+        self.set_ui_state(False)
+        self._rebuild_transport_schedule()
+
+    def set_ui_state(self, is_running: bool) -> None:
+        self.transport_dock.set_busy(is_running)
+        threads_widget = self.settings_dock.schema_form.widget_for("num_threads")
+        if threads_widget is not None:
+            threads_widget.setEnabled(not is_running)
+        self.settings_dock.volume_spin.setEnabled(not is_running)
+        self.settings_dock.pitch_spin.setEnabled(not is_running)
+        if not is_running:
+            self.transport_dock.set_progress_value(0 if self.engine.cancel_event.is_set() else 100)
+
+    # --- preview -----------------------------------
+
+    def preview_conversion(self) -> None:
+        if not self.engine.pipeline:
+            QMessageBox.information(self, "Wait", "Engine is initializing... please wait 2 seconds and try again.")
+            return
+
+        editor = self.editor
+        cursor = editor.textCursor()
+        text_data = cursor.selectedText().replace(" ", "\n") if cursor.hasSelection() else editor.toPlainText().strip()
+        if not text_data:
+            text_data = ("This is a sample audio preview using the Koh-koh-ro Tea-Tea-S engine. "
+                         "It demonstrates the voice quality and speed settings.")
+        preview_text = text_data[:1000]
+
+        state = self.settings_dock.get_state()
+        extra_config = {
+            "volume": state["volume"],
+            "pitch": state["pitch"],
+            "normalize": state["normalize"],
+            "trim_silence": state["trim_silence"],
+            "lexicon": self.settings.get("lexicon", {}),
+        }
+        if self.settings_dock.apply_fx_enabled():
+            extra_config.update(self.fx_dock.project_fx_state())
+
+        tmp_path = os.path.join(tempfile.gettempdir(), "kokoro_preview.wav")
+        self.set_status("Generating preview...", "busy")
+
+        def _done(future):
+            try:
+                success = future.result()
+                payload = tmp_path if success else "Preview failed."
+            except Exception as e:
+                success = False
+                payload = f"Preview error: {e}"
+            self.previewFinished.emit(success, payload)
+
+        future = self.engine.worker.run_coro(
+            self.engine.generate_preview(preview_text, state["voice"], state["speed"], tmp_path,
+                                          extra_config, lang_code=state["lang_code"])
+        )
+        future.add_done_callback(_done)
+
+    def _on_preview_finished(self, success: bool, payload: str) -> None:
+        if success:
+            self.set_status("Playing preview...", "success")
+            playback.play(payload)
+            QTimer.singleShot(3000, lambda: self.set_status("Ready"))
+        else:
+            self.set_status(payload, "error")
+
+    # --- start/cancel ------------------------------
+
+    def on_generate_clicked(self) -> None:
+        """The Transport dock's Generate button. A document with no clips
+        yet falls back to whole-document `start_conversion()`; a document
+        with clips dispatches the dirty-scoped batch path."""
+        if not self.document.clips:
+            self.start_conversion()
+            return
+
+        dirty = self.document.dirty_clips()
+        if not dirty:
+            QMessageBox.information(self, "Up to date", "All clips are already generated.")
+            return
+
+        # Once a document has any clips, Generate always runs the
+        # dirty-scoped batch path - even with JIT enabled (JIT has no
+        # per-clip output shape; it stays reachable via the no-clips
+        # fallback above).
+        self.timeline_dock.generate_dirty_clips_requested()
+
+    def generate_clip(self, clip_id: str) -> None:
+        """UI3: the gutter's per-clip play button and the timeline's
+        context menu both land here. On a clip that is already clean the
+        request means "regenerate": the engine bumps the clip's take and
+        writes fresh audio under a new key instead of serving the cached
+        file (grill TB8)."""
+        clip = self.document.get_clip(clip_id)
+        regenerate = clip is not None and clip not in self.document.dirty_clips()
+        self.timeline_dock.on_generate_clip_requested(clip_id, regenerate=regenerate)
+
+    def on_batch_generation_progress(self, completed: int, total: int, current_clip_label: str) -> None:
+        percent = int((completed / total) * 100) if total else 0
+        if current_clip_label:
+            detail = f"Generated {completed}/{total} clips"
+        else:
+            detail = f"Generating {total} clip(s)..."
+        self.transport_dock.set_progress(percent, detail)
+
+    def on_batch_generation_finished(self, succeeded: int, failed: int, failed_clip_ids: list) -> None:
+        total = succeeded + failed
+        if failed == 0:
+            self.set_status(f"Generated {succeeded} clip(s).", "success")
+        elif succeeded == 0:
+            self.set_status(f"Batch generation failed for all {failed} clip(s).", "error")
+        else:
+            self.set_status(f"Generated {succeeded} of {total} clips ({failed} failed)", "warning")
+        self._rebuild_transport_schedule()
+
+    def auto_split_and_generate(self) -> None:
+        """Generate menu > "Auto-split then generate": turns every
+        `[Speaker:FX]:`-tagged span (and, with "Split by paragraph" on,
+        each span's paragraphs) into clips, then batch-generates them."""
+        if self.is_busy():
+            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before auto-splitting.")
+            return
+
+        triples, unmatched = plan_auto_split_clips(
+            self.document, split_by_paragraph=self.settings.get("auto_split_by_paragraph", False)
+        )
+
+        if unmatched:
+            names = ", ".join(sorted(set(unmatched)))
+            QMessageBox.warning(
+                self, "Unmatched speaker names",
+                f"No character found for: {names}. Those blocks were skipped.",
+            )
+
+        if not triples:
+            QMessageBox.information(self, "Nothing to split", "No taggable text found to auto-split.")
+            return
+
+        for start, end, character_id in triples:
+            self.document.undo_stack.push(AssignCharacterCommand(start, end, character_id))
+
+        self.editor.rehighlight()
+        self.schedule_save()
+        self.refresh_timeline()
+
+        self.timeline_dock.generate_dirty_clips_requested()
+
+    def start_conversion(self) -> None:
+        text_data = self.editor.toPlainText().strip()
+        if not text_data:
+            QMessageBox.warning(self, "Empty", "No text to process.")
+            return
+
+        if not self.engine.pipeline:
+            QMessageBox.information(self, "Wait", "Engine is initializing... please wait 2 seconds and try again.")
+            return
+
+        config = self._assemble_config()
+
+        self.set_ui_state(True)
+        self.transport_dock.set_progress(0, "")
+
+        if self.jit_enabled and self.backend.capabilities.supports_jit_streaming:
+            self.engine.start_jit_conversion(text_data, config)
+        else:
+            self.engine.start_conversion(text_data, config)
+
+    def cancel_conversion(self) -> None:
+        self.engine.cancel()
+        self.set_status("Cancelling... waiting for workers...", "warning")
+
+    # --- transport / playhead (section 5) ----------------------------------
+
+    def current_arrangement(self):
+        if self._arrangement is None:
+            self._arrangement = self.build_arrangement()
+        return self._arrangement
+
+    def _rebuild_transport_schedule(self) -> None:
+        self._arrangement = self.build_arrangement()
+        rate = self.project_sample_rate()
+        schedule = []
+        for placed in self._arrangement.placed:
+            if placed.estimated:
+                continue
+            post_config = self.post_config_for_clip(placed.clip)
+            # One ScheduledClip per segment so multi-segment clips play
+            # back to back at their real (rendered) offsets.
+            offset = placed.start_s
+            for segment in sorted(placed.clip.segments, key=lambda s: s.order_index):
+                if not segment.audio_path:
+                    continue
+                schedule.append(ScheduledClip(clip_id=placed.clip.id, start_s=offset, path=segment.audio_path,
+                                              post_config=post_config))
+                try:
+                    offset += post.rendered_duration_s(segment.audio_path, post_config, rate)
+                except Exception:
+                    offset += segment.duration or 0.0
+        self.transport.load(schedule, sample_rate=self.project_sample_rate(),
+                            total_duration_s=self._arrangement.total_duration_s)
+        if self.timeline_dock is not None:
+            self.timeline_dock.timeline_view.set_arrangement(self._arrangement)
+        self.transport_dock.set_position(self.transport.position(), self.transport.duration())
+
+    def _on_transport_position(self, seconds: float) -> None:
+        self.transport_dock.set_position(seconds, self.transport.duration())
+        if self.timeline_dock is not None:
+            self.timeline_dock.timeline_view.set_playhead(seconds)
+        arrangement = self.current_arrangement()
+        playing = None
+        if self.transport.is_playing:
+            hits = arrangement.at_time(seconds)
+            playing = hits[0].clip.id if hits else None
+        self.selection.set_playing_clip(playing)
+
+    def _on_transport_state(self, state: str) -> None:
+        self.transport_dock.set_playing(state == "playing")
+        if state != "playing":
+            self.selection.set_playing_clip(None)
+
+    def _on_loop_toggled(self, checked: bool) -> None:
+        self.transport.loop = checked
+
+    # --- undo/redo -----------------------------------------------------------
+
+    def undo(self) -> None:
+        self.editor.undo_coordinator.undo()
+
+    def redo(self) -> None:
+        self.editor.undo_coordinator.redo()
+
+    # --- lifecycle -----------------------------------------------------------
+
+    def closeEvent(self, event) -> None:
+        """Grill TB12: a dirty project asks Save / Discard / Cancel. Save runs
+        in the background and closes the window when it succeeds; a failure
+        keeps the window open with the error. Then close-time GC, and
+        eviction of every project dir but the one launch resumes (TB13)."""
+        try:
+            self.transport.stop()
+        except Exception:
+            pass
+        if self._closed:
+            super().closeEvent(event)
+            return
+        if self._io_thread is not None and not self._closing_after_save:
+            event.ignore()
+            return
+        self.save_settings()
+        if self.project_dir and not self._closing_after_save and self._project_dirty:
+            choice = self._ask_close_choice()
+            if choice == "cancel":
+                event.ignore()
+                return
+            if choice == "save":
+                path = self.project_path or self._save_as_path_dialog()
+                if not path:
+                    event.ignore()
+                    return
+                if not self.project_path:
+                    self.project_path = path
+                    project_io.remember_recent(self.settings, path)
+                event.ignore()
+
+                def _then():
+                    self._closing_after_save = True
+                    self.close()
+
+                self._save_bundle(path, then=_then)
+                return
+            self._teardown_project(discard=True)
+        keep = None
+        last = self.settings.get("last_project")
+        if self.project_dir and last and self.project_path and os.path.abspath(last) == self.project_path:
+            keep = self.project_dir
+        if self.project_dir:
+            self._teardown_project(discard=False)
+        try:
+            project_io.evict_project_dirs(keep)
+        except OSError:
+            pass
+        qt_settings.save_settings(CONFIG_FILE, self.settings)
+        self._closed = True
+        for backend in self._asset_backends.values():
+            try:
+                backend.engine.worker.stop()
+            except Exception:
+                pass
+        self._asset_backends.clear()
+        super().closeEvent(event)

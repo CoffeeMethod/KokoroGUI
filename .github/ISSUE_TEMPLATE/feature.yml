@@ -1,0 +1,29 @@
+name: Feature request
+description: Something the app should do that it doesn't.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The task, not the button. "Make a two-voice audiobook from an EPUB with chapter breaks" tells us more than "add a chapter button".
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: How do you do it today?
+      description: The workaround, or "can't".
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like instead?
+      description: Optional. If you have a specific design in mind, describe it; if not, the first two answers are enough.
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Engine, if it matters
+      options:
+        - Any
+        - Kokoro
+        - Audio8

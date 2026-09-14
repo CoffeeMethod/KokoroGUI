@@ -173,3 +173,14 @@ cython_debug/
 /ROADMAP.md
 /CLAUDE.md
 /tests/output/
+/custom_voices/
+/cache/
+/presets/
+/Claude/PLAN_qt_and_engine_abstraction.md
+/generation_stats.json
+/SECURITY_AUDIT.md
+/Claude/
+/.claude/
+document.json
+document.tbaw
+config_qt.json

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and help
+    url: https://github.com/CoffeeMethod/KokoroGUI/discussions
+    about: Install trouble, "how do I", model and hardware questions.
+  - name: Security issue
+    url: https://github.com/CoffeeMethod/KokoroGUI/security/advisories/new
+    about: Report privately. See SECURITY.md.

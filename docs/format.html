@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Kokoro GUI · The .tbaw project format</title>
+<meta name="description" content="What a .tbaw (text based audio workflow) bundle contains: the manifest, document.json, project.json, generated audio named by segment key, and the per-engine assets. Enough to read or write one from another tool." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230b0b10'/%3E%3Cg fill='%23a78bfa'%3E%3Crect x='10' y='26' width='7' height='12' rx='2'/%3E%3Crect x='21' y='16' width='7' height='32' rx='2'/%3E%3Crect x='32' y='22' width='7' height='20' rx='2'/%3E%3Crect x='43' y='10' width='7' height='44' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/site.css" />
+<style>
+  .two{ display:grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; align-items:start; }
+  @media (max-width: 860px){ .two{ grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <nav class="wrap">
+    <a class="brand" href="index.html">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect width="64" height="64" rx="16" fill="var(--surface-2)" stroke="var(--border-2)"/>
+        <g fill="var(--accent)">
+          <rect x="10" y="26" width="7" height="12" rx="2"/>
+          <rect x="21" y="16" width="7" height="32" rx="2"/>
+          <rect x="32" y="22" width="7" height="20" rx="2"/>
+          <rect x="43" y="10" width="7" height="44" rx="2"/>
+        </g>
+      </svg>
+      <span class="brand-word">Kokoro GUI<span class="ver">v4.0.0 beta</span></span>
+    </a>
+    <div class="navlinks">
+      <a href="index.html#features">Features</a>
+      <a href="index.html#engines">Engines</a>
+      <a href="index.html#changelog">Changelog</a>
+      <a href="scripting.html">Scripting</a>
+      <a href="settings.html">Settings</a>
+      <a href="format.html" aria-current="page">.tbaw format</a>
+    </div>
+    <div class="navctas">
+      <button class="icon-btn" id="themeToggle" aria-label="Toggle color theme" title="Toggle color theme">
+        <svg id="iconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg id="iconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
+      </button>
+      <button class="icon-btn menu-btn" id="menuToggle" aria-label="Open menu" aria-expanded="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <a class="btn btn-primary" href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+</header>
+
+<main>
+  <section class="page-head">
+    <div class="wrap">
+      <span class="eyebrow">Format reference</span>
+      <h1>The .tbaw project bundle</h1>
+      <p class="lede">Text based audio workflow. A <code>.tbaw</code> is a zip with a manifest, the document, the project's settings, its generated audio, and the voice and FX assets it names. This page is what you need to read or write one from a script, and what the app guarantees about it.</p>
+      <div class="toc">
+        <a href="#layout">Layout</a>
+        <a href="#manifest">manifest.json</a>
+        <a href="#document">document.json</a>
+        <a href="#project">project.json</a>
+        <a href="#audio">Generated audio</a>
+        <a href="#keys">Segment keys</a>
+        <a href="#assets">Engine assets</a>
+        <a href="#compat">Compatibility</a>
+        <a href="#working">The working copy</a>
+        <a href="#safety">Safety on open</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="layout">
+    <div class="wrap">
+      <div class="two">
+        <div class="prose reveal">
+          <h2><span class="idx">01 · Layout</span>One zip, five kinds of entry</h2>
+          <p>Three JSON files at the root, then directories. Audio is stored uncompressed (<code>ZIP_STORED</code>) so a 400 MB audiobook doesn't pay for deflate on data that won't shrink; everything else is deflated. The archive is written with Zip64 enabled, so a bundle over 4 GB is fine.</p>
+          <p>Entries the app doesn't own are preserved. A directory a newer version or a fourth engine adds is copied through byte for byte on the next Save, so a bundle survives a round trip through an older build.</p>
+        </div>
+        <div class="code-block reveal">
+          <div class="head">my-audiobook.tbaw</div>
+          <pre class="tree"><span class="f">manifest.json</span>
+<span class="f">document.json</span>
+<span class="f">project.json</span>
+<span class="d">audio/generated/</span>
+  <span class="f">&lt;segment_key&gt;_&lt;index&gt;.wav</span>
+<span class="d">audio/imported/</span>              <span class="c">reserved, empty today</span>
+<span class="d">fx/</span>
+  <span class="f">&lt;preset name&gt;.json</span>
+<span class="d">engines/kokoro/voices/</span>
+  <span class="f">&lt;mix name&gt;.pt</span>
+<span class="d">engines/audio8/refs/</span>
+  <span class="f">&lt;reference name&gt;.wav</span>
+  <span class="f">&lt;reference name&gt;.txt</span></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="manifest">
+    <div class="wrap">
+      <h2><span class="idx">02 · manifest.json</span>Identity, versions, hashes</h2>
+      <p class="dek">Read first on Open. The welcome dialog's details pane reads only this file, so <code>stats</code> exists to make that cheap.</p>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>manifest.json</caption>
+          <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>format</td><td>Always <code>"tbaw"</code>. Anything else is refused.</td></tr>
+            <tr><td>version</td><td>Integer, currently <code>1</code>. A reader refuses a bundle whose version is higher than the one it implements.</td></tr>
+            <tr><td>requires</td><td>List of feature names the bundle depends on. Empty today. A reader refuses, by name, any feature it doesn't implement, which is how a future version can add something an old build can't fake.</td></tr>
+            <tr><td>project_id</td><td>Random id, stable across Save As. It names the working copy under <code>cache/projects/</code> and is what crash recovery keys on, not the path.</td></tr>
+            <tr><td>created_by</td><td>e.g. <code>"KokoroGUI 4.0.0"</code>.</td></tr>
+            <tr><td>created / modified</td><td>ISO 8601 local timestamps, seconds precision. <code>created</code> is carried from the previous manifest.</td></tr>
+            <tr><td>includes</td><td><code>{"generated_audio": bool, "imported_audio": bool}</code>. Whether the audio directories were bundled. A bundle saved without generated audio regenerates its clips on open.</td></tr>
+            <tr><td>audio.format</td><td><code>"wav"</code> or <code>"flac"</code>: the format new segments are written in.</td></tr>
+            <tr><td>stats</td><td><code>{"clips", "characters", "duration_s"}</code>. Counts and the sum of segment durations. Cosmetic; nothing reads audio to compute it.</td></tr>
+            <tr><td>engines</td><td><code>{"&lt;engine id&gt;": {"version": str, "meta": {}}}</code> for each engine the document's characters use. <code>version</code> is what the backend reported (Kokoro: the package version; Audio8: its model id). <code>meta</code> is per-backend and empty for both shipped engines.</td></tr>
+            <tr><td>assets</td><td>Bundle path to SHA-256, for every entry under <code>fx/</code> and <code>engines/</code>. Save skips re-hashing an asset whose hash is already in the working copy's index.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="dek" style="margin-top:1rem;">Unknown manifest keys are kept on Open and written back on Save.</p>
+    </div>
+  </section>
+
+  <section class="doc-section" id="document">
+    <div class="wrap">
+      <h2><span class="idx">03 · document.json</span>The document model</h2>
+      <p class="dek">The same shape the app autosaves to its working copy, with audio paths made bundle-relative (<code>audio/generated/…</code>). Five top-level keys.</p>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>document.json</caption>
+          <thead><tr><th>Key</th><th>Contents</th></tr></thead>
+          <tbody>
+            <tr><td>runs</td><td>The text, in order, as a list of <code>{text, clip_id, kind}</code>. The document's full text is the join of every run's <code>text</code>. <code>clip_id</code> is null for narration nobody has assigned; <code>kind</code> mirrors the clip's <code>source</code>.</td></tr>
+            <tr><td>clips</td><td><code>{id, character_id, track_id, overrides, fx_override, timeline_timestamp, source, original_audio_path, segments}</code>. A clip has no offsets of its own: its extent is wherever <code>runs</code> tags its id. <code>overrides</code> holds per-clip settings (<code>voice</code>, <code>speed</code>, <code>take</code>, <code>fx_preset</code>, <code>apply_fx</code>…); <code>timeline_timestamp</code> is null while the clip flows after its predecessor. <code>source</code> is <code>"generated"</code> or <code>"imported"</code>.</td></tr>
+            <tr><td>clips[].segments</td><td><code>{id, order_index, text, cache_key, audio_path, duration, raw, engine_version}</code>. One per engine-level chunk. <code>cache_key</code> is the <a href="#keys" class="link">segment key</a>, and <code>audio_path</code> is <code>audio/generated/&lt;cache_key&gt;_&lt;order_index&gt;.&lt;ext&gt;</code>. <code>raw</code> is true for every segment 4.0.0 generates (FX are applied at read time); a segment without the field, from a 4.0 preview build, is treated as baked and regenerated once. <code>engine_version</code> is the version that produced it.</td></tr>
+            <tr><td>tracks</td><td><code>{id, name, character_id, order_index}</code>. A lane. Kept separate from characters so a clip can sit on another character's track.</td></tr>
+            <tr><td>characters</td><td><code>{id, name, preset_data, highlight_color, backend_id}</code>. <code>preset_data</code> is the <code>presets/*.json</code> shape: voice, speed, split pattern, <code>fx_preset</code>, <code>apply_fx</code>, and so on. <code>backend_id</code> is the engine the voice belongs to.</td></tr>
+            <tr><td>settings</td><td>The document's own defaults, the "nothing selected" scope of the Settings tab.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout info reveal" style="max-width:760px; margin-top:1.3rem;">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/></svg>
+        <div>
+          <p><strong>Unknown fields ride along.</strong> Every one of these objects has an <code>extra</code> dict on the app side. A field this version doesn't know is parked there on load and written back on save, so a tool can add its own keys to a clip or character and they survive a round trip through the app.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="project">
+    <div class="wrap">
+      <h2><span class="idx">04 · project.json</span>Per-project settings</h2>
+      <p class="dek">The <code>project_settings</code> block. Small, and the only place the two bundle options live.</p>
+      <div class="table-wrap reveal" style="max-width:760px;">
+        <table class="ref">
+          <caption>project.json</caption>
+          <thead><tr><th>Key</th><th>Contents</th></tr></thead>
+          <tbody>
+            <tr><td>export</td><td>The Export dialog's remembered values: output folder, base filename, format, whether to write an <code>.srt</code> and per-clip files.</td></tr>
+            <tr><td>bundle</td><td><code>{"include_generated_audio": true, "include_imported_audio": true, "audio_format": "wav"}</code> by default. What Save puts in the zip and how new segments are encoded. Editable from the Export dialog.</td></tr>
+            <tr><td>workspace</td><td>Optional. A workspace name that overrides the app-level one when this project opens.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="audio">
+    <div class="wrap">
+      <h2><span class="idx">05 · Generated audio</span>One file per segment, named by what produced it</h2>
+      <div class="prose reveal">
+        <p>Every generated segment is <code>audio/generated/&lt;segment_key&gt;_&lt;order_index&gt;.&lt;wav|flac&gt;</code>, raw model output with no FX, volume, pitch, normalize or trim applied. The file is written once and never overwritten: a regenerate of a clean clip bumps the clip's <code>take</code>, which changes the key, which is a new file. The old file stays for any other clip that plays it until the project closes, when files no segment references are deleted.</p>
+        <p>Two clips with the same text, voice, speed, language, engine version and take share a key, so they share a file. A bundle with <code>includes.generated_audio</code> false has no <code>audio/generated/</code> entries; its segments keep their <code>cache_key</code>, and the app regenerates them on the first Generate (a cache hit if the machine's own cache has the key).</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="keys">
+    <div class="wrap">
+      <div class="two">
+        <div class="prose reveal">
+          <h2><span class="idx">06 · Segment keys</span>The one hash</h2>
+          <p>A segment key is a SHA-256 over a pipe-joined <code>k=v</code> list. The same function names the file, stamps <code>Segment.cache_key</code>, and drives the out-of-date check in the transcript gutter, so the three can't disagree.</p>
+          <p>The voice enters as a name plus a content fingerprint, never a path, which is why a key is the same on every machine. Nothing after generation is in it: split pattern, FX, output format, normalize and trim all apply to the same raw segment, so they don't change the key and don't dirty a clip.</p>
+          <p>Kokoro adds nothing to <code>extra</code>. Audio8 adds its reference transcript and sampling settings, since two clones of the same WAV with different transcripts are different voices.</p>
+        </div>
+        <div class="code-block reveal">
+          <div class="head">segment key inputs · schema 3</div>
+          <pre><span class="c1">schema_version</span>=3
+<span class="c1">engine_id</span>=kokoro
+<span class="c1">engine_version</span>=<span class="c2">0.7.11</span>      <span class="c1"># kokoro package version</span>
+<span class="c1">text</span>=<span class="c2">The old house stood…</span>
+<span class="c1">voice</span>=<span class="c2">narrator_mix</span>        <span class="c1"># basename, never a path</span>
+<span class="c1">voice_fingerprint</span>=<span class="c2">9c1e…</span>   <span class="c1"># file hash; the name if built-in</span>
+<span class="c1">speed</span>=<span class="c2">0.943874</span>            <span class="c1"># speed ÷ 2^(pitch/12)</span>
+<span class="c1">lang_code</span>=<span class="c2">a</span>
+<span class="c1">extra_take</span>=<span class="c2">2</span>               <span class="c1"># only when non-zero</span>
+<span class="c1">extra_ref_transcript</span>=…    <span class="c1"># Audio8 only, + sampling</span>
+
+<span class="c3">sha256("|".join(f"{k}={v}"))</span></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="assets">
+    <div class="wrap">
+      <h2><span class="idx">07 · Engine assets</span>What each engine puts under engines/</h2>
+      <p class="dek">Save walks the document, collects the voice names its characters and clips use, and asks each backend for the files those names need. Only named assets ship; a built-in Kokoro voice is a name with no file.</p>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>Bundle paths by engine</caption>
+          <thead><tr><th>Path</th><th>What it is</th></tr></thead>
+          <tbody>
+            <tr><td>fx/&lt;name&gt;.json</td><td>An FX preset a character's <code>fx_preset</code> or a clip's override names. The Audio FX tab's "Save FX Preset" shape.</td></tr>
+            <tr><td>engines/kokoro/voices/&lt;name&gt;.pt</td><td>A custom mix made in the Mixing tab: a saved voice tensor. Loaded with <code>torch.load(weights_only=True)</code>, see <a href="#safety" class="link">safety</a>.</td></tr>
+            <tr><td>engines/audio8/refs/&lt;name&gt;.wav + .txt</td><td>A cloning reference and its word-for-word transcript. The encoded reference codes are derived data and stay in the machine's own cache; the app warms them on the first generate after open.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose reveal" style="margin-top:1.3rem;">
+        <p>On Open, the bundle's own assets take priority. The Voices tab lists a project's mixes and references before the global ones, and the same name in both resolves to the bundle's copy. Nothing writes back into <code>engines/</code> except Open's extraction: saving a new mix or reference goes to the global store, and the next Save copies it in.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="compat">
+    <div class="wrap">
+      <h2><span class="idx">08 · Compatibility</span>Versions, engines, and the .json past</h2>
+      <div class="prose reveal">
+        <p><strong>Engine versions.</strong> A segment is compared under the <code>engine_version</code> it stores while its file is present. So a project made with one Kokoro release opens clean on a machine with another, and the status line says which version the clips came from. Only a clip you regenerate uses the installed version.</p>
+        <p><strong>Preview-era projects.</strong> A <code>.json</code> project from the 4.0 previews (the <code>document.json</code> shape plus a top-level <code>project_settings</code>) still opens. The app builds a working copy, adopts any segment whose stored key matches the schema-2 formula and whose file exists (copying it in under its schema-3 key), and saves a <code>.tbaw</code> next to the original. The <code>.json</code> is left alone.</p>
+        <p><strong>Forward compatibility.</strong> <code>version</code> and <code>requires</code> are the two gates. A reader refuses a higher version outright, and refuses a bundle that <code>requires</code> a feature it doesn't know, by name. Everything else, unknown entries, unknown manifest keys, unknown object fields, is carried through.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="working">
+    <div class="wrap">
+      <h2><span class="idx">09 · The working copy</span>Where the app actually edits</h2>
+      <div class="prose reveal">
+        <p>The app never edits a <code>.tbaw</code> in place. Open extracts it to <code>cache/projects/&lt;project_id&gt;/</code>, the working copy, and holds an OS lock on <code>&lt;dir&gt;/lock</code> for as long as the project is open. Autosave writes <code>document.json</code> and <code>project.json</code> there; clip generation writes into its <code>audio/generated/</code>. Save rebuilds the zip from the directory, into <code>&lt;path&gt;.tmp</code>, then swaps it over the old file, so a crash mid-save can't leave a truncated project.</p>
+        <p>A <code>session.json</code> next to the lock records which file the directory belongs to, the zip's size and mtime at extraction, a digest of the last saved document, and whether the directory is ahead of the file. That digest, not an mtime, is what the window title's <code>*</code> means. Opening a project whose directory is dirty offers to recover the unsaved session; Resume from the welcome dialog reuses a matching directory without re-extracting, which is why it's fast.</p>
+        <p>A clean close deletes audio no segment references and evicts other clean, unlocked working copies, keeping the last project's. Neither <code>session.json</code> nor <code>lock</code> is ever written into the bundle.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="safety">
+    <div class="wrap">
+      <h2><span class="idx">10 · Safety on open</span>A bundle is untrusted input</h2>
+      <div class="prose reveal">
+        <p>Before extracting, every entry name is checked: an absolute path on either OS, a drive-relative path, a <code>..</code> component or a symlink is refused and nothing is written. Free space is checked against the uncompressed size from the central directory first.</p>
+        <p>A bundle carrying a <code>.pt</code> voice mix is refused unless the machine's torch is 2.6 or newer, where <code>torch.load</code> defaults to <code>weights_only=True</code> and can't execute a pickle payload. Upgrade torch to open it; there's no override.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <div class="cols">
+      <div>
+        <a class="brand" href="index.html" style="margin-bottom:.4rem;">
+          <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="var(--surface-2)" stroke="var(--border-2)"/><g fill="var(--accent)"><rect x="10" y="26" width="7" height="12" rx="2"/><rect x="21" y="16" width="7" height="32" rx="2"/><rect x="32" y="22" width="7" height="20" rx="2"/><rect x="43" y="10" width="7" height="44" rx="2"/></g></svg>
+          <span class="brand-word">Kokoro GUI</span>
+        </a>
+        <p class="blurb">A desktop text-to-speech workstation. Not affiliated with the Kokoro or Audio8 model authors.</p>
+      </div>
+      <div>
+        <h5>Product</h5>
+        <ul>
+          <li><a href="index.html#features">Features</a></li>
+          <li><a href="index.html#engines">Engines</a></li>
+          <li><a href="index.html#changelog">Changelog</a></li>
+          <li><a href="index.html#install">Install</a></li>
+        </ul>
+      </div>
+      <div>
+        <h5>Docs</h5>
+        <ul>
+          <li><a href="scripting.html">Scripting guide</a></li>
+          <li><a href="settings.html">Settings reference</a></li>
+          <li><a href="format.html">.tbaw format</a></li>
+        </ul>
+      </div>
+      <div>
+        <h5>Project</h5>
+        <ul>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">GitHub</a></li>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/README.md" target="_blank" rel="noopener">README</a></li>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/LICENSE" target="_blank" rel="noopener">License</a></li>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI/issues" target="_blank" rel="noopener">Issues</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="bottom">
+      <span>Apache-2.0. Kokoro GUI 4.0.0 beta.</span>
+      <span>Kokoro by hexgrad · Audio8 models by Audio8 · Pedalboard by Spotify</span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

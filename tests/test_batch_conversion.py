@@ -4,6 +4,9 @@ pipeline (kokoro_engine.py:568-705, 910-1061). caching=False throughout
 import asyncio
 import json
 
+import kokoro_engine
+from kokoro_gui.engine import stats as generation_stats
+
 
 def test_process_chunk_task_writes_named_part_files(engine, fake_pipeline, make_config, isolated_dirs):
     config = make_config(filename="myrun", time_id="20260101000000")
@@ -98,6 +101,57 @@ def test_multispeaker_preset_and_fx_preset_layering(engine, fake_pipeline, make_
     assert captured["config"]["speed"] == 1.25
     assert captured["config"]["reverb_enabled"] is True
     assert captured["config"]["apply_fx"] is True
+
+
+def test_process_text_async_records_generation_stats_under_engine_id(engine, fake_pipeline, make_config, isolated_dirs):
+    text = "Hello there, this is a short test sentence."
+    config = make_config(engine_id="kokoro", filename="run", time_id="1")
+    asyncio.run(engine._process_text_async(text, config))
+
+    with open(kokoro_engine.STATS_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    entry = data["kokoro"][-1]
+    assert entry["chars"] == len(text)
+    assert entry["words"] == len(text.split())
+    assert entry["duration"] > 0
+
+
+def test_process_text_async_keeps_stats_separate_per_engine_id(engine, fake_pipeline, make_config, isolated_dirs):
+    text_a = "Text for engine one."
+    text_b = "A distinctly longer piece of text used for engine two."
+    asyncio.run(engine._process_text_async(text_a, make_config(engine_id="engine-a", time_id="1")))
+    asyncio.run(engine._process_text_async(text_b, make_config(engine_id="engine-b", time_id="2")))
+
+    with open(kokoro_engine.STATS_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert data["engine-a"][-1]["chars"] == len(text_a)
+    assert data["engine-b"][-1]["chars"] == len(text_b)
+
+
+def test_process_text_async_seeds_initial_eta_from_history(engine, fake_pipeline, make_config, isolated_dirs, callback_recorder):
+    # Prime history for this engine_id well before the run starts, so the
+    # very first on_progress call (percent 0) already carries a real ETA
+    # instead of "--:--".
+    generation_stats.record_generation("kokoro", chars=1000, words=180, duration=10.0)
+
+    config = make_config(engine_id="kokoro", filename="run", time_id="1")
+    asyncio.run(engine._process_text_async("Hello there, this is a short test sentence.", config))
+
+    first_percent, first_elapsed, first_eta, first_detail = callback_recorder.progresses[0]
+    assert first_percent == 0
+    assert first_elapsed == 0.0
+    assert first_eta != "--:--"
+
+
+def test_process_text_async_no_history_still_shows_no_initial_eta(engine, fake_pipeline, make_config, isolated_dirs, callback_recorder):
+    config = make_config(engine_id="brand-new-engine", filename="run", time_id="1")
+    asyncio.run(engine._process_text_async("Hello there, this is a short test sentence.", config))
+
+    # Without history, the first callback is a real chunk-progress tick
+    # (not the history-seeded pre-generation one), so it should carry actual
+    # progress rather than the percent==0 placeholder.
+    first_percent, *_ = callback_recorder.progresses[0]
+    assert first_percent > 0
 
 
 def test_full_batch_conversion_leaves_inspectable_output(engine, fake_pipeline, make_config, timestamped_output_dir):
