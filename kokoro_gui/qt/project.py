@@ -851,6 +851,51 @@ def _sha256_file(path: str) -> str:
     return "sha256:" + h.hexdigest()
 
 
+# --- imported audio ----------------------------------------------------------------
+
+# The largest file `import_audio_file` copies into a project dir.
+MAX_IMPORT_BYTES = 2 * 1024 ** 3
+
+
+def _import_extension(path: str) -> str:
+    """The source's extension, lowercased, letters and digits only, at most
+    eight characters: it becomes part of a file name in the project dir.
+    `bin` when nothing is left."""
+    ext = os.path.splitext(path)[1][1:].lower()
+    ext = "".join(ch for ch in ext if ch.isascii() and ch.isalnum())[:8]
+    return ext or "bin"
+
+
+def import_audio_file(src_path: str, project_dir: str, max_bytes: int = MAX_IMPORT_BYTES) -> str:
+    """Copies `src_path` to `<project_dir>/audio/imported/<sha256[:16]>.<ext>`
+    and returns the copy's absolute path. The name is the content hash, so a
+    second import of the same bytes finds the copy and skips the write.
+    Refuses a file over `max_bytes` or anything that isn't a regular file.
+    Every writer of imported audio (music bed, source track, recording
+    import) goes through here and stores the result on the clip."""
+    source = os.path.realpath(os.path.abspath(src_path))
+    drive = os.path.splitdrive(source)[0]
+    if not source.startswith(drive + os.sep) or not os.path.isfile(source):
+        raise ProjectError(f"Not a file: {src_path}")
+    size = os.path.getsize(source)
+    if size > max_bytes:
+        raise ProjectError(f"{os.path.basename(source)} is {size / 1024 ** 3:.1f} GB; "
+                           f"the import limit is {max_bytes / 1024 ** 3:.1f} GB.")
+    h = hashlib.sha256()
+    with open(source, "rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(block)
+    imported = os.path.join(os.path.abspath(project_dir), *AUDIO_IMPORTED.split("/"))
+    os.makedirs(imported, exist_ok=True)
+    target = os.path.join(imported, f"{h.hexdigest()[:16]}.{_import_extension(source)}")
+    if os.path.isfile(target):
+        return target
+    tmp = target + ".tmp"
+    shutil.copyfile(source, tmp)
+    _replace_with_retries(tmp, target)
+    return target
+
+
 def used_voice_names(document: Document) -> dict:
     """`{backend_id: {voice name, ...}}` from every character's preset and
     every clip override, grouped by the clip's character's backend. A
@@ -1038,7 +1083,8 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
         "modified": now,
         "includes": {
             "generated_audio": bool(options["include_generated_audio"]),
-            "imported_audio": bool(options["include_imported_audio"]),
+            "imported_audio": bool(options["include_imported_audio"])
+            and any(name.startswith(AUDIO_IMPORTED + "/") for name, _src in audio_files),
             "projects": embedded,
         },
         "audio": {"format": options["audio_format"]},

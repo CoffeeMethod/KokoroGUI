@@ -82,6 +82,11 @@ def test_never_generated_clip_is_dirty():
     assert is_clip_dirty(clip, "hello", _config()) is True
 
 
+def test_imported_clip_without_segments_is_never_dirty():
+    clip = Clip(source="imported", original_audio_path="/x/audio/imported/abc.wav")
+    assert is_clip_dirty(clip, "bed", _config()) is False
+
+
 def test_freshly_generated_clip_is_not_dirty():
     config = _config()
     clip = _generated_clip("hello world", config)

@@ -219,6 +219,161 @@ def test_save_bundles_only_audio_inside_the_project_dir(tmp_path, isolated_dirs)
     assert document["clips"][0]["segments"][0]["audio_path"] == str(outside).replace("\\", "/")
 
 
+# -- imported audio (phase 5 step 1) --------------------------------------------------
+
+
+def test_import_audio_file_names_by_hash_and_dedupes(tmp_path, isolated_dirs):
+    import hashlib
+
+    project_dir, _project_id = project_io.create_project_dir()
+    src = tmp_path / "Bed Music.WAV"
+    src.write_bytes(b"RIFF" + b"\1" * 100)
+    digest = hashlib.sha256(src.read_bytes()).hexdigest()[:16]
+
+    first = project_io.import_audio_file(str(src), project_dir)
+    second = project_io.import_audio_file(str(src), project_dir)
+
+    assert first == second == os.path.join(project_dir, "audio", "imported", f"{digest}.wav")
+    assert os.path.isabs(first)
+    assert os.listdir(os.path.dirname(first)) == [f"{digest}.wav"]
+    assert open(first, "rb").read() == src.read_bytes()
+
+
+def test_import_audio_file_skips_the_copy_when_the_hash_name_exists(tmp_path, isolated_dirs, monkeypatch):
+    project_dir, _project_id = project_io.create_project_dir()
+    src = tmp_path / "a.flac"
+    src.write_bytes(b"fLaC" + b"\0" * 10)
+    project_io.import_audio_file(str(src), project_dir)
+    copies = []
+    monkeypatch.setattr(project_io.shutil, "copyfile", lambda *a: copies.append(a))
+    project_io.import_audio_file(str(src), project_dir)
+    assert copies == []
+
+
+def test_import_audio_file_refuses_a_file_over_the_size_bound(tmp_path, isolated_dirs):
+    project_dir, _project_id = project_io.create_project_dir()
+    src = tmp_path / "big.wav"
+    src.write_bytes(b"\0" * 2048)
+    with pytest.raises(project_io.ProjectError):
+        project_io.import_audio_file(str(src), project_dir, max_bytes=1024)
+    assert not os.path.isdir(os.path.join(project_dir, "audio", "imported"))
+
+
+def test_import_audio_file_refuses_a_directory_or_missing_file(tmp_path, isolated_dirs):
+    project_dir, _project_id = project_io.create_project_dir()
+    with pytest.raises(project_io.ProjectError):
+        project_io.import_audio_file(str(tmp_path), project_dir)
+    with pytest.raises(project_io.ProjectError):
+        project_io.import_audio_file(str(tmp_path / "nope.wav"), project_dir)
+
+
+def test_import_audio_file_normalises_a_relative_dotdot_source(tmp_path, isolated_dirs, monkeypatch):
+    project_dir, _project_id = project_io.create_project_dir()
+    (tmp_path / "music").mkdir()
+    (tmp_path / "work").mkdir()
+    (tmp_path / "music" / "bed.ogg").write_bytes(b"OggS" + b"\2" * 20)
+    monkeypatch.chdir(tmp_path / "work")
+
+    path = project_io.import_audio_file(os.path.join("..", "music", "bed.ogg"), project_dir)
+
+    assert path.endswith(".ogg") and os.path.isfile(path)
+    assert os.path.dirname(path) == os.path.join(project_dir, "audio", "imported")
+
+
+def test_import_audio_file_sanitises_the_extension(tmp_path, isolated_dirs):
+    project_dir, _project_id = project_io.create_project_dir()
+    src = tmp_path / "clip.W-A-V!!"
+    src.write_bytes(b"data")
+    assert project_io.import_audio_file(str(src), project_dir).endswith(".wav")
+    bare = tmp_path / "noext"
+    bare.write_bytes(b"data2")
+    assert project_io.import_audio_file(str(bare), project_dir).endswith(".bin")
+
+
+def _document_with_imported(project_dir, tmp_path):
+    src = tmp_path / "bed.wav"
+    src.write_bytes(b"RIFF" + b"\3" * 60)
+    imported = project_io.import_audio_file(str(src), project_dir)
+    clip = Clip(source="imported", original_audio_path=imported)
+    doc = Document(runs=[Run("bed", clip.id, "imported")], clips=[clip])
+    return doc, imported
+
+
+def test_imported_audio_is_bundled_flagged_in_the_manifest_and_resolved_on_open(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, imported = _document_with_imported(project_dir, tmp_path)
+    rel = "audio/imported/" + os.path.basename(imported)
+    path = str(tmp_path / "proj.tbaw")
+
+    project_io.save_project(doc, path, {}, project_dir, project_id)
+
+    with zipfile.ZipFile(path) as zf:
+        assert rel in zf.namelist()
+        manifest = json.loads(zf.read("manifest.json"))
+        document = json.loads(zf.read("document.json"))
+    assert manifest["includes"]["imported_audio"] is True
+    assert document["clips"][0]["original_audio_path"] == rel
+
+    info = project_io.inspect_bundle(path)
+    other = str(tmp_path / "other")
+    project_io.extract_small(info, other)
+    project_io.extract_audio(info, other)
+    loaded = project_io.finish_open(info, other)
+    clip = loaded.document.clips[0]
+    assert clip.original_audio_path == os.path.join(other, "audio", "imported", os.path.basename(imported))
+    assert loaded.notices == []
+    assert loaded.document.dirty_clips() == []
+
+
+def test_include_imported_audio_off_leaves_the_file_out(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _imported = _document_with_imported(project_dir, tmp_path)
+    path = str(tmp_path / "proj.tbaw")
+
+    project_io.save_project(doc, path, {"bundle": {"include_imported_audio": False}}, project_dir, project_id)
+
+    with zipfile.ZipFile(path) as zf:
+        assert not any(n.startswith("audio/imported/") for n in zf.namelist())
+        assert json.loads(zf.read("manifest.json"))["includes"]["imported_audio"] is False
+    info = project_io.inspect_bundle(path)
+    other = str(tmp_path / "other")
+    project_io.extract_small(info, other)
+    loaded = project_io.finish_open(info, other)
+    assert loaded.document.clips[0].original_audio_path is None
+    assert any("missing" in n for n in loaded.notices)
+
+
+def test_a_document_without_imported_audio_says_so_in_the_manifest(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _seg = _document_with_audio(project_dir)
+    path = str(tmp_path / "proj.tbaw")
+    project_io.save_project(doc, path, {}, project_dir, project_id)
+    with zipfile.ZipFile(path) as zf:
+        assert json.loads(zf.read("manifest.json"))["includes"]["imported_audio"] is False
+
+
+def test_open_drops_an_imported_path_outside_the_project_dir(tmp_path, isolated_dirs):
+    secret = tmp_path / "secret.wav"
+    secret.write_bytes(b"RIFF")
+    other = str(tmp_path / "other")
+    os.makedirs(other)
+    with open(os.path.join(other, "document.json"), "w", encoding="utf-8") as f:
+        json.dump({"runs": [], "characters": [],
+                   "clips": [{"id": "c1", "source": "imported", "original_audio_path": str(secret)}]}, f)
+    info = project_io.BundleInfo(path=str(tmp_path / "x.tbaw"), manifest={}, project_id="x", entries=[],
+                                 audio_bytes=0, zip_size=0, zip_mtime=0.0)
+    loaded = project_io.finish_open(info, other)
+    assert loaded.document.clips[0].original_audio_path is None
+
+
+def test_referenced_audio_and_close_time_gc_keep_imported_files(tmp_path, isolated_dirs):
+    project_dir, _project_id = project_io.create_project_dir()
+    doc, imported = _document_with_imported(project_dir, tmp_path)
+    assert os.path.realpath(imported) in project_io.referenced_audio_paths(doc)
+    project_io.gc_project_dir(project_dir, doc)
+    assert os.path.isfile(imported)
+
+
 def test_open_never_extracts_the_dirs_own_session_or_lock(tmp_path, isolated_dirs):
     path = str(tmp_path / "planted.tbaw")
     _write_bundle(path, _manifest(), {"session.json": b'{"dirty": true, "source_path": "/elsewhere"}',
