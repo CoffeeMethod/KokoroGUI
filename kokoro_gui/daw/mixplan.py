@@ -44,7 +44,9 @@ def _inside_another(placed, seconds: float) -> bool:
 def clip_mixes(document, arrangement) -> dict:
     """`{clip_id: ClipMix}` for every audible placed clip."""
     tracks = {t.id: t for t in document.tracks}
-    any_solo = any(t.solo for t in document.tracks)
+    # Only a track with clips counts: an unused one isn't drawn (grill PR4),
+    # so its solo button can't be reached to switch it off.
+    any_solo = any(t.solo for t in document.used_tracks())
     auto_crossfade = bool((document.settings or {}).get("auto_crossfade", False))
     placed = list(arrangement.placed)
     mixes = {}

@@ -220,3 +220,16 @@ def test_word_level_srt_uses_stored_word_times(tmp_path):
     assert "1\n00:00:00,000 --> 00:00:00,400\nHello\n" in text
     assert "2\n00:00:00,500 --> 00:00:00,900\nthere.\n" in text
     assert "Kenobi" not in text  # b has no stored words
+
+
+def test_a_soloed_track_without_clips_silences_nothing(tmp_path):
+    """Grill PR4: an unused track isn't drawn, so its solo can't be turned
+    off; it must not mute the tracks that are there."""
+    from kokoro_gui.daw.models import Track
+
+    doc, _a, _b = _two_generated_clips(tmp_path)
+    doc.tracks.append(Track(name="unused", solo=True, order_index=9))
+    mixdown(doc, str(tmp_path / "u.wav"), fmt="wav", sample_rate=8000)
+    data, _ = sf.read(str(tmp_path / "u.wav"), dtype="float32")
+    assert not np.allclose(data[:8000], 0.0)
+    assert not np.allclose(data[8000:], 0.0)
