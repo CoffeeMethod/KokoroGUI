@@ -56,7 +56,7 @@ FORMAT = "tbaw"
 SUPPORTED_VERSION = 1
 # Content features this reader implements; a bundle whose `requires` names
 # one that isn't here is refused by name (section 8 of the plan).
-SUPPORTED_FEATURES: frozenset = frozenset({"takes", "nested"})
+SUPPORTED_FEATURES: frozenset = frozenset({"takes", "nested", "imported"})
 
 MANIFEST = "manifest.json"
 DOCUMENT = "document.json"
@@ -1148,7 +1148,16 @@ def required_features(document: Document) -> list:
         requires.append("takes")
     if any(clip.source == "nested" for clip in document.clips):
         requires.append("nested")
+    if has_imported_text(document) and "imported" not in requires:
+        requires.append("imported")
     return requires
+
+
+def has_imported_text(document: Document) -> bool:
+    """True when a run carries imported word timing (phase 5 P3). An older
+    reader would keep the words but play the clip as text it can't
+    generate, so the bundle `requires` "imported"."""
+    return any(run.words for run in document.runs)
 
 
 def project_stats(document: Document) -> dict:
@@ -1439,8 +1448,12 @@ def save_project(document: Document, path: str, project_settings: dict | None = 
 
 def referenced_audio_paths(document: Document) -> set:
     """Every file a clip points at: its original audio, its active take's
-    segments and every parked take's, so close-time GC keeps them all."""
+    segments and every parked take's, and every imported recording source
+    (`Document.sources`), so close-time GC keeps them all."""
     paths = set()
+    for entry in document.sources.values():
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str) and entry["path"]:
+            paths.add(os.path.realpath(entry["path"]))
     for clip in document.clips:
         if clip.original_audio_path:
             paths.add(os.path.realpath(clip.original_audio_path))

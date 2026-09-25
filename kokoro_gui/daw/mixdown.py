@@ -42,6 +42,7 @@ import numpy as np
 
 from kokoro_gui.audio import mixer, post
 from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement, segment_timeline
+from kokoro_gui.daw.imported import segment_plays
 from kokoro_gui.daw.mixplan import ClipMix, clip_mixes
 from kokoro_gui.daw.timecode import format_position
 
@@ -146,8 +147,10 @@ def _clip_samples(clip, sample_rate: int, post_config: Optional[dict] = None,
                   nested_audio_path: Optional[Callable] = None) -> Optional[np.ndarray]:
     """All of a clip's segments concatenated at `sample_rate`, post-processed
     per `post_config`, or None if none of them can be read. A segment with a
-    `range` contributes only that slice of its file. A nested clip
-    (a subproject) is its child's mixdown file, `nested_audio_path(clip)`."""
+    `range` contributes only that slice of its file; an imported clip's
+    ranges join with a short crossfade (`_crossfaded_samples`). A nested
+    clip (a subproject) is its child's mixdown file,
+    `nested_audio_path(clip)`."""
     if getattr(clip, "source", None) == "nested":
         path = nested_audio_path(clip) if nested_audio_path is not None else None
         if not path:
@@ -156,18 +159,53 @@ def _clip_samples(clip, sample_rate: int, post_config: Optional[dict] = None,
             return mixer.load_clip_samples(path, sample_rate, post_config).astype(np.float32)
         except Exception:
             return None
+    plays = segment_plays(clip)
+    if any(p.play_range_s != p.range_s for p in plays):
+        return _crossfaded_samples(plays, sample_rate, post_config)
     parts = []
-    for segment in sorted(clip.segments, key=lambda s: s.order_index):
-        if not segment.audio_path:
-            continue
+    for play in plays:
         try:
-            parts.append(mixer.load_clip_samples(segment.audio_path, sample_rate, post_config,
-                                                 post.segment_range(segment)))
+            parts.append(mixer.load_clip_samples(play.segment.audio_path, sample_rate, post_config, play.range_s))
         except Exception:
             continue
     if not parts:
         return None
     return np.concatenate(parts).astype(np.float32)
+
+
+def _crossfaded_samples(plays: list, sample_rate: int, post_config: Optional[dict]) -> Optional[np.ndarray]:
+    """An imported clip's ranges laid end to end at their nominal lengths,
+    each join crossfaded the way the transport plays it
+    (`imported.segment_plays`): the earlier range's read runs on past its
+    end, fading out, over the start of the next one, fading in."""
+    parts = []  # (samples, nominal_frames, fade_in_frames, fade_out_frames)
+    for play in plays:
+        path = play.segment.audio_path
+        try:
+            samples = mixer.load_clip_samples(path, sample_rate, post_config, play.play_range_s)
+            nominal = samples if play.play_range_s == play.range_s else \
+                mixer.load_clip_samples(path, sample_rate, post_config, play.range_s)
+        except Exception:
+            continue
+        parts.append((samples, len(nominal), int(round(play.fade_in_s * sample_rate)),
+                      int(round(play.fade_out_s * sample_rate))))
+    if not parts:
+        return None
+    total = sum(nominal for _s, nominal, _i, _o in parts)
+    out = np.zeros(max(total, 1), dtype=np.float32)
+    cursor = 0
+    for samples, nominal, fade_in, fade_out in parts:
+        piece = np.array(samples, dtype=np.float32)
+        n = len(piece)
+        fade_in, fade_out = min(fade_in, n), min(fade_out, n)
+        if fade_in:
+            piece[:fade_in] *= np.arange(fade_in, dtype=np.float32) / float(fade_in)
+        if fade_out:
+            piece[n - fade_out:] *= (fade_out - np.arange(fade_out, dtype=np.float32)) / float(fade_out)
+        end = min(len(out), cursor + n)
+        out[cursor:end] += piece[:end - cursor]
+        cursor += nominal
+    return out[:total]
 
 
 def write_audio(path: str, samples: np.ndarray, sample_rate: int, fmt: str) -> None:

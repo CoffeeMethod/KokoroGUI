@@ -161,6 +161,29 @@ def test_segments_with_a_range_are_measured_scheduled_and_drawn_as_slices(qt_app
     assert rate == RATE and len(samples) == RATE * 3 // 4
 
 
+def test_an_imported_clips_ranges_are_scheduled_with_a_crossfade_at_each_join(qt_app, tmp_path):
+    from kokoro_gui.daw.imported import JOIN_CROSSFADE_S
+    from kokoro_gui.daw.models import Clip, Run
+
+    path = tmp_path / "recording.wav"
+    sf.write(str(path), np.full(RATE * 2, 0.25, dtype=np.float32), RATE)
+    doc = qt_app.document
+    clip = Clip(source="imported")
+    doc.runs = [Run("one three", clip.id, "imported", words=[[0, 3, "rec", 0.0, 0.5], [4, 9, "rec", 1.0, 1.5]])]
+    doc.clips = [clip]
+    doc.add_sources({"rec": {"path": str(path), "sample_rate": RATE, "duration_s": 2.0}})
+    doc.refresh_imported_segments()
+
+    qt_app._rebuild_transport_schedule()
+
+    xfade = int(round(JOIN_CROSSFADE_S * RATE))
+    first, second = sorted(qt_app.transport.loaded_clips(), key=lambda c: c.start_frame)
+    assert second.start_frame - first.start_frame == RATE // 2  # the join doesn't move the next range
+    assert len(first.samples) == RATE // 2 + xfade  # read on past the cut...
+    assert first.fade_out_frames == xfade and second.fade_in_frames == xfade  # ...and crossfaded
+    assert first.fade_in_frames == 0 and second.fade_out_frames == 0
+
+
 def test_legacy_baked_segment_is_dirty_and_a_fresh_one_is_not(qt_app, tmp_path):
     clip = _generated_clip(qt_app, tmp_path)
     assert qt_app.document.dirty_clips() == []

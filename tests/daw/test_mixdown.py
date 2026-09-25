@@ -250,3 +250,47 @@ def test_a_soloed_track_without_clips_silences_nothing(tmp_path):
     data, _ = sf.read(str(tmp_path / "u.wav"), dtype="float32")
     assert not np.allclose(data[:8000], 0.0)
     assert not np.allclose(data[8000:], 0.0)
+
+
+def _recording_doc(tmp_path, values, words, rate=8000):
+    """An imported recording clip over one source file whose samples are
+    `values`, with `words` as the run's words over the text "a b c"."""
+    path = tmp_path / "rec.wav"
+    sf.write(str(path), np.asarray(values, dtype=np.float32), rate)
+    clip = Clip(source="imported")
+    doc = Document(runs=[Run(text="a b c", clip_id=clip.id, kind="imported", words=words)], clips=[clip],
+                   settings={"gap_s": 0.0, "paragraph_gap_s": 0.0,
+                             "sources": {"rec": {"path": str(path), "sample_rate": rate, "duration_s": 3.0}}})
+    doc.refresh_imported_segments()
+    return doc, clip
+
+
+def test_an_imported_clip_with_a_deleted_word_closes_up_with_a_crossfade(tmp_path):
+    """Phase 5 P3: the ranges left after a delete play end to end, and the
+    join crossfades instead of cutting. On a steady tone the crossfade sums
+    back to the tone, where two plain fades would dip to silence."""
+    doc, clip = _recording_doc(tmp_path, np.full(8000 * 3, 0.5),
+                               [[0, 1, "rec", 0.0, 1.0], [2, 3, "rec", 1.0, 2.0], [4, 5, "rec", 2.0, 3.0]])
+    doc.replace_text(1, 2, 0, "a c")  # " b": the middle word
+    assert [s.range for s in clip.segments] == [[0.0, 1.0], [2.0, 3.0]]
+
+    mixdown(doc, str(tmp_path / "r.wav"), fmt="wav", sample_rate=8000)
+
+    data, _ = sf.read(str(tmp_path / "r.wav"), dtype="float32")
+    assert len(data) == 16000  # 1 s + 1 s: the gap closed up
+    assert np.allclose(data, 0.5, atol=1e-3)
+
+
+def test_an_imported_clip_crossfade_blends_the_two_sides_of_the_cut(tmp_path):
+    values = np.concatenate([np.full(8000, 0.2), np.full(8000, 0.9), np.full(8000, -0.4)])
+    doc, _clip = _recording_doc(tmp_path, values, [[0, 1, "rec", 0.0, 1.0], [4, 5, "rec", 2.0, 3.0]])
+    mixdown(doc, str(tmp_path / "r.wav"), fmt="wav", sample_rate=8000)
+    data = sf.read(str(tmp_path / "r.wav"), dtype="float32")[0][:, 0]
+    xfade = 40  # 5 ms at 8 kHz
+    assert len(data) == 16000
+    assert np.allclose(data[:8000], 0.2, atol=1e-3)
+    assert np.allclose(data[8000 + xfade:], -0.4, atol=1e-3)
+    # Inside the join: the deleted word's first 5 ms fading out while the
+    # next range fades in.
+    ramp = np.arange(xfade) / xfade
+    assert np.allclose(data[8000:8000 + xfade], 0.9 * (1 - ramp) - 0.4 * ramp, atol=2e-3)

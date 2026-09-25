@@ -100,7 +100,10 @@ def is_clip_dirty(clip, text: str, config: dict, key_fn=None) -> bool:
     it, and this headless answer is "stale"."""
     if getattr(clip, "source", None) == "imported":
         # Its audio is the imported file, not a generation, so nothing it
-        # could be regenerated from ever changes.
+        # could be regenerated from ever changes. A missing source file
+        # isn't "dirty" either, since Generate can't bring a recording
+        # back: its segments come out pathless and play nothing, and
+        # `imported.missing_sources` names it for the GUI.
         return False
     if getattr(clip, "source", None) == "nested":
         return True

@@ -47,6 +47,7 @@ from kokoro_gui.daw import subtitles
 from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character, Document
 from kokoro_gui.daw.arrangement import compute_arrangement, segment_timeline
 from kokoro_gui.daw.mixplan import clip_mixes
+from kokoro_gui.daw.imported import segment_plays
 from kokoro_gui.daw.auto_split import plan_auto_split_clips, plan_pause_gaps
 from kokoro_gui.daw.undo import AssignCharacterCommand, ImportCuesCommand
 from kokoro_gui.engine import caching
@@ -2344,7 +2345,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         (`daw/mixplan.py`): muted and soloed-out tracks are left out; the
         track's gain, pan and automation and the clip's fades ride each
         entry. A clip's fade-in goes on its first segment and its fade-out
-        on its last. A segment with a `range` becomes a sliced entry."""
+        on its last. A segment with a `range` becomes a sliced entry; the
+        joins between an imported clip's ranges crossfade
+        (`imported.segment_plays`)."""
         level = self.level
         self._arrangement = self.build_arrangement(level)
         rate = self.project_sample_rate()
@@ -2366,17 +2369,16 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                     ))
                 continue
             # One ScheduledClip per segment so multi-segment clips play
-            # back to back at their real (rendered) offsets.
+            # back to back at their real (rendered) offsets. An imported
+            # clip's ranges crossfade at each join (`segment_plays`).
             offset = placed.start_s
-            segments = [s for s in sorted(placed.clip.segments, key=lambda s: s.order_index) if s.audio_path]
-            for index, segment in enumerate(segments):
-                range_s = post.segment_range(segment)
+            for play in segment_plays(placed.clip, mix.fade_in_s, mix.fade_out_s):
+                segment, range_s = play.segment, play.range_s
                 schedule.append(ScheduledClip(
                     clip_id=placed.clip.id, start_s=offset, path=segment.audio_path, post_config=post_config,
                     gain=mix.gain, pan=mix.pan, automation=mix.automation,
-                    fade_in_s=mix.fade_in_s if index == 0 else 0.0,
-                    fade_out_s=mix.fade_out_s if index == len(segments) - 1 else 0.0,
-                    slice=range_s,
+                    fade_in_s=play.fade_in_s, fade_out_s=play.fade_out_s,
+                    slice=play.play_range_s,
                 ))
                 try:
                     offset += post.rendered_duration_s(segment.audio_path, post_config, rate,

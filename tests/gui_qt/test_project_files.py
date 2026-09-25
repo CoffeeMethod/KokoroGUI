@@ -374,6 +374,103 @@ def test_referenced_audio_and_close_time_gc_keep_imported_files(tmp_path, isolat
     assert os.path.isfile(imported)
 
 
+# -- imported recording edited as text (phase 5 P3) ---------------------------------
+
+def _document_with_recording(project_dir, tmp_path):
+    """An imported recording clip whose run's words name one source under
+    `audio/imported/`, and no `original_audio_path`."""
+    import numpy as np
+    import soundfile as sf
+
+    from kokoro_gui.daw import imported as imported_text
+
+    src = tmp_path / "interview.wav"
+    sf.write(str(src), np.full(8000, 0.1, dtype=np.float32), 8000)
+    path = project_io.import_audio_file(str(src), project_dir)
+    source, entry = imported_text.source_entry(path)
+    text, words = imported_text.run_from_asr_words([("Hello", 0.1, 0.4), ("there", 0.5, 0.9)], source)
+    clip = Clip(source="imported")
+    doc = Document(runs=[Run(text, clip.id, "imported", words=words)], clips=[clip],
+                   settings={"sources": {source: entry}})
+    doc.refresh_imported_segments()
+    return doc, path, source
+
+
+def test_a_recording_source_is_bundled_required_and_resolved_on_open(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, imported, source = _document_with_recording(project_dir, tmp_path)
+    rel = "audio/imported/" + os.path.basename(imported)
+    path = str(tmp_path / "proj.tbaw")
+
+    project_io.save_project(doc, path, {}, project_dir, project_id)
+
+    with zipfile.ZipFile(path) as zf:
+        assert zf.namelist().count(rel) == 1
+        manifest = json.loads(zf.read("manifest.json"))
+        document = json.loads(zf.read("document.json"))
+    assert manifest["includes"]["imported_audio"] is True
+    assert manifest["requires"] == ["imported"]
+    assert document["settings"]["sources"][source]["path"] == rel
+    assert document["runs"][0]["words"]
+    assert doc.sources[source]["path"] == imported  # the live document keeps its absolute path
+
+    info = project_io.inspect_bundle(path)
+    other = str(tmp_path / "other")
+    project_io.extract_small(info, other)
+    project_io.extract_audio(info, other)
+    loaded = project_io.finish_open(info, other)
+    expected = os.path.join(other, "audio", "imported", os.path.basename(imported))
+    assert loaded.document.source_path(source) == expected
+    segment, = loaded.document.clips[0].segments
+    assert segment.audio_path == expected and segment.range == [0.1, 0.9]
+    assert loaded.notices == []
+    assert loaded.document.dirty_clips() == []
+
+
+def test_include_imported_audio_off_leaves_a_recording_source_out(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _imported, source = _document_with_recording(project_dir, tmp_path)
+    path = str(tmp_path / "proj.tbaw")
+
+    project_io.save_project(doc, path, {"bundle": {"include_imported_audio": False}}, project_dir, project_id)
+
+    with zipfile.ZipFile(path) as zf:
+        assert not any(n.startswith("audio/imported/") for n in zf.namelist())
+    info = project_io.inspect_bundle(path)
+    other = str(tmp_path / "other")
+    project_io.extract_small(info, other)
+    loaded = project_io.finish_open(info, other)
+    assert loaded.document.source_path(source) is None
+    assert loaded.document.clips[0].segments[0].audio_path is None
+    assert loaded.document.dirty_clips() == []
+    assert any("missing" in n for n in loaded.notices)
+
+
+def test_open_drops_a_recording_source_outside_the_project_dir(tmp_path, isolated_dirs):
+    secret = tmp_path / "secret.wav"
+    secret.write_bytes(b"RIFF")
+    other = str(tmp_path / "other")
+    os.makedirs(other)
+    with open(os.path.join(other, "document.json"), "w", encoding="utf-8") as f:
+        json.dump({"runs": [{"text": "hi", "clip_id": "c1", "kind": "imported", "words": [[0, 2, "s", 0.0, 0.5]]}],
+                   "clips": [{"id": "c1", "source": "imported"}], "characters": [],
+                   "settings": {"sources": {"s": {"path": str(secret)}, "t": {"path": "../secret.wav"}}}}, f)
+    info = project_io.BundleInfo(path=str(tmp_path / "x.tbaw"), manifest={}, project_id="x", entries=[],
+                                 audio_bytes=0, zip_size=0, zip_mtime=0.0)
+    loaded = project_io.finish_open(info, other)
+    assert loaded.document.source_path("s") is None and loaded.document.source_path("t") is None
+    assert loaded.document.clips[0].segments[0].audio_path is None
+
+
+def test_referenced_audio_and_close_time_gc_keep_a_recording_source(tmp_path, isolated_dirs):
+    project_dir, _project_id = project_io.create_project_dir()
+    doc, imported, _source = _document_with_recording(project_dir, tmp_path)
+    doc.replace_text(0, len(doc.text), 0, "")  # no clip uses it now; undo could bring it back
+    assert os.path.realpath(imported) in project_io.referenced_audio_paths(doc)
+    project_io.gc_project_dir(project_dir, doc)
+    assert os.path.isfile(imported)
+
+
 # -- reference video (phase 5, TB16) -------------------------------------------------
 
 _VIDEO_BYTES = b"\0\0\0\x18ftypmp42" + bytes(range(256)) * 4
