@@ -41,9 +41,21 @@ def _make_clip_on_track(qt_app, track, start=0, end=5, text="hello world"):
     return clip
 
 
+def _occupy(qt_app, track):
+    """Only a track with clips is drawn (grill PR4), so the drop target gets
+    a clip of its own, far to the right of where the drag lands."""
+    document = qt_app.document
+    other = document.assign_character_to_range(6, 11, track.character_id)
+    other.track_id = track.id
+    other.timeline_timestamp = 30.0
+
+
 def _drag_clip_onto_track_b(qt_app, qtbot, clip):
     """Simulates the full mouse gesture: press on the clip's block, release
     over track_b's lane (lane index 1, below the ruler)."""
+    track_b = next(t for t in qt_app.document.tracks if t.order_index == 1)
+    if not any(c.track_id == track_b.id for c in qt_app.document.clips):
+        _occupy(qt_app, track_b)
     qt_app.timeline_dock.refresh()
     view = qt_app.timeline_dock.timeline_view
     block = view._blocks_by_clip_id[clip.id]
