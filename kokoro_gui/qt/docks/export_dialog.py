@@ -9,9 +9,9 @@ project or between two markers) and "also write a cue sheet (.csv)"
 keys (`out_dir`/`filename`/`format`/`export_subtitles`/`separate`) so an
 existing user's choices carry over.
 
-Also the project bundle's two options (grill TB14): whether generated
+Also the project bundle's options (grill TB14, TB16): whether generated
 audio goes into the `.tbaw` and in which format (wav or flac for new
-segments). They live in `app.project_settings["bundle"]`
+segments), and whether the reference video goes in (off by default). They live in `app.project_settings["bundle"]`
 (`kokoro_gui.qt.project.bundle_options`) and are applied on OK, before the
 dirty-clips prompt.
 
@@ -138,6 +138,11 @@ class ExportDialog(QDialog):
         self.bundle_format_combo.setCurrentText(bundle["audio_format"])
         self.bundle_format_combo.setToolTip("Format of newly generated segments; existing ones keep theirs.")
         form.addRow("Bundle audio format:", self.bundle_format_combo)
+        self.bundle_video_check = QCheckBox("Bundle the reference video in the project file")
+        self.bundle_video_check.setChecked(bool(bundle["include_video"]))
+        self.bundle_video_check.setToolTip("Stored uncompressed under video/. Off keeps only the video's path, "
+                                           "so the .tbaw stays small.")
+        form.addRow("", self.bundle_video_check)
 
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Export")
@@ -154,6 +159,7 @@ class ExportDialog(QDialog):
         return {
             "include_generated_audio": self.bundle_audio_check.isChecked(),
             "include_imported_audio": True,
+            "include_video": self.bundle_video_check.isChecked(),
             "audio_format": self.bundle_format_combo.currentText(),
         }
 

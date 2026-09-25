@@ -70,7 +70,7 @@ from kokoro_gui.daw.arrangement import clip_audio_duration_s  # noqa: E402
 from kokoro_gui.qt.characters_dialog import CharactersDialog  # noqa: E402
 from kokoro_gui.qt.docks import (  # noqa: E402
     FXDock, LexiconDock, MixingDock, SettingsDock, TimelineDock, TranscriptDock, TransportDock,
-    VoiceCloneDock,
+    VideoDock, VoiceCloneDock,
 )
 from kokoro_gui.qt.docks.export_dialog import ExportDialog, run_export  # noqa: E402
 from kokoro_gui.qt.welcome_dialog import WelcomeDialog  # noqa: E402
@@ -197,6 +197,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.voice_clone_dock: VoiceCloneDock | None = None
         self.timeline_dock: TimelineDock | None = None
         self.transport_dock: TransportDock | None = None
+        self.video_dock: VideoDock | None = None
 
         # --- Engines: one resident backend per engine id in use ---
         self._add_backend(engine_registry.get_engine("kokoro", engine=KokoroEngine()))
@@ -626,6 +627,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.import_audio_action.setEnabled(False)
         self.import_audio_action.setToolTip("coming with ASR-anchored import")
         self.file_menu.addAction(self.import_audio_action)
+        self.load_video_action = self._action("Load &Video...", self.load_video_dialog)
+        self.file_menu.addAction(self.load_video_action)
         self.export_action = self._action("&Export...", self.export_dialog, "Ctrl+E")
         self.file_menu.addAction(self.export_action)
         self.file_menu.addSeparator()
@@ -742,6 +745,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.lexicon_dock = LexiconDock(self)
         self.timeline_dock = TimelineDock(self)
         self.transport_dock = TransportDock(self)
+        self.video_dock = VideoDock(self)
 
         self.timeline_dock.batchGenerationProgress.connect(self.on_batch_generation_progress)
         self.timeline_dock.batchGenerationFinished.connect(self.on_batch_generation_finished)
@@ -787,6 +791,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         for voices_dock in (self.mixing_dock, self.voice_clone_dock):
             if voices_dock is not None:
                 self._place_voices_dock(voices_dock)
+        # The reference video (TB16) is the last tab of the right-hand group;
+        # Load Video raises it.
+        self.addDockWidget(top, self.video_dock)
+        self.tabifyDockWidget(self.settings_dock, self.video_dock)
         self.addDockWidget(bottom, self.timeline_dock)
         self.addDockWidget(bottom, self.transport_dock)
         self.splitDockWidget(self.timeline_dock, self.transport_dock, Qt.Orientation.Horizontal)
@@ -826,7 +834,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def _all_docks(self) -> list:
         docks = [self.transcript_dock, self.settings_dock, self.fx_dock, self.lexicon_dock,
-                 self.mixing_dock, self.voice_clone_dock, self.timeline_dock, self.transport_dock]
+                 self.mixing_dock, self.voice_clone_dock, self.timeline_dock, self.transport_dock,
+                 self.video_dock]
         return [d for d in docks if d is not None]
 
     def _build_shortcuts(self) -> None:
@@ -1370,6 +1379,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             self.settings_dock.refresh_scope_fields()
         if self.fx_dock is not None:
             self.fx_dock.refresh_for_selection()
+        self._sync_video_dock()
         self.refresh_timeline()
         session = project_io.read_session(self.root.project_dir) if self.root.project_dir else None
         loop = (session or {}).get("loop_s")
@@ -1612,7 +1622,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                 project_io.wipe_project_dir(project_dir)
                 for child_dir in child_dirs:
                     project_io.delete_project_dir(child_dir)
-        elif session and project_io.session_matches_file(session, info) and has_document:
+        elif session and project_io.session_matches_file(session, info) and has_document \
+                and not project_io.video_extract_pending(info, project_dir):
             extract = False  # a clean extraction of this very file: Resume is fast
         else:
             project_io.wipe_project_dir(project_dir)
@@ -1621,8 +1632,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             self._finish_open(info, project_dir, lock, recovered)
             return
 
+        heavy_bytes = project_io.heavy_bytes(info)
         try:
-            project_io.check_free_space(project_io.projects_root(), info.audio_bytes, "open the project")
+            project_io.check_free_space(project_io.projects_root(), heavy_bytes, "open the project")
             project_io.extract_small(info, project_dir)
         except (project_io.ProjectError, OSError) as e:
             lock.release()
@@ -1630,7 +1642,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             self._start_untitled_after_failed_open()
             return
 
-        if info.audio_bytes == 0:
+        if heavy_bytes == 0:
             self._finish_open(info, project_dir, lock, recovered)
             return
 
@@ -1683,6 +1695,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             self.set_status(notice, "warning")
         if not loaded.notices:
             self.set_status(f"Opened {project_io.project_title(info.path)}.")
+        if project_io.video_settings(self.root.project_settings) is not None and self.video_path() is None:
+            self._offer_video_relink()
 
     def _open_json_project(self, path: str) -> None:
         """TB6: a 4.0-preview `.json` project opens, gets a project id and a dir,
@@ -1752,6 +1766,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             return
         new_path = os.path.abspath(project_io.bundle_path_for(path))
         self._rebase_linked_paths(new_path)
+        self._rebase_video_path(new_path)
         self.project_path = new_path
         project_io.remember_recent(self.settings, self.project_path)
         self._rebuild_recent_menu()
@@ -1821,6 +1836,81 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                 then()
 
         self._run_project_io(_work, _done)
+
+    # -- reference video (phase 5, TB16) -----------------------------------------
+
+    def video_path(self) -> str | None:
+        """The file the video dock plays: the root project's
+        `project_settings["video"]["path"]` when that file exists, else the
+        copy Open extracted from the bundle, else None."""
+        root = self.root
+        return project_io.video_source(root.project_settings, root.path, root.project_dir, root.manifest)
+
+    def _sync_video_dock(self) -> None:
+        if self.video_dock is None:
+            return
+        block = project_io.video_settings(self.root.project_settings)
+        if block is None:
+            self.video_dock.set_video(None)
+            return
+        path = self.video_path()
+        missing = None if path else (project_io.resolve_video_path(self.root.project_settings, self.root.path)
+                                     or block["path"])
+        self.video_dock.set_video(path, block["offset_s"], missing=missing)
+
+    def load_video(self, path: str) -> bool:
+        """File > Load Video...: the root project's `project_settings["video"]`
+        names `path`, relative to the project's file when it has one on the
+        same drive. The offset is kept. Returns False when `path` isn't a file."""
+        path = os.path.abspath(path)
+        if not os.path.isfile(path):
+            QMessageBox.warning(self, "Load video", f"Couldn't read {path}.")
+            return False
+        block = project_io.video_settings(self.root.project_settings)
+        self.root.project_settings["video"] = {
+            "path": project_io.video_path_for(path, self.root.path),
+            "offset_s": block["offset_s"] if block else 0.0,
+        }
+        self._sync_video_dock()
+        if self.video_dock is not None and self.workspaces.active != SIMPLE:
+            self.video_dock.show()
+            self.video_dock.raise_()
+        self.schedule_save()
+        self.set_status(f"Reference video: {os.path.basename(path)}.")
+        return True
+
+    def load_video_dialog(self) -> bool:
+        path, _ = QFileDialog.getOpenFileName(self, "Load video", "", project_io.VIDEO_FILTER)
+        return bool(path) and self.load_video(path)
+
+    def set_video_offset(self, offset_s: float) -> None:
+        """The video dock's offset box: video time is transport time plus
+        `offset_s`."""
+        block = self.root.project_settings.get("video")
+        if not isinstance(block, dict):
+            return
+        block["offset_s"] = round(float(offset_s), 3)
+        if self.video_dock is not None:
+            self.video_dock.set_offset(block["offset_s"])
+        self.schedule_save()
+
+    def _offer_video_relink(self) -> bool:
+        """The reference video is neither at its path nor in the bundle: ask
+        for it, the way a missing linked subproject asks for its file (NP4)."""
+        block = project_io.video_settings(self.root.project_settings) or {}
+        missing = project_io.resolve_video_path(self.root.project_settings, self.root.path) or block.get("path")
+        answer = QMessageBox.question(self, "Video not found",
+                                      f"The reference video {missing} isn't there.\nFind the video file?")
+        if answer == QMessageBox.StandardButton.Yes:
+            return self.load_video_dialog()
+        return False
+
+    def _rebase_video_path(self, new_root_path: str) -> None:
+        """Save As moved the root: a relative video path is rewritten for the
+        new location (the video didn't move)."""
+        absolute = project_io.resolve_video_path(self.root.project_settings, self.root.path)
+        if absolute:
+            self.root.project_settings["video"]["path"] = project_io.video_path_for(absolute, new_root_path)
 
     # -- background I/O plumbing ------------------------------------------------
 

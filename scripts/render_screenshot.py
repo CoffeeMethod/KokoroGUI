@@ -59,6 +59,10 @@ def build_app(workdir: str, theme_name: str, workspace: str, subproject: bool = 
     qt_app_module.FX_PRESETS_DIR = os.path.join(workdir, "presets", "fx")
     qt_app_module.DOCUMENT_FILE = os.path.join(workdir, "document.json")
     qt_app_module.KokoroEngine = StubEngine
+    # The video dock stays a stub: no QtMultimedia in a headless run.
+    from kokoro_gui.qt.docks import video_dock  # noqa: E402
+
+    video_dock.PLAYER_ENABLED = False
     os.makedirs(qt_app_module.FX_PRESETS_DIR, exist_ok=True)
     with open(os.path.join(qt_app_module.FX_PRESETS_DIR, "Echo.json"), "w", encoding="utf-8") as f:
         f.write('{"delay_enabled": true, "delay_time": 0.3, "delay_feedback": 0.3, "delay_mix": 0.4}')
