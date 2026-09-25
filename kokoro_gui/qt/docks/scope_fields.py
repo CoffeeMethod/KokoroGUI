@@ -8,19 +8,24 @@ kokoro_gui/daw/mixplan.py), ripple on regenerate (`["ripple"]`, on by
 default, kokoro_gui/daw/arrangement.py), onset alignment of locked clips
 (`["align_onset"]`, derived from the pinned clips while unset,
 `arrangement.align_onset_enabled`), the track layout (`["track_layout"]`,
-kokoro_gui/daw/lanes.py), and timecode (`["timecode"]`,
-kokoro_gui/daw/timecode.py).
+kokoro_gui/daw/lanes.py), timecode (`["timecode"]`,
+kokoro_gui/daw/timecode.py), and the source track's offset or its removal
+(`["source_track"]`, kokoro_gui/daw/reference.py).
 
-Clip: its gap override (blank inherits), take, review status, note, and
-source text with a syllable comparison against the clip's text.
+Clip: its gap override (blank inherits), take, review status, note,
+source text with a syllable comparison against the clip's text, and the
+reference range (`overrides["reference_range"]`, typed as "start - end" in
+seconds, blank for none).
 
 Every edit is one `SetFieldCommand` (or `SetActiveTakeCommand`) on the
 document's undo stack, then autosave and a timeline refresh.
 """
 from __future__ import annotations
 
+import os
 import re
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
     QPushButton, QSpinBox, QWidget,
@@ -28,14 +33,35 @@ from PySide6.QtWidgets import (
 
 from kokoro_gui.daw.arrangement import DEFAULT_GAP_S, DEFAULT_PARAGRAPH_GAP_S, align_onset_enabled
 from kokoro_gui.daw.models import CLIP_STATUSES
+from kokoro_gui.daw.reference import REFERENCE_RANGE_KEY, SOURCE_TRACK_KEY, reference_range, source_track_settings
 from kokoro_gui.daw.timecode import FRAME_RATES, tc_to_frames, timecode_settings
 from kokoro_gui.daw.undo import SetActiveTakeCommand, SetFieldCommand
+from kokoro_gui.qt import project as project_io
 
 STATUS_LABELS = {"todo": "To do", "generated": "Generated", "approved": "Approved",
                  "needs_rewrite": "Needs rewrite"}
 # The clip gap spin's minimum stands for "inherit" (shown as blank text).
 GAP_INHERIT = -0.05
 _VOWEL_GROUPS = re.compile(r"[aeiouy]+", re.IGNORECASE)
+_RANGE = re.compile(r"^\s*(\d+(?:\.\d*)?|\.\d+)\s*-\s*(\d+(?:\.\d*)?|\.\d+)\s*$")
+
+
+def parse_range(text: str):
+    """`"1.5 - 3"` as `[1.5, 3.0]`; `""` as None; ValueError for anything
+    else or an end not after the start."""
+    if not (text or "").strip():
+        return None
+    match = _RANGE.match(text)
+    if match is None:
+        raise ValueError(text)
+    start, end = float(match.group(1)), float(match.group(2))
+    if end <= start:
+        raise ValueError(text)
+    return [start, end]
+
+
+def format_range(rng) -> str:
+    return "" if rng is None else f"{rng[0]:.2f} - {rng[1]:.2f}"
 
 
 def syllable_count(text: str) -> int:
@@ -159,8 +185,35 @@ class ScopeFields(QWidget):
         for signal in (enabled.toggled, drop.toggled, fps.currentIndexChanged):
             signal.connect(lambda *_: self._commit_timecode())
         start.editingFinished.connect(self._commit_timecode)
+
+        track = source_track_settings(settings)
+        if track is None:
+            track_name = "None (File > Import Source Track)"
+        else:
+            track_name = os.path.basename(track["path"])
+            if project_io.source_track_path(self.app.document, self.app.project_dir) is None:
+                track_name += " (missing)"
+        track_label = QLabel(track_name)
+        track_label.setToolTip("The original dialogue. The transport's Original and Both play it under each "
+                               "clip that has a reference range.")
+        offset = _spin(-3600.0, 3600.0, 0.1, track["offset_s"] if track else 0.0)
+        offset.setDecimals(3)
+        offset.setEnabled(track is not None)
+        offset.setToolTip("Where reference time zero is in the source track, in seconds.")
+        offset.editingFinished.connect(self._commit_source_offset)
+        remove = QPushButton("Remove")
+        remove.setEnabled(track is not None)
+        remove.clicked.connect(self._remove_source_track)
+        track_row = QWidget()
+        track_layout = QHBoxLayout(track_row)
+        track_layout.setContentsMargins(0, 0, 0, 0)
+        track_layout.addWidget(track_label, 1)
+        track_layout.addWidget(remove)
+        self.form.addRow("Source track:", track_row)
+        self.form.addRow("Source offset (s):", offset)
         self.widgets = {"title": title, "gap_s": gap, "paragraph_gap_s": para, "auto_crossfade": crossfade,
-                        "ripple": ripple, "align_onset": align, "track_layout": layout_combo, "track_lanes": lanes, "tc_enabled": enabled, "tc_fps": fps, "tc_start": start, "tc_drop": drop}
+                        "ripple": ripple, "align_onset": align, "track_layout": layout_combo, "track_lanes": lanes, "tc_enabled": enabled, "tc_fps": fps, "tc_start": start, "tc_drop": drop,
+                        "source_track": track_label, "source_offset": offset, "source_remove": remove}
 
     def build_clip(self, clip) -> None:
         self.clear()
@@ -211,8 +264,16 @@ class ScopeFields(QWidget):
         syllables = QLabel(self._syllable_text(clip))
         syllables.setToolTip("Vowel groups per word: a rough lip-sync length check, not a real syllable count.")
         self.form.addRow("", syllables)
+
+        reference = QLineEdit(format_range(reference_range(clip)))
+        reference.setPlaceholderText("start - end (s)")
+        reference.setToolTip("The part of the source track this clip dubs, in seconds. The transport's "
+                             "Original and Both play it under the clip. Blank for none.")
+        reference.editingFinished.connect(lambda: self._commit_reference_range(reference))
+        self.form.addRow("Original (s):", reference)
         self.widgets = {"gap_before_s": gap, "take": take, "status": status, "note": note,
-                        "source_text": source, "source_edit": edit, "syllables": syllables}
+                        "source_text": source, "source_edit": edit, "syllables": syllables,
+                        "reference_range": reference}
 
     def _syllable_text(self, clip) -> str:
         dub = syllable_count(self.app.document.clip_text(clip))
@@ -257,8 +318,40 @@ class ScopeFields(QWidget):
         self._set_setting("timecode", value)
         self.app.transport_dock.set_position(self.app.transport.position(), self.app.transport.duration())
 
+    def _commit_source_offset(self) -> None:
+        track = source_track_settings(self.app.document.settings)
+        if track is None:
+            return
+        self._set_setting(SOURCE_TRACK_KEY, {**track, "offset_s": round(self.widgets["source_offset"].value(), 3)})
+
+    def _remove_source_track(self) -> None:
+        """Clears the setting; the copy stays in the project dir, so an undo
+        brings the track back. The fields rebuild once the click is done
+        (the button is one of the widgets rebuilt)."""
+        self._set_setting(SOURCE_TRACK_KEY, None)
+        dock = self.app.settings_dock
+        QTimer.singleShot(0, dock, dock.refresh_scope_fields)
+
     def _clip(self):
         return self.app.document.get_clip(self.clip_id) if self.clip_id else None
+
+    def _commit_reference_range(self, field: QLineEdit) -> None:
+        """`overrides["reference_range"]` from the "start - end" field; text
+        that doesn't parse puts the stored range back."""
+        clip = self._clip()
+        if clip is None:
+            return
+        try:
+            value = parse_range(field.text())
+        except ValueError:
+            field.setText(format_range(reference_range(clip)))
+            return
+        if value == clip.overrides.get(REFERENCE_RANGE_KEY):
+            return
+        self.app.document.undo_stack.push(SetFieldCommand("clip", clip.id, "overrides", value,
+                                                          key=REFERENCE_RANGE_KEY))
+        field.setText(format_range(value))
+        self._after_edit()
 
     def _set_clip(self, field: str, value) -> None:
         clip = self._clip()

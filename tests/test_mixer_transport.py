@@ -314,6 +314,93 @@ def test_transport_scheduled_clip_with_a_slice_plays_only_that_range(tmp_path, m
     assert np.allclose(render_block_for_test(transport, 100), 0.0)
 
 
+# -- phase 5 D5: the original dialogue as an alt schedule ------------------------
+
+
+def _dub_and_original(tmp_path, make_transport):
+    """A dub clip of constant 0.4 at 1s for 1s, and a source track whose
+    second 2..3 is a constant 0.6, sliced under the same clip."""
+    dub = str(tmp_path / "dub.wav")
+    sf.write(dub, np.full(8000, 0.4, dtype=np.float32), 8000, subtype="FLOAT")
+    source = np.zeros(4 * 8000, dtype=np.float32)
+    source[2 * 8000:3 * 8000] = 0.6
+    track = str(tmp_path / "source.wav")
+    sf.write(track, source, 8000, subtype="FLOAT")
+    transport = make_transport()
+    transport.load([ScheduledClip("c1", 1.0, dub)], sample_rate=8000,
+                   alt_schedule=[ScheduledClip("c1", 1.0, track, slice=(2.0, 3.0))])
+    return transport
+
+
+def _block_at(transport, seconds, frames=800):
+    transport.seek(seconds)
+    return render_block_for_test(transport, frames)
+
+
+def test_dub_monitor_plays_only_the_schedule(tmp_path, make_transport):
+    transport = _dub_and_original(tmp_path, make_transport)
+
+    assert transport.monitor == "dub"
+    assert np.allclose(_block_at(transport, 1.2), 0.4)
+    assert len(transport.loaded_alt_clips()) == 1
+
+
+def test_original_monitor_plays_only_the_alt_schedule(tmp_path, make_transport):
+    transport = _dub_and_original(tmp_path, make_transport)
+    transport.set_monitor("original")
+
+    assert np.allclose(_block_at(transport, 1.2), 0.6, atol=1e-6)
+    assert np.allclose(_block_at(transport, 0.2), 0.0)
+
+
+def test_both_monitor_sums_the_two_at_minus_6_db_each(tmp_path, make_transport):
+    from kokoro_gui.audio.transport import BOTH_GAIN
+
+    transport = _dub_and_original(tmp_path, make_transport)
+    transport.set_monitor("both")
+
+    assert BOTH_GAIN == pytest.approx(10 ** (-6 / 20), abs=1e-4)
+    assert np.allclose(_block_at(transport, 1.2), (0.4 + 0.6) * BOTH_GAIN, atol=1e-5)
+
+
+def test_switching_the_monitor_mid_play_keeps_the_position(tmp_path, make_transport):
+    transport = _dub_and_original(tmp_path, make_transport)
+    transport.seek(1.1)
+    transport.play()
+    stream = FakeStream.instances[-1]
+
+    assert np.allclose(stream.pull(800), 0.4)
+    transport.set_monitor("original")
+    assert transport.is_playing
+    assert transport.position() == pytest.approx(1.2)
+    assert np.allclose(stream.pull(800), 0.6, atol=1e-6)
+    assert transport.position() == pytest.approx(1.3)
+    transport.set_monitor("nonsense")
+    assert transport.monitor == "original"
+
+
+def test_a_reload_without_an_alt_schedule_clears_the_original(tmp_path, make_transport):
+    transport = _dub_and_original(tmp_path, make_transport)
+    dub = str(tmp_path / "dub.wav")
+    transport.set_monitor("original")
+
+    transport.reload([ScheduledClip("c1", 1.0, dub)], sample_rate=8000)
+
+    assert transport.loaded_alt_clips() == []
+    assert np.allclose(_block_at(transport, 1.2), 0.0)
+
+
+def test_the_duration_covers_an_original_longer_than_the_dub(tmp_path, make_transport):
+    dub = _write(tmp_path / "dub.wav", np.full(800, 0.4), rate=8000)  # 0.1s
+    track = _write(tmp_path / "source.wav", np.full(8000, 0.6), rate=8000)
+    transport = make_transport()
+
+    transport.load([ScheduledClip("c1", 0.0, dub)], sample_rate=8000,
+                   alt_schedule=[ScheduledClip("c1", 0.0, track, slice=(0.0, 0.5))])
+
+    assert transport.duration() == 0.5
+
+
 # -- mix plan (track controls) ---------------------------------------------------
 
 

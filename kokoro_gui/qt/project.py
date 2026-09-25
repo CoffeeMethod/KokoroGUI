@@ -6,9 +6,11 @@ TB1-TB15): one zip holding `manifest.json`, `document.json`
 `project_settings` block: export defaults, workspace override, bundle
 options), every generated segment under `audio/generated/` named by its
 segment key, and every named asset a character or clip points at (`fx/`,
-`engines/<id>/...`, with convolution impulse responses under `fx/ir/`), and,
-when `include_video` is on, the reference video under `video/` (phase 5,
-TB16). A `.json` project (the 4.0-preview format, the document shape plus a
+`engines/<id>/...`, with convolution impulse responses under `fx/ir/`),
+imported audio under `audio/imported/` (the source track
+`Document.settings["source_track"]` names included, phase 5 D5), and, when
+`include_video` is on, the reference video under `video/` (phase 5, TB16).
+A `.json` project (the 4.0-preview format, the document shape plus a
 top-level `"project_settings"`) still opens and is migrated to `.tbaw` on
 open (`migrate_json_project`).
 
@@ -46,12 +48,14 @@ import kokoro_engine
 from kokoro_gui import APP_VERSION
 from kokoro_gui.daw import serialization
 from kokoro_gui.daw.models import Document
+from kokoro_gui.daw.reference import source_track_settings
 from kokoro_gui.engine.caching import RESERVED_SUFFIX, compute_cache_key, effective_speed
 from kokoro_gui.engine.presets import filter_fx_preset_values, ir_safe_name, resolve_ir
 
 MAX_RECENT = 10
 PROJECT_FILTER = "KokoroGUI project (*.tbaw *.json)"
 VIDEO_FILTER = "Video (*.mp4 *.mov *.mkv *.webm *.avi *.m4v);;All files (*)"
+AUDIO_FILTER = "Audio (*.wav *.flac *.ogg *.mp3 *.aiff *.aif);;All files (*)"
 DEFAULT_EXTENSION = ".tbaw"
 
 FORMAT = "tbaw"
@@ -799,6 +803,10 @@ def _load_dir(project_dir: str) -> tuple:
     document = serialization.document_from_dict(data)
     if missing:
         notices.append(f"{len(missing)} audio file(s) missing from the bundle; those clips will regenerate.")
+    # The source track stays project-relative in the document and resolves
+    # at use time (`source_track_path`); a missing one is only a notice.
+    if source_track_settings(document.settings) is not None and source_track_path(document, project_dir) is None:
+        notices.append("the source track is missing from the bundle; import it again to hear the original")
     return document, project_settings, notices
 
 
@@ -914,6 +922,37 @@ def import_audio_file(src_path: str, project_dir: str, max_bytes: int = MAX_IMPO
     shutil.copyfile(source, tmp)
     _replace_with_retries(tmp, target)
     return target
+
+
+# --- source track (phase 5, D5) ------------------------------------------------------
+
+
+def source_track_relpath(abs_path: str, project_dir: str) -> str | None:
+    """`abs_path` (an `import_audio_file` result) as the project-relative
+    path `Document.settings["source_track"]["path"]` stores, or None when
+    it isn't inside `project_dir`."""
+    root = os.path.realpath(project_dir)
+    real = os.path.realpath(abs_path)
+    if not real.startswith(root + os.sep):
+        return None
+    return os.path.relpath(real, root).replace("\\", "/")
+
+
+def source_track_path(document: Document, project_dir: str | None) -> str | None:
+    """The absolute path of the document's source track
+    (`kokoro_gui.daw.reference`), or None when none is set, the project has
+    no dir, or the file isn't there. `document.json` is untrusted input: the
+    path has to resolve to a file inside the project dir, whatever it says."""
+    block = source_track_settings(document.settings)
+    if block is None or not project_dir:
+        return None
+    root = os.path.realpath(project_dir)
+    rel = block["path"]
+    candidate = rel if os.path.isabs(rel) else os.path.join(root, *rel.split("/"))
+    real = os.path.realpath(candidate)
+    if real.startswith(root + os.sep) and os.path.isfile(real):
+        return real
+    return None
 
 
 # --- reference video (phase 5, TB16) -----------------------------------------------
@@ -1284,6 +1323,11 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
         return abs_path.replace("\\", "/")
 
     serialization.rewrite_audio_paths(data, to_relative)
+    # The source track (D5) is already project-relative in the document;
+    # its file goes in with the rest of the imported audio.
+    source_track = source_track_path(document, project_dir)
+    if source_track is not None:
+        to_relative(source_track)
     # Embedded subprojects: each child's bundle as its parent's project dir
     # holds it (the app writes an open child's bundle there first).
     embedded = []
@@ -1504,10 +1548,14 @@ def save_project(document: Document, path: str, project_settings: dict | None = 
 # --- close-time GC, eviction, sweep ---------------------------------------------
 
 
-def referenced_audio_paths(document: Document) -> set:
+def referenced_audio_paths(document: Document, project_dir: str | None = None) -> set:
     """Every file a clip points at: its original audio, its active take's
-    segments and every parked take's, so close-time GC keeps them all."""
+    segments and every parked take's, so close-time GC keeps them all.
+    With `project_dir`, the document's source track (D5) too."""
     paths = set()
+    source_track = source_track_path(document, project_dir)
+    if source_track is not None:
+        paths.add(os.path.realpath(source_track))
     for clip in document.clips:
         if clip.original_audio_path:
             paths.add(os.path.realpath(clip.original_audio_path))
@@ -1548,7 +1596,7 @@ def gc_project_dir(project_dir: str, document: Document) -> list:
     generated = os.path.join(project_dir, *AUDIO_GENERATED.split("/"))
     if not os.path.isdir(generated):
         return removed
-    keep = referenced_audio_paths(document)
+    keep = referenced_audio_paths(document, project_dir)
     for name in os.listdir(generated):
         full = os.path.join(generated, name)
         if not os.path.isfile(full):
