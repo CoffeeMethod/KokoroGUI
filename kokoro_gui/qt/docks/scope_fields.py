@@ -4,7 +4,8 @@ change, like the schema form.
 
 Project: pacing (`Document.settings["gap_s"]` / `["paragraph_gap_s"]`,
 kokoro_gui/daw/arrangement.py), auto-crossfade (`["auto_crossfade"]`,
-kokoro_gui/daw/mixplan.py), and timecode (`["timecode"]`,
+kokoro_gui/daw/mixplan.py), the track layout (`["track_layout"]`,
+kokoro_gui/daw/lanes.py), and timecode (`["timecode"]`,
 kokoro_gui/daw/timecode.py).
 
 Clip: its gap override (blank inherits), take, review status, note, and
@@ -19,7 +20,7 @@ import re
 
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
-    QPushButton, QWidget,
+    QPushButton, QSpinBox, QWidget,
 )
 
 from kokoro_gui.daw.arrangement import DEFAULT_GAP_S, DEFAULT_PARAGRAPH_GAP_S
@@ -86,6 +87,27 @@ class ScopeFields(QWidget):
         crossfade.toggled.connect(lambda on: self._set_setting("auto_crossfade", bool(on)))
         self.form.addRow("", crossfade)
 
+        layout = self.app.document.track_layout()
+        layout_combo = QComboBox()
+        layout_combo.addItem("One per character", "character")
+        layout_combo.addItem("Unified", "unified")
+        layout_combo.setCurrentIndex(max(0, layout_combo.findData(layout["mode"])))
+        layout_combo.setToolTip("Unified puts every clip on a few lanes and moves to the next lane "
+                                "whenever the speaker changes.")
+        lanes = QSpinBox()
+        lanes.setRange(1, 16)
+        lanes.setValue(int(layout.get("lanes", 3)))
+        lanes.setSuffix(" lanes")
+        lanes.setEnabled(layout["mode"] == "unified")
+        layout_row = QWidget()
+        layout_box = QHBoxLayout(layout_row)
+        layout_box.setContentsMargins(0, 0, 0, 0)
+        layout_box.addWidget(layout_combo, 1)
+        layout_box.addWidget(lanes)
+        layout_combo.activated.connect(lambda _i: self._commit_track_layout())
+        lanes.editingFinished.connect(self._commit_track_layout)
+        self.form.addRow("Track layout:", layout_row)
+
         tc = timecode_settings(settings)
         enabled = QCheckBox("Show timecode")
         enabled.setChecked(bool(tc["enabled"]))
@@ -111,7 +133,7 @@ class ScopeFields(QWidget):
             signal.connect(lambda *_: self._commit_timecode())
         start.editingFinished.connect(self._commit_timecode)
         self.widgets = {"gap_s": gap, "paragraph_gap_s": para, "auto_crossfade": crossfade,
-                        "tc_enabled": enabled, "tc_fps": fps, "tc_start": start, "tc_drop": drop}
+                        "track_layout": layout_combo, "track_lanes": lanes, "tc_enabled": enabled, "tc_fps": fps, "tc_start": start, "tc_drop": drop}
 
     def build_clip(self, clip) -> None:
         self.clear()
@@ -182,6 +204,17 @@ class ScopeFields(QWidget):
             return
         self.app.document.undo_stack.push(SetFieldCommand("document", None, "settings", value, key=key))
         self._after_edit()
+
+    def _commit_track_layout(self) -> None:
+        """One undo step: the setting and the relane it triggers
+        (`lanes.relane_follow_up`)."""
+        mode = self.widgets["track_layout"].currentData()
+        lanes = self.widgets["track_lanes"]
+        lanes.setEnabled(mode == "unified")
+        value = {"mode": "unified", "lanes": lanes.value()} if mode == "unified" else {"mode": "character"}
+        if self.app.document.track_layout() == value:
+            return
+        self._set_setting("track_layout", value)
 
     def _commit_timecode(self) -> None:
         w = self.widgets

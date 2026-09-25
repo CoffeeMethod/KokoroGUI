@@ -65,7 +65,10 @@ def test_lanes_match_track_count_and_order_index_ordering(qtbot):
     # insertion order, drives lane position.
     track_bob = Track(name="Bob", character_id=bob.id, order_index=1)
     track_alice = Track(name="Alice", character_id=alice.id, order_index=0)
-    doc = Document.from_plain_text("", characters=[alice, bob], tracks=[track_bob, track_alice])
+    clip_bob = Clip(character_id=bob.id, track_id=track_bob.id)
+    clip_alice = Clip(character_id=alice.id, track_id=track_alice.id)
+    doc = _tagged_doc("bob alice", [(0, 3, clip_bob), (4, 9, clip_alice)], characters=[alice, bob],
+                      tracks=[track_bob, track_alice])
 
     widget.render_document(doc)
 
@@ -73,6 +76,30 @@ def test_lanes_match_track_count_and_order_index_ordering(qtbot):
     label_by_text = {label.text(): label for label in labels}
     assert label_by_text["Alice"].pos().y() < label_by_text["Bob"].pos().y()
     assert label_by_text["Alice"].pos().y() >= RULER_HEIGHT_PX
+
+
+def test_a_track_without_clips_is_not_drawn(qtbot):
+    """Grill PR4: an unused track stays in the model (with its mixer
+    settings) but gets no lane or header row."""
+    widget = TimelineWidget()
+    qtbot.addWidget(widget)
+    alice = Character.from_preset_dict("Alice", {})
+    bob = Character.from_preset_dict("Bob", {})
+    track_alice = Track(name="Alice", character_id=alice.id, order_index=0)
+    track_bob = Track(name="Bob", character_id=bob.id, order_index=1, gain=0.5)
+    clip = Clip(character_id=bob.id, track_id=track_bob.id)
+    doc = _tagged_doc("bob", [(0, 3, clip)], characters=[alice, bob], tracks=[track_alice, track_bob])
+
+    widget.render_document(doc, compute_arrangement(doc, chars_per_second=CPS))
+
+    names = {item.text() for item in widget.header._scene.items() if hasattr(item, "text")}
+    assert "Bob" in names and "Alice" not in names
+    assert list(widget.header.controls) == [track_bob.id]
+    block = widget.view._blocks_by_clip_id[clip.id]
+    assert block.pos().y() < lane_top(1)  # Bob takes the first lane
+    assert widget.view._track_at_y(doc, lane_top(0) + 5) is track_bob
+    assert widget.view._track_at_y(doc, lane_top(1) + 5) is None
+    assert track_alice in doc.tracks
 
 
 def test_first_clip_starts_at_zero_seconds_and_is_as_wide_as_its_estimate(qtbot):
@@ -601,7 +628,10 @@ def _build_doc_two_tracks_same_character():
     track_a = Track(name="Alice A", character_id=alice.id, order_index=0)
     track_b = Track(name="Alice B", character_id=alice.id, order_index=1)
     clip = Clip(character_id=alice.id, track_id=track_a.id)
-    doc = _tagged_doc("x" * 40, [(0, 10, clip)], characters=[alice], tracks=[track_a, track_b])
+    # Only a track with clips is drawn (grill PR4), so lane B holds one too,
+    # far to the right of where the drags land.
+    other = Clip(character_id=alice.id, track_id=track_b.id, timeline_timestamp=20.0)
+    doc = _tagged_doc("x" * 40, [(0, 10, clip), (30, 40, other)], characters=[alice], tracks=[track_a, track_b])
     return doc, clip, track_a, track_b
 
 
@@ -685,7 +715,7 @@ def test_drag_release_on_different_track_with_matching_character_emits_signal_no
     qtbot.addWidget(view)
     doc, clip, track_a, track_b = _build_doc_two_tracks_same_character()
     _render(view, doc)
-    block = _clip_block_items(view)[0]
+    block = view._blocks_by_clip_id[clip.id]
 
     def _fail_exec(self):
         raise AssertionError("QMessageBox.exec must not be called when there's no ambiguity")
@@ -711,7 +741,7 @@ def test_drag_release_on_same_track_emits_clip_moved_not_reassigned(qtbot):
     qtbot.addWidget(view)
     doc, clip, track_a, _track_b = _build_doc_two_tracks_same_character()
     _render(view, doc)
-    block = _clip_block_items(view)[0]
+    block = view._blocks_by_clip_id[clip.id]
 
     received = []
     moved = []
@@ -765,7 +795,7 @@ def test_drag_release_off_all_lanes_is_a_noop(qtbot):
     qtbot.addWidget(view)
     doc, clip, track_a, _track_b = _build_doc_two_tracks_same_character()
     _render(view, doc)
-    block = _clip_block_items(view)[0]
+    block = view._blocks_by_clip_id[clip.id]
 
     received = []
     view.clipDragReassigned.connect(lambda *a: received.append(a))
@@ -840,7 +870,7 @@ def test_shift_drag_exiting_block_bounds_emits_nothing(qtbot):
     qtbot.addWidget(view)
     doc, clip, track_a, _track_b = _build_doc_two_tracks_same_character()
     _render(view, doc)
-    block = _clip_block_items(view)[0]
+    block = view._blocks_by_clip_id[clip.id]
 
     drag_received = []
     sub_range_received = []
@@ -865,7 +895,7 @@ def test_different_track_drag_emits_drag_reassigned_not_sub_range_tts(qtbot):
     qtbot.addWidget(view)
     doc, clip, _track_a, track_b = _build_doc_two_tracks_same_character()
     _render(view, doc)
-    block = _clip_block_items(view)[0]
+    block = view._blocks_by_clip_id[clip.id]
 
     drag_received = []
     sub_range_received = []

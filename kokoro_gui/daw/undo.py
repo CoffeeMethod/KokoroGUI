@@ -58,13 +58,24 @@ class UndoStack:
         # anything Qt-related itself. `None` (the default) means nobody's
         # listening - `push`/`clear_redo` stay plain no-ops toward it.
         self.on_push = None
+        # Optional `(document, command) -> Command | None`, asked after each
+        # push for a command that has to ride along in the same undo step
+        # (kokoro_gui/daw/lanes.py's relane). A module-level function, so a
+        # deep copy of the stack never captures a bound object.
+        self.follow_up = None
 
     def push(self, command: Command) -> None:
         """Runs `command.do(document)`, records it as the most recent undoable
         action, and invalidates any redo history - a new action after an
         undo makes the undone-and-now-abandoned branch unreachable, the same
-        behavior every standard undo stack has."""
+        behavior every standard undo stack has. A `follow_up` command runs
+        right after and is recorded with it as one `CompositeCommand`."""
         command.do(self._document)
+        if self.follow_up is not None:
+            extra = self.follow_up(self._document, command)
+            if extra is not None:
+                extra.do(self._document)
+                command = CompositeCommand([command, extra])
         self._undo.append(command)
         self._redo.clear()
         if self.on_push is not None:
@@ -100,6 +111,22 @@ class UndoStack:
 
     def can_redo(self) -> bool:
         return bool(self._redo)
+
+
+class CompositeCommand(Command):
+    """Several commands as one undo step: `do` runs them in order, `undo`
+    in reverse."""
+
+    def __init__(self, commands):
+        self.commands = list(commands)
+
+    def do(self, document) -> None:
+        for command in self.commands:
+            command.do(document)
+
+    def undo(self, document) -> None:
+        for command in reversed(self.commands):
+            command.undo(document)
 
 
 class AssignCharacterCommand(Command):
@@ -487,6 +514,42 @@ class DeleteTakeCommand(Command):
         clip = document.get_clip(self.clip_id)
         if clip is not None and self._segments is not None:
             clip.takes[self.index] = self._segments
+
+
+class RelaneCommand(Command):
+    """Puts every clip on the track the document's track layout says
+    (kokoro_gui/daw/lanes.py): the unified layout's lane rule, or each
+    clip's own character track. Creates the tracks that needs. The plan is
+    made in `do`, so a redo after an undone split (whose new clip gets a
+    fresh id) lanes what is there; `undo` restores each clip's previous
+    `track_id` and removes the tracks `do` created (grill PR4)."""
+
+    def __init__(self):
+        self._previous: dict = {}
+        self._created_track_ids: list = []
+
+    def do(self, document) -> None:
+        from kokoro_gui.daw.lanes import plan_relane
+
+        plan = plan_relane(document)
+        document.tracks.extend(plan.new_tracks)
+        self._created_track_ids = [t.id for t in plan.new_tracks]
+        self._previous = {}
+        for clip_id, track_id in plan.assignments.items():
+            clip = document.get_clip(clip_id)
+            if clip is None:
+                continue
+            self._previous[clip_id] = clip.track_id
+            clip.track_id = track_id
+
+    def undo(self, document) -> None:
+        for clip_id, track_id in self._previous.items():
+            clip = document.get_clip(clip_id)
+            if clip is not None:
+                clip.track_id = track_id
+        created = set(self._created_track_ids)
+        if created:
+            document.tracks = [t for t in document.tracks if t.id not in created]
 
 
 # The split-or-create primitive item 7 ("Auto-split on generation") and

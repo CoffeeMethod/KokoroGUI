@@ -138,6 +138,10 @@ class Track:
     solo: bool = False
     pan: float = 0.0
     automation: list = field(default_factory=list)
+    # 1-based lane number when this is one of the unified layout's "Lane N"
+    # tracks (kokoro_gui/daw/lanes.py), else None. Such a track has no
+    # character; clips of any character land on it by the lane rule.
+    lane: Optional[int] = None
     id: str = field(default_factory=_new_id)
     extra: dict = field(default_factory=dict)  # unknown fields, see Character
 
@@ -298,6 +302,11 @@ class Document:
 
     def __post_init__(self):
         self.undo_stack = UndoStack(self)
+        # In the unified track layout, an edit that changes clip order or a
+        # clip's character re-runs the lane rule in the same undo step.
+        from kokoro_gui.daw.lanes import relane_follow_up
+
+        self.undo_stack.follow_up = relane_follow_up
 
     @classmethod
     def from_plain_text(cls, text: str = "", **kwargs) -> "Document":

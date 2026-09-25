@@ -234,3 +234,60 @@ def test_dirty_clips_delegates_to_dirty_module(monkeypatch):
     monkeypatch.setattr("kokoro_gui.daw.dirty.is_clip_dirty", fake_is_dirty)
     assert doc.dirty_clips() == [clip]
     assert calls == [clip, other]
+
+
+# -- tracks made on first use (grill PR4) ---------------------------------------
+
+
+def test_first_assignment_makes_the_characters_track_named_after_it():
+    from kokoro_gui.daw.undo import AssignCharacterCommand
+
+    alice = Character.from_preset_dict("Alice", {})
+    bob = Character.from_preset_dict("Bob", {})
+    doc = Document.from_plain_text("hello world", characters=[alice, bob])
+    assert doc.tracks == []
+
+    doc.undo_stack.push(AssignCharacterCommand(0, 5, alice.id))
+    assert [(t.name, t.character_id) for t in doc.tracks] == [("Alice", alice.id)]
+    first = doc.clip_covering(0)
+    assert first.track_id == doc.tracks[0].id
+
+    doc.undo_stack.push(AssignCharacterCommand(6, 11, bob.id))
+    assert [t.name for t in doc.tracks] == ["Alice", "Bob"]
+    assert doc.tracks[1].order_index > doc.tracks[0].order_index
+
+    # A second use reuses the track.
+    doc.undo_stack.push(AssignCharacterCommand(0, 5, alice.id))
+    assert len(doc.tracks) == 2
+
+    # Undoing a first use removes the track it made.
+    doc.undo_stack.undo()
+    doc.undo_stack.undo()
+    assert [t.name for t in doc.tracks] == ["Alice"]
+    doc.undo_stack.undo()
+    assert doc.tracks == []
+
+
+def test_an_unused_track_stays_in_the_model_but_is_not_used():
+    alice = Character.from_preset_dict("Alice", {})
+    doc = Document.from_plain_text("hello", characters=[alice])
+    clip = doc.assign_character_to_range(0, 5, alice.id)
+    track = doc.get_track(clip.track_id)
+    track.gain = 0.5
+    assert doc.used_tracks() == [track]
+
+    doc.replace_text(0, 5, 0, "")  # the only clip is gone
+    assert doc.used_tracks() == []
+    assert track in doc.tracks
+
+    doc.replace_text(0, 0, 3, "new")
+    again = doc.assign_character_to_range(0, 3, alice.id)
+    assert again.track_id == track.id and track.gain == 0.5
+
+
+def test_unknown_or_no_character_makes_no_track():
+    doc = Document.from_plain_text("hello")
+    clip = doc.assign_character_to_range(0, 5, None)
+    assert clip.track_id is None and doc.tracks == []
+    doc.assign_character_to_range(0, 5, "nobody")
+    assert doc.tracks == []

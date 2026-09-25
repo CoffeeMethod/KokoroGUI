@@ -224,6 +224,47 @@ def test_project_scope_pacing_fields_write_document_settings_undoably(qt_app):
     assert "auto_crossfade" not in qt_app.document.settings
 
 
+def test_project_scope_track_layout_switches_both_ways(qt_app):
+    """Grill PR4: Unified puts clips on "Lane N" tracks by the lane rule;
+    One per character puts them back on character tracks. Each switch is
+    one undo step with its relane."""
+    from kokoro_gui.daw.models import Character
+
+    doc = qt_app.document
+    alice = doc.characters[0]
+    bob = Character.from_preset_dict("Bob", {})
+    doc.characters.append(bob)
+    doc.text = "one two three"
+    first = doc.assign_character_to_range(0, 3, alice.id)
+    second = doc.assign_character_to_range(4, 7, bob.id)
+    third = doc.assign_character_to_range(8, 13, alice.id)
+    character_track_ids = [c.track_id for c in (first, second, third)]
+    qt_app.selection.clear()
+    fields = qt_app.settings_dock.scope_fields.widgets
+    assert fields["track_layout"].currentData() == "character"
+    assert not fields["track_lanes"].isEnabled()
+
+    fields["track_lanes"].setValue(2)
+    fields["track_layout"].setCurrentIndex(fields["track_layout"].findData("unified"))
+    fields["track_layout"].activated.emit(fields["track_layout"].currentIndex())
+
+    assert doc.settings["track_layout"] == {"mode": "unified", "lanes": 2}
+    assert [doc.get_track(c.track_id).name for c in (first, second, third)] == ["Lane 1", "Lane 2", "Lane 1"]
+    header_names = [t.name for t in doc.used_tracks()]
+    assert header_names == ["Lane 1", "Lane 2"]
+
+    fields = qt_app.settings_dock.scope_fields.widgets
+    fields["track_layout"].setCurrentIndex(fields["track_layout"].findData("character"))
+    fields["track_layout"].activated.emit(fields["track_layout"].currentIndex())
+    assert [c.track_id for c in (first, second, third)] == character_track_ids
+
+    doc.undo_stack.undo()
+    assert [doc.get_track(c.track_id).lane for c in (first, second, third)] == [1, 2, 1]
+    doc.undo_stack.undo()
+    assert "track_layout" not in doc.settings
+    assert [c.track_id for c in (first, second, third)] == character_track_ids
+
+
 def test_project_scope_timecode_fields_store_one_dict(qt_app):
     dock = qt_app.settings_dock
     qt_app.selection.clear()
