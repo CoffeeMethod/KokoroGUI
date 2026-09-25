@@ -27,6 +27,7 @@ complexity.
 from __future__ import annotations
 
 import copy
+import uuid
 
 
 class Command:
@@ -658,6 +659,50 @@ class ImportCuesCommand(Command):
         added = set(self._added_character_ids)
         if added:
             document.characters = [c for c in document.characters if c.id not in added]
+
+
+class ImportBedCommand(Command):
+    """File > Import Audio's music bed (phase 5 P2, grill Q30): a paragraph
+    at the end of the transcript holding the file's name as a placeholder
+    run, and an imported clip playing `path` on the "Music" track (made
+    when there is none), pinned at `at_s`. `undo` restores the runs and
+    clips and removes the track if this command made it. The clip's and
+    the track's ids are fixed here, so a redo recreates the same ones."""
+
+    def __init__(self, path: str, title: str, at_s: float = 0.0):
+        self.path = path
+        self.title = title or "Audio"
+        self.at_s = max(0.0, float(at_s))
+        self.clip_id = uuid.uuid4().hex
+        self._new_track_id = uuid.uuid4().hex
+        self._pre = None
+        self._created_track_id = None
+
+    def do(self, document) -> None:
+        from kokoro_gui.daw.models import Clip, Run, Track
+
+        self._pre = (copy.deepcopy(document.runs), copy.deepcopy(document.clips))
+        track_id = document.music_track()
+        self._created_track_id = None
+        if track_id is None:
+            order = max((t.order_index for t in document.tracks), default=-1) + 1
+            document.tracks.append(Track(name="Music", order_index=order, role="music", id=self._new_track_id))
+            track_id = self._created_track_id = self._new_track_id
+        tail = document.text[-2:]
+        if tail and tail != "\n\n":
+            document.runs.append(Run(text="\n" if tail.endswith("\n") else "\n\n"))
+        clip = Clip(source="imported", original_audio_path=self.path, track_id=track_id,
+                    timeline_timestamp=self.at_s, pinned=True, id=self.clip_id)
+        document.clips.append(clip)
+        document.runs.append(Run(text=self.title, clip_id=clip.id, kind=clip.run_kind))
+        document._normalize_runs()
+
+    def undo(self, document) -> None:
+        runs, clips = self._pre
+        document.runs = copy.deepcopy(runs)
+        document.clips = copy.deepcopy(clips)
+        if self._created_track_id is not None:
+            document.tracks = [t for t in document.tracks if t.id != self._created_track_id]
 
 
 class RelaneCommand(Command):

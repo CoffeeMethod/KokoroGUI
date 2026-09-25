@@ -376,3 +376,173 @@ def test_auto_crossfade_only_when_the_option_is_on():
     cb.fade_in_s = 0.2
     assert plan()[cb.id].fade_in_s == 0.2
     assert cb.fade_in_s == 0.2  # never written by the option
+
+
+def test_a_duck_track_is_ducked_and_a_bed_never_feeds_the_sidechain():
+    from kokoro_gui.daw.models import Clip, Run
+
+    doc, _ta, tb, ca, cb, plan = _mix_doc()
+    tb.duck = True
+    bed = Clip(source="imported", original_audio_path="bed.wav", track_id=None)
+    doc.clips.append(bed)
+    doc.runs.append(Run("bed", bed.id, "placeholder"))
+    mixes = plan()
+    assert (mixes[ca.id].duck, mixes[ca.id].sidechain) == (False, True)
+    assert (mixes[cb.id].duck, mixes[cb.id].sidechain) == (True, False)
+    assert (mixes[bed.id].duck, mixes[bed.id].sidechain) == (False, False)
+
+
+# -- ducking (phase 5 P2) ---------------------------------------------------------
+
+DUCK_RATE = 8000
+
+
+def _bed(samples, **kwargs):
+    return mixer.LoadedClip("bed", start_frame=0, samples=samples.astype(np.float32), duck=True,
+                            sidechain=False, **kwargs)
+
+
+def _speech(samples, start_frame=0, **kwargs):
+    return mixer.LoadedClip("speech", start_frame=start_frame, samples=samples.astype(np.float32), **kwargs)
+
+
+def _blockwise(clips, total, block, duck):
+    out = np.zeros((total, mixer.CHANNELS), dtype=np.float32)
+    for start in range(0, total, block):
+        n = min(block, total - start)
+        mixer.mix_block(clips, start, n, out=out[start:start + n], duck=duck)
+    return out
+
+
+def test_a_bed_alone_plays_at_unity():
+    bed = _bed(np.full(DUCK_RATE, 0.3))
+    out = _blockwise([bed], DUCK_RATE, 512, mixer.DuckState(DUCK_RATE))
+    assert np.allclose(out, 0.3)
+
+
+def test_a_bed_under_full_scale_speech_is_down_12_db_after_the_attack_and_recovers_after_release():
+    rate = DUCK_RATE
+    # Speech hard left at full scale for 1 s, then 4 s of silence; the bed
+    # plays centred, so the right column is the bed alone.
+    speech = _speech(np.ones(rate), gain_l=1.0, gain_r=0.0)
+    bed = _bed(np.full(5 * rate, 0.1))
+    duck = mixer.DuckState(rate)
+    out = _blockwise([speech, bed], 5 * rate, 512, duck)
+    right = out[:, 1]
+
+    assert right[0] == pytest.approx(0.1)  # nothing heard yet at the first frame
+    after_attack = right[int(0.05 * rate):rate]
+    assert np.allclose(20 * np.log10(after_attack / 0.1), -12.0, atol=0.01)
+    # Still down just after the speech stops (the release is slow)...
+    assert right[rate + int(0.1 * rate)] < 0.05
+    # ...and back to unity well after it.
+    assert right[-1] == pytest.approx(0.1, rel=0.01)
+
+
+def test_duck_depth_follows_the_setting():
+    rate = DUCK_RATE
+    speech = _speech(np.ones(rate), gain_l=1.0, gain_r=0.0)
+    bed = _bed(np.full(rate, 0.1))
+    out = _blockwise([speech, bed], rate, 512, mixer.DuckState(rate, duck_db=-6.0))
+    assert 20 * np.log10(out[-1, 1] / 0.1) == pytest.approx(-6.0, abs=0.01)
+
+
+def test_duck_state_carries_across_blocks_so_block_size_does_not_matter():
+    rate = DUCK_RATE
+    rng = np.random.default_rng(0)
+    speech = _speech(rng.uniform(-0.5, 0.5, 2 * rate) * (np.arange(2 * rate) % 3000 < 1500), start_frame=300)
+    bed = _bed(rng.uniform(-0.2, 0.2, 3 * rate))
+    total = 3 * rate
+    one = _blockwise([speech, bed], total, total, mixer.DuckState(rate))
+    for block in (512, 333, 40, 1):
+        other = _blockwise([speech, bed], total, block, mixer.DuckState(rate))
+        assert np.array_equal(one, other), block
+
+
+def test_without_a_duck_state_ducked_clips_mix_plainly():
+    speech = _speech(np.ones(100), gain_l=1.0, gain_r=0.0)
+    bed = _bed(np.full(100, 0.1))
+    out = mixer.mix_block([speech, bed], 0, 100)
+    assert np.allclose(out[:, 1], 0.1)
+
+
+def test_a_bed_does_not_duck_another_bed():
+    # A bed on an unducked track isn't speech: it doesn't feed the sidechain.
+    other = mixer.LoadedClip("other", 0, np.ones(DUCK_RATE, dtype=np.float32), gain_l=1.0, gain_r=0.0,
+                             sidechain=False)
+    bed = _bed(np.full(DUCK_RATE, 0.1))
+    out = _blockwise([other, bed], DUCK_RATE, 512, mixer.DuckState(DUCK_RATE))
+    assert np.allclose(out[:, 1], 0.1)
+
+
+def test_transport_carries_the_duck_state_and_resets_it_on_seek(tmp_path, make_transport):
+    rate = DUCK_RATE
+    speech_path = _write(tmp_path / "speech.wav", np.full(rate, 0.9), rate=rate)
+    bed_path = _write(tmp_path / "bed.wav", np.full(2 * rate, 0.1), rate=rate)
+    schedule = [ScheduledClip("s", 0.0, speech_path, pan=-1.0),
+                ScheduledClip("b", 0.0, bed_path, duck=True, sidechain=False)]
+    transport = make_transport()
+    transport.load(schedule, sample_rate=rate, duck_db=-12.0)
+
+    played = np.concatenate([render_block_for_test(transport, 512) for _ in range(2 * rate // 512)])
+    loaded = transport.loaded_clips()
+    expected = _blockwise(loaded, len(played), len(played), mixer.DuckState(rate, -12.0))
+    assert np.array_equal(played, expected)
+    assert played[rate - 1, 1] < 0.03
+
+    transport.seek(0.0)
+    assert np.array_equal(render_block_for_test(transport, 512), expected[:512])
+
+
+def test_mixdown_matches_the_transport_with_a_ducked_bed(tmp_path, make_transport):
+    from kokoro_gui.daw.arrangement import compute_arrangement
+    from kokoro_gui.daw.beds import playable_segments
+    from kokoro_gui.daw.mixdown import mixdown
+    from kokoro_gui.daw.mixplan import clip_mixes
+    from kokoro_gui.daw.models import Character, Clip, Document, Run, Segment, Track
+
+    rate = DUCK_RATE
+    rng = np.random.default_rng(1)
+    speech_path = str(tmp_path / "speech.wav")
+    sf.write(speech_path, rng.uniform(-0.6, 0.6, rate).astype(np.float32), rate, subtype="FLOAT")
+    bed_path = str(tmp_path / "bed.wav")
+    sf.write(bed_path, rng.uniform(-0.2, 0.2, 3 * rate).astype(np.float32), rate, subtype="FLOAT")
+
+    narrator = Character.from_preset_dict("N", {})
+    voice = Track(name="N", character_id=narrator.id, pan=-1.0)
+    music = Track(name="Music", role="music", order_index=1, duck=True)
+    speech = Clip(character_id=narrator.id, track_id=voice.id, timeline_timestamp=0.5,
+                  segments=[Segment(0, "hi", "k", speech_path, 1.0)])
+    bed = Clip(source="imported", original_audio_path=bed_path, track_id=music.id, timeline_timestamp=0.0,
+               pinned=True)
+    doc = Document(runs=[Run("hi", speech.id, "generated"), Run("\n\n"), Run("bed", bed.id, "placeholder")],
+                   clips=[speech, bed], tracks=[voice, music], characters=[narrator],
+                   settings={"duck_db": -9.0})
+    arrangement = compute_arrangement(doc, chars_per_second=10.0)
+
+    out = str(tmp_path / "mix.wav")
+    mixdown(doc, out, "wav", rate, arrangement=arrangement)
+    exported, _rate = sf.read(out, dtype="float32", always_2d=True)
+
+    mixes = clip_mixes(doc, arrangement)
+    schedule = []
+    for placed in arrangement.placed:
+        mix = mixes[placed.clip.id]
+        offset = placed.start_s
+        for segment in playable_segments(placed.clip):
+            schedule.append(ScheduledClip(placed.clip.id, offset, segment.audio_path, slice=segment.range,
+                                          gain=mix.gain, pan=mix.pan, duck=mix.duck, sidechain=mix.sidechain))
+            offset += segment.duration
+    assert [(s.duck, s.sidechain) for s in schedule] == [(False, True), (True, False)]
+    transport = make_transport()
+    transport.load(schedule, sample_rate=rate, total_duration_s=arrangement.total_duration_s, duck_db=-9.0)
+    played = np.concatenate([render_block_for_test(transport, 512) for _ in range(len(exported) // 512 + 1)])
+    played = played[:len(exported)]
+
+    assert len(exported) == 3 * rate
+    # The wav is 16-bit.
+    assert np.allclose(exported, played, atol=2.0 / 32768)
+    # The bed (alone in the right column: the speech is panned hard left)
+    # really was ducked while the speech played.
+    assert np.abs(exported[int(1.2 * rate):int(1.4 * rate), 1]).max() < 0.2 * 10 ** (-9 / 20) + 1e-3
+    assert np.abs(exported[int(2.5 * rate):, 1]).max() > 0.15

@@ -48,6 +48,9 @@ def lane_numbers(document, lanes: int) -> dict:
     lane = 0
     previous_character = object()  # matches nothing, so the first clip starts lane 1
     for clip in text_ordered_clips(document):
+        if clip.is_bed:
+            # A music bed stays on its "Music" track (phase 5 P2).
+            continue
         if not out:
             lane = 1
         elif clip.character_id != previous_character:

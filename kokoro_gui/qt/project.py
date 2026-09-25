@@ -50,13 +50,14 @@ from kokoro_gui.engine.caching import RESERVED_SUFFIX, compute_cache_key, effect
 MAX_RECENT = 10
 PROJECT_FILTER = "KokoroGUI project (*.tbaw *.json)"
 VIDEO_FILTER = "Video (*.mp4 *.mov *.mkv *.webm *.avi *.m4v);;All files (*)"
+AUDIO_FILTER = "Audio (*.wav *.flac *.ogg *.mp3 *.aif *.aiff);;All files (*)"
 DEFAULT_EXTENSION = ".tbaw"
 
 FORMAT = "tbaw"
 SUPPORTED_VERSION = 1
 # Content features this reader implements; a bundle whose `requires` names
 # one that isn't here is refused by name (section 8 of the plan).
-SUPPORTED_FEATURES: frozenset = frozenset({"takes", "nested"})
+SUPPORTED_FEATURES: frozenset = frozenset({"takes", "nested", "imported"})
 
 MANIFEST = "manifest.json"
 DOCUMENT = "document.json"
@@ -1142,12 +1143,15 @@ def required_features(document: Document) -> list:
     misplay (section 8 of the bundle plan). Parked takes (an older reader
     would drop them on its next Save and GC their files) and subprojects
     (it would read a nested clip's source as unknown and refuse the
-    document)."""
+    document), and imported audio (grill Q30: it would find a clip with no
+    segments and push its file name back through TTS)."""
     requires = []
     if any(clip.takes for clip in document.clips):
         requires.append("takes")
     if any(clip.source == "nested" for clip in document.clips):
         requires.append("nested")
+    if any(clip.source == "imported" for clip in document.clips):
+        requires.append("imported")
     return requires
 
 
