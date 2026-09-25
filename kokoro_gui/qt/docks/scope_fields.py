@@ -11,8 +11,10 @@ default, kokoro_gui/daw/arrangement.py), onset alignment of locked clips
 kokoro_gui/daw/lanes.py), and timecode (`["timecode"]`,
 kokoro_gui/daw/timecode.py).
 
-Clip: its gap override (blank inherits), take, review status, note, and
-source text with a syllable comparison against the clip's text.
+Clip: its gap override (blank inherits), take, review status, note,
+source text with a syllable comparison against the clip's text, and the
+duration target fit to slot aims at (`overrides["target_duration_s"]`,
+kokoro_gui/daw/fit.py; blank clears it).
 
 Every edit is one `SetFieldCommand` (or `SetActiveTakeCommand`) on the
 document's undo stack, then autosave and a timeline refresh.
@@ -26,6 +28,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSpinBox, QWidget,
 )
 
+from kokoro_gui.daw import fit as fit_ops
 from kokoro_gui.daw.arrangement import DEFAULT_GAP_S, DEFAULT_PARAGRAPH_GAP_S, align_onset_enabled
 from kokoro_gui.daw.models import CLIP_STATUSES
 from kokoro_gui.daw.timecode import FRAME_RATES, tc_to_frames, timecode_settings
@@ -35,6 +38,9 @@ STATUS_LABELS = {"todo": "To do", "generated": "Generated", "approved": "Approve
                  "needs_rewrite": "Needs rewrite"}
 # The clip gap spin's minimum stands for "inherit" (shown as blank text).
 GAP_INHERIT = -0.05
+# The target spin's minimum stands for "no target" (blank), likewise.
+TARGET_NONE = 0.0
+TARGET_MAX_S = 3600.0
 _VOWEL_GROUPS = re.compile(r"[aeiouy]+", re.IGNORECASE)
 
 
@@ -211,8 +217,23 @@ class ScopeFields(QWidget):
         syllables = QLabel(self._syllable_text(clip))
         syllables.setToolTip("Vowel groups per word: a rough lip-sync length check, not a real syllable count.")
         self.form.addRow("", syllables)
+
+        current_target = fit_ops.target_duration_s(clip)
+        target = QDoubleSpinBox()
+        target.setRange(TARGET_NONE, TARGET_MAX_S)
+        target.setDecimals(3)
+        target.setSingleStep(0.1)
+        target.setValue(TARGET_NONE if current_target is None else current_target)
+        target.setSpecialValueText(" ")
+        target.setToolTip("How long this clip should last, from its time on the timeline (a subtitle "
+                          "cue's length). Fit to slot aims at it. Blank for none.")
+        target.editingFinished.connect(
+            lambda: self._set_override(fit_ops.TARGET_KEY,
+                                       None if target.value() <= TARGET_NONE else round(target.value(), 3)))
+        self.form.addRow("Target (s):", target)
         self.widgets = {"gap_before_s": gap, "take": take, "status": status, "note": note,
-                        "source_text": source, "source_edit": edit, "syllables": syllables}
+                        "source_text": source, "source_edit": edit, "syllables": syllables,
+                        "target_duration_s": target}
 
     def _syllable_text(self, clip) -> str:
         dub = syllable_count(self.app.document.clip_text(clip))
@@ -265,6 +286,16 @@ class ScopeFields(QWidget):
         if clip is None or getattr(clip, field) == value:
             return
         self.app.document.undo_stack.push(SetFieldCommand("clip", clip.id, field, value))
+        self._after_edit()
+
+    def _set_override(self, key: str, value) -> None:
+        """One entry of `clip.overrides`; None removes it."""
+        clip = self._clip()
+        if clip is None or clip.overrides.get(key) == value:
+            return
+        self.app.document.undo_stack.push(SetFieldCommand("clip", clip.id, "overrides", value, key=key))
+        if self.app.editor is not None:
+            self.app.editor.rehighlight()
         self._after_edit()
 
     def _pick_take(self, index) -> None:
