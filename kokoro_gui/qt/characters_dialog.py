@@ -29,6 +29,8 @@ without `exec()`.
 """
 from __future__ import annotations
 
+import copy
+
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -43,9 +45,16 @@ from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character
 from kokoro_gui.qt import theme
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
 
+# NP3's three scopes (phase 4): the global library, the project (a root
+# character linked at project scope, which its subprojects follow), and
+# this file only. A linked character neither store has on this machine plays
+# its inlined snapshot.
 SCOPE_LOCAL = "Local"
-SCOPE_LIBRARY = "Library"
-SCOPE_MISSING = "Library (not found here)"
+SCOPE_GLOBAL = "Global"
+SCOPE_PROJECT = "Project"
+SCOPE_MISSING = "Linked (not found here)"
+SCOPE_LIBRARY = SCOPE_GLOBAL  # the phase 3 name
+_SCOPE_LABELS = {"local": SCOPE_LOCAL, "global": SCOPE_GLOBAL, "project": SCOPE_PROJECT, "missing": SCOPE_MISSING}
 _ID_ROLE = 0x0100
 _SCOPE_ROLE = 0x0101
 
@@ -105,6 +114,13 @@ class CharactersDialog(QDialog):
         self.promote_btn.setToolTip("Make this character a library entry, shared with every project.")
         self.promote_btn.clicked.connect(self.promote_current)
         left.addWidget(self.promote_btn)
+        # In a subproject (NP3): share a character with the whole book.
+        self.promote_project_btn = QPushButton("Promote to Project")
+        self.promote_project_btn.setToolTip("Make this character the top-level project's, shared by every "
+                                            "subproject in it.")
+        self.promote_project_btn.clicked.connect(self.promote_to_project)
+        self.promote_project_btn.hide()
+        left.addWidget(self.promote_project_btn)
         root.addLayout(left, 1)
 
         right = QWidget()
@@ -191,11 +207,11 @@ class CharactersDialog(QDialog):
         return self.app.character_library
 
     def scope_of(self, character: Character) -> str:
-        if not character.library_id:
-            return SCOPE_LOCAL
-        if self.library.get(character.library_id) is None:
-            return SCOPE_MISSING
-        return SCOPE_LIBRARY
+        return _SCOPE_LABELS[self.app.character_scope(character)]
+
+    def _in_subproject(self) -> bool:
+        focus = getattr(self.app, "focus", None)
+        return focus is not None and focus.parent_id is not None
 
     def reload(self) -> None:
         self._loading = True
@@ -229,8 +245,10 @@ class CharactersDialog(QDialog):
     def _show_scope(self, character: Character | None) -> None:
         scope = self.scope_of(character) if character is not None else ""
         self.scope_label.setText(scope)
-        self.promote_btn.setEnabled(scope == SCOPE_LOCAL)
-        self.rename_in_library_btn.setEnabled(scope == SCOPE_LIBRARY)
+        self.promote_btn.setEnabled(scope in (SCOPE_LOCAL, SCOPE_PROJECT))
+        self.promote_project_btn.setVisible(self._in_subproject())
+        self.promote_project_btn.setEnabled(self._in_subproject() and scope == SCOPE_LOCAL)
+        self.rename_in_library_btn.setEnabled(scope == SCOPE_GLOBAL)
         item = self.list.currentItem()
         if item is not None and character is not None:
             item.setData(_SCOPE_ROLE, scope)
@@ -504,12 +522,41 @@ class CharactersDialog(QDialog):
         return self.add_from_library([item.data(_ID_ROLE) for item in listing.selectedItems()])
 
     def promote_current(self) -> str | None:
-        """WF7: saves the local character as a new library entry and links
-        this record to it."""
+        """WF7: saves a local character as a new library entry and links this
+        record to it. A project-scope character (NP3) moves on to the
+        library under the id it already has, so every subproject linked to
+        it follows through the root's record."""
         character = self._current
-        if character is None or character.library_id:
+        if character is None:
             return None
-        library_id = self.library.save(character)
+        scope = self.app.character_scope(character)
+        if scope == "local":
+            library_id = self.library.save(character)
+            character.library_id = library_id
+        elif scope == "project":
+            root_record = next(c for c in self.app.root.document.characters
+                               if c.library_id == character.library_id)
+            library_id = self.library.save(root_record)
+        else:
+            return None
+        self._show_scope(character)
+        self._changed(write_through=False)
+        return library_id
+
+    def promote_to_project(self) -> str | None:
+        """NP3, from a subproject: the local character becomes one of the
+        top-level project's (a root record under a fresh project-scope
+        `library_id`) and this record links to it."""
+        from kokoro_gui.daw.models import _new_id
+
+        character = self._current
+        if character is None or character.library_id or not self._in_subproject():
+            return None
+        library_id = library_ops.new_project_scope_id()
+        record = copy.deepcopy(character)
+        record.id = _new_id()
+        record.library_id = library_id
+        self.app.root.document.characters.append(record)
         character.library_id = library_id
         self._show_scope(character)
         self._changed(write_through=False)
@@ -549,6 +596,17 @@ class CharactersDialog(QDialog):
         re-resolved so every record linked to that entry follows."""
         character = self._current
         if write_through and character is not None and character.library_id:
-            if library_ops.write_through(character, self.library):
+            scope = self.app.character_scope(character)
+            if scope == "global" and library_ops.write_through(character, self.library):
+                self.app.resolve_library(refresh=False)
+            elif scope == "project" and self._in_subproject():
+                # The live link at project scope: the root's record, which
+                # every subproject resolves from.
+                root_record = next(c for c in self.app.root.document.characters
+                                   if c.library_id == character.library_id)
+                for name in library_ops.RESOLVED_FIELDS:
+                    setattr(root_record, name, copy.deepcopy(getattr(character, name)))
+                self.app.resolve_library(refresh=False)
+            elif scope == "project":
                 self.app.resolve_library(refresh=False)
         self.app.on_characters_changed()

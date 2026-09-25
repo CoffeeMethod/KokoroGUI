@@ -559,3 +559,73 @@ def test_save_as_rebases_linked_paths(qt_app, tmp_path):
     qt_app.save_project_as(str(tmp_path / "sub" / "show2"))
     qt_app.wait_for_project_io()
     assert nested.child["path"] == "../episode.tbaw"
+
+
+# -- step 8: characters across the tree (NP3) -------------------------------------
+
+
+def test_a_new_child_links_the_roots_characters_at_project_scope(qt_app):
+    from kokoro_gui.daw.library import is_project_scope_id
+    from kokoro_gui.qt.characters_dialog import SCOPE_PROJECT, CharactersDialog
+
+    _intro, chapter, child = _book(qt_app)
+    narrator = qt_app.root.document.characters[0]
+    assert is_project_scope_id(narrator.library_id)  # minted when the child was made
+    record = child.document.get_character(narrator.id)
+    assert record.library_id == narrator.library_id
+    assert qt_app.character_scope(record) == "project"
+    assert qt_app.character_scope(narrator) == "project"
+    assert narrator.id not in qt_app.library_missing
+
+    # Editing it inside the subproject edits the book's character.
+    qt_app.selection.select_clip(child.clip_id)
+    dialog = CharactersDialog(qt_app)
+    assert dialog.scope_label.text() == SCOPE_PROJECT
+    dialog.voice_combo.setCurrentText("bm_george")
+    assert narrator.preset_data["voice"] == "bm_george"
+    assert record.preset_data["voice"] == "bm_george"
+
+
+def test_the_root_edit_reaches_an_open_child(qt_app):
+    from kokoro_gui.qt.characters_dialog import CharactersDialog
+
+    _intro, _chapter, child = _book(qt_app)
+    narrator = qt_app.root.document.characters[0]
+    dialog = CharactersDialog(qt_app)  # the root's
+    dialog.set_color("#3bb3c4")
+    assert child.document.get_character(narrator.id).highlight_color == "#3bb3c4"
+
+
+def test_promote_to_project_from_a_child_then_to_the_library(qt_app):
+    from kokoro_gui.daw.models import Character
+    from kokoro_gui.qt.characters_dialog import SCOPE_GLOBAL, SCOPE_LOCAL, SCOPE_PROJECT, CharactersDialog
+
+    _intro, _chapter, child = _book(qt_app)
+    guest = Character.from_preset_dict("Guest", {"voice": "af_nicole"})
+    child.document.characters.append(guest)
+    qt_app.selection.select_clip(child.clip_id)
+    dialog = CharactersDialog(qt_app)
+    dialog._select(guest)
+    assert dialog.scope_label.text() == SCOPE_LOCAL
+    assert not dialog.promote_project_btn.isHidden()
+    assert dialog.promote_project_btn.isEnabled()
+
+    library_id = dialog.promote_to_project()
+
+    assert guest.library_id == library_id
+    root_record = next(c for c in qt_app.root.document.characters if c.library_id == library_id)
+    assert root_record.name == "Guest" and root_record.id != guest.id
+    assert dialog.scope_label.text() == SCOPE_PROJECT
+    assert not dialog.promote_project_btn.isEnabled()
+
+    # On to the library: the same id, and the root's record follows it.
+    assert dialog.promote_current() == library_id
+    assert qt_app.character_library.get(library_id).name == "Guest"
+    assert dialog.scope_label.text() == SCOPE_GLOBAL
+
+
+def test_the_root_dialog_has_no_promote_to_project(qt_app):
+    from kokoro_gui.qt.characters_dialog import CharactersDialog
+
+    dialog = CharactersDialog(qt_app)
+    assert dialog.promote_project_btn.isHidden()

@@ -890,13 +890,11 @@ class SubprojectsMixin:
         ids, so moved clips' `character_id`s still resolve."""
         import copy
 
-        from kokoro_gui.daw.models import _new_id
-
         root_doc = self.root.document
         characters = []
         for character in root_doc.characters:
             if not character.library_id:
-                character.library_id = _new_id()
+                character.library_id = character_library.new_project_scope_id()
             characters.append(copy.deepcopy(character))
         present = {c.library_id for c in characters}
         for entry in self.character_library.list():

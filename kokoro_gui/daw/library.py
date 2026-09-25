@@ -34,7 +34,21 @@ LIBRARY_DIR = "characters"
 # (the document's own) and never `name` (renamed per project, WF12).
 RESOLVED_FIELDS = ("preset_data", "highlight_color", "backend_id", "variants")
 
+# A `library_id` minted at project scope (NP3, phase 4): the character lives
+# in the top-level project's document, not in the global library, and its
+# subprojects link to it. The prefix is what tells it from a global entry
+# that just isn't on this machine.
+PROJECT_SCOPE_PREFIX = "project-"
+
 _log = logging.getLogger(__name__)
+
+
+def new_project_scope_id() -> str:
+    return PROJECT_SCOPE_PREFIX + _new_id()
+
+
+def is_project_scope_id(library_id) -> bool:
+    return isinstance(library_id, str) and library_id.startswith(PROJECT_SCOPE_PREFIX)
 
 
 def _safe_id(library_id) -> str | None:

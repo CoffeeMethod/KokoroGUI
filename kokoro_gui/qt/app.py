@@ -53,7 +53,7 @@ from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
 from kokoro_gui.qt import settings as qt_settings
 from kokoro_gui.qt.open_projects import OpenProject
-from kokoro_gui.qt.subprojects import SubprojectsMixin
+from kokoro_gui.qt.subprojects import ParentStore, SubprojectsMixin
 from kokoro_gui.qt.selection import SelectionModel
 from kokoro_gui.qt.signals import EngineSignalBridge, wire_engine
 from kokoro_gui.qt.workspace import ADVANCED, SIMPLE, WorkspaceManager
@@ -387,19 +387,49 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def _resolve_library_into(self, document) -> character_library.ResolveReport:
         report = character_library.resolve_characters(document, [self.character_library])
+        # A project-scope character in the root is its own store (NP3).
+        report.missing = [cid for cid in report.missing
+                          if not character_library.is_project_scope_id(
+                              getattr(document.get_character(cid), "library_id", None))]
         self.library_missing = set(report.missing)
         self._library_mtime = self.character_library.mtime()
         return report
 
     def resolve_library(self, refresh: bool = True) -> character_library.ResolveReport:
-        """Re-reads every linked character of the open document from the
-        library (the live link, WF5). With `refresh`, a change reaches the
-        editor, transcript, timeline and autosave through
-        `on_characters_changed`."""
-        report = self._resolve_library_into(self.document)
-        if report.changed and refresh:
+        """Re-reads every linked character of every open project (the live
+        link, WF5): the root from the library, each subproject from the
+        root's characters first, then the library (NP3). With `refresh`, a
+        change reaches the editor, transcript, timeline and autosave through
+        `on_characters_changed`. Returns the focus project's report."""
+        root_report = self._resolve_library_into(self.root.document)
+        reports = {self.root.project_id: root_report}
+        missing = set(root_report.missing)
+        changed = bool(root_report.changed)
+        for child in self.children.values():
+            report = character_library.resolve_characters(
+                child.document, [ParentStore(self.root.document), self.character_library])
+            reports[child.project_id] = report
+            missing |= set(report.missing)
+            changed = changed or bool(report.changed)
+        self.library_missing = missing
+        if changed and refresh:
             self.on_characters_changed()
-        return report
+        return reports.get(self.focus.project_id, root_report)
+
+    def character_scope(self, character) -> str:
+        """NP3's three scopes plus the orphan: "global" (the library has its
+        `library_id`), "project" (the root document has a character with it,
+        minted at project scope), "local" (no `library_id`), or "missing"
+        (linked, but neither store has it on this machine)."""
+        library_id = character.library_id if character is not None else None
+        if not library_id:
+            return "local"
+        if self.character_library.get(library_id) is not None:
+            return "global"
+        if character_library.is_project_scope_id(library_id) and \
+                any(c.library_id == library_id for c in self.root.document.characters):
+            return "project"
+        return "missing"
 
     def _on_library_changed_on_disk(self) -> None:
         if self.character_library.mtime() == self._library_mtime:
