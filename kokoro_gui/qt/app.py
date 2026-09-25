@@ -1926,6 +1926,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         if not os.path.isfile(path):
             QMessageBox.warning(self, "Load video", f"Couldn't read {path}.")
             return False
+        project_io.trust_video(self.root.project_dir, path)
         block = project_io.video_settings(self.root.project_settings)
         self.root.project_settings["video"] = {
             "path": project_io.video_path_for(path, self.root.path),

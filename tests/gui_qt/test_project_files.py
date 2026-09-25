@@ -745,6 +745,7 @@ def test_include_video_on_stores_it_uncompressed_under_its_hash(tmp_path, isolat
     project_dir, project_id = project_io.create_project_dir()
     doc, _seg = _document_with_audio(project_dir)
     video = _video_file(tmp_path)
+    project_io.trust_video(project_dir, video)
     path = str(tmp_path / "proj.tbaw")
 
     result = project_io.save_project(doc, path, _video_settings(video, path, include=True), project_dir, project_id)
@@ -767,6 +768,7 @@ def test_open_prefers_the_video_path_and_falls_back_to_the_bundled_copy(tmp_path
     project_dir, project_id = project_io.create_project_dir()
     doc, _seg = _document_with_audio(project_dir)
     video = _video_file(tmp_path)
+    project_io.trust_video(project_dir, video)
     path = str(tmp_path / "proj.tbaw")
     project_io.save_project(doc, path, _video_settings(video, path, include=True), project_dir, project_id)
     bundled_name = f"{hashlib.sha256(_VIDEO_BYTES).hexdigest()[:16]}.mp4"
@@ -811,6 +813,7 @@ def test_video_hash_is_reused_while_size_and_mtime_hold(tmp_path, isolated_dirs,
     project_dir, project_id = project_io.create_project_dir()
     doc, _seg = _document_with_audio(project_dir)
     video = _video_file(tmp_path)
+    project_io.trust_video(project_dir, video)
     path = str(tmp_path / "proj.tbaw")
     settings = _video_settings(video, path, include=True)
     hashed = []
@@ -849,7 +852,49 @@ def test_include_video_with_the_file_missing_warns_and_bundles_nothing(tmp_path,
                                           str(tmp_path / "fx"))
     assert plan.video_file is None
     assert plan.manifest["includes"]["video"] is False
-    assert "reference video not found; not bundled" in warnings
+    assert any(w.startswith("reference video not found") for w in warnings)
+
+
+def test_save_never_bundles_a_video_path_the_user_did_not_pick_here(tmp_path, isolated_dirs):
+    """`project.json` comes from the bundle: a crafted one naming a file on
+    this machine with include_video on must not get that file copied into
+    the next Save. Only a path `trust_video` recorded for this dir is read."""
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _seg = _document_with_audio(project_dir)
+    secret = tmp_path / "secret.txt"
+    secret.write_bytes(b"private")
+    path = str(tmp_path / "proj.tbaw")
+    for named in (str(secret), project_io.video_path_for(str(secret), path)):
+        settings = {"video": {"path": named, "offset_s": 0.0}, "bundle": {"include_video": True}}
+        project_io.save_project(doc, path, settings, project_dir, project_id)
+        with zipfile.ZipFile(path) as zf:
+            assert not any(n.startswith("video/") for n in zf.namelist())
+            assert json.loads(zf.read("manifest.json"))["includes"]["video"] is False
+
+    # Picking it with Load Video is what makes it bundle.
+    project_io.trust_video(project_dir, str(secret))
+    project_io.save_project(doc, path, settings, project_dir, project_id)
+    with zipfile.ZipFile(path) as zf:
+        assert any(n.startswith("video/") for n in zf.namelist())
+
+
+def test_video_trust_survives_reopening_the_same_file_only(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _seg = _document_with_audio(project_dir)
+    video = _video_file(tmp_path)
+    project_io.trust_video(project_dir, video)
+    path = str(tmp_path / "proj.tbaw")
+    project_io.save_project(doc, path, _video_settings(video, path, include=True), project_dir, project_id)
+
+    info = project_io.inspect_bundle(path)
+    project_io.extract_small(info, project_dir)
+    project_io.finish_open(info, project_dir)
+    assert project_io.read_session(project_dir)[project_io.VIDEO_TRUST_KEY] == os.path.realpath(video)
+
+    other = str(tmp_path / "other")
+    project_io.extract_small(info, other)
+    project_io.finish_open(info, other)
+    assert project_io.VIDEO_TRUST_KEY not in project_io.read_session(other)
 
 
 def test_video_paths_are_relative_to_the_bundle_and_normalised(tmp_path):
@@ -1523,15 +1568,18 @@ def test_bundle_toggles_live_in_the_export_dialog_and_feed_the_clip_config(qt_ap
 
     dialog = ExportDialog(qt_app)
     assert dialog.bundle_audio_check.isChecked() is True
+    assert dialog.bundle_imported_check.isChecked() is True
     assert dialog.bundle_format_combo.currentText() == "wav"
     dialog.bundle_audio_check.setChecked(False)
+    dialog.bundle_imported_check.setChecked(False)
     dialog.bundle_format_combo.setCurrentText("flac")
     run_export(qt_app, dialog.values(), bundle=dialog.bundle_values())  # no clips: nothing scheduled
 
     assert qt_app.project_settings["bundle"] == {
-        "include_generated_audio": False, "include_imported_audio": True, "include_video": False,
+        "include_generated_audio": False, "include_imported_audio": False, "include_video": False,
         "audio_format": "flac",
     }
+    assert ExportDialog(qt_app).bundle_imported_check.isChecked() is False
     clip = _generated_clip(qt_app)
     assert qt_app._assemble_clip_config(clip)["format"] == "flac"
     path = _save_as(qt_app, str(tmp_path / "toggles"))

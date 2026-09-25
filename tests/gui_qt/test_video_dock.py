@@ -114,6 +114,9 @@ def test_load_video_is_absolute_while_untitled_and_relative_after_save_as(qt_app
     assert qt_app.load_video(video)
     assert qt_app.project_settings["video"] == {"path": os.path.abspath(video), "offset_s": 0.0}
     assert qt_app.video_dock.path == os.path.realpath(video)
+    # Picking it here is what lets Save copy it into the bundle.
+    session = project_io.read_session(qt_app.project_dir)
+    assert session[project_io.VIDEO_TRUST_KEY] == os.path.realpath(video)
 
     _save_as(qt_app, str(tmp_path / "work" / "proj"))
     assert qt_app.project_settings["video"]["path"] == "../footage/clip.mp4"

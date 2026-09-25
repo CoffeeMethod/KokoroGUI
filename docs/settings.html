@@ -319,7 +319,8 @@
           <tbody>
             <tr><td>Output folder / Base filename</td><td>Where the mixdown is written and what it's called. Remembered per project.</td></tr>
             <tr><td>Project: bundle generated audio / Bundle audio format</td><td>Whether Save puts generated segments into the <code>.tbaw</code> (off gives a small file whose clips regenerate on open) and whether new segments are written as wav or flac. Remembered per project.</td></tr>
-            <tr><td>Bundle the reference video in the project file</td><td>Off by default. On, Save stores the reference video under <code>video/</code> in the <code>.tbaw</code>, uncompressed; off keeps only its path. Opening the project where the video already is at that path doesn't extract the bundled copy. Imported audio (music beds, the source track) is always bundled.</td></tr>
+            <tr><td>Bundle the reference video in the project file</td><td>Off by default. On, Save stores the reference video under <code>video/</code> in the <code>.tbaw</code>, uncompressed; off keeps only its path. Opening the project where the video already is at that path doesn't extract the bundled copy. Save only reads a video you picked with Load Video on this machine; a project someone sent you keeps the copy it came with.</td></tr>
+            <tr><td>Bundle imported audio in the project file</td><td>On by default. Music beds, the source track and imported recordings go under <code>audio/imported/</code> in the <code>.tbaw</code>. Off leaves them out; a copy opened elsewhere plays without them.</td></tr>
             <tr><td>Format</td><td>wav, mp3, flac or ogg.</td></tr>
             <tr><td>Channels</td><td>Stereo, or mono (the average of the two channels). Muted and soloed-out tracks are left out either way.</td></tr>
             <tr><td>Range</td><td>The whole project, the stretch between any two neighbouring markers, or the loop region.</td></tr>

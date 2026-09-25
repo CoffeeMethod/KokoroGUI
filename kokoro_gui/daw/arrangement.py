@@ -158,12 +158,14 @@ def boundary_gap_s(document, text: str, previous_end: Optional[int], clip, exten
 
 def align_onset_enabled(document) -> bool:
     """`document.settings["align_onset"]` when the project set it, else on
-    for a project with any pinned clip (a cue placed in time, where the
-    first word should land on the cue) and off otherwise."""
+    for a project with any pinned generated clip (a cue placed in time,
+    where the first word should land on the cue) and off otherwise. A
+    pinned music bed or subproject says nothing about cues."""
     value = (document.settings or {}).get("align_onset")
     if value is not None:
         return bool(value)
-    return any(getattr(clip, "pinned", False) for clip in document.clips)
+    return any(getattr(clip, "pinned", False) and getattr(clip, "source", "generated") == "generated"
+               for clip in document.clips)
 
 
 def first_onset_s(clip) -> Optional[float]:

@@ -133,6 +133,12 @@ class ExportDialog(QDialog):
         self.bundle_audio_check.setChecked(bool(bundle["include_generated_audio"]))
         self.bundle_audio_check.setToolTip("Off gives a small .tbaw whose every clip regenerates on open.")
         form.addRow("Project:", self.bundle_audio_check)
+        self.bundle_imported_check = QCheckBox("Bundle imported audio in the project file")
+        self.bundle_imported_check.setChecked(bool(bundle["include_imported_audio"]))
+        self.bundle_imported_check.setToolTip("Music beds, the source track and imported recordings, under "
+                                              "audio/imported/. Off keeps them out of the .tbaw; a copy "
+                                              "opened elsewhere plays without them.")
+        form.addRow("", self.bundle_imported_check)
         self.bundle_format_combo = QComboBox()
         self.bundle_format_combo.addItems(BUNDLE_AUDIO_FORMATS)
         self.bundle_format_combo.setCurrentText(bundle["audio_format"])
@@ -158,7 +164,7 @@ class ExportDialog(QDialog):
     def bundle_values(self) -> dict:
         return {
             "include_generated_audio": self.bundle_audio_check.isChecked(),
-            "include_imported_audio": True,
+            "include_imported_audio": self.bundle_imported_check.isChecked(),
             "include_video": self.bundle_video_check.isChecked(),
             "audio_format": self.bundle_format_combo.currentText(),
         }

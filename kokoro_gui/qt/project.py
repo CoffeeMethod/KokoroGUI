@@ -80,6 +80,8 @@ PROJECTS_DIR = "projects"
 # The reference video (phase 5, TB16), when the `include_video` bundle
 # option is on: `video/<sha256[:16]>.<ext>`, stored uncompressed.
 VIDEO_DIR = "video"
+# `session.json` key: the reference video the user picked on this machine.
+VIDEO_TRUST_KEY = "video_trusted"
 # A subproject's rendered mix, in its own project dir (phase 4, NP2):
 # `mixdown.<fmt>` plus `mixdown.json` recording the document digest it was
 # rendered from, its length and rate. Derived data: never bundled, always
@@ -842,14 +844,19 @@ def finish_open(info: BundleInfo, project_dir: str, engine_versions: dict | None
     if not recovered:
         document_bytes, project_bytes = serialize_for_dir(document, project_settings, project_dir)
         previous = read_session(project_dir) or {}
-        write_session(project_dir, {
+        session = {
             "source_path": source_path or info.path,
             "zip_size": info.zip_size,
             "zip_mtime": info.zip_mtime,
             "saved_digest": document_digest(document_bytes, project_bytes),
             "dirty": False,
             "asset_index": previous.get("asset_index", {}) if isinstance(previous.get("asset_index"), dict) else {},
-        })
+        }
+        # The video the user picked stays trusted when the same file is
+        # reopened into its own dir; any other bundle starts untrusted.
+        if previous.get(VIDEO_TRUST_KEY) and previous.get("source_path") == session["source_path"]:
+            session[VIDEO_TRUST_KEY] = previous[VIDEO_TRUST_KEY]
+        write_session(project_dir, session)
 
     return LoadedProject(document=document, project_settings=project_settings, project_dir=project_dir,
                          project_id=info.project_id, manifest=info.manifest, notices=notices,
@@ -1044,6 +1051,35 @@ def video_source(project_settings, project_file: str | None, project_dir: str | 
         return None
     path = resolve_video_path(project_settings, project_file)
     if path and os.path.isfile(path):
+        return path
+    return bundled_video_path(project_dir, manifest)
+
+
+def trust_video(project_dir: str | None, path: str) -> None:
+    """Records in `session.json` that the user picked `path` as the
+    reference video on this machine (File > Load Video, or the relink
+    prompt). Save copies a video from outside the project dir only when it
+    is this file: `project.json` comes from the bundle, so without the
+    check a crafted bundle could name any file and the next Save would copy
+    it into the project."""
+    if not project_dir:
+        return
+    session = read_session(project_dir) or {}
+    session[VIDEO_TRUST_KEY] = os.path.realpath(os.path.abspath(path))
+    write_session(project_dir, session)
+
+
+def video_to_bundle(project_settings, project_file: str | None, project_dir: str | None,
+                    manifest: dict | None = None, session: dict | None = None) -> str | None:
+    """The file Save puts under `video/`: the settings path when it exists
+    and is the one `trust_video` recorded for this project dir, else the
+    copy the bundle already carried (extracted into the project dir), else
+    None."""
+    if video_settings(project_settings) is None:
+        return None
+    path = resolve_video_path(project_settings, project_file)
+    trusted = (session or {}).get(VIDEO_TRUST_KEY)
+    if path and isinstance(trusted, str) and path == trusted and os.path.isfile(path):
         return path
     return bundled_video_path(project_dir, manifest)
 
@@ -1356,9 +1392,10 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
     assets, engines, warnings = collect_assets(document, backend_for, project_dir, fx_presets_dir, project_fx)
     video_file = None
     if options["include_video"] and video_settings(project_settings) is not None:
-        video_file = video_source(project_settings, path, project_dir, previous_manifest)
+        video_file = video_to_bundle(project_settings, path, project_dir, previous_manifest, previous_session)
         if video_file is None:
-            warnings.append("reference video not found; not bundled")
+            warnings.append("reference video not found or not picked on this machine (File > Load Video); "
+                            "not bundled")
     now = datetime.datetime.now().replace(microsecond=0).isoformat()
     created = (previous_manifest or {}).get("created") or now
     manifest = {

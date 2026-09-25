@@ -337,3 +337,13 @@ def test_align_onset_default_follows_the_pinned_clips():
     assert align_onset_enabled(doc)
     doc, cue, _after = _cue_doc(align_onset=False)
     assert not align_onset_enabled(doc)
+
+
+def test_a_pinned_music_bed_does_not_turn_align_onset_on():
+    from kokoro_gui.daw.arrangement import align_onset_enabled
+
+    doc, _cue, _after = _cue_doc(pinned=False)
+    bed = Clip(source="imported", original_audio_path="/p/audio/imported/abc.wav", timeline_timestamp=0.0,
+               pinned=True)
+    doc.clips.append(bed)
+    assert not align_onset_enabled(doc)

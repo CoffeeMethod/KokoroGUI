@@ -86,7 +86,9 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
     seek. Its Offset box sets which video time sits at the timeline's 0. The project keeps the
     video's path, relative to the `.tbaw` when it can, and asks you to find the file if it has
     moved. "Bundle the reference video in the project file" in the Export dialog puts the video
-    inside the `.tbaw` instead (off by default). Workspace > Simple hides the tab.
+    inside the `.tbaw` instead (off by default). Save only copies a video you picked with Load
+    Video on this machine; a project someone sent you keeps the copy it came with. Workspace >
+    Simple hides the tab.
 -   **Convolution reverb.** Audio FX > Spatial & Time > Convolution Reverb puts a clip in a
     recorded space: pick an impulse response and set Mix (default 0.5). "Add..." copies a `.wav`
     into the impulse response library (`presets/fx/ir/`). Save bundles every impulse response the
