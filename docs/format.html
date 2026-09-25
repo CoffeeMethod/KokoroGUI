@@ -64,6 +64,7 @@
         <a href="#document">document.json</a>
         <a href="#project">project.json</a>
         <a href="#audio">Generated audio</a>
+        <a href="#imported">Imported audio &amp; video</a>
         <a href="#keys">Segment keys</a>
         <a href="#assets">Engine assets</a>
         <a href="#compat">Compatibility</a>
@@ -78,7 +79,7 @@
       <div class="two">
         <div class="prose reveal">
           <h2><span class="idx">01 · Layout</span>One zip, five kinds of entry</h2>
-          <p>Three JSON files at the root, then directories. Audio is stored uncompressed (<code>ZIP_STORED</code>) so a 400 MB audiobook doesn't pay for deflate on data that won't shrink; everything else is deflated. The archive is written with Zip64 enabled, so a bundle over 4 GB is fine.</p>
+          <p>Three JSON files at the root, then directories. Everything under <code>audio/</code>, the video and embedded subprojects are stored uncompressed (<code>ZIP_STORED</code>) so a 400 MB audiobook doesn't pay for deflate on data that won't shrink; everything else is deflated. The archive is written with Zip64 enabled, so a bundle over 4 GB is fine.</p>
           <p>Entries the app doesn't own are preserved. A directory a newer version or a fourth engine adds is copied through byte for byte on the next Save, so a bundle survives a round trip through an older build.</p>
         </div>
         <div class="code-block reveal">
@@ -88,9 +89,15 @@
 <span class="f">project.json</span>
 <span class="d">audio/generated/</span>
   <span class="f">&lt;segment_key&gt;_&lt;index&gt;.wav</span>
-<span class="d">audio/imported/</span>              <span class="c">reserved, empty today</span>
+<span class="d">audio/imported/</span>
+  <span class="f">&lt;sha256[:16]&gt;.&lt;ext&gt;</span>       <span class="c">imported audio</span>
+<span class="d">video/</span>                       <span class="c">only with include_video</span>
+  <span class="f">&lt;sha256[:16]&gt;.&lt;ext&gt;</span>
 <span class="d">fx/</span>
   <span class="f">&lt;preset name&gt;.json</span>
+  <span class="f">ir/&lt;name&gt;.wav</span>              <span class="c">impulse responses</span>
+<span class="d">projects/</span>
+  <span class="f">&lt;project_id&gt;.tbaw</span>          <span class="c">embedded subprojects</span>
 <span class="d">engines/kokoro/voices/</span>
   <span class="f">&lt;mix name&gt;.pt</span>
 <span class="d">engines/audio8/refs/</span>
@@ -112,15 +119,15 @@
           <tbody>
             <tr><td>format</td><td>Always <code>"tbaw"</code>. Anything else is refused.</td></tr>
             <tr><td>version</td><td>Integer, currently <code>1</code>. A reader refuses a bundle whose version is higher than the one it implements.</td></tr>
-            <tr><td>requires</td><td>List of feature names the bundle depends on: <code>"takes"</code> when a clip has parked takes, <code>"nested"</code> when it holds a subproject. A reader refuses, by name, any feature it doesn't implement, which is how a newer version adds something an old build can't fake. A bundle without either opens in 4.0.</td></tr>
+            <tr><td>requires</td><td>List of feature names the bundle depends on: <code>"takes"</code> when a clip has parked takes, <code>"nested"</code> when it holds a subproject, <code>"imported"</code> when a clip plays imported audio (a music bed or a recording) or a run carries imported word timing. A reader refuses, by name, any feature it doesn't implement, which is how a newer version adds something an old build can't fake. A bundle with none of them opens in 4.0.</td></tr>
             <tr><td>project_id</td><td>Random id, stable across Save As. It names the working copy under <code>cache/projects/</code> and is what crash recovery keys on, not the path.</td></tr>
             <tr><td>created_by</td><td>e.g. <code>"KokoroGUI 4.0.0"</code>.</td></tr>
             <tr><td>created / modified</td><td>ISO 8601 local timestamps, seconds precision. <code>created</code> is carried from the previous manifest.</td></tr>
-            <tr><td>includes</td><td><code>{"generated_audio": bool, "imported_audio": bool, "projects": [id, ...]}</code>. Whether the audio directories were bundled, and the ids of the embedded subprojects under <code>projects/</code>. A bundle saved without generated audio regenerates its clips on open.</td></tr>
+            <tr><td>includes</td><td><code>{"generated_audio": bool, "imported_audio": bool, "projects": [id, ...], "video": bool}</code>. Whether generated audio was bundled; whether the bundle carries at least one file under <code>audio/imported/</code>; the ids of the embedded subprojects under <code>projects/</code>; and whether it carries the reference video under <code>video/</code>. A bundle saved without generated audio regenerates its clips on open.</td></tr>
             <tr><td>audio.format</td><td><code>"wav"</code> or <code>"flac"</code>: the format new segments are written in.</td></tr>
             <tr><td>stats</td><td><code>{"clips", "characters", "duration_s"}</code>, plus <code>"subprojects"</code> when there are any. Counts and the sum of segment durations. Cosmetic; nothing reads audio to compute it.</td></tr>
             <tr><td>engines</td><td><code>{"&lt;engine id&gt;": {"version": str, "meta": {}}}</code> for each engine the document's characters use. <code>version</code> is what the backend reported (Kokoro: the package version; Audio8: its model id). <code>meta</code> is per-backend and empty for both shipped engines.</td></tr>
-            <tr><td>assets</td><td>Bundle path to SHA-256, for every entry under <code>fx/</code> and <code>engines/</code>. Save skips re-hashing an asset whose hash is already in the working copy's index.</td></tr>
+            <tr><td>assets</td><td>Bundle path to SHA-256, for every entry under <code>fx/</code> (impulse responses included) and <code>engines/</code>, and for the reference video under <code>video/</code>. Save skips re-hashing an asset whose file hasn't changed size or mtime since the working copy's index recorded it.</td></tr>
           </tbody>
         </table>
       </div>
@@ -131,18 +138,18 @@
   <section class="doc-section" id="document">
     <div class="wrap">
       <h2><span class="idx">03 · document.json</span>The document model</h2>
-      <p class="dek">The same shape the app autosaves to its working copy, with audio paths made bundle-relative (<code>audio/generated/…</code>). Five top-level keys.</p>
+      <p class="dek">The same shape the app autosaves to its working copy, with audio paths made bundle-relative (<code>audio/generated/…</code>, <code>audio/imported/…</code>). Five top-level keys.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>document.json</caption>
           <thead><tr><th>Key</th><th>Contents</th></tr></thead>
           <tbody>
-            <tr><td>runs</td><td>The text, in order, as a list of <code>{text, clip_id, kind}</code>. The document's full text is the join of every run's <code>text</code>. <code>clip_id</code> is null for narration nobody has assigned; <code>kind</code> mirrors the clip's <code>source</code>.</td></tr>
-            <tr><td>clips</td><td><code>{id, character_id, track_id, overrides, fx_override, timeline_timestamp, source, original_audio_path, segments, child}</code>. A clip has no offsets of its own: its extent is wherever <code>runs</code> tags its id. <code>overrides</code> holds per-clip settings (<code>voice</code>, <code>speed</code>, <code>take</code>, <code>fx_preset</code>, <code>apply_fx</code>…); <code>timeline_timestamp</code> is null while the clip flows after its predecessor. <code>source</code> is <code>"generated"</code>, <code>"imported"</code> or <code>"nested"</code>. A nested clip is a subproject: <code>child</code> is <code>{"kind": "embedded", "id"}</code> (its bundle at <code>projects/&lt;id&gt;.tbaw</code>) or <code>{"kind": "linked", "id", "path"}</code> (a <code>.tbaw</code> on disk, relative to this one when on the same drive); <code>id</code> is the child's <code>project_id</code>. It has no segments; its one run has <code>kind</code> <code>"placeholder"</code> and holds the child's title.</td></tr>
-            <tr><td>clips[].segments</td><td><code>{id, order_index, text, cache_key, audio_path, duration, raw, engine_version}</code>. One per engine-level chunk. <code>cache_key</code> is the <a href="#keys" class="link">segment key</a>, and <code>audio_path</code> is <code>audio/generated/&lt;cache_key&gt;_&lt;order_index&gt;.&lt;ext&gt;</code>. <code>raw</code> is true for every segment 4.0.0 generates (FX are applied at read time); a segment without the field, from a 4.0 preview build, is treated as baked and regenerated once. <code>engine_version</code> is the version that produced it.</td></tr>
-            <tr><td>tracks</td><td><code>{id, name, character_id, order_index}</code>. A lane. Kept separate from characters so a clip can sit on another character's track.</td></tr>
+            <tr><td>runs</td><td>The text, in order, as a list of <code>{text, clip_id, kind, words}</code>. The document's full text is the join of every run's <code>text</code>. <code>clip_id</code> is null for narration nobody has assigned; <code>kind</code> mirrors the clip's <code>source</code>, or is <code>"placeholder"</code> for the one read-only run of a subproject or a music bed. <code>words</code>, written only when set and only on an <code>"imported"</code> run, times an imported recording's text: one <code>[char_start, char_end, source, start_s, end_s]</code> per word, character offsets into this run's <code>text</code>, <code>source</code> a key of <code>settings.sources</code>, times in seconds into that file. Text no word covers is untimed.</td></tr>
+            <tr><td>clips</td><td><code>{id, character_id, track_id, overrides, fx_override, timeline_timestamp, source, original_audio_path, segments, child}</code>. A clip has no offsets of its own: its extent is wherever <code>runs</code> tags its id. <code>overrides</code> holds per-clip settings (<code>voice</code>, <code>speed</code>, <code>take</code>, <code>fx_preset</code>, <code>apply_fx</code>…); <code>timeline_timestamp</code> is null while the clip flows after its predecessor. <code>source</code> is <code>"generated"</code>, <code>"imported"</code> or <code>"nested"</code>. An imported clip with <code>original_audio_path</code> set is a music bed: it plays that file (<code>audio/imported/…</code>), stores no segments, and its one run is a placeholder holding the file name. An imported clip without it is a recording, played from its runs' <code>words</code>. A nested clip is a subproject: <code>child</code> is <code>{"kind": "embedded", "id"}</code> (its bundle at <code>projects/&lt;id&gt;.tbaw</code>) or <code>{"kind": "linked", "id", "path"}</code> (a <code>.tbaw</code> on disk, relative to this one when on the same drive); <code>id</code> is the child's <code>project_id</code>. It has no segments; its one run has <code>kind</code> <code>"placeholder"</code> and holds the child's title.</td></tr>
+            <tr><td>clips[].segments</td><td><code>{id, order_index, text, cache_key, audio_path, duration, raw, engine_version, range}</code>. One per engine-level chunk. <code>range</code>, written only when set, is <code>[start_s, end_s]</code> into <code>audio_path</code>: the segment is that slice of the file. A recording's segments are slices of its source file, rebuilt from the runs' <code>words</code> on load. <code>cache_key</code> is the <a href="#keys" class="link">segment key</a>, and <code>audio_path</code> is <code>audio/generated/&lt;cache_key&gt;_&lt;order_index&gt;.&lt;ext&gt;</code>. <code>raw</code> is true for every segment 4.0.0 generates (FX are applied at read time); a segment without the field, from a 4.0 preview build, is treated as baked and regenerated once. <code>engine_version</code> is the version that produced it.</td></tr>
+            <tr><td>tracks</td><td><code>{id, name, character_id, order_index}</code> plus the mixer fields (<code>gain</code>, <code>mute</code>, <code>solo</code>, <code>pan</code>, <code>automation</code>) and <code>duck</code>: true turns the track down while clips on tracks without it play. <code>role</code> is <code>"music"</code> for the Music track beds go on, <code>"subprojects"</code> for the subprojects' track. A lane. Kept separate from characters so a clip can sit on another character's track.</td></tr>
             <tr><td>characters</td><td><code>{id, name, preset_data, highlight_color, backend_id, variants, library_id}</code>. <code>preset_data</code> is the <code>presets/*.json</code> shape: voice, speed, <code>fx_preset</code>, <code>apply_fx</code>, and so on. <code>backend_id</code> is the engine the character generates with. <code>library_id</code>, when set, names the record this one is a live view of: a global character library entry, or (prefixed <code>project-</code>) a character of the top-level project that its subprojects share. The record is always inlined, so a bundle opens where that entry doesn't exist.</td></tr>
-            <tr><td>settings</td><td>The document's own defaults, the "nothing selected" scope of the Settings tab.</td></tr>
+            <tr><td>settings</td><td>The document's own defaults, the "nothing selected" scope of the Settings tab. Among them: <code>align_onset</code> (bool; absent means on when any clip is locked in time), <code>duck_db</code> (how far a ducked track goes down, default <code>-12</code>), <code>source_track</code> (<code>{"path": "audio/imported/&lt;sha256[:16]&gt;.&lt;ext&gt;", "offset_s"}</code>, the original dialogue; the path is relative to the project in the working copy too) and <code>sources</code> (<code>{name: {"path", "sample_rate", "duration_s"}}</code>, the recordings <code>words</code> name, each <code>name</code> the file's hash stem).</td></tr>
           </tbody>
         </table>
       </div>
@@ -165,7 +172,8 @@
           <thead><tr><th>Key</th><th>Contents</th></tr></thead>
           <tbody>
             <tr><td>export</td><td>The Export dialog's remembered values: output folder, base filename, format, whether to write an <code>.srt</code> and per-clip files.</td></tr>
-            <tr><td>bundle</td><td><code>{"include_generated_audio": true, "include_imported_audio": true, "audio_format": "wav"}</code> by default. What Save puts in the zip and how new segments are encoded. Editable from the Export dialog.</td></tr>
+            <tr><td>bundle</td><td><code>{"include_generated_audio": true, "include_imported_audio": true, "include_video": false, "audio_format": "wav"}</code> by default. What Save puts in the zip and how new segments are encoded. Editable from the Export dialog, which always sets <code>include_imported_audio</code>.</td></tr>
+            <tr><td>video</td><td>Optional, top-level project only. <code>{"path": str, "offset_s": float}</code>: the reference video, relative to the <code>.tbaw</code>'s folder when both are on the same drive, else absolute, and the video time at the timeline's 0.</td></tr>
             <tr><td>workspace</td><td>Optional. A workspace name that overrides the app-level one when this project opens.</td></tr>
           </tbody>
         </table>
@@ -183,11 +191,23 @@
     </div>
   </section>
 
+  <section class="doc-section" id="imported">
+    <div class="wrap">
+      <h2><span class="idx">06 · Imported audio &amp; video</span>Files named by their content</h2>
+      <div class="prose reveal">
+        <p>Audio that came from a file, not from TTS, is copied into the project as <code>audio/imported/&lt;sha256[:16]&gt;.&lt;ext&gt;</code>: the first 16 hex digits of the file's SHA-256 and its own extension, lowercased. Importing the same file twice stores it once. Three things point there: a music bed's <code>original_audio_path</code>, <code>settings.source_track.path</code>, and each entry of <code>settings.sources</code>. <code>project.json</code>'s <code>bundle.include_imported_audio</code> decides whether Save puts them in the zip, and <code>manifest.includes.imported_audio</code> says whether it did.</p>
+        <p>A bed's clip overrides say how it plays the file: <code>trim</code> is <code>[start_s, end_s]</code> into it (unset, the whole file); <code>loop</code> true repeats that range until <code>loop_length_s</code> seconds (unset, one pass). The slices it plays are worked out on read and never stored as segments.</p>
+        <p>The dubbing overrides live on any clip: <code>target_duration_s</code> is the length the clip should fill from its timeline time; <code>reference_range</code> is <code>[start_s, end_s]</code> of the source track the clip dubs, in seconds before <code>source_track.offset_s</code> is added; <code>time_stretch</code> is a read-time stretch factor (clamped to 0.5-2.0; Fit to slot keeps it between 0.87 and 1.15) that shortens or lengthens the clip without changing its pitch, applied after pitch and before the FX chain.</p>
+        <p>With <code>bundle.include_video</code> on, Save stores the reference video <code>project.json</code>'s <code>video.path</code> names as <code>video/&lt;sha256[:16]&gt;.&lt;ext&gt;</code>, uncompressed, and lists its hash in <code>manifest.assets</code>. The path wins over the bundled copy: Open extracts <code>video/</code> only when that path isn't a file on the machine.</p>
+      </div>
+    </div>
+  </section>
+
   <section class="doc-section" id="keys">
     <div class="wrap">
       <div class="two">
         <div class="prose reveal">
-          <h2><span class="idx">06 · Segment keys</span>The one hash</h2>
+          <h2><span class="idx">07 · Segment keys</span>The one hash</h2>
           <p>A segment key is a SHA-256 over a pipe-joined <code>k=v</code> list. The same function names the file, stamps <code>Segment.cache_key</code>, and drives the out-of-date check in the transcript gutter, so the three can't disagree.</p>
           <p>The voice enters as a name plus a content fingerprint, never a path, which is why a key is the same on every machine. Nothing after generation is in it: split pattern, FX, output format, normalize and trim all apply to the same raw segment, so they don't change the key and don't dirty a clip.</p>
           <p>Kokoro adds nothing to <code>extra</code>. Audio8 adds its reference transcript and sampling settings, since two clones of the same WAV with different transcripts are different voices.</p>
@@ -213,7 +233,7 @@
 
   <section class="doc-section" id="assets">
     <div class="wrap">
-      <h2><span class="idx">07 · Engine assets</span>What each engine puts under engines/</h2>
+      <h2><span class="idx">08 · Engine assets</span>What each engine puts under engines/</h2>
       <p class="dek">Save walks the document, collects the voice names its characters and clips use, and asks each backend for the files those names need. Only named assets ship; a built-in Kokoro voice is a name with no file.</p>
       <div class="table-wrap reveal">
         <table class="ref">
@@ -221,6 +241,7 @@
           <thead><tr><th>Path</th><th>What it is</th></tr></thead>
           <tbody>
             <tr><td>fx/&lt;name&gt;.json</td><td>An FX preset a character's <code>fx_preset</code> or a clip's override names. The Audio FX tab's "Save FX Preset" shape.</td></tr>
+            <tr><td>fx/ir/&lt;name&gt;.wav</td><td>An impulse response the convolution reverb's <code>convolution_ir</code> names in the project's FX, in an FX preset a character or clip names, or in a clip's FX override. On open it takes priority over the library's file of the same name (<code>presets/fx/ir/</code>).</td></tr>
             <tr><td>engines/kokoro/voices/&lt;name&gt;.pt</td><td>A custom mix made in the Mixing tab: a saved voice tensor. Loaded with <code>torch.load(weights_only=True)</code>, see <a href="#safety" class="link">safety</a>.</td></tr>
             <tr><td>engines/audio8/refs/&lt;name&gt;.wav + .txt</td><td>A cloning reference and its word-for-word transcript. The encoded reference codes are derived data and stay in the machine's own cache; the app warms them on the first generate after open.</td></tr>
             <tr><td>projects/&lt;id&gt;.tbaw</td><td>An embedded subproject: a complete bundle of its own, stored uncompressed, extracted with the audio. Opening the parent doesn't open it; selecting its block does. Its rendered mixdown lives only in its working copy and is never bundled.</td></tr>
@@ -235,7 +256,7 @@
 
   <section class="doc-section" id="compat">
     <div class="wrap">
-      <h2><span class="idx">08 · Compatibility</span>Versions, engines, and the .json past</h2>
+      <h2><span class="idx">09 · Compatibility</span>Versions, engines, and the .json past</h2>
       <div class="prose reveal">
         <p><strong>Engine versions.</strong> A segment is compared under the <code>engine_version</code> it stores while its file is present. So a project made with one Kokoro release opens clean on a machine with another, and the status line says which version the clips came from. Only a clip you regenerate uses the installed version.</p>
         <p><strong>Preview-era projects.</strong> A <code>.json</code> project from the 4.0 previews (the <code>document.json</code> shape plus a top-level <code>project_settings</code>) still opens. The app builds a working copy, adopts any segment whose stored key matches the schema-2 formula and whose file exists (copying it in under its schema-3 key), and saves a <code>.tbaw</code> next to the original. The <code>.json</code> is left alone.</p>
@@ -246,7 +267,7 @@
 
   <section class="doc-section" id="working">
     <div class="wrap">
-      <h2><span class="idx">09 · The working copy</span>Where the app actually edits</h2>
+      <h2><span class="idx">10 · The working copy</span>Where the app actually edits</h2>
       <div class="prose reveal">
         <p>The app never edits a <code>.tbaw</code> in place. Open extracts it to <code>cache/projects/&lt;project_id&gt;/</code>, the working copy, and holds an OS lock on <code>&lt;dir&gt;/lock</code> for as long as the project is open. Autosave writes <code>document.json</code> and <code>project.json</code> there; clip generation writes into its <code>audio/generated/</code>. Save rebuilds the zip from the directory, into <code>&lt;path&gt;.tmp</code>, then swaps it over the old file, so a crash mid-save can't leave a truncated project.</p>
         <p>A <code>session.json</code> next to the lock records which file the directory belongs to, the zip's size and mtime at extraction, a digest of the last saved document, and whether the directory is ahead of the file. That digest, not an mtime, is what the window title's <code>*</code> means. Opening a project whose directory is dirty offers to recover the unsaved session; Resume from the welcome dialog reuses a matching directory without re-extracting, which is why it's fast.</p>
@@ -257,7 +278,7 @@
 
   <section class="doc-section" id="safety">
     <div class="wrap">
-      <h2><span class="idx">10 · Safety on open</span>A bundle is untrusted input</h2>
+      <h2><span class="idx">11 · Safety on open</span>A bundle is untrusted input</h2>
       <div class="prose reveal">
         <p>Before extracting, every entry name is checked: an absolute path on either OS, a drive-relative path, a <code>..</code> component or a symlink is refused and nothing is written. Free space is checked against the uncompressed size from the central directory first.</p>
         <p>A bundle carrying a <code>.pt</code> voice mix is refused unless the machine's torch is 2.6 or newer, where <code>torch.load</code> defaults to <code>weights_only=True</code> and can't execute a pickle payload. Upgrade torch to open it; there's no override.</p>

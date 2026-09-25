@@ -53,6 +53,60 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
     placed by dragging that sit after it move by the same amount. Right-click a clip > Lock in
     time to keep it where it is, or turn ripple off in Settings > Project. Clips that overlap on
     one track get a red border.
+-   **Subtitle import.** File > Import Subtitles... reads SRT, WebVTT and ASS/SSA files. Each cue
+    becomes its own paragraph at the end of the transcript and a clip locked in time at the cue's
+    start, with the cue's text as the clip's source text and the cue's length as its target.
+    When the file names speakers (an ASS Name field, a VTT `<v Name>` tag), a dialog asks once
+    which character voices each: the narrator, a new character named after the speaker, or one
+    you already have. Cancel imports nothing, and one undo removes the whole import, including
+    the characters it made. Ripple never moves a cue; dragging one moves it and it stays locked.
+-   **Locked clips line up on their first word.** Settings > Project > "Align locked clips to
+    their first word" starts a clip that's locked in time a little early, by the silence before
+    its first word, so the word lands on the clip's time instead of the breath before it. It's on
+    by default in a project with a locked clip, and skipped for a clip with Trim Silence on.
+-   **Target durations and Fit to slot.** Settings > Clip > Target (s) gives a clip a length to
+    fill; subtitle import sets it from each cue. The timeline draws that slot as a bracket, puts
+    how full it is in the clip's label as a percentage, and tints the clip amber past 103% and red
+    past 115%. Right-click > Fit to slot changes the clip until it's within 3% of the target:
+    Kokoro regenerates it at a new speed (0.7x to 1.6x, up to three tries), and Audio8, which has
+    no speed control, time-stretches it on playback (between 0.87x and 1.15x). A line still too
+    long at that limit is marked Needs rewrite. Each fit is one undo step. "Fit all over slot"
+    above the timeline, shown once any clip has a target, fits every clip that runs long. While
+    you type, an out-of-date clip whose text reads longer than its target gets a wavy amber or
+    red underline, judged from how fast each character has been speaking in this project.
+-   **Original dialogue to dub against.** File > Import Source Track... copies the original
+    recording into the project. Settings > Clip > Original (s) holds the part of it a clip dubs
+    (`start - end`); subtitle import fills it from each cue's times. The transport's Dub /
+    Original / Both switch picks what you hear: the dub, the original under each clip, or both
+    at -6 dB each, and you can switch mid-play. It stays on Dub, greyed out, until the project
+    has a source track. Settings > Project shows the source track, a Source offset (where the
+    cue times start in the file) and Remove. Export is still the dub alone.
+-   **Reference video.** File > Load Video... (MP4, MOV, MKV, WebM, AVI, M4V) opens a Video tab
+    beside Settings that plays the video muted and follows the transport: play, pause, stop and
+    seek. Its Offset box sets which video time sits at the timeline's 0. The project keeps the
+    video's path, relative to the `.tbaw` when it can, and asks you to find the file if it has
+    moved. "Bundle the reference video in the project file" in the Export dialog puts the video
+    inside the `.tbaw` instead (off by default). Workspace > Simple hides the tab.
+-   **Convolution reverb.** Audio FX > Spatial & Time > Convolution Reverb puts a clip in a
+    recorded space: pick an impulse response and set Mix (default 0.5). "Add..." copies a `.wav`
+    into the impulse response library (`presets/fx/ir/`). Save bundles every impulse response the
+    project uses, and a project's own copy wins over the library's. A missing one plays dry and
+    logs a warning.
+-   **Music beds with ducking.** File > Import Audio... adds a WAV, FLAC, OGG, MP3 or AIFF file
+    as a music bed on a Music track, locked in time at 0:00 or at the playhead, with its file
+    name as a read-only line at the end of the transcript. Drag a bed's edges to trim it, and
+    right-click for Loop (then drag the right edge to set how long it runs), Reset trim, Lock in
+    time and Remove. The `D` button on a track's header ducks it: the track goes down while the
+    clips on tracks without `D` play, by Settings > Project > Ducking (default -12 dB). The
+    original dialogue neither ducks nor is ducked. Export sounds the same as playback. A project
+    with imported audio needs this version or newer to open.
+<!-- P3 GUI: draft bullet, adjust to the UI once it lands.
+-   **Edit a recording as text.** File > Import Audio > "Recording to edit as text" transcribes
+    a recording and puts its words in the transcript with their timing ... deleting words cuts
+    the audio (5 ms crossfade); typed text has no character and splits the recording around it;
+    assigning a character makes it ordinary TTS; cut and paste carry the audio; timed words are
+    underlined. The recording is bundled under audio/imported/.
+-->
 
 ## New in 4.0.0-beta.3
 
@@ -279,6 +333,10 @@ real backend, and projects that live in one file.
     -   **Direct text:** type or paste directly into the transcript panel.
     -   **File support:** load `.txt`, `.pdf`, and `.epub` files. Good for turning e-books into
         audiobooks.
+    -   **Subtitles:** import `.srt`, `.vtt` and `.ass`/`.ssa` files as clips locked to each cue's
+        time, with the cue's length as a target to fit.
+    -   **Audio and video:** music beds with ducking, the original dialogue as a source track to
+        dub against, and a reference video that plays along with the timeline.
 -   **Two synthesis engines, one interface:**
     -   **Kokoro** (default): named base voices plus custom mixing, 8 languages, 24,000 Hz, one
         pipeline per worker thread for true parallel generation.
@@ -294,7 +352,8 @@ real backend, and projects that live in one file.
 -   **Audio FX and post-processing** (non-destructive: applied on playback and export, never
     written into a generated clip, so changing them never regenerates anything):
     -   **Live FX (Pedalboard):** Compressor, Limiter, Gain, shelf EQ, high/low-pass filters, Reverb,
-        Delay, Chorus, Distortion, Phaser, Clipping, Pitch Shift, Bitcrush, GSM Compressor.
+        Delay, Chorus, Distortion, Phaser, Clipping, Pitch Shift, Bitcrush, GSM Compressor, and
+        a Convolution Reverb that takes your own impulse responses.
     -   **Per-clip FX override**, layered on top of a character's own FX preset, on top of the
         project's FX.
     -   **Traditional controls:** Speed (0.5x-2.0x), Volume, Pitch.
@@ -393,10 +452,11 @@ for a 3.2.0 install other than cloning 4.0.0 alongside it; there is nothing to m
 
     -   **Transcript** (top-left): the editor, with Character and FX combos above it and a gutter
         that names the speaker and offers a per-clip regenerate button.
-    -   **Settings / Audio FX / Lexicon / Voices** (top-right, tabbed): voice, speed, language and
-        audio controls scoped to whatever's selected (document, clip or character); the Pedalboard
-        chain, also scoped; pronunciation overrides; and the engine's voice tools (Mixing for
-        Kokoro, Voice Reference for Audio8).
+    -   **Settings / Audio FX / Lexicon / Voices / Video** (top-right, tabbed): voice, speed,
+        language and audio controls scoped to whatever's selected (document, clip or character);
+        the Pedalboard chain, also scoped; pronunciation overrides; the engine's voice tools
+        (Mixing for Kokoro, Voice Reference for Audio8); and the reference video, if the project
+        has one.
     -   **Timeline** (bottom-left): one lane per character on a seconds axis, ruler, playhead.
     -   **Transport** (bottom-right): play / pause / stop, Preview, Generate (with Auto-split in its
         menu), Cancel, and the progress line.
