@@ -66,6 +66,11 @@ class Palette:
     playing_highlight: str
     estimated_outline: str
     overlap_border: str
+    # Fit to slot (phase 5, D4): a clip's tint when it runs past its target
+    # (amber) and past 115 % of it (red). A fill, where an overlap is a
+    # border, so the two read apart on one block.
+    fit_over: str
+    fit_far_over: str
     accent: str
     accent_hover: str
     border: str
@@ -99,6 +104,8 @@ LIGHT = Palette(
     playing_highlight="#f5d87a",
     estimated_outline="#8a8f98",
     overlap_border="#e5484d",
+    fit_over="#f59e0b",
+    fit_far_over="#dc2626",
     accent="#2563eb",
     accent_hover="#1d4fd8",
     border="#d4d4d8",
@@ -128,6 +135,8 @@ DARK = Palette(
     playing_highlight="#8a7a2a",
     estimated_outline="#8f939a",
     overlap_border="#f0716a",
+    fit_over="#fbbf24",
+    fit_far_over="#ef4444",
     accent="#4c8df6",
     accent_hover="#6ba1f8",
     border="#3a3d42",

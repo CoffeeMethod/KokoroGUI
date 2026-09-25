@@ -294,3 +294,57 @@ def test_rendered_duration_of_a_range_reads_only_the_slice(tmp_path):
     post.clear_render_cache()
     assert post.rendered_duration_s(path, None, 8000, range_s=(0.5, 0.75)) == 0.25
     assert post.rendered_duration_s(path, None, 8000) == 1.0
+
+
+# -- time stretch (phase 5, D4) -----------------------------------------------------
+
+
+def test_time_stretch_is_a_post_key():
+    assert "time_stretch" in post.POST_KEYS
+    assert post.post_key({"time_stretch": 1.1}) != post.post_key({})
+    assert post.extract_post_config({"time_stretch": 1.1, "speed": 1.2}) == {"time_stretch": 1.1}
+
+
+def test_time_stretch_divides_the_rendered_length_and_keeps_1_as_identity(tmp_path):
+    path = _tone(tmp_path / "a.wav", seconds=1.0)
+    raw, _rate = sf.read(path, dtype="float32")
+    post.clear_render_cache()
+
+    assert post.is_identity({"time_stretch": 1.0, "apply_fx": False})
+    assert not post.is_identity({"time_stretch": 1.1, "apply_fx": False})
+    assert np.array_equal(post.render(path, {"time_stretch": 1.0, "apply_fx": False}, 8000), raw)
+
+    faster = post.render(path, {"time_stretch": 1.25, "apply_fx": False}, 8000)
+    slower = post.render(path, {"time_stretch": 0.8, "apply_fx": False}, 8000)
+    assert faster.ndim == 1 and faster.dtype == np.float32
+    assert len(faster) == pytest.approx(len(raw) / 1.25, abs=2)
+    assert len(slower) == pytest.approx(len(raw) / 0.8, abs=2)
+
+
+def test_time_stretch_is_clamped_and_tolerates_junk(tmp_path):
+    from kokoro_gui.engine.audio_fx import TIME_STRETCH_MAX, clamp_time_stretch
+
+    assert clamp_time_stretch(None) == 1.0
+    assert clamp_time_stretch("fast") == 1.0
+    assert clamp_time_stretch(float("nan")) == 1.0
+    assert clamp_time_stretch(1000) == TIME_STRETCH_MAX
+    path = _tone(tmp_path / "a.wav", seconds=1.0)
+    post.clear_render_cache()
+    assert len(post.render(path, {"time_stretch": "fast", "apply_fx": False}, 8000)) == 8000
+
+
+def test_duration_hint_divides_by_the_stretch_after_trim_and_pitch(tmp_path):
+    from kokoro_gui.daw.models import Segment
+
+    segment = Segment(duration=2.0, onset_s=0.1, tail_s=0.3)
+    assert post.duration_hint(segment, {"time_stretch": 1.25}) == pytest.approx(1.6)
+    assert post.duration_hint(segment, {"trim_silence": True, "pitch": 12, "time_stretch": 0.8}) \
+        == pytest.approx(1.0)
+    ranged = Segment(duration=5.0, range=[1.0, 3.0])
+    assert post.duration_hint(ranged, {"time_stretch": 2.0}) == pytest.approx(1.0)
+    # The hint agrees with what a render measures.
+    path = _tone(tmp_path / "b.wav", seconds=1.0)
+    post.clear_render_cache()
+    measured = post.rendered_duration_s(path, {"time_stretch": 1.1, "apply_fx": False}, 8000)
+    assert measured == pytest.approx(post.duration_hint(Segment(duration=1.0, onset_s=0.0, tail_s=0.0),
+                                                        {"time_stretch": 1.1}), abs=1e-3)

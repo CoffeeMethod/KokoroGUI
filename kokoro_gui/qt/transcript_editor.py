@@ -35,7 +35,10 @@ UI-shell pass (Claude/PLAN_ui_shell_redesign.md section 2):
   (`Narrator` / `FX: Echo`), and draws a play button beside each dirty
   clip's first line (UI3). Clicking it runs `app.generate_clip(clip_id)`.
 - Runs belonging to a dirty clip get a dashed underline
-  (`ClipHighlighter`'s second pass).
+  (`ClipHighlighter`'s second pass). A dirty clip with a duration target
+  whose text reads longer than the target (`fit.reading_rate_ratio`) gets a
+  wavy amber or red one instead, so a dub line is seen to be too long while
+  it is typed.
 - Split rules (UI2): a thin line at every boundary `plan_auto_split_clips`
   would produce with the current "split by paragraph" setting, plus every
   existing clip boundary, painted over the viewport after `super()`.
@@ -66,6 +69,7 @@ from PySide6.QtGui import (
 from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QMenu, QTextEdit, QToolTip, QWidget
 
+from kokoro_gui.daw import fit as fit_ops
 from kokoro_gui.daw.auto_split import plan_auto_split_clips
 from kokoro_gui.daw.undo import AssignCharacterCommand
 from kokoro_gui.qt import theme
@@ -110,7 +114,8 @@ def clip_fx_name(daw_doc, clip) -> Optional[str]:
 class ClipHighlighter(QSyntaxHighlighter):
     """Paints each text block by whichever `Clip` a run covers, using the
     matching `Character`'s `highlight_color`, then dash-underlines the runs
-    of every dirty clip. `dirty_ids()` is computed once per rehighlight
+    of every dirty clip (wave-underlines one that reads past its duration
+    target, `rate_levels()`). `dirty_ids()` is computed once per rehighlight
     cycle and invalidated by the editor on every content change and after
     generation finishes.
 
@@ -124,9 +129,31 @@ class ClipHighlighter(QSyntaxHighlighter):
         super().__init__(qt_text_document)
         self._daw_document_provider = daw_document_provider
         self._dirty_ids: Optional[set] = None
+        self._rate_levels: Optional[dict] = None
 
     def invalidate_dirty(self) -> None:
         self._dirty_ids = None
+        self._rate_levels = None
+
+    def rate_levels(self) -> dict:
+        """`{clip_id: "over" | "far_over"}` for each dirty clip whose text,
+        read at its speed and learned pace, runs past its duration target.
+        A clean clip's real length is on the timeline instead."""
+        if self._rate_levels is None:
+            self._rate_levels = {}
+            daw_doc = self._daw_document_provider()
+            clips = [c for c in getattr(daw_doc, "clips", None) or []
+                     if fit_ops.TARGET_KEY in (c.overrides or {}) and c.id in self.dirty_ids()]
+            if clips:
+                try:
+                    rates = fit_ops.speaking_rates(daw_doc)
+                    for clip in clips:
+                        level = fit_ops.fit_level(fit_ops.reading_rate_ratio(daw_doc, clip, rates))
+                        if level in ("over", "far_over"):
+                            self._rate_levels[clip.id] = level
+                except Exception:
+                    self._rate_levels = {}
+        return self._rate_levels
 
     def dirty_ids(self) -> set:
         if self._dirty_ids is None:
@@ -149,7 +176,9 @@ class ClipHighlighter(QSyntaxHighlighter):
         block_start = self.currentBlock().position()
         block_end = block_start + len(block_text)
         dirty = self.dirty_ids()
-        underline_color = QColor(theme.current().dirty_underline)
+        rate_levels = self.rate_levels()
+        pal = theme.current()
+        underline_color = QColor(pal.dirty_underline)
 
         pos = 0
         for run in daw_doc.runs:
@@ -172,7 +201,11 @@ class ClipHighlighter(QSyntaxHighlighter):
                 tint = QColor(character.highlight_color)
                 tint.setAlpha(HIGHLIGHT_ALPHA)
                 fmt.setBackground(tint)
-            if clip is not None and clip.id in dirty:
+            if clip is not None and clip.id in rate_levels:
+                fmt.setUnderlineStyle(QTextCharFormat.UnderlineStyle.WaveUnderline)
+                fmt.setUnderlineColor(QColor(pal.fit_far_over if rate_levels[clip.id] == "far_over"
+                                             else pal.fit_over))
+            elif clip is not None and clip.id in dirty:
                 fmt.setUnderlineStyle(QTextCharFormat.UnderlineStyle.DashUnderline)
                 fmt.setUnderlineColor(underline_color)
             self.setFormat(lo, hi - lo, fmt)

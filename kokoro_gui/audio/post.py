@@ -2,10 +2,11 @@
 
 Generation writes a clip's segments as raw model output (`Segment.raw`).
 Everything the Audio FX tab and the Settings tab's volume / pitch / normalize
-/ trim controls describe is applied here, when the transport, the exporter
-or the timeline waveform reads the file, and never written back. Changing an
-FX setting therefore never dirties a clip: `daw/dirty.py` only looks at the
-generation keys, and this module only looks at `POST_KEYS`.
+/ trim controls describe, and fit to slot's `time_stretch`, is applied here,
+when the transport, the exporter or the timeline waveform reads the file,
+and never written back. Changing an FX setting therefore never dirties a
+clip: `daw/dirty.py` only looks at the generation keys, and this module
+only looks at `POST_KEYS`.
 
 `render()` memoizes by `(path, mtime, post_key, target_rate, range_s)`, so
 a slider move re-renders only the clips whose resolved post config changed,
@@ -35,8 +36,11 @@ from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, resolve_ir
 
 # Every config key the post stage reads. `pitch` is here (the resample) and
 # also in the generation cache key (the speed compensation), which is why a
-# pitch change both dirties the clip and re-renders it.
-POST_KEYS = frozenset(ALLOWED_FX_PRESET_KEYS | {"apply_fx", "volume", "pitch", "normalize", "trim_silence"})
+# pitch change both dirties the clip and re-renders it. `time_stretch` is a
+# factor (1.0 = none, above 1 = shorter) that fit to slot sets from
+# `Clip.overrides` on a clip whose engine has no speed control.
+POST_KEYS = frozenset(ALLOWED_FX_PRESET_KEYS | {"apply_fx", "volume", "pitch", "normalize", "trim_silence",
+                                                "time_stretch"})
 
 _RENDER_CACHE: dict = {}
 
@@ -83,6 +87,8 @@ def is_identity(config: dict) -> bool:
         return False
     if config.get("volume", 1.0) != 1.0 or float(config.get("pitch", 0.0) or 0.0) != 0.0:
         return False
+    if _stretches(config):
+        return False
     if not config.get("apply_fx", True):
         return True
     for key in ALLOWED_FX_PRESET_KEYS:
@@ -91,6 +97,15 @@ def is_identity(config: dict) -> bool:
     if config.get("convolution_ir"):
         return False
     return not (config.get("eq_bass", 0.0) or config.get("eq_treble", 0.0))
+
+
+def _stretches(config: dict) -> bool:
+    """True when `config` carries a `time_stretch` other than 1.0. Checked
+    without importing audio_fx, which pulls in Pedalboard."""
+    try:
+        return float(config.get("time_stretch", 1.0)) != 1.0
+    except (TypeError, ValueError):
+        return False
 
 
 def segment_range(segment) -> Optional[tuple]:
@@ -188,8 +203,8 @@ def duration_hint(segment, post_config: Optional[dict]) -> Optional[float]:
     """The segment's rendered length computed from what generation stored
     (`duration`, `onset_s`, `tail_s`) without reading audio, or None for a
     segment that predates those fields. Trim removes the onset and tail;
-    pitch resamples by `2 ** (semitones / 12)`; nothing else in
-    `process_audio` changes the length. A segment with a `range` is
+    pitch resamples by `2 ** (semitones / 12)`; `time_stretch` divides by
+    its factor; nothing else in `process_audio` changes the length. A segment with a `range` is
     `end - start` long before pitch, and trim doesn't apply to it (see
     `_slice_config`)."""
     config = post_config or {}
@@ -204,12 +219,12 @@ def duration_hint(segment, post_config: Optional[dict]) -> Optional[float]:
         length = float(duration)
         if config.get("trim_silence", False):
             length = max(0.0, length - float(onset) - float(tail))
-    from kokoro_gui.engine.audio_fx import clamp_pitch_semitones
+    from kokoro_gui.engine.audio_fx import clamp_pitch_semitones, clamp_time_stretch
 
     semitones = clamp_pitch_semitones(config.get("pitch", 0.0))
     if semitones:
         length /= 2 ** (semitones / 12.0)
-    return length
+    return length / clamp_time_stretch(config.get("time_stretch", 1.0))
 
 
 def rendered_duration_s(path: str, post_config: Optional[dict], target_rate: int,

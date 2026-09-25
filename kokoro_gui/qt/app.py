@@ -1110,6 +1110,11 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         resolution = fx_resolve.resolve_fx(self, clip=clip, project=project)
         config.update(resolution.values)
         config["apply_fx"] = resolution.apply_fx
+        # Fit to slot's stretch factor (a post key). Read off the overrides
+        # directly, like the take: it is per clip, never a preset value.
+        stretch = (clip.overrides or {}).get("time_stretch")
+        if stretch is not None:
+            config["time_stretch"] = stretch
         return config
 
     def _install_segment_key_fn(self, project=None) -> None:

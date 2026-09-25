@@ -17,10 +17,16 @@ different length, every later clip placed by timestamp moves by the
 difference (`arrangement.plan_ripple`, one undoable `RippleCommand`), unless
 it is locked in time (`Clip.pinned`) or the project turned ripple off
 (`document.settings["ripple"]`, on by default).
+
+Fit to slot (phase 5, D4): the block menu's "Fit to slot" and the header's
+"Fit all over slot" bring a clip's length to its
+`overrides["target_duration_s"]` by speed or time stretch (see the section
+comment above `clips_over_slot`).
 """
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -28,14 +34,40 @@ from PySide6.QtWidgets import (
     QPushButton, QVBoxLayout, QWidget,
 )
 
+from kokoro_gui.daw import fit as fit_ops
 from kokoro_gui.daw import markers as marker_ops
 from kokoro_gui.daw.arrangement import OVERLAP_EPSILON_S, plan_ripple
 from kokoro_gui.daw.dirty import build_segments_from_results, carry_segment_timing, take_from_results
 from kokoro_gui.daw.undo import (
-    AssignCharacterCommand, DeleteTakeCommand, MoveClipBeforeCommand, MoveClipCommand, ReassignTrackCommand,
-    RippleCommand, SetActiveTakeCommand, SetClipTimestampCommand, SetFieldCommand, TextEditCommand,
+    AssignCharacterCommand, CompositeCommand, DeleteTakeCommand, MoveClipBeforeCommand, MoveClipCommand,
+    ReassignTrackCommand, RippleCommand, SetActiveTakeCommand, SetClipTimestampCommand, SetFieldCommand,
+    TextEditCommand,
 )
+from kokoro_gui.engine.audio_fx import clamp_time_stretch
 from kokoro_gui.qt.timeline_view import TimelineWidget
+
+
+def _set_override(clip, key: str, value) -> None:
+    """Sets or (for None) removes `clip.overrides[key]` without the undo
+    stack: a fit's passes in between, whose net change `_finish_fit`
+    records as one step."""
+    if value is None:
+        clip.overrides.pop(key, None)
+    else:
+        clip.overrides[key] = value
+
+
+@dataclass
+class _FitJob:
+    """One clip being fitted to its slot (`TimelineDock._start_fit`)."""
+    clip_id: str
+    project: object
+    key: str  # the override the fit changes: "speed" or "time_stretch"
+    original: object  # that override before the fit; None when unset
+    before: object  # the arrangement at the start, for the one ripple
+    good: object = None  # the override the clip's current audio was made with
+    passes: int = 0
+    needs_rewrite: bool = False
 
 
 class TimelineDock(QDockWidget):
@@ -79,6 +111,7 @@ class TimelineDock(QDockWidget):
         self.timeline_view.takeDeleteRequested.connect(self.on_take_delete_requested)
         self.timeline_view.statusChangeRequested.connect(self.on_status_change_requested)
         self.timeline_view.alignWordsRequested.connect(self.on_align_words_requested)
+        self.timeline_view.fitToSlotRequested.connect(self.on_fit_to_slot_requested)
         self.timeline_view.markerAddRequested.connect(self.on_marker_add_requested)
         self.timeline_view.markerMoved.connect(self.on_marker_moved)
         self.timeline_view.markerRenameRequested.connect(self.on_marker_rename_requested)
@@ -113,6 +146,11 @@ class TimelineDock(QDockWidget):
         filter_row.addWidget(QLabel("Show:"))
         filter_row.addWidget(self.status_filter_combo)
         filter_row.addStretch(1)
+        self.fit_all_button = QPushButton("Fit all over slot")
+        self.fit_all_button.setToolTip("Fit every clip that runs past its target duration: regenerate "
+                                       "faster, or time-stretch on an engine without a speed control.")
+        self.fit_all_button.clicked.connect(lambda _checked=False: self.fit_all_over_slot())
+        filter_row.addWidget(self.fit_all_button)
         column.addLayout(filter_row)
         column.addWidget(self.timeline_widget, 1)
         self.setWidget(content)
@@ -137,6 +175,13 @@ class TimelineDock(QDockWidget):
         self._pending_batch: list | None = None
         self._batch_progress_lock = threading.Lock()
         self._batch_completed = 0
+
+        # Fit to slot: clip id -> its running `_FitJob`, the clips "Fit all
+        # over slot" has yet to start, and (clip id, needs rewrite) per
+        # finished fit for the batch's summary.
+        self._fits: dict = {}
+        self._fit_queue: list = []
+        self._fit_batch: list = []
 
         self.refresh()
 
@@ -175,6 +220,8 @@ class TimelineDock(QDockWidget):
 
     def refresh(self) -> None:
         self.refresh_breadcrumb()
+        # Shown once the timeline has a clip with a target (a subtitle import).
+        self.fit_all_button.setVisible(any(fit_ops.TARGET_KEY in (c.overrides or {}) for c in self._doc.clips))
         arrangement = self.app.build_arrangement()
         level = self.app.level
         self.timeline_view.render_document(self._doc, arrangement,
@@ -304,20 +351,21 @@ class TimelineDock(QDockWidget):
 
     # -- per-clip Generate ---------------------------------------------------
 
-    def on_generate_clip_requested(self, clip_id: str, regenerate: bool = False, project=None) -> None:
+    def on_generate_clip_requested(self, clip_id: str, regenerate: bool = False, project=None) -> bool:
         """`regenerate` is what the gutter button sends for a clip that is
         already clean; the engine then bumps the take instead of returning
-        the present file (grill TB8). The dirty batch path never sets it."""
+        the present file (grill TB8). The dirty batch path never sets it.
+        Returns whether a generate started."""
         if self.app.is_busy():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before generating a clip.")
-            return
+            return False
 
         # The job holds its project: the results land there even when the
         # focus or the level moves while it runs (phase 4).
         project = project or self.app.project_of_clip_id(clip_id)
         clip = project.document.get_clip(clip_id) if project is not None else None
         if clip is None or clip.is_nested:
-            return
+            return False
 
         text = project.document.clip_text(clip)
         config = self.app._assemble_clip_config(clip, project)
@@ -342,6 +390,7 @@ class TimelineDock(QDockWidget):
         engine = self.app.backend_for(clip, project).engine
         future = engine.worker.run_coro(engine.generate_clip_audio((0, text, config)))
         future.add_done_callback(_done)
+        return True
 
     def on_lock_in_time_requested(self, clip_id: str, pinned: bool) -> None:
         if self._doc.get_clip(clip_id) is not None:
@@ -352,9 +401,18 @@ class TimelineDock(QDockWidget):
         applied; `before` is the arrangement from just before. Only a clip
         that had audio counts (a first generate replaces an estimate, not a
         take). Returns how many clips moved."""
+        shifts = self._ripple_shifts(before, clip_ids, project)
+        if shifts:
+            project.document.undo_stack.push(RippleCommand(shifts))
+            self.app.set_status(f"Ripple: moved {len(shifts)} clip(s) after the regenerated audio.")
+        return len(shifts)
+
+    def _ripple_shifts(self, before, clip_ids, project) -> dict:
+        """`plan_ripple`'s shifts for `clip_ids` against `before`, or {}
+        with ripple off."""
         document = project.document
         if not document.settings.get("ripple", True):
-            return 0
+            return {}
         old = before.by_clip_id()
         deltas = {}
         for clip_id in clip_ids:
@@ -368,30 +426,39 @@ class TimelineDock(QDockWidget):
             delta = duration - placed.duration_s
             if abs(delta) > OVERLAP_EPSILON_S:
                 deltas[clip_id] = delta
-        shifts = plan_ripple(before, deltas)
-        if shifts:
-            document.undo_stack.push(RippleCommand(shifts))
-            self.app.set_status(f"Ripple: moved {len(shifts)} clip(s) after the regenerated audio.")
-        return len(shifts)
+        return plan_ripple(before, deltas)
 
     def _on_clip_generation_finished(self, clip_id: str, success: bool, error: str) -> None:
         self.app.set_ui_state(False)
 
         project = self._pending_projects.pop(clip_id, None) or self.app.project_of_clip_id(clip_id)
         clip = project.document.get_clip(clip_id) if project is not None else None
+        # A fit to slot pass: its ripple waits for the fit's end (one undo step).
+        job = self._fits.get(clip_id)
         if success and clip is not None:
             results = self._pending_results.pop(clip_id)
             before = self.app.build_arrangement(project)
             self._apply_results(clip, results, project)
-            self._ripple(before, [clip_id], project)
+            if job is None:
+                self._ripple(before, [clip_id], project)
             self.app.on_project_generated(project)
             self.app.editor.rehighlight()
             self.app.schedule_save()
             self.app.refresh_timeline()
             self.app.schedule_word_alignment([clip_id])
+            if job is not None:
+                job.good = clip.overrides.get(job.key)
+                self._advance_fit(job)
         elif not success:
             self._pending_results.pop(clip_id, None)
             self.app.set_status(f"Clip generation failed: {error}", "error")
+            if job is not None:
+                self._fit_queue.clear()
+                self._finish_fit(job, failed=True)
+        elif job is not None:
+            self._pending_results.pop(clip_id, None)
+            self._fits.pop(clip_id, None)
+            self._start_next_fit()
 
     def _apply_results(self, clip, results: list, project=None) -> None:
         """Stamps `clip.segments` and `clip.overrides["take"]` from what the
@@ -421,6 +488,170 @@ class TimelineDock(QDockWidget):
         else:
             clip.overrides.pop("take", None)
         clip.status = "generated"
+
+    # -- fit to slot (phase 5, D4) ---------------------------------------------
+    # A clip with `overrides["target_duration_s"]` is fitted to it one job at
+    # a time. With a speed control (`capabilities.supports_speed`, Kokoro)
+    # a job generates when the clip is stale, then regenerates at
+    # `fit.next_speed` until the rendered length is within the tolerance,
+    # at most `fit.MAX_FIT_PASSES` times; each pass runs from
+    # `_on_clip_generation_finished`, so nothing blocks. A speed change is a
+    # new segment key, so no pass bumps the take. Without one (Audio8) the
+    # job sets `overrides["time_stretch"]` once, a read-time post key. The
+    # passes write the override directly; `_finish_fit` puts back the
+    # original and pushes the final value, any status change and the ripple
+    # as one undo step.
+
+    def clips_over_slot(self, project=None) -> list:
+        """The clips of `project` (default: the level) whose rendered
+        length runs past their target by more than the fit tolerance."""
+        project = project or self.app.level
+        over = []
+        for clip in project.document.clips:
+            target = None if clip.is_nested else fit_ops.target_duration_s(clip)
+            if target is None:
+                continue
+            ratio = fit_ops.fit_ratio(self.app.clip_duration_s(clip, project), target)
+            if ratio is not None and ratio > 1.0 + fit_ops.FIT_TOLERANCE:
+                over.append(clip)
+        return over
+
+    def on_fit_to_slot_requested(self, clip_id: str) -> bool:
+        """Context menu "Fit to slot". Returns whether a fit started."""
+        project = self.app.project_of_clip_id(clip_id)
+        if project is None:
+            return False
+        if self.app.is_busy() or self._fits:
+            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before fitting a clip.")
+            return False
+        self._fit_batch = []
+        return self._start_fit(clip_id, project)
+
+    def fit_all_over_slot(self, project=None) -> int:
+        """The header's "Fit all over slot": queues every clip
+        `clips_over_slot` lists and fits them one after another. Returns
+        how many were queued."""
+        if self.app.is_busy() or self._fits:
+            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before fitting clips.")
+            return 0
+        project = project or self.app.level
+        clips = self.clips_over_slot(project)
+        if not clips:
+            self.app.set_status("No clip runs over its slot.")
+            return 0
+        self._fit_queue = [(clip.id, project) for clip in clips]
+        self._fit_batch = []
+        self._start_next_fit()
+        return len(clips)
+
+    def _start_next_fit(self) -> None:
+        while self._fit_queue and not self._fits:
+            clip_id, project = self._fit_queue.pop(0)
+            if self._start_fit(clip_id, project):
+                return
+        if not self._fits and len(self._fit_batch) > 1:
+            rewrites = sum(1 for _clip_id, rewrite in self._fit_batch if rewrite)
+            message = f"Fitted {len(self._fit_batch)} clips to their slots."
+            if rewrites:
+                message += f" {rewrites} marked Needs rewrite."
+            self.app.set_status(message, "warning" if rewrites else "success")
+
+    def _start_fit(self, clip_id: str, project) -> bool:
+        clip = project.document.get_clip(clip_id)
+        if clip is None or clip.is_nested or fit_ops.target_duration_s(clip) is None:
+            return False
+        backend = self.app.backend_for(clip, project)
+        key = "speed" if getattr(backend.capabilities, "supports_speed", True) else "time_stretch"
+        job = _FitJob(clip_id=clip_id, project=project, key=key, original=clip.overrides.get(key),
+                      before=self.app.build_arrangement(project))
+        job.good = job.original
+        self._fits[clip_id] = job
+        stale = clip in project.document.dirty_clips() or self.app.clip_duration_s(clip, project) is None
+        if not stale:
+            self._advance_fit(job)
+            return True
+        if not self.on_generate_clip_requested(clip_id, project=project):
+            self._fits.pop(clip_id, None)
+            return False
+        return True
+
+    def _advance_fit(self, job) -> None:
+        """One step with the clip's audio current: done, or the next pass."""
+        clip = job.project.document.get_clip(job.clip_id)
+        target = fit_ops.target_duration_s(clip) if clip is not None else None
+        duration = self.app.clip_duration_s(clip, job.project) if target is not None else None
+        if duration is None:
+            self._finish_fit(job)
+            return
+        if job.key == "time_stretch":
+            natural = duration * clamp_time_stretch(clip.overrides.get("time_stretch", 1.0))
+            factor, job.needs_rewrite = fit_ops.stretch_for(natural, target)
+            _set_override(clip, "time_stretch", factor)
+            self._finish_fit(job)
+            return
+        if fit_ops.is_fitted(duration / target) or job.passes >= fit_ops.MAX_FIT_PASSES:
+            self._finish_fit(job)
+            return
+        speed = float(self.app._assemble_generation_config(clip, job.project).get("speed", 1.0) or 1.0)
+        new_speed = fit_ops.next_speed(speed, duration, target)
+        if abs(new_speed - speed) < 1e-3:
+            # Already at the clamp: another pass would render the same.
+            self._finish_fit(job)
+            return
+        _set_override(clip, "speed", new_speed)
+        job.passes += 1
+        if not self.on_generate_clip_requested(clip.id, project=job.project):
+            self._finish_fit(job, failed=True)
+
+    def _finish_fit(self, job, failed: bool = False) -> None:
+        """Ends `job`: back to the last value that rendered when it
+        `failed`, then one undo step for the override, a Needs rewrite
+        status when the clip still can't fit, and the ripple."""
+        self._fits.pop(job.clip_id, None)
+        project = job.project
+        clip = project.document.get_clip(job.clip_id)
+        if clip is not None:
+            if failed:
+                _set_override(clip, job.key, job.good)
+            final = clip.overrides.get(job.key)
+            target = fit_ops.target_duration_s(clip)
+            ratio = fit_ops.fit_ratio(self.app.clip_duration_s(clip, project), target)
+            rewrite = job.needs_rewrite or (
+                job.key == "speed" and not failed and ratio is not None
+                and ratio > 1.0 + fit_ops.FIT_TOLERANCE and final is not None
+                and float(final) >= fit_ops.SPEED_MAX)
+            shifts = self._ripple_shifts(job.before, [clip.id], project)
+            _set_override(clip, job.key, job.original)
+            commands = []
+            if final != job.original:
+                commands.append(SetFieldCommand("clip", clip.id, "overrides", final, key=job.key))
+            if rewrite and clip.status != "needs_rewrite":
+                commands.append(SetFieldCommand("clip", clip.id, "status", "needs_rewrite"))
+            if shifts:
+                commands.append(RippleCommand(shifts))
+            if commands:
+                project.document.undo_stack.push(commands[0] if len(commands) == 1 else CompositeCommand(commands))
+            self._fit_batch.append((clip.id, rewrite))
+            if not failed:
+                self.app.set_status(self._fit_message(job, final, ratio, rewrite), "warning" if rewrite else "success")
+            if self.app.editor is not None:
+                self.app.editor.rehighlight()
+            self.app.schedule_save()
+            self.app.refresh_timeline()
+        self._start_next_fit()
+
+    @staticmethod
+    def _fit_message(job, final, ratio, rewrite: bool) -> str:
+        percent = f"{round(ratio * 100)}%" if ratio is not None else "unknown length"
+        if job.key == "time_stretch":
+            how = f"stretched x{float(final):.2f}" if final is not None else "no stretch needed"
+        else:
+            passes = f"{job.passes} pass" + ("" if job.passes == 1 else "es")
+            how = f"speed {float(final):.2f} after {passes}" if final is not None else "at its own speed"
+        message = f"Fit to slot: {percent} of the target, {how}."
+        if rewrite:
+            message += " Too long to fit: marked Needs rewrite."
+        return message
 
     # -- per-clip FX preset menu (item 5, "Per-clip FX button") --------------
 

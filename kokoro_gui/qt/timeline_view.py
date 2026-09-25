@@ -44,9 +44,12 @@ automation lane), a fader and a pan slider (`trackFieldChanged`).
 The block context menu adds Take (pick or delete a parked take), Status,
 "Align words" and "Lock in time" (`Clip.pinned`: ripple on regenerate
 won't move it). Two clips overlapping on one track get a red border
-(`arrangement.overlaps`). The ruler labels in timecode when the document has it
-enabled (`kokoro_gui/daw/timecode.py`). `set_status_filter` dims blocks
-that don't match the timeline dock's filter.
+(`arrangement.overlaps`). A clip with a duration target
+(`kokoro_gui/daw/fit.py`) draws its slot as a bracket, tints amber or red
+when it runs past it, shows the fit percentage in its label and offers
+"Fit to slot" (`fitToSlotRequested`). The ruler labels in timecode when the
+document has it enabled (`kokoro_gui/daw/timecode.py`). `set_status_filter`
+dims blocks that don't match the timeline dock's filter.
 
 The widget stays app-independent (no `self.app`): the dock owning
 `app.document`/`app.engine` handles every signal. `render_document()` is a
@@ -64,6 +67,7 @@ from PySide6.QtWidgets import (
     QGraphicsSimpleTextItem, QGraphicsView, QHBoxLayout, QMenu, QMessageBox, QSlider, QToolButton, QWidget,
 )
 
+from kokoro_gui.daw import fit as fit_ops
 from kokoro_gui.daw import markers as marker_ops
 from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement, overlaps
 from kokoro_gui.daw.models import CLIP_STATUSES
@@ -111,6 +115,11 @@ FX_BUTTON_WIDTH_PX = 24.0
 FX_BUTTON_HEIGHT_PX = 16.0
 FX_BUTTON_ACTIVE_OPACITY = 0.9
 FX_BUTTON_INACTIVE_OPACITY = 0.5
+SLOT_TICK_PX = 8.0
+SLOT_BRACKET_WIDTH_PX = 2
+FIT_TINT_ALPHA = 110
+# `fit.fit_level` -> the theme token a block over its slot is tinted with.
+FIT_TINT_TOKENS = {"over": "fit_over", "far_over": "fit_far_over"}
 
 
 def seconds_to_x(seconds: float, zoom: float) -> float:
@@ -154,7 +163,12 @@ def label_color_for(fill: QColor) -> QColor:
 class ClipBlockItem(QGraphicsItem):
     """One clip's block on a lane: character-colored fill, label, optional
     child `WaveformItem`, FX chip in the bottom-right corner. Estimated
-    clips get a dashed outline and no waveform."""
+    clips get a dashed outline and no waveform.
+
+    A clip with a duration target (`daw/fit.py`) draws its slot as a
+    bracket along the bottom edge, from the clip's timestamp to timestamp +
+    target, which may reach past the block; `fit_ratio` is the rendered
+    length over the target and `fit_level` picks the tint (`fit_tint`)."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -173,6 +187,10 @@ class ClipBlockItem(QGraphicsItem):
         self._nested_state = None
         self._fade_in_px = 0.0
         self._fade_out_px = 0.0
+        # The slot bracket in item x (start, end), or None without a target.
+        self.slot_px: Optional[tuple] = None
+        self.fit_ratio: Optional[float] = None
+        self.fit_level: Optional[str] = None
         self.clip_id: Optional[str] = None
         self.audio_path: Optional[str] = None
         self.start_s = 0.0
@@ -198,6 +216,10 @@ class ClipBlockItem(QGraphicsItem):
     def set_label(self, text: str) -> None:
         self._label = text
         self.update()
+
+    @property
+    def label(self) -> str:
+        return self._label
 
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
@@ -231,6 +253,25 @@ class ClipBlockItem(QGraphicsItem):
     def overlap(self) -> bool:
         return self._overlap
 
+    def set_fit(self, slot_start_px: Optional[float], slot_width_px: Optional[float],
+                ratio: Optional[float]) -> None:
+        """The slot bracket (item x of its start, and its width; None for
+        no target) and the fit ratio (None while the length is estimated)."""
+        self.prepareGeometryChange()
+        if slot_start_px is None or slot_width_px is None:
+            self.slot_px = None
+        else:
+            start = max(0.0, float(slot_start_px))
+            self.slot_px = (start, start + max(0.0, float(slot_width_px)))
+        self.fit_ratio = ratio
+        self.fit_level = fit_ops.fit_level(ratio)
+        self.update()
+
+    @property
+    def fit_tint(self) -> Optional[str]:
+        """The theme token the block is tinted with, or None."""
+        return FIT_TINT_TOKENS.get(self.fit_level)
+
     def set_fades_px(self, fade_in_px: float, fade_out_px: float) -> None:
         self._fade_in_px = max(0.0, min(fade_in_px, self._width))
         self._fade_out_px = max(0.0, min(fade_out_px, self._width))
@@ -258,7 +299,15 @@ class ClipBlockItem(QGraphicsItem):
         self._waveform_item.set_peaks(peaks, width, height)
 
     def boundingRect(self) -> QRectF:  # noqa: N802 (Qt override)
-        return QRectF(0, 0, self._width, self._height)
+        # The slot bracket can run past the block's end.
+        width = max(self._width, self.slot_px[1] + 1.0) if self.slot_px is not None else self._width
+        return QRectF(0, 0, width, self._height)
+
+    def shape(self) -> QPainterPath:  # noqa: N802 (Qt override)
+        # Clicks and the waveform clip to the block, not the bracket.
+        path = QPainterPath()
+        path.addRect(QRectF(0, 0, self._width, self._height))
+        return path
 
     def paint(self, painter, option, widget=None) -> None:  # noqa: N802 (Qt override)
         pal = theme.current()
@@ -280,6 +329,16 @@ class ClipBlockItem(QGraphicsItem):
             painter.setPen(QPen(base.darker(135), 1))
         painter.setBrush(fill)
         painter.drawRoundedRect(rect, CLIP_RADIUS_PX, CLIP_RADIUS_PX)
+        if self.fit_tint is not None:
+            # Over its slot: a tint inside the border, so an overlap's red
+            # border still shows on top of it.
+            tint = QColor(getattr(pal, self.fit_tint))
+            tint.setAlpha(FIT_TINT_ALPHA)
+            painter.save()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(tint)
+            painter.drawRoundedRect(rect.adjusted(1.5, 1.5, -1.5, -1.5), CLIP_RADIUS_PX, CLIP_RADIUS_PX)
+            painter.restore()
         label_left = 6
         if self._nested_state is not None:
             # A subproject: a folder glyph before the title; a stale one is
@@ -329,6 +388,29 @@ class ClipBlockItem(QGraphicsItem):
         painter.setPen(QPen(QColor(pal.fx_badge_text)))
         painter.drawText(fx_rect, Qt.AlignmentFlag.AlignCenter, "FX")
         painter.setOpacity(base_opacity)
+        if self.slot_px is not None:
+            self._paint_slot_bracket(painter, pal, base)
+
+    def _paint_slot_bracket(self, painter, pal, base: QColor) -> None:
+        """`|___|` along the bottom edge from the slot's start to its end:
+        in the label color over the block, in the text color past it."""
+        start, end = self.slot_px
+        bottom = self._height - 1.5
+        path = QPainterPath()
+        path.moveTo(start + 1, bottom - SLOT_TICK_PX)
+        path.lineTo(start + 1, bottom)
+        path.lineTo(end - 1, bottom)
+        path.lineTo(end - 1, bottom - SLOT_TICK_PX)
+        parts = [(QRectF(0, 0, self._width, self._height), label_color_for(base))]
+        if end > self._width:
+            parts.append((QRectF(self._width, 0, end - self._width + 2, self._height), QColor(pal.text)))
+        for clip_rect, color in parts:
+            painter.save()
+            painter.setClipRect(clip_rect, Qt.ClipOperation.IntersectClip)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(color, SLOT_BRACKET_WIDTH_PX))
+            painter.drawPath(path)
+            painter.restore()
 
 
 class _RulerItem(QGraphicsItem):
@@ -654,6 +736,7 @@ class TimelineView(QGraphicsView):
     takeDeleteRequested = Signal(str, int)
     statusChangeRequested = Signal(str, str)
     alignWordsRequested = Signal(str)
+    fitToSlotRequested = Signal(str)
     markerAddRequested = Signal(float)
     markerMoved = Signal(str, float)
     markerRenameRequested = Signal(str)
@@ -791,6 +874,10 @@ class TimelineView(QGraphicsView):
             if any(s.audio_path for s in clip.segments):
                 align = menu.addAction("Align words")
                 align.triggered.connect(lambda checked=False, cid=clip.id: self.alignWordsRequested.emit(cid))
+            if fit_ops.target_duration_s(clip) is not None:
+                fit = menu.addAction("Fit to slot")
+                fit.setToolTip("Regenerate faster or slower, or time-stretch, until the clip fills its target.")
+                fit.triggered.connect(lambda checked=False, cid=clip.id: self.fitToSlotRequested.emit(cid))
 
         return menu
 
@@ -1337,6 +1424,16 @@ class TimelineView(QGraphicsView):
             else:
                 block.set_label(character.name if character is not None else "")
             block.set_geometry(x, y, width, height)
+            target = None if clip.is_nested else fit_ops.target_duration_s(clip)
+            if target is not None:
+                # The slot starts at the timestamp (the cue's in-time), not
+                # at an onset-aligned block start.
+                slot_start = clip.timeline_timestamp if clip.timeline_timestamp is not None else placed.start_s
+                ratio = None if placed.estimated else fit_ops.fit_ratio(placed.duration_s, target)
+                block.set_fit(seconds_to_x(float(slot_start) - placed.start_s, self._zoom),
+                              seconds_to_x(target, self._zoom), ratio)
+                if ratio is not None:
+                    block.set_label(f"{block.label}  {round(ratio * 100)}%")
             block.set_estimated(placed.estimated)
             block.start_s = placed.start_s
             block.duration_s = placed.duration_s
