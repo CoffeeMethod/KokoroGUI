@@ -353,3 +353,265 @@ def test_gutter_tooltip_shows_the_source_text(qt_app):
     gutter.paintEvent(QPaintEvent(gutter.rect()))
     rect, _start, _end = gutter._label_rects[0]
     assert gutter.tooltip_at(rect.center()) == "Source: Bonjour."
+
+
+# ---------------------------------------------------------------------------
+# Imported recording text (phase 5 P3): cut, paste, drag, undo, visuals
+# ---------------------------------------------------------------------------
+
+RATE = 16000
+
+
+def _recording(qt_app, tmp_path, rows, name="talk.wav"):
+    """Imports a 10 s file into the project and appends one recording clip
+    per row of `(word, start_s, end_s)`, as File > Import Audio's commit
+    does. Returns `(source, clip_ids)`."""
+    import numpy as np
+    import soundfile as sf
+
+    from kokoro_gui.daw import imported
+    from kokoro_gui.daw.undo import ImportRecordingCommand
+    from kokoro_gui.qt import project as project_io
+
+    path = str(tmp_path / name)
+    sf.write(path, np.linspace(-0.2, 0.2, RATE * 10).astype(np.float32), RATE)
+    stored = project_io.import_audio_file(path, qt_app.project_dir)
+    source, entry = imported.source_entry(stored)
+    host = qt_app.document.characters[0]
+    command = ImportRecordingCommand(
+        [dict(zip(("text", "words"), imported.run_from_asr_words(words, source)), character_id=host.id)
+         for words in rows], {source: entry})
+    qt_app.document.undo_stack.push(command)
+    qt_app.editor.load_text(qt_app.document.text)
+    return source, command.clip_ids
+
+
+def _select(editor, start, end):
+    # The caret goes in first, as a click would: selecting straight into a
+    # clip that isn't selected yet selects the whole clip.
+    _caret(editor, start)
+    cursor = editor.textCursor()
+    cursor.setPosition(start)
+    cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+    editor.setTextCursor(cursor)
+
+
+def _caret(editor, position):
+    cursor = editor.textCursor()
+    cursor.setPosition(position)
+    editor.setTextCursor(cursor)
+
+
+def _cursor_at(editor, position):
+    cursor = QTextCursor(editor.document())
+    cursor.setPosition(position)
+    return cursor
+
+
+def _format_at(editor, position):
+    from PySide6.QtGui import QTextCharFormat
+
+    block = editor.document().findBlock(position)
+    offset = position - block.position()
+    formats = block.layout().formats()
+    for fmt_range in formats:
+        if fmt_range.start <= offset < fmt_range.start + fmt_range.length:
+            return QTextCharFormat(fmt_range.format)
+    return None
+
+
+def _word_times(document, start):
+    from kokoro_gui.daw import imported
+
+    for clip in document.clips:
+        for w_start, _w_end, _source, start_s, end_s in imported.clip_words(document, clip):
+            if w_start == start:
+                return [start_s, end_s]
+    return None
+
+
+def _words_mime(text, words, sources):
+    import json
+
+    from kokoro_gui.daw import imported
+
+    mime = QMimeData()
+    mime.setText(text)
+    mime.setData(imported.WORDS_MIME_TYPE, json.dumps({"words": words, "sources": sources}).encode("utf-8"))
+    return mime
+
+
+HELLO = [("Hello", 0.0, 0.4), ("there", 0.5, 0.9), ("friend.", 1.0, 1.5)]
+SECOND = [("Second", 2.0, 2.5), ("line.", 2.5, 3.0)]
+
+
+def test_cut_a_word_and_paste_it_two_paragraphs_later_keeps_its_audio(qt_app, tmp_path, qtbot):
+    from kokoro_gui.daw import imported
+
+    document, editor = qt_app.document, qt_app.editor
+    _source, (first_id, second_id) = _recording(qt_app, tmp_path, [HELLO, SECOND])
+    _caret(editor, len(document.text))
+    editor.textCursor().insertText("\n\nNotes: ")
+    there = document.text.index("there")
+    times = _word_times(document, there)
+    assert times == [0.45, 0.95]  # the pauses either side split at their midpoints
+
+    _select(editor, there, there + 5)
+    qtbot.keyClick(editor, Qt.Key.Key_X, Qt.KeyboardModifier.ControlModifier)
+    assert document.text.startswith("Hello  friend.")
+    assert [s.range for s in document.get_clip(first_id).segments] == [[0.0, 0.45], [0.95, 1.5]]
+
+    _caret(editor, len(document.text))
+    qtbot.keyClick(editor, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
+    assert document.text.endswith("Notes: there")
+    pasted = document.clip_covering(len(document.text) - 1)
+    assert imported.is_recording_clip(pasted) and pasted.id not in (first_id, second_id)
+    assert [s.range for s in pasted.segments] == [times]
+    assert pasted.character_id == document.characters[0].id
+
+    # One undo takes the paste away (text and clip), the next gives the
+    # word back where it was, with its audio.
+    qt_app.undo()
+    assert document.text.endswith("Notes: ") and document.get_clip(pasted.id) is None
+    qt_app.undo()
+    assert document.text.startswith("Hello there friend.") and editor.toPlainText() == document.text
+    assert [s.range for s in document.get_clip(first_id).segments] == [[0.0, 1.5]]
+
+    qt_app.redo()
+    qt_app.redo()
+    assert document.text.endswith("Notes: there") and editor.toPlainText() == document.text
+    assert [s.range for s in document.clip_covering(len(document.text) - 1).segments] == [times]
+
+
+def test_paste_timed_text_whose_recording_is_gone_lands_untimed(qt_app, tmp_path):
+    document, editor = qt_app.document, qt_app.editor
+    _set_text_via_real_edit(editor, "Notes: ")
+    source = "0123456789abcdef"
+    gone = str(tmp_path / f"{source}.wav")
+    _caret(editor, 7)
+
+    editor.insertFromMimeData(_words_mime("there", [[0, 5, source, 1.0, 1.5]], {source: {"path": gone}}))
+
+    assert document.text == "Notes: there"
+    assert document.clips == [] and document.sources == {}
+    assert "without timing" in qt_app.transport_dock.status_text()
+
+
+def test_paste_from_another_project_imports_its_recording(qt_app, tmp_path):
+    import os
+
+    import numpy as np
+    import soundfile as sf
+
+    from kokoro_gui.daw import imported
+    from kokoro_gui.qt import project as project_io
+
+    other_dir, _other_id = project_io.create_project_dir()
+    wav = str(tmp_path / "elsewhere.wav")
+    sf.write(wav, np.full(RATE * 3, 0.1, dtype=np.float32), RATE)
+    source, entry = imported.source_entry(project_io.import_audio_file(wav, other_dir))
+    document, editor = qt_app.document, qt_app.editor
+    _set_text_via_real_edit(editor, "Notes: ")
+    _caret(editor, 7)
+
+    editor.insertFromMimeData(_words_mime("there", [[0, 5, source, 1.0, 1.5]], {source: entry}))
+
+    local = document.source_path(source)
+    assert local.startswith(os.path.join(qt_app.project_dir, "audio", "imported")) and os.path.isfile(local)
+    clip = document.clip_covering(8)
+    assert [s.range for s in clip.segments] == [[1.0, 1.5]] and clip.segments[0].audio_path == local
+
+    qt_app.undo()
+    assert document.text == "Notes: " and document.sources == {}
+
+
+def test_deleting_imported_words_undoes_with_their_timing(qt_app, tmp_path, qtbot):
+    import copy
+
+    document, editor = qt_app.document, qt_app.editor
+    _source, (clip_id,) = _recording(qt_app, tmp_path, [HELLO])
+    before = copy.deepcopy(document.runs)
+    there = document.text.index("there")
+
+    _select(editor, there, there + 6)
+    qtbot.keyClick(editor, Qt.Key.Key_Delete)
+    assert document.text == "Hello friend."
+    assert [s.range for s in document.get_clip(clip_id).segments] == [[0.0, 0.45], [0.95, 1.5]]
+
+    qt_app.undo()
+    assert document.runs == before and editor.toPlainText() == document.text
+    qt_app.redo()
+    assert document.text == "Hello friend." and editor.toPlainText() == document.text
+
+
+def test_typing_inside_a_recording_splits_it_and_undo_joins_it_back(qt_app, tmp_path, qtbot):
+    import copy
+
+    from kokoro_gui.daw import imported
+    from kokoro_gui.qt import theme
+
+    document, editor = qt_app.document, qt_app.editor
+    _source, (clip_id,) = _recording(qt_app, tmp_path, [HELLO])
+    before = copy.deepcopy(document.runs)
+    at = document.text.index(" friend")
+    _caret(editor, at)
+    editor.setFocus()
+
+    qtbot.keyClicks(editor, " my")
+    assert document.text == "Hello there my friend."
+    typed = document._run_covering(at + 1)
+    assert typed.clip_id is None and typed.text == " my"
+    assert len([c for c in document.clips if imported.is_recording_clip(c)]) == 2
+    # The typed text has no character: no tint, greyed.
+    fmt = _format_at(editor, at + 2)
+    assert fmt.background().style() == Qt.BrushStyle.NoBrush
+    assert fmt.foreground().color().name() == theme.current().text_muted
+
+    # Qt coalesces "my" into the space's undo step, so one undo takes back
+    # the typing and joins the clip again, words and all.
+    qt_app.undo()
+    assert document.runs == before and [c.id for c in document.clips] == [clip_id]
+    assert editor.toPlainText() == document.text
+
+    qt_app.redo()
+    assert document.text == "Hello there my friend." and editor.toPlainText() == document.text
+    assert document._run_covering(at + 1).text == " my"
+
+
+def test_imported_words_get_a_faint_underline(qt_app, tmp_path):
+    from PySide6.QtGui import QTextCharFormat
+
+    document, editor = qt_app.document, qt_app.editor
+    _set_text_via_real_edit(editor, "Plain text.")
+    _recording(qt_app, tmp_path, [HELLO])
+    there = document.text.index("there")
+
+    assert _format_at(editor, there + 1).underlineStyle() == QTextCharFormat.UnderlineStyle.SingleUnderline
+    plain = _format_at(editor, 2)
+    assert plain is None or plain.underlineStyle() == QTextCharFormat.UnderlineStyle.NoUnderline
+
+
+def test_dragging_imported_words_inside_the_editor_moves_their_audio(qt_app, tmp_path, monkeypatch):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QDropEvent
+
+    document, editor = qt_app.document, qt_app.editor
+    _source, (first_id, _second_id) = _recording(qt_app, tmp_path, [HELLO, SECOND])
+    there = document.text.index("there")
+    times = _word_times(document, there)
+    _select(editor, there, there + 5)
+    mime = editor.createMimeDataFromSelection()
+    end = len(document.text)
+    monkeypatch.setattr(editor, "_is_own_drag", lambda event: True)
+    monkeypatch.setattr(editor, "cursorForPosition", lambda point: _cursor_at(editor, end))
+    event = QDropEvent(QPointF(5, 5), Qt.DropAction.MoveAction | Qt.DropAction.CopyAction, mime,
+                       Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+    event.setDropAction(Qt.DropAction.MoveAction)
+
+    editor.dropEvent(event)
+
+    assert document.text == "Hello  friend.\n\nSecond line.there"
+    assert event.dropAction() == Qt.DropAction.CopyAction
+    moved = document.clip_covering(len(document.text) - 1)
+    assert [s.range for s in moved.segments][-1] == times
+    assert [s.range for s in document.get_clip(first_id).segments] == [[0.0, 0.45], [0.95, 1.5]]

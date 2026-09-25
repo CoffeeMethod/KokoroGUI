@@ -264,3 +264,43 @@ def test_segment_plays_leave_a_generated_clip_as_it_was():
     plays = segment_plays(clip, fade_in_s=0.1, fade_out_s=0.2)
     assert [p.segment.audio_path for p in plays] == ["a.wav", "b.wav"]
     assert [(p.play_range_s, p.fade_in_s, p.fade_out_s) for p in plays] == [(None, 0.1, 0.0), (None, 0.0, 0.2)]
+
+
+# -- import grouping and review ---------------------------------------------------
+
+
+def test_group_asr_words_ends_a_clip_at_a_sentence_end_a_long_pause_or_the_length_cap():
+    words = [("Hello", 0.0, 0.3), ("there.", 0.3, 0.6), ("How", 0.7, 0.9), ("are", 0.9, 1.1),
+             ("you", 2.0, 2.3), ("today?\"", 2.3, 2.7), ("Fine", 3.0, 3.2), ("", 3.2, 3.3), ("bad",)]
+    groups = imported.group_asr_words(words)
+    assert [[w[0] for w in g] for g in groups] == [["Hello", "there."], ["How", "are"], ["you", "today?\""],
+                                                  ["Fine"]]
+    long = [(f"w{i}", float(i), i + 0.9) for i in range(40)]
+    assert [len(g) for g in imported.group_asr_words(long, max_s=10.0)] == [10, 10, 10, 10]
+
+
+def test_realign_words_keeps_the_times_of_a_corrected_line():
+    text, words = run_from_asr_words([("Helo", 1.0, 1.4), ("wrld", 1.4, 1.9)], A)
+    heard = imported.heard_words(text, words)
+    assert heard == [("Helo", 1.0, 1.4), ("wrld", 1.4, 1.9)]
+    # Both words respelled: nothing matches, so the line spreads over what
+    # was heard, which is the same two slots.
+    assert imported.realign_words("Hello world", heard, A) == [[0, 5, A, 1.0, 1.45], [6, 11, A, 1.45, 1.9]]
+    # One respelled, one matched: the matched word keeps its times exactly
+    # and the corrected first word gets what was heard before it.
+    assert imported.realign_words("Hello wrld", heard, A) == [[0, 5, A, 1.0, 1.4], [6, 10, A, 1.4, 1.9]]
+    # A word added past the end was never heard: it stays untimed.
+    assert imported.realign_words("Helo wrld again", heard, A) == [[0, 4, A, 1.0, 1.4], [5, 9, A, 1.4, 1.9]]
+
+
+def test_untimed_gaps_are_untagged_text_inside_a_recording_paragraph():
+    clip = Clip(source="imported")
+    doc = Document(runs=[Run("Intro line\n"),
+                         Run("Hello there, ", clip.id, "imported", words=[[0, 5, A, 0.0, 0.4], [6, 11, A, 0.4, 0.8]]),
+                         Run("my friend "),
+                         Run("how are you", clip.id, "imported", words=[[0, 3, A, 0.8, 1.0]]),
+                         Run("\n\nOutro")],
+                   clips=[clip], settings={"sources": dict(SOURCES)})
+    start = len("Intro line\nHello there, ")
+    assert imported.untimed_gaps(doc) == [(start, start + len("my friend "))]
+    assert imported.untimed_gaps(Document.from_plain_text("plain\ntext")) == []

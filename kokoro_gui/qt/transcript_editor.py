@@ -58,20 +58,25 @@ spell `self.app.document` out in full in this class.
 """
 from __future__ import annotations
 
+import bisect
+import json
+import os
 import re
 from typing import Callable, Optional
 
 from PySide6.QtCore import QEvent, QMimeData, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import (
-    QColor, QFont, QKeySequence, QPainter, QPen, QPolygon, QSyntaxHighlighter, QTextCharFormat,
+    QColor, QDragLeaveEvent, QFont, QKeySequence, QPainter, QPen, QPolygon, QSyntaxHighlighter, QTextCharFormat,
     QTextCursor,
 )
 from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QMenu, QTextEdit, QToolTip, QWidget
 
 from kokoro_gui.daw import fit as fit_ops
+from kokoro_gui.daw import imported
 from kokoro_gui.daw.auto_split import plan_auto_split_clips
-from kokoro_gui.daw.undo import AssignCharacterCommand
+from kokoro_gui.daw.undo import ApplyWordsCommand, AssignCharacterCommand, TextEditCommand
+from kokoro_gui.qt import project as project_io
 from kokoro_gui.qt import theme
 from kokoro_gui.qt.undo_coordinator import UndoCoordinator
 
@@ -88,6 +93,12 @@ HIGHLIGHT_ALPHA = 90
 GUTTER_BUTTON_PX = 16
 SPLIT_RULE_DEBOUNCE_MS = 150
 _FX_PLACEHOLDER = "Select FX Preset..."
+# Alpha of the underline under imported recording words (phase 5 P3): faint,
+# so it reads as "this carries audio" without competing with the dirty one.
+IMPORTED_UNDERLINE_ALPHA = 110
+# A clipboard's timed-words payload bigger than this is ignored.
+MAX_WORDS_PAYLOAD_BYTES = 16 * 1024 * 1024
+UNTIMED_TOOLTIP = "No character: this text has no audio. Assign a character to generate it."
 
 
 def clip_fx_name(daw_doc, clip) -> Optional[str]:
@@ -130,10 +141,30 @@ class ClipHighlighter(QSyntaxHighlighter):
         self._daw_document_provider = daw_document_provider
         self._dirty_ids: Optional[set] = None
         self._rate_levels: Optional[dict] = None
+        self._word_spans: Optional[list] = None
+        self._untimed_gaps: Optional[list] = None
 
     def invalidate_dirty(self) -> None:
         self._dirty_ids = None
         self._rate_levels = None
+        self._word_spans = None
+        self._untimed_gaps = None
+
+    def word_spans(self) -> list:
+        """`imported.word_spans` of the document, once per cycle: the words
+        that carry recorded audio, underlined faintly."""
+        if self._word_spans is None:
+            daw_doc = self._daw_document_provider()
+            self._word_spans = imported.word_spans(daw_doc) if daw_doc is not None else []
+        return self._word_spans
+
+    def untimed_gaps(self) -> list:
+        """`imported.untimed_gaps` of the document, once per cycle: text
+        typed into a recording, drawn greyed."""
+        if self._untimed_gaps is None:
+            daw_doc = self._daw_document_provider()
+            self._untimed_gaps = imported.untimed_gaps(daw_doc) if daw_doc is not None else []
+        return self._untimed_gaps
 
     def rate_levels(self) -> dict:
         """`{clip_id: "over" | "far_over"}` for each dirty clip whose text,
@@ -211,6 +242,36 @@ class ClipHighlighter(QSyntaxHighlighter):
                 fmt.setUnderlineColor(underline_color)
             self.setFormat(lo, hi - lo, fmt)
 
+        # Imported recording text (phase 5 P3): a faint underline under
+        # every word that carries audio, and text typed into a recording
+        # (no character, no audio) greyed. Both go over the run's format.
+        faint = QColor(pal.text_muted)
+        faint.setAlpha(IMPORTED_UNDERLINE_ALPHA)
+        for lo, hi in self._spans_in(self.word_spans(), block_start, block_end):
+            fmt = QTextCharFormat(self.format(lo))
+            if fmt.underlineStyle() == QTextCharFormat.UnderlineStyle.NoUnderline:
+                fmt.setUnderlineStyle(QTextCharFormat.UnderlineStyle.SingleUnderline)
+                fmt.setUnderlineColor(faint)
+                self.setFormat(lo, hi - lo, fmt)
+        for lo, hi in self._spans_in(self.untimed_gaps(), block_start, block_end):
+            fmt = QTextCharFormat(self.format(lo))
+            fmt.setForeground(QColor(pal.text_muted))
+            self.setFormat(lo, hi - lo, fmt)
+
+    @staticmethod
+    def _spans_in(spans: list, block_start: int, block_end: int):
+        """`(lo, hi)` offsets inside the block of each sorted
+        `(doc_start, doc_end)` span that overlaps it."""
+        index = bisect.bisect_left(spans, (block_start, block_start))
+        # A span starting before the block may still reach into it.
+        index = max(0, index - 1)
+        for start, end in spans[index:]:
+            if start >= block_end:
+                break
+            lo, hi = max(start, block_start) - block_start, min(end, block_end) - block_start
+            if hi > lo:
+                yield lo, hi
+
 
 def placeholder_label(clip) -> str:
     """The gutter label on a placeholder line: "Subproject" for a nested
@@ -226,6 +287,12 @@ class TranscriptGutter(QWidget):
     Labels open a character picker for the clicked clip; the button runs a
     scoped Generate for that one clip.
 
+    Imported recordings (phase 5 P3): a recording clip is never stale, so it
+    gets a play-only button instead (outlined, where Generate's is filled)
+    that plays the timeline from the clip's start (`app.play_clip`). A line
+    holding text typed into a recording (`imported.untimed_gaps`) gets a
+    small hollow circle: that text has no character and no audio.
+
     Built as a child of `TranscriptEditor` itself - `QTextEdit` has no
     public `firstVisibleBlock()`/`contentOffset()`, so lines are positioned
     via `document().documentLayout().blockBoundingRect(block)` translated
@@ -237,6 +304,8 @@ class TranscriptGutter(QWidget):
         self.editor = editor
         self._label_rects: list = []  # [(QRect, line_start, line_end)]
         self._button_rects: list = []  # [(QRect, clip_id)]
+        self._play_rects: list = []  # [(QRect, clip_id)]
+        self._mark_rects: list = []  # [(QRect, line_start, line_end)]
         self.setMouseTracking(True)
         editor.verticalScrollBar().valueChanged.connect(lambda _value: self.update())
         editor.textChanged.connect(self.update)
@@ -259,6 +328,8 @@ class TranscriptGutter(QWidget):
         painter.fillRect(event.rect(), QColor(pal.gutter_bg))
         self._label_rects = []
         self._button_rects = []
+        self._play_rects = []
+        self._mark_rects = []
 
         daw_doc = self.editor.app.document
         qt_doc = self.editor.document()
@@ -266,6 +337,9 @@ class TranscriptGutter(QWidget):
         scroll = self.editor.verticalScrollBar().value()
         dirty_ids = {c.id for c in daw_doc.dirty_clips()}
         labelled_dirty: set = set()
+        recording_ids = {c.id for c in daw_doc.clips
+                         if imported.is_recording_clip(c) and any(s.audio_path for s in c.segments)}
+        gaps = imported.untimed_gaps(daw_doc)
 
         base_font = QFont(self.font())
         small_font = QFont(base_font)
@@ -281,7 +355,7 @@ class TranscriptGutter(QWidget):
                 # line labels only if it differs from the hidden line above.
                 clip = daw_doc.clip_covering(block.position())
                 previous_key = self._label_key(daw_doc, clip)
-                if clip is not None and clip.id in dirty_ids:
+                if clip is not None and (clip.id in dirty_ids or clip.id in recording_ids):
                     labelled_dirty.add(clip.id)
                 block = block.next()
                 continue
@@ -338,15 +412,34 @@ class TranscriptGutter(QWidget):
                             GUTTER_BUTTON_PX, GUTTER_BUTTON_PX)
                 self._draw_play_button(painter, btn, pal)
                 self._button_rects.append((btn, clip.id))
+            elif clip is not None and clip.id in recording_ids and clip.id not in labelled_dirty:
+                labelled_dirty.add(clip.id)
+                btn = QRect(self.width() - GUTTER_BUTTON_PX - 4, top + max(0, (min(line_h, metrics_h) - GUTTER_BUTTON_PX) // 2),
+                            GUTTER_BUTTON_PX, GUTTER_BUTTON_PX)
+                self._draw_play_button(painter, btn, pal, outline=True)
+                self._play_rects.append((btn, clip.id))
+
+            if any(g_start < line_end and g_end > line_start for g_start, g_end in gaps):
+                mark = QRect(self.width() - 2 * GUTTER_BUTTON_PX - 8,
+                             top + max(0, (min(line_h, metrics_h) - GUTTER_BUTTON_PX) // 2),
+                             GUTTER_BUTTON_PX, GUTTER_BUTTON_PX)
+                self._draw_untimed_mark(painter, mark, pal)
+                self._mark_rects.append((mark, line_start, line_end))
 
             previous_key = key
             block = block.next()
 
     @staticmethod
-    def _draw_play_button(painter: QPainter, rect: QRect, pal) -> None:
+    def _draw_play_button(painter: QPainter, rect: QRect, pal, outline: bool = False) -> None:
+        """Generate's filled triangle, or with `outline` a recording's
+        play-only one in the gutter's text color."""
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(QPen(QColor(pal.dirty_underline), 1))
-        painter.setBrush(QColor(pal.dirty_underline))
+        color = QColor(pal.gutter_text if outline else pal.dirty_underline)
+        painter.setPen(QPen(color, 1))
+        if outline:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+        else:
+            painter.setBrush(color)
         tri = QPolygon([
             QPoint(rect.left() + 4, rect.top() + 3),
             QPoint(rect.right() - 3, rect.center().y()),
@@ -355,11 +448,35 @@ class TranscriptGutter(QWidget):
         painter.drawPolygon(tri)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
+    @staticmethod
+    def _draw_untimed_mark(painter: QPainter, rect: QRect, pal) -> None:
+        """The "no character" mark: a small hollow circle."""
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QPen(QColor(pal.text_muted), 1.5))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(rect.center(), 4, 4)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
     def button_rects(self) -> list:
         return list(self._button_rects)
 
+    def play_rects(self) -> list:
+        """`(QRect, clip_id)` of each recording clip's play-only button."""
+        return list(self._play_rects)
+
+    def mark_rects(self) -> list:
+        """`(QRect, line_start, line_end)` of each "no character" mark."""
+        return list(self._mark_rects)
+
     def tooltip_at(self, pos) -> Optional[str]:
-        """The source text of the clip whose label is at `pos`, if any."""
+        """The source text of the clip whose label is at `pos`, if any, or
+        what a "no character" mark means."""
+        for rect, _line_start, _line_end in self._mark_rects:
+            if rect.contains(pos):
+                return UNTIMED_TOOLTIP
+        for rect, _clip_id in self._play_rects:
+            if rect.contains(pos):
+                return "Play this recording"
         for rect, line_start, _line_end in self._label_rects:
             if rect.contains(pos):
                 clip = self.editor.app.document.clip_covering(line_start)
@@ -380,6 +497,10 @@ class TranscriptGutter(QWidget):
         for rect, clip_id in self._button_rects:
             if rect.contains(pos):
                 self.editor.app.generate_clip(clip_id)
+                return
+        for rect, clip_id in self._play_rects:
+            if rect.contains(pos):
+                self.editor.app.play_clip(clip_id)
                 return
         for rect, line_start, line_end in self._label_rects:
             if rect.contains(pos):
@@ -434,13 +555,17 @@ class TranscriptEditor(QTextEdit):
         # selection, then inserting) and the *net* chars added is what
         # assign_character_to_range needs.
         self._paste_chars_accumulator: Optional[int] = None
+        # True while a paste of timed text is inserted: every text change
+        # then goes through `TextEditCommand`, so the insert and its
+        # `ApplyWordsCommand` undo as one step (`push_joined`).
+        self._joined_edit = False
         # Guards against _on_selection_model_changed's own setTextCursor()
         # call bouncing straight back into _on_cursor_position_changed.
         self._updating_from_model = False
 
         self._highlighter = ClipHighlighter(self.document(), lambda: self.app.document)
         self.undo_coordinator = UndoCoordinator(
-            self.document(), self.app.document.undo_stack, self._on_custom_stack_changed
+            self.document(), self.app.document.undo_stack, self._on_custom_stack_changed, self._run_joined
         )
 
         # Left gutter - reserves its own width via setViewportMargins so it
@@ -495,9 +620,18 @@ class TranscriptEditor(QTextEdit):
         if self._paste_chars_accumulator is not None:
             self._paste_chars_accumulator += chars_added
         if self._suppress_contents_change:
+            self.undo_coordinator.edit_seen()
             return
         new_text = self.toPlainText()
-        self.app.document.replace_text(position, chars_removed, chars_added, new_text)
+        document = self.app.document
+        if self._joined_edit or document.edit_touches_imported(position, chars_removed):
+            # Imported recording text (phase 5 P3): Qt's native undo would
+            # give back the characters but not their word timing, so the
+            # edit is also a `TextEditCommand`, joined to the native step.
+            self.undo_coordinator.push_joined(TextEditCommand(position, chars_removed, chars_added, new_text))
+        else:
+            document.replace_text(position, chars_removed, chars_added, new_text)
+        self.undo_coordinator.edit_seen()
         # The highlighter's own contentsChange slot ran before this one (it
         # connected first, at construction) against the pre-edit run list -
         # re-paint the touched blocks now that the run list caught up.
@@ -528,6 +662,9 @@ class TranscriptEditor(QTextEdit):
         finally:
             self._suppress_contents_change = False
             self._updating_from_model = was_updating
+        # setPlainText cleared Qt's undo history.
+        if getattr(self, "undo_coordinator", None) is not None:
+            self.undo_coordinator.native_history_cleared()
         self.rehighlight()
 
     def rebind_document(self) -> None:
@@ -535,7 +672,7 @@ class TranscriptEditor(QTextEdit):
         New/Open): reload the text, point the undo coordinator at the new
         stack, repaint."""
         self.undo_coordinator = UndoCoordinator(
-            self.document(), self.app.document.undo_stack, self._on_custom_stack_changed
+            self.document(), self.app.document.undo_stack, self._on_custom_stack_changed, self._run_joined
         )
         self.document().clearUndoRedoStacks()
         self.load_text(self.app.document.text)
@@ -564,6 +701,36 @@ class TranscriptEditor(QTextEdit):
             dock.refresh_character_choices()
         self.app.schedule_save()
         self.app.refresh_timeline()
+
+    def _run_joined(self, step) -> None:
+        """Undo or redo of a joined step (`UndoCoordinator.push_joined`):
+        `step` moves Qt's text and the custom stack together, with the
+        document sync off since the custom commands restore the runs. Text
+        Qt coalesced into the same native step after the joined edit (a
+        few more keystrokes) reaches the document afterwards
+        (`_align_document_text`)."""
+        self._suppress_contents_change = True
+        try:
+            step()
+        finally:
+            self._suppress_contents_change = False
+        self._align_document_text()
+        self._on_custom_stack_changed()
+
+    def _align_document_text(self) -> None:
+        """Brings `app.document`'s text in line with the editor's by one
+        `replace_text` over the span where they differ, as if typed."""
+        old, new = self.app.document.text, self.toPlainText()
+        if old == new:
+            return
+        prefix = 0
+        limit = min(len(old), len(new))
+        while prefix < limit and old[prefix] == new[prefix]:
+            prefix += 1
+        suffix = 0
+        while suffix < limit - prefix and old[-1 - suffix] == new[-1 - suffix]:
+            suffix += 1
+        self.app.document.replace_text(prefix, len(old) - prefix - suffix, len(new) - prefix - suffix, new)
 
     def _push_assign_character(self, start: int, end: int, character_id) -> None:
         """Shared tail end of every character-assignment authoring path
@@ -845,10 +1012,39 @@ class TranscriptEditor(QTextEdit):
             block = self.textCursor().block()
             pending_line = (block.position(), block.text())
 
-        super().keyPressEvent(event)
+        # A key that may edit imported recording text runs in an edit block
+        # of its own, so Qt gives it a fresh native undo command rather than
+        # merging it into the previous keystrokes', and the command it is
+        # joined to (`_on_contents_change`) undoes exactly this edit. A
+        # paste wraps itself (`insertFromMimeData`).
+        wrap = (edit_range is not None and not event.matches(QKeySequence.StandardKey.Paste)
+                and self._key_may_edit_imported(event, *edit_range))
+        edit_block = QTextCursor(self.document()) if wrap else None
+        if edit_block is not None:
+            edit_block.beginEditBlock()
+        try:
+            super().keyPressEvent(event)
+        finally:
+            if edit_block is not None:
+                edit_block.endEditBlock()
 
         if pending_line is not None:
             self._try_recognize_shorthand_line(*pending_line)
+
+    def _key_may_edit_imported(self, event, start: int, end: int, inserting: bool) -> bool:
+        """True when the key's edit (`_key_edit_range`) may change imported
+        recording text. A Backspace or Delete with no selection can take a
+        whole word (with Ctrl), so it counts when its line or a neighbour
+        holds recording text."""
+        document = self.app.document
+        if inserting:
+            return document.edit_touches_imported(start, 0)
+        if event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete) and not self.textCursor().hasSelection():
+            qt_doc = self.document()
+            first, last = qt_doc.findBlock(start), qt_doc.findBlock(end)
+            start = max(0, first.position() - 1)
+            end = min(len(document.text), last.position() + last.length())
+        return end > start and document.edit_touches_imported(start, end - start)
 
     def focusOutEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().focusOutEvent(event)
@@ -912,9 +1108,14 @@ class TranscriptEditor(QTextEdit):
         mime.setText(source.text())
         if source.hasHtml():
             mime.setHtml(source.html())
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            # Imported recording words carry their timing (phase 5 P3).
+            payload = imported.words_payload(self.app.document, cursor.selectionStart(), cursor.selectionEnd())
+            if payload["words"]:
+                mime.setData(imported.WORDS_MIME_TYPE, json.dumps(payload).encode("utf-8"))
         if not self.app.settings.get("character_fx_copy", True):
             return mime
-        cursor = self.textCursor()
         if cursor.hasSelection():
             source_clip = self.app.document.clip_covering(cursor.selectionStart())
             if source_clip is not None and source_clip.character_id:
@@ -927,6 +1128,26 @@ class TranscriptEditor(QTextEdit):
         raw = bytes(source.data(self.CHARACTER_ID_MIME_TYPE)).decode("utf-8")
         return raw or None
 
+    @staticmethod
+    def words_from_mime(source: QMimeData) -> Optional[dict]:
+        """The `imported.WORDS_MIME_TYPE` payload of a paste or drop as
+        `{"words": list, "sources": dict}`, or None when there is none or
+        it doesn't parse (clipboard data is untrusted; `apply_words`
+        checks each word)."""
+        if not source.hasFormat(imported.WORDS_MIME_TYPE):
+            return None
+        raw = bytes(source.data(imported.WORDS_MIME_TYPE))
+        if not raw or len(raw) > MAX_WORDS_PAYLOAD_BYTES:
+            return None
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            return None
+        if not isinstance(data, dict) or not isinstance(data.get("words"), list) or not data["words"]:
+            return None
+        sources = data.get("sources")
+        return {"words": data["words"], "sources": sources if isinstance(sources, dict) else {}}
+
     def insertFromMimeData(self, source: QMimeData) -> None:  # noqa: N802 (Qt override)
         source_character_id = self._extract_source_character_id(source)
         cursor = self.textCursor()
@@ -936,14 +1157,130 @@ class TranscriptEditor(QTextEdit):
             self._placeholder_status(cursor.selectionStart(), cursor.selectionEnd(),
                                      inserting=not cursor.hasSelection())
             return
+        payload = self.words_from_mime(source)
 
+        # One edit block: one native undo command and one contents change
+        # for the whole paste, never merged into what was typed before.
         self._paste_chars_accumulator = 0
+        joined_before, self._joined_edit = self._joined_edit, self._joined_edit or payload is not None
+        edit_block = QTextCursor(self.document())
+        edit_block.beginEditBlock()
         try:
             super().insertFromMimeData(source)
         finally:
+            edit_block.endEditBlock()
             chars_added = self._paste_chars_accumulator
             self._paste_chars_accumulator = None
+            self._joined_edit = joined_before
+
+        if payload is not None and chars_added:
+            if chars_added == len(source.text()):
+                self._apply_pasted_words(insert_position, chars_added, payload, source_character_id)
+            else:
+                self.app.set_status("Pasted without timing: the text changed on the way in.", "warning")
+            return
 
         splits_enabled = self.app.settings.get("character_fx_paste_splits", True)
         if source_character_id and splits_enabled and chars_added:
             self._push_assign_character(insert_position, insert_position + chars_added, source_character_id)
+
+    def _apply_pasted_words(self, position: int, length: int, payload: dict, character_id) -> None:
+        """Tags a paste of timed text as imported recording text
+        (`ApplyWordsCommand`, joined to the paste's undo step). A source this
+        project lacks is imported from the path the payload names when that
+        file is still there (`_import_pasted_source`); words whose source
+        can't be found lose their timing, which the status bar says. The
+        new clip takes the copied text's character when this project has
+        it."""
+        document = self.app.document
+        known = {name for name in document.sources if document.source_path(name)}
+        added = {}
+        for name, entry in payload["sources"].items():
+            if name not in known:
+                local = self._import_pasted_source(str(name), entry)
+                if local is not None:
+                    added[str(name)] = local
+        words = payload["words"]
+        usable = [w for w in words
+                  if isinstance(w, (list, tuple)) and len(w) > 2 and (w[2] in known or w[2] in added)]
+        if not usable:
+            self.app.set_status("Pasted without timing: the recording it came from isn't in this project.",
+                                "warning")
+            return
+        if document.get_character(character_id) is None:
+            character_id = None
+        self.undo_coordinator.push_joined(ApplyWordsCommand(position, length, usable, added, character_id))
+        if len(usable) < len(words):
+            self.app.set_status("Some pasted words lost their timing: their recording isn't in this project.",
+                                "warning")
+        self.rehighlight()
+        self.app.schedule_save()
+        self.app.refresh_timeline()
+
+    def _import_pasted_source(self, name: str, entry) -> Optional[dict]:
+        """A pasted word's source (another project's recording) copied into
+        this project (`project.import_audio_file`): its `Document.sources`
+        entry, or None when the path is gone, isn't a file under the
+        projects root, or its content isn't `name`."""
+        path = entry.get("path") if isinstance(entry, dict) else None
+        project_dir = self.app.project_dir
+        if not isinstance(path, str) or not path or not project_dir:
+            return None
+        real = os.path.realpath(os.path.abspath(path))
+        root = os.path.realpath(project_io.projects_root())
+        if not real.startswith(root + os.sep) or not os.path.isfile(real):
+            return None
+        if os.path.splitext(os.path.basename(real))[0] != name:
+            return None
+        try:
+            stored = project_io.import_audio_file(real, project_dir)
+        except (OSError, project_io.ProjectError):
+            return None
+        source, local = imported.source_entry(stored)
+        return local if source == name else None
+
+    # -- Drag and drop -------------------------------------------------------
+
+    def _is_own_drag(self, event) -> bool:
+        return event.source() in (self, self.viewport())
+
+    def dropEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """A drag inside the editor, or a drop of timed text, goes through
+        the same path as cut and paste: the dragged text is removed first
+        (its own undo step), then inserted with `insertFromMimeData`, so
+        imported words keep their timing. Qt's own drop does both in one
+        edit, which reads to the document as the whole stretch between
+        the two places being retyped. Other drops are Qt's."""
+        mime = event.mimeData()
+        own = self._is_own_drag(event)
+        if mime is None or not mime.hasText() or not (own or mime.hasFormat(imported.WORDS_MIME_TYPE)):
+            super().dropEvent(event)
+            return
+        position = self.cursorForPosition(event.position().toPoint()).position()
+        cursor = self.textCursor()
+        start, end = cursor.selectionStart(), cursor.selectionEnd()
+        moving = own and event.dropAction() == Qt.DropAction.MoveAction and end > start
+        # Clears Qt's drop caret.
+        super().dragLeaveEvent(QDragLeaveEvent())
+        if moving and start <= position <= end:
+            event.setDropAction(Qt.DropAction.IgnoreAction)
+            event.accept()
+            return
+        if moving:
+            if self.edit_touches_placeholder(start, end):
+                self._placeholder_status(start, end)
+                event.ignore()
+                return
+            removal = QTextCursor(self.document())
+            removal.setPosition(start)
+            removal.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+            removal.removeSelectedText()
+            if position >= end:
+                position -= end - start
+        target = QTextCursor(self.document())
+        target.setPosition(max(0, min(position, len(self.toPlainText()))))
+        self.setTextCursor(target)
+        self.insertFromMimeData(mime)
+        # The source must not delete the dragged text again.
+        event.setDropAction(Qt.DropAction.CopyAction)
+        event.accept()

@@ -2653,6 +2653,22 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.transport.seek(target)
         return True
 
+    def play_clip(self, clip_id: str) -> bool:
+        """The gutter's play button on an imported recording clip (phase 5
+        P3): the transport plays on from the clip's placed start. False
+        when the clip isn't placed in the level the transport plays."""
+        if self.focus is not self.level:
+            return False
+        if self._schedule_timer.isActive():
+            self._schedule_timer.stop()
+            self._rebuild_transport_schedule()
+        placed = self.current_arrangement().by_clip_id().get(clip_id)
+        if placed is None:
+            return False
+        self.transport.seek(placed.start_s)
+        self.transport.play()
+        return True
+
     # --- word alignment (phase 2, C1) ------------------------------------------
 
     def _engine_has_word_timing(self, clip) -> bool:
