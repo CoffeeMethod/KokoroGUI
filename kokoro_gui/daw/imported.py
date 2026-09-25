@@ -55,20 +55,26 @@ def is_recording_clip(clip) -> bool:
 # -- deriving segments ---------------------------------------------------------------
 
 
-def clip_words(document, clip) -> list:
-    """`(doc_start, doc_end, source, start_s, end_s)` for every word of
-    `clip`, in text order, with document character offsets."""
-    out = []
+def _words_by_clip(document, clip_ids) -> dict:
+    """`{clip_id: [(doc_start, doc_end, source, start_s, end_s)]}` for the
+    clips in `clip_ids`, words in text order, from one walk of the runs."""
+    out = {clip_id: [] for clip_id in clip_ids}
     for run, r_start, _r_end in document._iter_runs_with_offsets():
-        if run.clip_id != clip.id or not run.words:
+        if run.clip_id not in out or not run.words:
             continue
         for word in sorted(run.words, key=lambda w: w[0]):
             try:
-                out.append((r_start + int(word[0]), r_start + int(word[1]), str(word[2]),
-                            float(word[3]), float(word[4])))
+                out[run.clip_id].append((r_start + int(word[0]), r_start + int(word[1]), str(word[2]),
+                                         float(word[3]), float(word[4])))
             except (TypeError, ValueError, IndexError):
                 continue
     return out
+
+
+def clip_words(document, clip) -> list:
+    """`(doc_start, doc_end, source, start_s, end_s)` for every word of
+    `clip`, in text order, with document character offsets."""
+    return _words_by_clip(document, [clip.id])[clip.id]
 
 
 def word_spans(document) -> list:
@@ -99,10 +105,21 @@ def segments_for(document, clip) -> list:
     range start (the `Segment.words` shape the playhead highlight reads),
     `duration` the range's length, `text` the transcript it covers, `raw`
     True so read-time FX apply. A clip with no words has none."""
-    words = clip_words(document, clip)
+    return _segments_from_words(document, clip_words(document, clip), document.text)
+
+
+def segments_by_clip(document, clip_ids) -> dict:
+    """`{clip_id: segments_for(document, clip)}` for every id in
+    `clip_ids`, from one walk of the runs (what
+    `Document.refresh_imported_segments` uses)."""
+    text = document.text
+    return {clip_id: _segments_from_words(document, words, text)
+            for clip_id, words in _words_by_clip(document, clip_ids).items()}
+
+
+def _segments_from_words(document, words: list, text: str) -> list:
     if not words:
         return []
-    text = document.text
     groups: list = []
     for word in words:
         _s, _e, source, start_s, end_s = word

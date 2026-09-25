@@ -516,16 +516,15 @@ class Document:
         `clip.segments` uses unchanged; a clip whose derived segments equal
         what it has keeps its list. Every edit that touches such a clip's
         runs calls this."""
-        from kokoro_gui.daw.imported import is_recording_clip, same_segments, segments_for
+        from kokoro_gui.daw.imported import is_recording_clip, same_segments, segments_by_clip
 
-        for clip in self.clips:
-            if clip_ids is not None and clip.id not in clip_ids:
-                continue
-            if not is_recording_clip(clip):
-                continue
-            segments = segments_for(self, clip)
-            if not same_segments(clip.segments, segments):
-                clip.segments = segments
+        targets = [c for c in self.clips if (clip_ids is None or c.id in clip_ids) and is_recording_clip(c)]
+        if not targets:
+            return
+        derived = segments_by_clip(self, [c.id for c in targets])
+        for clip in targets:
+            if not same_segments(clip.segments, derived[clip.id]):
+                clip.segments = derived[clip.id]
 
     def _recording_clip_of(self, run: Optional[Run]) -> Optional[Clip]:
         """`run`'s clip when it is an imported recording clip, else None."""
@@ -555,6 +554,30 @@ class Document:
                 run.clip_id = new_clip.id
         self.clips.insert(self.clips.index(clip) + 1, new_clip)
         return new_clip
+
+    @staticmethod
+    def _continues(left: Clip, right: Clip) -> bool:
+        """True when imported clip `right` reads as the rest of `left`: it
+        follows with no added silence and isn't placed on its own, with the
+        same character and track (what `_split_clip_at` leaves)."""
+        return (right.gap_before_s == 0.0 and right.timeline_timestamp is None
+                and right.character_id == left.character_id and right.track_id == left.track_id)
+
+    def edit_touches_imported(self, position: int, chars_removed: int) -> bool:
+        """True when a `replace_text` of `[position, position +
+        chars_removed)` changes imported recording text: a delete overlapping
+        a recording clip's runs, or an insert strictly inside one (which
+        splits it). Qt's native undo replays only characters, so it can't
+        give dropped words back; the editor can send such an edit through
+        `TextEditCommand` instead, whose undo restores the runs."""
+        removed_end = position + chars_removed
+        if chars_removed > 0:
+            return any(self._recording_clip_of(run) is not None
+                       for run, r_start, r_end in self._iter_runs_with_offsets()
+                       if r_start < removed_end and r_end > position)
+        left = self._recording_clip_of(self._run_covering(position - 1)) if position > 0 else None
+        right = self._run_covering(position)
+        return left is not None and right is not None and right.clip_id == left.id
 
     def _merge_clip_into(self, target: Clip, other: Clip) -> None:
         """Retags `other`'s runs with `target` and drops `other`, which
@@ -1083,6 +1106,14 @@ class Document:
         if split_clip is not None:
             touched.add(split_clip.id)
             touched.add(self._split_clip_at(split_clip, position + chars_added).id)
+        elif chars_removed > 0 and chars_added == 0 and 0 < position < len(self.text):
+            # Deleting what was typed between two halves of a split clip
+            # (Qt's native undo of the typing does exactly this) joins them.
+            left = self._recording_clip_of(self._run_covering(position - 1))
+            right = self._recording_clip_of(self._run_covering(position))
+            if left is not None and right is not None and left is not right and self._continues(left, right):
+                self._merge_clip_into(left, right)
+                touched.add(left.id)
         self._normalize_runs()
         self.refresh_imported_segments(touched)
         return removed_clips
@@ -1102,9 +1133,9 @@ class Document:
         sources meet: the clip ending at `position` whose last word has the
         first pasted word's source, else the clip starting right after the
         span whose first word has the last pasted word's source. When both
-        sides are such clips with the same character, the right one merges
-        into the left, so pasting a cut word back where it was leaves one
-        clip. Otherwise a new imported clip is made with `character_id`, on
+        sides are such clips and the right one reads as the rest of the
+        left (`_continues`: two halves of one split clip), it merges into
+        the left, so pasting a cut word back where it was leaves one clip. Otherwise a new imported clip is made with `character_id`, on
         that character's track. Returns the id of the clip the span belongs
         to."""
         end = position + length
@@ -1130,7 +1161,7 @@ class Document:
 
         if left is not None:
             target = left
-            if right is not None and right.id != left.id and right.character_id == left.character_id:
+            if right is not None and right.id != left.id and self._continues(left, right):
                 self._merge_clip_into(left, right)
         elif right is not None:
             target = right

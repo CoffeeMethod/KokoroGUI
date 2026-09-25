@@ -433,6 +433,33 @@ def test_replacing_a_word_by_typing_over_it_splits_around_the_new_text():
     assert _ranges(first) == [[0.0, 0.5]] and _ranges(second) == [[1.0, 1.5]]
 
 
+def test_deleting_the_typed_text_between_two_halves_joins_them_again():
+    # What Qt's native undo of the typing sends.
+    doc, (clip,) = _recording(HELLO)
+    doc.replace_text(12, 0, 3, "Hello there my world")
+    doc.replace_text(12, 3, 0, "Hello there world")
+    assert doc.clips == [clip]
+    assert [(r.text, r.clip_id) for r in doc.runs] == [("Hello there world", clip.id)]
+    assert _ranges(clip) == [[0.0, 1.5]]
+
+
+def test_deleting_a_paragraph_break_does_not_join_two_imported_clips():
+    doc, (a, b) = _recording(("Hello there", ((0.0, 0.5), (0.5, 1.0))),
+                             ("Good morning", ((2.0, 2.4), (2.4, 3.0))))
+    doc.replace_text(11, 2, 0, "Hello thereGood morning")
+    assert [c.id for c in doc.clips] == [a.id, b.id]
+
+
+def test_edit_touches_imported_says_which_edits_change_timed_text():
+    doc, (clip,) = _recording(HELLO)
+    doc.replace_text(17, 0, 7, "Hello there world, again")
+    assert doc.edit_touches_imported(5, 1)  # the space between two words
+    assert doc.edit_touches_imported(8, 0)  # typing inside
+    assert not doc.edit_touches_imported(0, 0)  # typing at the start
+    assert not doc.edit_touches_imported(17, 0)  # or the end
+    assert not doc.edit_touches_imported(18, 3)  # untagged text after it
+
+
 def test_deleting_across_the_boundary_of_two_imported_clips_keeps_both():
     doc, (a, b) = _recording(("Hello there", ((0.0, 0.5), (0.5, 1.0))),
                              ("Good morning", ((2.0, 2.4), (2.4, 3.0))))
