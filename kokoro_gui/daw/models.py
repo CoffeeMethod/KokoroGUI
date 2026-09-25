@@ -231,6 +231,9 @@ class Clip:
     note: str = ""
     # The original-language line a dub is written against, when there is one.
     source_text: Optional[str] = None
+    # Locked in time: ripple on regenerate never moves it (subtitle cues set
+    # it). A drag still does. Not the same as having a `timeline_timestamp`.
+    pinned: bool = False
     id: str = field(default_factory=_new_id)
     extra: dict = field(default_factory=dict)  # unknown fields, see Character
 

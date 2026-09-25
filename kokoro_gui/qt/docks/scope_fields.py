@@ -4,7 +4,8 @@ change, like the schema form.
 
 Project: pacing (`Document.settings["gap_s"]` / `["paragraph_gap_s"]`,
 kokoro_gui/daw/arrangement.py), auto-crossfade (`["auto_crossfade"]`,
-kokoro_gui/daw/mixplan.py), the track layout (`["track_layout"]`,
+kokoro_gui/daw/mixplan.py), ripple on regenerate (`["ripple"]`, on by
+default, kokoro_gui/daw/arrangement.py), the track layout (`["track_layout"]`,
 kokoro_gui/daw/lanes.py), and timecode (`["timecode"]`,
 kokoro_gui/daw/timecode.py).
 
@@ -87,6 +88,13 @@ class ScopeFields(QWidget):
         crossfade.toggled.connect(lambda on: self._set_setting("auto_crossfade", bool(on)))
         self.form.addRow("", crossfade)
 
+        ripple = QCheckBox("Ripple on regenerate")
+        ripple.setChecked(bool(settings.get("ripple", True)))
+        ripple.setToolTip("When a regenerated clip changes length, move the clips placed after it by the "
+                          "difference. A clip locked in time stays put.")
+        ripple.toggled.connect(lambda on: self._set_setting("ripple", bool(on)))
+        self.form.addRow("", ripple)
+
         layout = self.app.document.track_layout()
         layout_combo = QComboBox()
         layout_combo.addItem("One per character", "character")
@@ -133,7 +141,7 @@ class ScopeFields(QWidget):
             signal.connect(lambda *_: self._commit_timecode())
         start.editingFinished.connect(self._commit_timecode)
         self.widgets = {"gap_s": gap, "paragraph_gap_s": para, "auto_crossfade": crossfade,
-                        "track_layout": layout_combo, "track_lanes": lanes, "tc_enabled": enabled, "tc_fps": fps, "tc_start": start, "tc_drop": drop}
+                        "ripple": ripple, "track_layout": layout_combo, "track_lanes": lanes, "tc_enabled": enabled, "tc_fps": fps, "tc_start": start, "tc_drop": drop}
 
     def build_clip(self, clip) -> None:
         self.clear()

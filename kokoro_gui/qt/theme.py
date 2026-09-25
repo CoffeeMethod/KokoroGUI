@@ -65,6 +65,7 @@ class Palette:
     fx_badge_text: str
     playing_highlight: str
     estimated_outline: str
+    overlap_border: str
     accent: str
     accent_hover: str
     border: str
@@ -97,6 +98,7 @@ LIGHT = Palette(
     fx_badge_text="#ffffff",
     playing_highlight="#f5d87a",
     estimated_outline="#8a8f98",
+    overlap_border="#e5484d",
     accent="#2563eb",
     accent_hover="#1d4fd8",
     border="#d4d4d8",
@@ -125,6 +127,7 @@ DARK = Palette(
     fx_badge_text="#f0f0f0",
     playing_highlight="#8a7a2a",
     estimated_outline="#8f939a",
+    overlap_border="#f0716a",
     accent="#4c8df6",
     accent_hover="#6ba1f8",
     border="#3a3d42",

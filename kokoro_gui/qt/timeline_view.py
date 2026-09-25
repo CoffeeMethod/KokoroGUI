@@ -41,8 +41,10 @@ Mouse gestures on the main view (all resolved in `mouseReleaseEvent`):
 
 The header column has, per track, `M` (mute), `S` (solo), `A` (show the
 automation lane), a fader and a pan slider (`trackFieldChanged`).
-The block context menu adds Take (pick or delete a parked take), Status
-and "Align words". The ruler labels in timecode when the document has it
+The block context menu adds Take (pick or delete a parked take), Status,
+"Align words" and "Lock in time" (`Clip.pinned`: ripple on regenerate
+won't move it). Two clips overlapping on one track get a red border
+(`arrangement.overlaps`). The ruler labels in timecode when the document has it
 enabled (`kokoro_gui/daw/timecode.py`). `set_status_filter` dims blocks
 that don't match the timeline dock's filter.
 
@@ -63,7 +65,7 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.daw import markers as marker_ops
-from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement
+from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement, overlaps
 from kokoro_gui.daw.models import CLIP_STATUSES
 from kokoro_gui.daw.timecode import format_position
 from kokoro_gui.qt import theme, waveform_data
@@ -104,6 +106,7 @@ MIN_SCENE_SECONDS = 10.0
 AUTO_SCROLL_GRACE_S = 2.0
 FALLBACK_CLIP_COLOR = "#888888"
 SELECTED_BORDER_WIDTH_PX = 3
+OVERLAP_BORDER_WIDTH_PX = 2
 FX_BUTTON_WIDTH_PX = 24.0
 FX_BUTTON_HEIGHT_PX = 16.0
 FX_BUTTON_ACTIVE_OPACITY = 0.9
@@ -164,6 +167,7 @@ class ClipBlockItem(QGraphicsItem):
         self._selected = False
         self._fx_active = False
         self._estimated = False
+        self._overlap = False
         self._fade_in_px = 0.0
         self._fade_out_px = 0.0
         self.clip_id: Optional[str] = None
@@ -208,6 +212,14 @@ class ClipBlockItem(QGraphicsItem):
     def estimated(self) -> bool:
         return self._estimated
 
+    def set_overlap(self, overlap: bool) -> None:
+        self._overlap = overlap
+        self.update()
+
+    @property
+    def overlap(self) -> bool:
+        return self._overlap
+
     def set_fades_px(self, fade_in_px: float, fade_out_px: float) -> None:
         self._fade_in_px = max(0.0, min(fade_in_px, self._width))
         self._fade_out_px = max(0.0, min(fade_out_px, self._width))
@@ -249,6 +261,8 @@ class ClipBlockItem(QGraphicsItem):
         fill.setAlpha(70 if self._estimated else CLIP_FILL_ALPHA)
         if self._selected:
             painter.setPen(QPen(QColor(pal.selection_border), SELECTED_BORDER_WIDTH_PX))
+        elif self._overlap:
+            painter.setPen(QPen(QColor(pal.overlap_border), OVERLAP_BORDER_WIDTH_PX))
         elif self._estimated:
             painter.setPen(QPen(QColor(pal.estimated_outline), 1, Qt.PenStyle.DashLine))
         else:
@@ -596,6 +610,7 @@ class TimelineView(QGraphicsView):
     subRangeTtsRequested = Signal(str, int, int)  # (clip_id, sub_start, sub_end) text offsets
     clipMoved = Signal(str, float)  # (clip_id, new_start_s)
     unpinRequested = Signal(str)
+    lockInTimeRequested = Signal(str, bool)  # (clip_id, pinned)
     seekRequested = Signal(float)
     zoomChanged = Signal(float)
     fadeChanged = Signal(str, str, float)  # (clip_id, "fade_in_s" | "fade_out_s", seconds)
@@ -719,6 +734,11 @@ class TimelineView(QGraphicsView):
             unpin.triggered.connect(lambda checked=False, cid=block.clip_id: self.unpinRequested.emit(cid))
 
         if clip is not None:
+            lock = menu.addAction("Lock in time")
+            lock.setCheckable(True)
+            lock.setChecked(bool(clip.pinned))
+            lock.setToolTip("Ripple on regenerate won't move this clip.")
+            lock.triggered.connect(lambda checked=False, cid=clip.id: self.lockInTimeRequested.emit(cid, bool(checked)))
             menu.addSeparator()
             self._add_take_menu(menu, clip)
             status_menu = menu.addMenu("Status")
@@ -1197,6 +1217,7 @@ class TimelineView(QGraphicsView):
         # Only tracks with clips are drawn (grill PR4); an unused one keeps
         # its mixer settings in the model.
         tracks = document.used_tracks()
+        overlapping = {clip_id for pair in overlaps(arrangement) for clip_id in pair}
         lane_index_by_track_id = {track.id: i for i, track in enumerate(tracks)}
         self._lane_count = len(tracks)
 
@@ -1240,6 +1261,7 @@ class TimelineView(QGraphicsView):
             height = LANE_HEIGHT_PX - 2 * LANE_MARGIN_PX
 
             block = ClipBlockItem()
+            block.set_overlap(clip.id in overlapping)
             block.set_clip_id(clip.id)
             block.set_color(color)
             block.set_label(character.name if character is not None else "")

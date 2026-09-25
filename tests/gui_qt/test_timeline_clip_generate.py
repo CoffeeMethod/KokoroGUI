@@ -28,8 +28,9 @@ def test_context_menu_shows_generate_action_over_a_clip_block(qt_app):
     menu = qt_app.timeline_dock.timeline_view._build_context_menu(view_pos)
 
     assert menu is not None
-    # No audio, one take: Generate, then the Status submenu (no Play, Take or Align words).
-    assert [a.text() for a in menu.actions() if not a.isSeparator()] == ["Generate", "Status"]
+    # No audio, one take: Generate, Lock in time, then the Status submenu
+    # (no Play, Take or Align words).
+    assert [a.text() for a in menu.actions() if not a.isSeparator()] == ["Generate", "Lock in time", "Status"]
 
 
 def test_context_menu_empty_over_lane_background(qt_app):
@@ -283,3 +284,101 @@ def test_declining_the_whisper_download_stops_asking_this_session(qt_app, monkey
     assert qt_app.schedule_word_alignment([clip.id]) is False
     assert qt_app.schedule_word_alignment([clip.id]) is False
     assert asked == [True]
+
+
+# --- phase 3: ripple on regenerate, overlap warnings -----------------------------
+
+
+def _wav(tmp_path, name, seconds):
+    import numpy as np
+    import soundfile as sf
+
+    path = tmp_path / name
+    sf.write(str(path), np.full(int(24000 * seconds), 0.2, dtype=np.float32), 24000)
+    return str(path)
+
+
+def _generate_with(qt_app, clip, path, seconds, take=0, key="k"):
+    _fresh_future(qt_app)
+    qt_app.transport_dock.set_busy(False)
+    qt_app.timeline_dock.on_generate_clip_requested(clip.id)
+    qt_app.engine.worker.run_coro.return_value.set_result([
+        {"path": path, "text": qt_app.document.clip_text(clip), "duration": seconds, "seg_idx": 0,
+         "cache_key": key, "take": take},
+    ])
+
+
+def _ripple_setup(qt_app, tmp_path):
+    """Clip a (text-ordered, generated at 1 s), then b and c placed by
+    timestamp after it; c is locked in time."""
+    qt_app.document.settings["gap_s"] = 0.0
+    qt_app.document.text = "aaa bbb ccc"
+    character = qt_app.document.characters[0]
+    a = qt_app.document.assign_character_to_range(0, 3, character.id)
+    b = qt_app.document.assign_character_to_range(4, 7, character.id)
+    c = qt_app.document.assign_character_to_range(8, 11, character.id)
+    _generate_with(qt_app, a, _wav(tmp_path, "a0.wav", 1.0), 1.0)
+    b.timeline_timestamp = 2.0
+    c.timeline_timestamp = 4.0
+    c.pinned = True
+    return a, b, c
+
+
+def test_a_longer_regenerate_ripples_later_timestamp_clips_but_not_locked_ones(qt_app, tmp_path):
+    a, b, c = _ripple_setup(qt_app, tmp_path)
+
+    _generate_with(qt_app, a, _wav(tmp_path, "a1.wav", 1.5), 1.5, take=1, key="k1")
+
+    assert abs(b.timeline_timestamp - 2.5) < 1e-3
+    assert c.timeline_timestamp == 4.0
+    qt_app.document.undo_stack.undo()
+    assert b.timeline_timestamp == 2.0
+
+
+def test_ripple_off_leaves_clips_where_they_are(qt_app, tmp_path):
+    a, b, _c = _ripple_setup(qt_app, tmp_path)
+    qt_app.document.settings["ripple"] = False
+
+    _generate_with(qt_app, a, _wav(tmp_path, "a1.wav", 1.5), 1.5, take=1, key="k1")
+
+    assert b.timeline_timestamp == 2.0
+
+
+def test_a_first_generate_does_not_ripple(qt_app, tmp_path):
+    qt_app.document.text = "aaa bbb"
+    character = qt_app.document.characters[0]
+    a = qt_app.document.assign_character_to_range(0, 3, character.id)
+    b = qt_app.document.assign_character_to_range(4, 7, character.id)
+    b.timeline_timestamp = 5.0
+
+    _generate_with(qt_app, a, _wav(tmp_path, "a0.wav", 2.0), 2.0)
+
+    assert b.timeline_timestamp == 5.0
+
+
+def test_overlapping_clips_on_one_track_get_a_red_border(qt_app, tmp_path):
+    a, b, _c = _ripple_setup(qt_app, tmp_path)
+    b.timeline_timestamp = 0.5  # on a's track, inside a's 1 s
+    qt_app.refresh_timeline()
+
+    assert _clip_block_for(qt_app, a.id).overlap
+    assert _clip_block_for(qt_app, b.id).overlap
+
+    b.timeline_timestamp = 3.0
+    qt_app.refresh_timeline()
+    assert not _clip_block_for(qt_app, a.id).overlap
+
+
+def test_lock_in_time_menu_toggles_pinned_undoably(qt_app):
+    clip = _make_clip(qt_app)
+    qt_app.refresh_timeline()
+    view = qt_app.timeline_dock.timeline_view
+    block = _clip_block_for(qt_app, clip.id)
+    menu = view._build_context_menu(view.mapFromScene(block.mapToScene(0, 0)))
+    lock = next(a for a in menu.actions() if a.text() == "Lock in time")
+    assert not lock.isChecked()
+
+    lock.trigger()
+    assert clip.pinned is True
+    qt_app.document.undo_stack.undo()
+    assert clip.pinned is False

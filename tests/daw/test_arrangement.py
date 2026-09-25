@@ -177,3 +177,71 @@ def test_first_clip_gets_only_its_own_override():
     assert compute_arrangement(doc, chars_per_second=10.0).placed[0].start_s == 0.0
     first.gap_before_s = 0.75
     assert compute_arrangement(doc, chars_per_second=10.0).placed[0].start_s == 0.75
+
+
+# -- overlaps and ripple on regenerate (phase 3, beside the library) -----------------
+
+
+def _placed(**clips_at):
+    """An arrangement from `name=(track_id, start, duration, timestamp, pinned)`."""
+    from kokoro_gui.daw.arrangement import Arrangement, PlacedClip
+
+    placed, by_name = [], {}
+    for name, (track_id, start, duration, timestamp, pinned) in clips_at.items():
+        clip = Clip(track_id=track_id, timeline_timestamp=timestamp, pinned=pinned)
+        by_name[name] = clip
+        placed.append(PlacedClip(clip=clip, start_s=start, duration_s=duration, estimated=False))
+    total = max((p.end_s for p in placed), default=0.0)
+    return Arrangement(placed=placed, total_duration_s=total), by_name
+
+
+def test_overlaps_reports_same_track_intersections_only():
+    from kokoro_gui.daw.arrangement import overlaps
+
+    arrangement, c = _placed(
+        a=("t1", 0.0, 2.0, None, False),
+        b=("t1", 1.5, 1.0, 1.5, False),   # overlaps a
+        c=("t2", 0.5, 1.0, 0.5, False),   # other track: fine
+        d=("t1", 2.5, 1.0, 2.5, False),   # touches b's end exactly: fine
+        e=(None, 0.0, 5.0, 0.0, False),   # no track: ignored
+    )
+    assert overlaps(arrangement) == [(c["a"].id, c["b"].id)]
+
+
+def test_overlaps_is_empty_for_a_plain_read_through():
+    from kokoro_gui.daw.arrangement import overlaps
+
+    alice = Character.from_preset_dict("Alice", {})
+    track = Track(name="A", character_id=alice.id)
+    first = Clip(character_id=alice.id, track_id=track.id)
+    second = Clip(character_id=alice.id, track_id=track.id)
+    doc = _doc("aaaa bbbb", [(0, 4, first), (5, 9, second)], characters=[alice], tracks=[track])
+    assert overlaps(compute_arrangement(doc, chars_per_second=10.0)) == []
+
+
+def test_ripple_moves_later_timestamp_clips_and_skips_pinned_ones():
+    from kokoro_gui.daw.arrangement import plan_ripple
+
+    arrangement, c = _placed(
+        regen=("t1", 0.0, 2.0, None, False),
+        before=("t2", 1.0, 1.0, 1.0, False),     # starts before regen's old end
+        after=("t1", 2.5, 1.0, 2.5, False),      # timestamp-placed, after: moves
+        locked=("t1", 4.0, 1.0, 4.0, True),      # pinned: never moves
+        text_ordered=("t1", 5.0, 1.0, None, False),  # follows on its own
+    )
+    assert plan_ripple(arrangement, {c["regen"].id: 0.75}) == {c["after"].id: 0.75}
+    assert plan_ripple(arrangement, {c["regen"].id: -0.5}) == {c["after"].id: -0.5}
+    assert plan_ripple(arrangement, {}) == {}
+
+
+def test_ripple_from_several_clips_adds_up():
+    from kokoro_gui.daw.arrangement import plan_ripple
+
+    arrangement, c = _placed(
+        one=("t1", 0.0, 1.0, None, False),
+        two=("t1", 2.0, 1.0, 2.0, False),
+        three=("t1", 4.0, 1.0, 4.0, False),
+    )
+    shifts = plan_ripple(arrangement, {c["one"].id: 0.5, c["two"].id: 0.25})
+    # two moves for one's change only; three for both.
+    assert shifts == {c["two"].id: 0.5, c["three"].id: 0.75}

@@ -21,6 +21,12 @@ The gap is the clip's own `gap_before_s` when set (a `[pause:x]` marker
 sets it), else `document.settings["paragraph_gap_s"]` when the text between
 the two clips holds a blank line, else `document.settings["gap_s"]`. The
 first clip gets only its own override. A pinned clip ignores gaps.
+
+`overlaps` lists clips on the same track whose spans intersect (the
+timeline paints them red). `plan_ripple` is ripple on regenerate: when a
+regenerated clip comes back longer or shorter, every clip placed by
+timestamp after its old end moves by the difference, except a clip with
+`Clip.pinned` set. Clips placed in text order follow on their own.
 """
 from __future__ import annotations
 
@@ -29,6 +35,9 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 FALLBACK_CHARS_PER_SECOND = 15.0
+# Two clips closer than this aren't reported as overlapping, and a duration
+# change smaller than this doesn't ripple.
+OVERLAP_EPSILON_S = 1e-3
 DEFAULT_GAP_S = 0.35
 DEFAULT_PARAGRAPH_GAP_S = 0.9
 # A blank line, whitespace-only lines included.
@@ -186,3 +195,49 @@ def text_order_predecessor(arrangement: Arrangement, clip_id: str):
         if placed.clip.id == clip_id:
             return arrangement.placed[index - 1] if index > 0 else None
     return None
+
+
+def overlaps(arrangement: Arrangement) -> list:
+    """`[(clip_id, clip_id)]` for every pair of placed clips on the same
+    track whose spans intersect by more than `OVERLAP_EPSILON_S`, earlier
+    clip first. Clips with no track are left out."""
+    by_track: dict = {}
+    for placed in arrangement.placed:
+        track_id = getattr(placed.clip, "track_id", None)
+        if track_id is not None:
+            by_track.setdefault(track_id, []).append(placed)
+    pairs = []
+    for placed_list in by_track.values():
+        placed_list.sort(key=lambda p: (p.start_s, p.end_s))
+        for i, a in enumerate(placed_list):
+            for b in placed_list[i + 1:]:
+                if b.start_s >= a.end_s - OVERLAP_EPSILON_S:
+                    break
+                if b.end_s > a.start_s + OVERLAP_EPSILON_S and b.duration_s > OVERLAP_EPSILON_S:
+                    pairs.append((a.clip.id, b.clip.id))
+    return pairs
+
+
+def plan_ripple(arrangement: Arrangement, deltas: dict) -> dict:
+    """Ripple on regenerate. `deltas` is `{clip_id: new duration - old
+    duration}` for regenerated clips, measured against `arrangement` (the
+    placement before the new audio). Returns `{clip_id: shift_s}` for every
+    clip placed by `timeline_timestamp`, not `pinned`, that starts at or
+    after a regenerated clip's old end: the sum of those clips' deltas.
+    Several regenerated clips compose, since each shift is measured in the
+    same before-coordinates."""
+    old_end = {}
+    for placed in arrangement.placed:
+        if placed.clip.id in deltas:
+            old_end[placed.clip.id] = placed.end_s
+    shifts = {}
+    for placed in arrangement.placed:
+        clip = placed.clip
+        if clip.timeline_timestamp is None or getattr(clip, "pinned", False):
+            continue
+        shift = sum(delta for clip_id, delta in deltas.items()
+                    if clip_id != clip.id and clip_id in old_end
+                    and placed.start_s >= old_end[clip_id] - OVERLAP_EPSILON_S)
+        if abs(shift) > OVERLAP_EPSILON_S:
+            shifts[clip.id] = shift
+    return shifts

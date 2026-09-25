@@ -11,6 +11,12 @@ for just that clip's text/config, and populates its `Segment`s with real
 audio - the same "a dock owns its own Signals and reaches into
 self.app.engine/self.app.document directly" pattern MixingDock's
 preview/mix flow already establishes.
+
+Ripple on regenerate: when a generate gives a clip that already had audio a
+different length, every later clip placed by timestamp moves by the
+difference (`arrangement.plan_ripple`, one undoable `RippleCommand`), unless
+it is locked in time (`Clip.pinned`) or the project turned ripple off
+(`document.settings["ripple"]`, on by default).
 """
 from __future__ import annotations
 
@@ -23,10 +29,11 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.daw import markers as marker_ops
+from kokoro_gui.daw.arrangement import OVERLAP_EPSILON_S, plan_ripple
 from kokoro_gui.daw.dirty import build_segments_from_results, carry_segment_timing, take_from_results
 from kokoro_gui.daw.undo import (
     AssignCharacterCommand, DeleteTakeCommand, MoveClipBeforeCommand, MoveClipCommand, ReassignTrackCommand,
-    SetActiveTakeCommand, SetClipTimestampCommand, SetFieldCommand, TextEditCommand,
+    RippleCommand, SetActiveTakeCommand, SetClipTimestampCommand, SetFieldCommand, TextEditCommand,
 )
 from kokoro_gui.qt.timeline_view import TimelineWidget
 
@@ -64,6 +71,7 @@ class TimelineDock(QDockWidget):
         self.timeline_view.subRangeTtsRequested.connect(self.on_sub_range_tts_requested)
         self.timeline_view.clipMoved.connect(self.on_clip_moved)
         self.timeline_view.unpinRequested.connect(self.on_clip_unpin_requested)
+        self.timeline_view.lockInTimeRequested.connect(self.on_lock_in_time_requested)
         self.timeline_view.playClipRequested.connect(self.on_play_clip_requested)
         self.timeline_view.fadeChanged.connect(self.on_fade_changed)
         self.timeline_view.takeSelected.connect(self.on_take_selected)
@@ -279,13 +287,46 @@ class TimelineDock(QDockWidget):
         future = self.app.engine.worker.run_coro(self.app.engine.generate_clip_audio((0, text, config)))
         future.add_done_callback(_done)
 
+    def on_lock_in_time_requested(self, clip_id: str, pinned: bool) -> None:
+        if self.app.document.get_clip(clip_id) is not None:
+            self._push(SetFieldCommand("clip", clip_id, "pinned", bool(pinned)))
+
+    def _ripple(self, before, clip_ids) -> int:
+        """Ripple on regenerate for `clip_ids`, whose new audio is already
+        applied; `before` is the arrangement from just before. Only a clip
+        that had audio counts (a first generate replaces an estimate, not a
+        take). Returns how many clips moved."""
+        document = self.app.document
+        if not document.settings.get("ripple", True):
+            return 0
+        old = before.by_clip_id()
+        deltas = {}
+        for clip_id in clip_ids:
+            placed = old.get(clip_id)
+            clip = document.get_clip(clip_id)
+            if placed is None or placed.estimated or clip is None:
+                continue
+            duration = self.app.clip_duration_s(clip)
+            if duration is None:
+                continue
+            delta = duration - placed.duration_s
+            if abs(delta) > OVERLAP_EPSILON_S:
+                deltas[clip_id] = delta
+        shifts = plan_ripple(before, deltas)
+        if shifts:
+            document.undo_stack.push(RippleCommand(shifts))
+            self.app.set_status(f"Ripple: moved {len(shifts)} clip(s) after the regenerated audio.")
+        return len(shifts)
+
     def _on_clip_generation_finished(self, clip_id: str, success: bool, error: str) -> None:
         self.app.set_ui_state(False)
 
         clip = self.app.document.get_clip(clip_id)
         if success and clip is not None:
             results = self._pending_results.pop(clip_id)
+            before = self.app.build_arrangement()
             self._apply_results(clip, results)
+            self._ripple(before, [clip_id])
             self.app.editor.rehighlight()
             self.app.schedule_save()
             self.app.refresh_timeline()
@@ -534,6 +575,7 @@ class TimelineDock(QDockWidget):
         succeeded_ids = []
         failed_ids = []
         any_segments_updated = False
+        before = self.app.build_arrangement()
 
         for outcome in pending:
             clip_id = outcome["clip_id"]
@@ -549,6 +591,7 @@ class TimelineDock(QDockWidget):
                 failed_ids.append(clip_id)
 
         if any_segments_updated:
+            self._ripple(before, succeeded_ids)
             self.app.editor.rehighlight()
             self.app.schedule_save()
             self.app.refresh_timeline()

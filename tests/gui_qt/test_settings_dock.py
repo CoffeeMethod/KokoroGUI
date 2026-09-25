@@ -224,6 +224,16 @@ def test_project_scope_pacing_fields_write_document_settings_undoably(qt_app):
     assert "auto_crossfade" not in qt_app.document.settings
 
 
+def test_project_scope_ripple_checkbox_defaults_on_and_writes_the_setting(qt_app):
+    qt_app.selection.clear()
+    ripple = qt_app.settings_dock.scope_fields.widgets["ripple"]
+    assert ripple.isChecked()
+    ripple.setChecked(False)
+    assert qt_app.document.settings["ripple"] is False
+    qt_app.document.undo_stack.undo()
+    assert "ripple" not in qt_app.document.settings
+
+
 def test_project_scope_track_layout_switches_both_ways(qt_app):
     """Grill PR4: Unified puts clips on "Lane N" tracks by the lane rule;
     One per character puts them back on character tracks. Each switch is

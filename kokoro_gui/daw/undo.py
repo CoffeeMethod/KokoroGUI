@@ -347,6 +347,32 @@ class SetClipTimestampCommand(Command):
         clip.timeline_timestamp = self._previous
 
 
+class RippleCommand(Command):
+    """Ripple on regenerate: moves each clip in `shifts` (`{clip_id:
+    seconds}`, from `arrangement.plan_ripple`) along the timeline by adding
+    to its `timeline_timestamp`, never below 0. Undo puts back the exact
+    previous values."""
+
+    def __init__(self, shifts: dict):
+        self.shifts = dict(shifts)
+        self._previous: dict = {}
+
+    def do(self, document) -> None:
+        self._previous = {}
+        for clip_id, shift in self.shifts.items():
+            clip = document.get_clip(clip_id)
+            if clip is None or clip.timeline_timestamp is None:
+                continue
+            self._previous[clip_id] = clip.timeline_timestamp
+            clip.timeline_timestamp = max(0.0, float(clip.timeline_timestamp) + float(shift))
+
+    def undo(self, document) -> None:
+        for clip_id, timestamp in self._previous.items():
+            clip = document.get_clip(clip_id)
+            if clip is not None:
+                clip.timeline_timestamp = timestamp
+
+
 class MoveClipBeforeCommand(Command):
     """UI9 / grill Q13: dragging a clip to before another clip on the
     timeline also moves its text to just before that clip's text. Moves
