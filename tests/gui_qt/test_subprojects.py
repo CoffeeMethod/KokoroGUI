@@ -188,3 +188,94 @@ def test_close_with_only_a_dirty_child_prompts_once_naming_it(qt_app, tmp_path, 
     qt_app.new_project()
     assert len(asked) == 1
     assert "Chapter 1" in asked[0]
+
+
+# -- step 4: the selection points the docks at a subproject (NP1) -----------------
+
+
+def test_selecting_the_nested_block_points_the_docks_at_the_child(qt_app):
+    _intro, chapter, child = _book(qt_app)
+    root = qt_app.root
+
+    qt_app.selection.select_clip(child.clip_id)
+
+    assert qt_app.focus is child
+    assert qt_app.level is root
+    assert qt_app.document is child.document
+    assert qt_app.selection.project_id == child.project_id
+    assert qt_app.editor.toPlainText() == "Chapter text."
+    assert qt_app.scope_text() == "Subproject: Chapter 1"
+    assert not qt_app.transcript_dock.scope_bar.isHidden()
+    assert qt_app.fx_dock.scope_label.text().startswith("Subproject: Chapter 1")
+    assert qt_app.settings_dock.subproject_label.text() == "Subproject: Chapter 1"
+    assert qt_app.settings_dock.scope_fields.widgets["title"].text() == "Chapter 1"
+    # The timeline still shows the parent.
+    assert chapter.id not in qt_app.timeline_dock.timeline_view._blocks_by_clip_id
+    assert child.clip_id in qt_app.timeline_dock.timeline_view._blocks_by_clip_id
+
+    # Typing edits the child; undo is the child's.
+    qt_app.editor.textCursor().insertText("Hi ")
+    assert child.document.text.startswith("Hi ")
+    assert root.document.text == "Intro. Chapter 1 Outro."
+
+    # Back, or selecting a parent clip, returns the docks to the level.
+    qt_app.transcript_dock.scope_back_btn.click()
+    assert qt_app.focus is root
+    assert qt_app.editor.toPlainText() == root.document.text
+    assert qt_app.transcript_dock.scope_bar.isHidden()
+
+
+def test_selecting_a_parent_clip_moves_the_focus_back(qt_app):
+    intro, _chapter, child = _book(qt_app)
+    qt_app.selection.select_clip(child.clip_id)
+    assert qt_app.focus is child
+    qt_app.selection.select_clip(intro.id)
+    assert qt_app.focus is qt_app.root
+
+
+def test_a_selection_inside_the_child_keeps_the_focus_there(qt_app):
+    _intro, chapter, child = _book(qt_app)
+    qt_app.selection.select_clip(child.clip_id)
+    qt_app.selection.select_clip(chapter.id)  # the child's own clip, from its transcript
+    assert qt_app.focus is child
+    qt_app.selection.clear()
+    assert qt_app.focus is child
+
+
+def test_renaming_a_subproject_rewrites_its_placeholder(qt_app):
+    _intro, _chapter, child = _book(qt_app)
+    qt_app.selection.select_clip(child.clip_id)
+    field = qt_app.settings_dock.scope_fields.widgets["title"]
+    field.setText("The Beginning")
+    field.editingFinished.emit()
+    assert child.project_settings["title"] == "The Beginning"
+    assert qt_app.root.document.text == "Intro. The Beginning Outro."
+    assert qt_app.scope_text() == "Subproject: The Beginning"
+
+
+def test_the_placeholder_line_is_read_only(qt_app, qtbot):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QTextCursor
+
+    _intro, _chapter, child = _book(qt_app)
+    editor = qt_app.editor
+    start, end = qt_app.document.clip_extent(child.clip_id)
+    assert editor.edit_touches_placeholder(start + 2, start + 2, inserting=True)
+    assert editor.edit_touches_placeholder(start - 1, start + 3)
+    assert not editor.edit_touches_placeholder(start, end)  # the whole line may go
+    assert not editor.edit_touches_placeholder(0, 3)
+
+    # A backspace over a selection reaching into the placeholder is refused.
+    editor._updating_from_model = True
+    cursor = QTextCursor(editor.document())
+    cursor.setPosition(start - 2)
+    cursor.setPosition(start + 3, QTextCursor.MoveMode.KeepAnchor)
+    editor.setTextCursor(cursor)
+    editor._updating_from_model = False
+    qtbot.keyClick(editor, Qt.Key.Key_Backspace)
+    assert qt_app.root.document.text == "Intro. Chapter 1 Outro."
+
+    # Typing right after the placeholder doesn't join it.
+    qt_app.root.document.replace_text(end, 0, 1, qt_app.root.document.text[:end] + "X" +
+                                      qt_app.root.document.text[end:])
+    assert qt_app.root.document.clip_text(qt_app.root.document.get_clip(child.clip_id)) == "Chapter 1"

@@ -764,7 +764,9 @@ class Document:
         inherited = self._run_covering(position - 1) if position > 0 else None
         inherited_clip_id = inherited.clip_id if inherited is not None else None
         inherited_kind = inherited.kind if inherited is not None else None
-        if inherited_clip_id in fully_consumed_ids:
+        # Text typed after a subproject's placeholder line is never part of
+        # it: the placeholder holds the child's title and nothing else.
+        if inherited_kind == PLACEHOLDER or inherited_clip_id in fully_consumed_ids:
             inherited_clip_id = None
             inherited_kind = None
 

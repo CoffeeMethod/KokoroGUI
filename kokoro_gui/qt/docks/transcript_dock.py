@@ -23,7 +23,7 @@ What's left is a header row with two combos above the editor:
 """
 from __future__ import annotations
 
-from PySide6.QtWidgets import QComboBox, QDockWidget, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QDockWidget, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from kokoro_gui.daw.undo import SetClipFxCommand, SetFieldCommand
 from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, filter_allowed_keys
@@ -48,6 +48,20 @@ class TranscriptDock(QDockWidget):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
+
+        # Phase 4 (NP1): shown while the transcript shows a subproject the
+        # timeline isn't in.
+        self.scope_bar = QWidget()
+        scope_layout = QHBoxLayout(self.scope_bar)
+        scope_layout.setContentsMargins(0, 0, 0, 0)
+        self.scope_label = QLabel()
+        self.scope_back_btn = QPushButton("Back")
+        self.scope_back_btn.setToolTip("Show the project the timeline is in.")
+        self.scope_back_btn.clicked.connect(lambda: self.app.set_focus(self.app.level))
+        scope_layout.addWidget(self.scope_label, 1)
+        scope_layout.addWidget(self.scope_back_btn)
+        self.scope_bar.hide()
+        layout.addWidget(self.scope_bar)
 
         header = QHBoxLayout()
         header.addWidget(QLabel("Character:"))
@@ -78,6 +92,14 @@ class TranscriptDock(QDockWidget):
         self.fx_combo.activated.connect(self._on_fx_activated)
         self.variant_combo.activated.connect(self._on_variant_activated)
         self.editor.cursorPositionChanged.connect(self.sync_header)
+
+    def refresh_scope(self) -> None:
+        """The subproject bar: its title and a way back to the level."""
+        text = self.app.scope_text() if hasattr(self.app, "scope_text") else None
+        self.scope_bar.setVisible(bool(text))
+        if text:
+            self.scope_label.setText(text)
+            self.scope_back_btn.setText(f"Back to {self.app.level.title()}")
         self.app.selection.changed.connect(self.sync_header)
         self.sync_header()
 

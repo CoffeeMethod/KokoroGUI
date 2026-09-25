@@ -53,7 +53,7 @@ import os
 
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFormLayout,
-    QGroupBox, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget,
+    QGroupBox, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget,
 )
 
 import kokoro_gui.qt.app as qt_app_module
@@ -97,6 +97,12 @@ class SettingsDock(QDockWidget):
         layout = QVBoxLayout(inner)
         scroll.setWidget(inner)
         outer.addWidget(scroll)
+
+        # Phase 4 (NP1): which subproject these settings edit, when the
+        # docks show one the timeline isn't in.
+        self.subproject_label = QLabel()
+        self.subproject_label.hide()
+        layout.addWidget(self.subproject_label)
 
         # --- Schema-driven config (moved from GenerationDock) ---
         self.schema_group = QGroupBox("Configuration")
@@ -192,6 +198,9 @@ class SettingsDock(QDockWidget):
             self._none_values = self._snapshot_none_values()
 
         self._mode, self._target = self._resolve_mode()
+        scope = self.app.scope_text() if hasattr(self.app, "scope_text") else None
+        self.subproject_label.setVisible(bool(scope))
+        self.subproject_label.setText(scope or "")
         self._build_schema_form()
         self._refresh_hand_built_display()
         self.refresh_scope_fields()

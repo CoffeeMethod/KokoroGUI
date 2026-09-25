@@ -201,11 +201,13 @@ class FXDock(QDockWidget):
         finally:
             self._loading = False
         if self._mode == "clip":
-            self.scope_label.setText("Clip FX (override for the selected clip)")
+            text = "Clip FX (override for the selected clip)"
         elif self._mode == "character":
-            self.scope_label.setText(f"Character FX: {self._target.name}")
+            text = f"Character FX: {self._target.name}"
         else:
-            self.scope_label.setText("Project FX")
+            text = "Project FX"
+        scope = self.app.scope_text() if hasattr(self.app, "scope_text") else None
+        self.scope_label.setText(f"{scope}: {text}" if scope else text)
 
     def _character_preset_name(self, character):
         return fx_resolve.real_preset_name(character.preset_data.get("fx_preset")) if character is not None else None

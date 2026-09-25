@@ -39,6 +39,10 @@ class SelectionModel(QObject):
         self.selected_character_id: Optional[str] = None
         self.selected_range: Optional[tuple[int, int]] = None
         self.playing_clip_id: Optional[str] = None
+        # The open project the selected clip belongs to (phase 4). Set by the
+        # app when the selection changes; clip ids are unique across
+        # projects, so this is bookkeeping for the docks, not a key.
+        self.project_id: Optional[str] = None
 
     @property
     def kind(self) -> str:

@@ -268,6 +268,91 @@ class SubprojectsMixin:
         """Placeholder until the mixdown lands: a nested clip is stale."""
         project.document.nested_state_fn = lambda clip: True
 
+    # -- focus: what the transcript, Settings and FX docks show (NP1) --------------
+
+    def scope_text(self):
+        """"Subproject: <title>" while the docks show a subproject the
+        timeline isn't in, else None."""
+        if self.focus is self.level:
+            return None
+        return f"Subproject: {self.focus.title()}"
+
+    def set_focus(self, project) -> None:
+        """Points the transcript, Settings and Audio FX docks at `project`'s
+        document. Undo follows (each document has its own stack)."""
+        if project is None or project is self.focus:
+            return
+        self.focus = project
+        self.selection.project_id = project.project_id
+        self._refresh_focus_docks()
+
+    def _refresh_focus_docks(self) -> None:
+        self._focus_switching = True
+        try:
+            editor = self.editor
+            if editor is not None:
+                editor._updating_from_model = True
+                try:
+                    editor.rebind_document()
+                finally:
+                    editor._updating_from_model = False
+            for backend in list(self._backends.values()):
+                backend.on_project_opened(self.project_dir, self._engine_meta(backend.id))
+            if self.transcript_dock is not None:
+                self.transcript_dock.refresh_character_choices()
+                self.transcript_dock.refresh_scope()
+            if self.settings_dock is not None:
+                self.settings_dock._build_for_selection()
+            if self.fx_dock is not None:
+                self.fx_dock.refresh_for_selection()
+            self._on_active_backend_maybe_changed(force=True)
+        finally:
+            self._focus_switching = False
+
+    def _on_selection_for_focus(self) -> None:
+        """NP1: selecting a nested block (in the timeline, or its placeholder
+        line in the transcript) points the docks at its child, opening it
+        the first time; selecting another clip points them at the clip's
+        own project; a lane label at the level. A text range or an empty
+        selection leaves the focus where it is, so editing inside a
+        subproject stays there."""
+        if getattr(self, "_focus_switching", False):
+            return
+        selection = self.selection
+        if selection.kind == "clip":
+            owner = self.project_of_clip_id(selection.selected_clip_id)
+            if owner is None:
+                return
+            selection.project_id = owner.project_id
+            clip = owner.document.get_clip(selection.selected_clip_id)
+            if clip is not None and clip.is_nested:
+                if self.is_child_missing(clip) and self.child_project(clip) is None:
+                    self.set_focus(owner)
+                    return
+                self.open_child(clip, then=lambda child: self.set_focus(child or owner))
+                return
+            self.set_focus(owner)
+        elif selection.kind == "character":
+            selection.project_id = self.level.project_id
+            self.set_focus(self.level)
+
+    def rename_subproject(self, child, title: str) -> None:
+        """Sets a subproject's title (`project_settings["title"]`, in its
+        own `project.json`) and rewrites its placeholder line in the parent."""
+        title = (title or "").strip()
+        if child is None or child.parent_id is None or not title or title == child.title():
+            return
+        child.project_settings["title"] = title
+        parent = self.parent_of(child)
+        if parent is not None and child.clip_id:
+            parent.document.set_placeholder_text(child.clip_id, child.title())
+            if parent is self.focus and self.editor is not None:
+                self.editor.load_text(parent.document.text)
+        if self.transcript_dock is not None:
+            self.transcript_dock.refresh_scope()
+        self.schedule_save()
+        self.refresh_timeline()
+
     # -- making a child -----------------------------------------------------------
 
     def _next_subproject_title(self, document) -> str:

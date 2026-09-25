@@ -704,6 +704,37 @@ class TranscriptEditor(QTextEdit):
 
     # -- Undo/redo coordination + [Speaker:FX]: shorthand recognition -------
 
+    def edit_touches_placeholder(self, start: int, end: int, inserting: bool = False) -> bool:
+        """True when an edit over `[start, end)` would change part of a
+        subproject's placeholder line (phase 4): cutting into it, or typing
+        strictly inside it. Removing a whole placeholder is allowed (the
+        subproject leaves the parent)."""
+        for run, r_start, r_end in self.app.document._iter_runs_with_offsets():
+            if run.kind != "placeholder":
+                continue
+            if inserting and end == start and r_start < start < r_end:
+                return True
+            if end > start and r_start < end and r_end > start and not (start <= r_start and r_end <= end):
+                return True
+        return False
+
+    def _key_edit_range(self, event):
+        """`(start, end, inserting)` the key would edit, or None for a key
+        that edits nothing."""
+        cursor = self.textCursor()
+        if event.matches(QKeySequence.StandardKey.Copy) or event.matches(QKeySequence.StandardKey.SelectAll):
+            return None
+        start, end = cursor.selectionStart(), cursor.selectionEnd()
+        if event.key() == Qt.Key.Key_Backspace:
+            return (start, end, False) if end > start else (max(0, start - 1), start, False)
+        if event.key() == Qt.Key.Key_Delete:
+            return (start, end, False) if end > start else (start, start + 1, False)
+        if event.matches(QKeySequence.StandardKey.Cut):
+            return (start, end, False)
+        if event.text() or event.matches(QKeySequence.StandardKey.Paste):
+            return (start, end, end == start)
+        return None
+
     def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.matches(QKeySequence.StandardKey.Undo):
             self.undo_coordinator.undo()
@@ -711,6 +742,11 @@ class TranscriptEditor(QTextEdit):
             return
         if event.matches(QKeySequence.StandardKey.Redo):
             self.undo_coordinator.redo()
+            event.accept()
+            return
+        edit_range = self._key_edit_range(event)
+        if edit_range is not None and self.edit_touches_placeholder(*edit_range):
+            self.app.set_status("A subproject's line is read-only; select it to edit the subproject.", "warning")
             event.accept()
             return
 
@@ -805,6 +841,10 @@ class TranscriptEditor(QTextEdit):
         source_character_id = self._extract_source_character_id(source)
         cursor = self.textCursor()
         insert_position = cursor.selectionStart() if cursor.hasSelection() else cursor.position()
+        if self.edit_touches_placeholder(cursor.selectionStart(), cursor.selectionEnd(),
+                                         inserting=not cursor.hasSelection()):
+            self.app.set_status("A subproject's line is read-only; select it to edit the subproject.", "warning")
+            return
 
         self._paste_chars_accumulator = 0
         try:

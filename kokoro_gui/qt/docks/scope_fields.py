@@ -74,6 +74,15 @@ class ScopeFields(QWidget):
     def build_project(self) -> None:
         self.clear()
         settings = self.app.document.settings
+        focus = getattr(self.app, "focus", None)
+        title = None
+        if focus is not None and focus.parent_id is not None:
+            # A subproject's name, shown by its parent's placeholder line,
+            # the timeline block and the breadcrumb (phase 4).
+            title = QLineEdit(focus.title())
+            title.setToolTip("The subproject's name in its parent.")
+            title.editingFinished.connect(lambda: self.app.rename_subproject(self.app.focus, title.text()))
+            self.form.addRow("Title:", title)
         gap = _spin(0.0, 10.0, 0.05, float(settings.get("gap_s", DEFAULT_GAP_S)))
         para = _spin(0.0, 10.0, 0.05, float(settings.get("paragraph_gap_s", DEFAULT_PARAGRAPH_GAP_S)))
         gap.setToolTip("Silence between clips placed one after another.")
@@ -140,7 +149,7 @@ class ScopeFields(QWidget):
         for signal in (enabled.toggled, drop.toggled, fps.currentIndexChanged):
             signal.connect(lambda *_: self._commit_timecode())
         start.editingFinished.connect(self._commit_timecode)
-        self.widgets = {"gap_s": gap, "paragraph_gap_s": para, "auto_crossfade": crossfade,
+        self.widgets = {"title": title, "gap_s": gap, "paragraph_gap_s": para, "auto_crossfade": crossfade,
                         "ripple": ripple, "track_layout": layout_combo, "track_lanes": lanes, "tc_enabled": enabled, "tc_fps": fps, "tc_start": start, "tc_drop": drop}
 
     def build_clip(self, clip) -> None:

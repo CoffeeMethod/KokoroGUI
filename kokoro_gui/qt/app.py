@@ -221,6 +221,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self._update_window_title()
 
         self.set_status("Initializing engine...")
+        # Focus first: a nested block's child becomes the docks' document
+        # before the active engine is read.
+        self.selection.changed.connect(self._on_selection_for_focus)
         self.selection.changed.connect(self._on_active_backend_maybe_changed)
         self._last_active_engine_id = self.backend.id
         for engine_id in self._document_engine_ids(self.document):
@@ -1303,8 +1306,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             self.editor.rebind_document()
         if self.transcript_dock is not None:
             self.transcript_dock.refresh_character_choices()
+            self.transcript_dock.refresh_scope()
         if self.settings_dock is not None:
             self.settings_dock.rebuild_schema_form()
+            self.settings_dock.refresh_scope_fields()
         if self.fx_dock is not None:
             self.fx_dock.refresh_for_selection()
         self.refresh_timeline()
