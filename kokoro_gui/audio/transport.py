@@ -13,6 +13,21 @@ carries its track's gain, pan and automation and its own fades.
 `loop_range` (frames, runtime only) wraps playback inside a region once the
 playhead crosses its end; without one, `loop` wraps the whole arrangement.
 
+`load` also takes an `alt_schedule`: the original dialogue, the source
+track sliced per clip (phase 5 D5, kokoro_gui/daw/reference.py). The
+monitor mode (`set_monitor`, runtime only) picks what the callback mixes:
+"dub" the schedule, "original" the alt schedule, "both" the two summed at
+-6 dB each. All three clip lists are built at load, so a switch mid-play
+takes effect on the next block and keeps the position.
+
+When a loaded clip is on a ducked track (`ScheduledClip.duck`), the
+transport keeps a `mixer.DuckState` across callbacks so the sidechain's
+envelope carries from block to block; a seek or a stop resets it, and a
+reload keeps it (a timeline edit mid-play doesn't restart the envelope).
+The original dialogue neither ducks nor is ducked: its clips load with
+`duck` and `sidechain` off, so "both" ducks the dub's beds under the dub's
+speech only.
+
 Position is the callback's frame counter, sample accurate, published to
 the GUI thread by a 30Hz `QTimer` as `positionChanged(float)`. `play()`,
 `pause()`, `stop()`, `seek()`, `toggle()` are GUI-thread API.
@@ -26,7 +41,7 @@ loads and changes state, it just never advances.
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Optional
 
 import numpy as np
@@ -37,6 +52,9 @@ from kokoro_gui.audio import mixer
 
 POSITION_TIMER_MS = 33
 DEFAULT_SAMPLE_RATE = 24000
+MONITOR_MODES = ("dub", "original", "both")
+# Each side's gain in the "both" monitor mode: -6 dB.
+BOTH_GAIN = 0.5012
 
 
 @dataclass(frozen=True)
@@ -56,6 +74,10 @@ class ScheduledClip:
     # `(start_s, end_s)` into `path`: only that range plays (a
     # `Segment.range`, a source track sliced per clip). None plays the file.
     slice: Optional[tuple] = None
+    # Ducked under speech, and whether this clip is speech the sidechain
+    # listens to (`mixer.LoadedClip`).
+    duck: bool = False
+    sidechain: bool = True
 
 
 def loaded_clip_for(item, samples: np.ndarray, sample_rate: int) -> "mixer.LoadedClip":
@@ -73,6 +95,8 @@ def loaded_clip_for(item, samples: np.ndarray, sample_rate: int) -> "mixer.Loade
         fade_in_frames=int(round(max(0.0, item.fade_in_s) * sample_rate)),
         fade_out_frames=int(round(max(0.0, item.fade_out_s) * sample_rate)),
         automation=mixer.automation_arrays(item.automation, sample_rate),
+        duck=bool(getattr(item, "duck", False)),
+        sidechain=bool(getattr(item, "sidechain", True)),
     )
 
 
@@ -110,6 +134,10 @@ class Transport(QObject):
         self._stream_factory = stream_factory or default_stream_factory
         self._lock = threading.Lock()
         self._clips: list = []
+        self._alt_clips: list = []
+        # What the callback mixes, per monitor mode; rebuilt by `load`.
+        self._mixes: dict = {mode: [] for mode in MONITOR_MODES}
+        self._monitor = "dub"
         self._sample_rate = DEFAULT_SAMPLE_RATE
         self._frame = 0
         self._total_frames = 0
@@ -119,6 +147,8 @@ class Transport(QObject):
         self.loop = False
         # `(start_frame, end_frame)` or None; see the module docstring.
         self.loop_range: Optional[tuple] = None
+        # The sidechain's state while any loaded clip ducks, else None.
+        self._duck: Optional[mixer.DuckState] = None
         self._timer = QTimer(self)
         self._timer.setInterval(POSITION_TIMER_MS)
         self._timer.timeout.connect(self._on_tick)
@@ -149,31 +179,54 @@ class Transport(QObject):
         with self._lock:
             return list(self._clips)
 
+    def loaded_alt_clips(self) -> list:
+        with self._lock:
+            return list(self._alt_clips)
+
+    @property
+    def monitor(self) -> str:
+        return self._monitor
+
+    def set_monitor(self, mode: str) -> None:
+        """"dub", "original" or "both"; anything else is ignored. The
+        position and the playing state stay as they are."""
+        if mode not in MONITOR_MODES:
+            return
+        with self._lock:
+            self._monitor = mode
+
     # -- loading -----------------------------------------------------------------
 
     def load(self, schedule: list, sample_rate: Optional[int] = None,
-             total_duration_s: Optional[float] = None) -> None:
-        """Replace the arrangement. Keeps the current position and playing
-        state so a freshly generated clip becomes audible mid-playback (this
-        is also what `reload()` is for)."""
+             total_duration_s: Optional[float] = None, alt_schedule: Optional[list] = None,
+             duck_db: float = mixer.DEFAULT_DUCK_DB) -> None:
+        """Replace the arrangement, and the original dialogue with it (None
+        clears it). Keeps the current position and playing state so a
+        freshly generated clip becomes audible mid-playback (this is also
+        what `reload()` is for). `duck_db` is how far a ducked clip goes
+        down under speech (`Document.settings["duck_db"]`)."""
         if sample_rate:
             new_rate = int(sample_rate)
         else:
             new_rate = self._sample_rate
-        clips = []
-        for item in schedule:
-            if not item.path:
-                continue
-            try:
-                samples = mixer.load_clip_samples(item.path, new_rate, item.post_config, item.slice)
-            except Exception:
-                continue
-            clips.append(loaded_clip_for(item, samples, new_rate))
-        total = mixer.total_frames(clips)
+        clips = self._load_schedule(schedule, new_rate)
+        alt_clips = [replace(c, duck=False, sidechain=False)
+                     for c in self._load_schedule(alt_schedule or [], new_rate)]
+        mixes = {
+            "dub": clips,
+            "original": alt_clips,
+            "both": [replace(c, gain=c.gain * BOTH_GAIN) for c in (*clips, *alt_clips)],
+        }
+        total = max(mixer.total_frames(clips), mixer.total_frames(alt_clips))
         if total_duration_s is not None:
             total = max(total, int(round(total_duration_s * new_rate)))
 
         rate_changed = new_rate != self._sample_rate
+        duck = None
+        if any(c.duck for c in clips):
+            duck = self._duck if self._duck is not None and self._duck.sample_rate == new_rate \
+                else mixer.DuckState(new_rate, duck_db)
+            duck.set_duck_db(duck_db)
         with self._lock:
             if rate_changed:
                 self._frame = int(round(self._frame * new_rate / float(self._sample_rate)))
@@ -182,6 +235,9 @@ class Transport(QObject):
                     self.loop_range = tuple(int(round(f * ratio)) for f in self.loop_range)
             self._sample_rate = new_rate
             self._clips = clips
+            self._alt_clips = alt_clips
+            self._mixes = mixes
+            self._duck = duck
             self._total_frames = total
             self._frame = min(self._frame, total)
             self._ended = False
@@ -193,9 +249,25 @@ class Transport(QObject):
         self.loaded.emit()
         self.positionChanged.emit(self.position())
 
+    @staticmethod
+    def _load_schedule(schedule: list, rate: int) -> list:
+        """`LoadedClip`s for the entries that have a readable file."""
+        clips = []
+        for item in schedule:
+            if not item.path:
+                continue
+            try:
+                samples = mixer.load_clip_samples(item.path, rate, item.post_config, item.slice)
+            except Exception:
+                continue
+            clips.append(loaded_clip_for(item, samples, rate))
+        return clips
+
     def reload(self, schedule: list, sample_rate: Optional[int] = None,
-               total_duration_s: Optional[float] = None) -> None:
-        self.load(schedule, sample_rate=sample_rate, total_duration_s=total_duration_s)
+               total_duration_s: Optional[float] = None, alt_schedule: Optional[list] = None,
+               duck_db: float = mixer.DEFAULT_DUCK_DB) -> None:
+        self.load(schedule, sample_rate=sample_rate, total_duration_s=total_duration_s, alt_schedule=alt_schedule,
+                  duck_db=duck_db)
 
     # -- control -------------------------------------------------------------------
 
@@ -225,6 +297,8 @@ class Transport(QObject):
         with self._lock:
             self._frame = 0
             self._ended = False
+            if self._duck is not None:
+                self._duck.reset()
         self._set_state("stopped")
         self.positionChanged.emit(0.0)
 
@@ -248,6 +322,8 @@ class Transport(QObject):
         with self._lock:
             self._frame = min(frame, self._total_frames)
             self._ended = False
+            if self._duck is not None:
+                self._duck.reset()
         self.positionChanged.emit(self.position())
 
     # -- internals -------------------------------------------------------------
@@ -282,10 +358,11 @@ class Transport(QObject):
         """PortAudio callback thread. Never touches Qt."""
         with self._lock:
             frame = self._frame
-            clips = self._clips
+            clips = self._mixes[self._monitor]
             total = self._total_frames
             loop = self.loop
             loop_range = self.loop_range
+            duck = self._duck
         new_frame = frame + frames
         if loop_range is not None and frame < loop_range[1] <= new_frame:
             # The block crosses the region's end: play up to it, then carry
@@ -293,12 +370,12 @@ class Transport(QObject):
             start, end = loop_range
             head = end - frame
             block = np.zeros((frames, mixer.CHANNELS), dtype=np.float32)
-            block[:head] = mixer.mix_block(clips, frame, head)
+            block[:head] = mixer.mix_block(clips, frame, head, duck=duck)
             if frames > head:
-                block[head:] = mixer.mix_block(clips, start, frames - head)
+                block[head:] = mixer.mix_block(clips, start, frames - head, duck=duck)
             new_frame = start + (frames - head)
         else:
-            block = mixer.mix_block(clips, frame, frames)
+            block = mixer.mix_block(clips, frame, frames, duck=duck)
         self._write_block(outdata, block)
         ended = False
         # Short of a loop region's end, playback runs on through silence.

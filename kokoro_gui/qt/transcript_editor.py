@@ -35,7 +35,10 @@ UI-shell pass (Claude/PLAN_ui_shell_redesign.md section 2):
   (`Narrator` / `FX: Echo`), and draws a play button beside each dirty
   clip's first line (UI3). Clicking it runs `app.generate_clip(clip_id)`.
 - Runs belonging to a dirty clip get a dashed underline
-  (`ClipHighlighter`'s second pass).
+  (`ClipHighlighter`'s second pass). A dirty clip with a duration target
+  whose text reads longer than the target (`fit.reading_rate_ratio`) gets a
+  wavy amber or red one instead, so a dub line is seen to be too long while
+  it is typed.
 - Split rules (UI2): a thin line at every boundary `plan_auto_split_clips`
   would produce with the current "split by paragraph" setting, plus every
   existing clip boundary, painted over the viewport after `super()`.
@@ -66,6 +69,7 @@ from PySide6.QtGui import (
 from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QMenu, QTextEdit, QToolTip, QWidget
 
+from kokoro_gui.daw import fit as fit_ops
 from kokoro_gui.daw.auto_split import plan_auto_split_clips
 from kokoro_gui.daw.undo import AssignCharacterCommand
 from kokoro_gui.qt import theme
@@ -110,7 +114,8 @@ def clip_fx_name(daw_doc, clip) -> Optional[str]:
 class ClipHighlighter(QSyntaxHighlighter):
     """Paints each text block by whichever `Clip` a run covers, using the
     matching `Character`'s `highlight_color`, then dash-underlines the runs
-    of every dirty clip. `dirty_ids()` is computed once per rehighlight
+    of every dirty clip (wave-underlines one that reads past its duration
+    target, `rate_levels()`). `dirty_ids()` is computed once per rehighlight
     cycle and invalidated by the editor on every content change and after
     generation finishes.
 
@@ -124,9 +129,31 @@ class ClipHighlighter(QSyntaxHighlighter):
         super().__init__(qt_text_document)
         self._daw_document_provider = daw_document_provider
         self._dirty_ids: Optional[set] = None
+        self._rate_levels: Optional[dict] = None
 
     def invalidate_dirty(self) -> None:
         self._dirty_ids = None
+        self._rate_levels = None
+
+    def rate_levels(self) -> dict:
+        """`{clip_id: "over" | "far_over"}` for each dirty clip whose text,
+        read at its speed and learned pace, runs past its duration target.
+        A clean clip's real length is on the timeline instead."""
+        if self._rate_levels is None:
+            self._rate_levels = {}
+            daw_doc = self._daw_document_provider()
+            clips = [c for c in getattr(daw_doc, "clips", None) or []
+                     if fit_ops.TARGET_KEY in (c.overrides or {}) and c.id in self.dirty_ids()]
+            if clips:
+                try:
+                    rates = fit_ops.speaking_rates(daw_doc)
+                    for clip in clips:
+                        level = fit_ops.fit_level(fit_ops.reading_rate_ratio(daw_doc, clip, rates))
+                        if level in ("over", "far_over"):
+                            self._rate_levels[clip.id] = level
+                except Exception:
+                    self._rate_levels = {}
+        return self._rate_levels
 
     def dirty_ids(self) -> set:
         if self._dirty_ids is None:
@@ -149,7 +176,9 @@ class ClipHighlighter(QSyntaxHighlighter):
         block_start = self.currentBlock().position()
         block_end = block_start + len(block_text)
         dirty = self.dirty_ids()
-        underline_color = QColor(theme.current().dirty_underline)
+        rate_levels = self.rate_levels()
+        pal = theme.current()
+        underline_color = QColor(pal.dirty_underline)
 
         pos = 0
         for run in daw_doc.runs:
@@ -165,17 +194,28 @@ class ClipHighlighter(QSyntaxHighlighter):
                 continue
             fmt = QTextCharFormat()
             if run.kind == "placeholder":
-                # A subproject's line (phase 4): its title, read-only.
+                # A subproject's line (phase 4) or a music bed's (phase 5
+                # P2): its title or file name, read-only.
                 fmt.setBackground(QColor(theme.current().panel_alt))
                 fmt.setFontItalic(True)
             elif character is not None:
                 tint = QColor(character.highlight_color)
                 tint.setAlpha(HIGHLIGHT_ALPHA)
                 fmt.setBackground(tint)
-            if clip is not None and clip.id in dirty:
+            if clip is not None and clip.id in rate_levels:
+                fmt.setUnderlineStyle(QTextCharFormat.UnderlineStyle.WaveUnderline)
+                fmt.setUnderlineColor(QColor(pal.fit_far_over if rate_levels[clip.id] == "far_over"
+                                             else pal.fit_over))
+            elif clip is not None and clip.id in dirty:
                 fmt.setUnderlineStyle(QTextCharFormat.UnderlineStyle.DashUnderline)
                 fmt.setUnderlineColor(underline_color)
             self.setFormat(lo, hi - lo, fmt)
+
+
+def placeholder_label(clip) -> str:
+    """The gutter label on a placeholder line: "Subproject" for a nested
+    clip, "Audio" for a music bed."""
+    return "Audio" if getattr(clip, "is_bed", False) else "Subproject"
 
 
 class TranscriptGutter(QWidget):
@@ -209,6 +249,8 @@ class TranscriptGutter(QWidget):
             return (None, None)
         if clip.is_nested:
             return ("nested", clip.id)
+        if clip.is_bed:
+            return ("bed", clip.id)
         return (clip.character_id, clip_fx_name(daw_doc, clip))
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt override)
@@ -256,13 +298,15 @@ class TranscriptGutter(QWidget):
             line_h = max(int(rect.height()), 1)
             text_right = self.width() - GUTTER_BUTTON_PX - 10
 
-            if key != previous_key and clip is not None and clip.is_nested:
-                # A subproject's line (phase 4): labelled, no picker.
+            if key != previous_key and clip is not None and clip.has_placeholder:
+                # A subproject's line (phase 4) or a music bed's (phase 5
+                # P2): labelled, no picker, and never a play button (a bed
+                # is never stale).
                 name_rect = QRect(4, top, text_right - 4, metrics_h)
                 painter.setFont(base_font)
                 painter.setPen(QColor(pal.gutter_text))
                 painter.drawText(name_rect, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
-                                 "Subproject")
+                                 placeholder_label(clip))
             elif key != previous_key and character is not None:
                 name_rect = QRect(4, top, text_right - 4, metrics_h)
                 painter.setFont(base_font)
@@ -524,10 +568,11 @@ class TranscriptEditor(QTextEdit):
     def _push_assign_character(self, start: int, end: int, character_id) -> None:
         """Shared tail end of every character-assignment authoring path
         (Characters menu, gutter picker, header combo, paste-splitting, the
-        `[Speaker:FX]:` shorthand). A range over a subproject's placeholder
-        line is refused."""
+        `[Speaker:FX]:` shorthand). A range over a placeholder line (a
+        subproject's or a music bed's) is refused."""
         if self.app.document.overlaps_nested(start, end):
-            self.app.set_status("A subproject's line can't be assigned a character.", "warning")
+            self.app.set_status("A subproject's or an audio file's line can't be assigned a character.",
+                                "warning")
             return
         self.app.document.undo_stack.push(AssignCharacterCommand(start, end, character_id))
         self.rehighlight()
@@ -737,17 +782,31 @@ class TranscriptEditor(QTextEdit):
 
     def edit_touches_placeholder(self, start: int, end: int, inserting: bool = False) -> bool:
         """True when an edit over `[start, end)` would change part of a
-        subproject's placeholder line (phase 4): cutting into it, or typing
-        strictly inside it. Removing a whole placeholder is allowed (the
-        subproject leaves the parent)."""
-        for run, r_start, r_end in self.app.document._iter_runs_with_offsets():
+        placeholder line (a subproject's, phase 4, or a music bed's, phase
+        5 P2): cutting into it, or typing strictly inside it. Removing a
+        whole placeholder is allowed (the subproject or the bed leaves the
+        project)."""
+        return self._placeholder_touched(start, end, inserting) is not None
+
+    def _placeholder_touched(self, start: int, end: int, inserting: bool = False):
+        """The clip whose placeholder line `edit_touches_placeholder` found,
+        or None."""
+        document = self.app.document
+        for run, r_start, r_end in document._iter_runs_with_offsets():
             if run.kind != "placeholder":
                 continue
             if inserting and end == start and r_start < start < r_end:
-                return True
+                return document.get_clip(run.clip_id) or run
             if end > start and r_start < end and r_end > start and not (start <= r_start and r_end <= end):
-                return True
-        return False
+                return document.get_clip(run.clip_id) or run
+        return None
+
+    def _placeholder_status(self, start: int, end: int, inserting: bool = False) -> None:
+        clip = self._placeholder_touched(start, end, inserting)
+        if getattr(clip, "is_bed", False):
+            self.app.set_status("An imported audio file's line is read-only; it shows the file's name.", "warning")
+        else:
+            self.app.set_status("A subproject's line is read-only; select it to edit the subproject.", "warning")
 
     def _key_edit_range(self, event):
         """`(start, end, inserting)` the key would edit, or None for a key
@@ -777,7 +836,7 @@ class TranscriptEditor(QTextEdit):
             return
         edit_range = self._key_edit_range(event)
         if edit_range is not None and self.edit_touches_placeholder(*edit_range):
-            self.app.set_status("A subproject's line is read-only; select it to edit the subproject.", "warning")
+            self._placeholder_status(*edit_range)
             event.accept()
             return
 
@@ -874,7 +933,8 @@ class TranscriptEditor(QTextEdit):
         insert_position = cursor.selectionStart() if cursor.hasSelection() else cursor.position()
         if self.edit_touches_placeholder(cursor.selectionStart(), cursor.selectionEnd(),
                                          inserting=not cursor.hasSelection()):
-            self.app.set_status("A subproject's line is read-only; select it to edit the subproject.", "warning")
+            self._placeholder_status(cursor.selectionStart(), cursor.selectionEnd(),
+                                     inserting=not cursor.hasSelection())
             return
 
         self._paste_chars_accumulator = 0

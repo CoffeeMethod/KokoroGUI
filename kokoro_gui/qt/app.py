@@ -49,7 +49,10 @@ from kokoro_gui.daw.arrangement import compute_arrangement, segment_timeline
 from kokoro_gui.daw.mixplan import clip_mixes
 from kokoro_gui.daw.imported import segment_plays
 from kokoro_gui.daw.auto_split import plan_auto_split_clips, plan_pause_gaps
-from kokoro_gui.daw.undo import AssignCharacterCommand, ImportCuesCommand
+from kokoro_gui.daw.beds import playable_segments
+from kokoro_gui.daw.mixdown import duck_db_setting
+from kokoro_gui.daw.reference import SOURCE_TRACK_KEY, reference_slices, source_track_settings
+from kokoro_gui.daw.undo import AssignCharacterCommand, ImportBedCommand, ImportCuesCommand, SetFieldCommand
 from kokoro_gui.engine import caching
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
@@ -70,7 +73,7 @@ FX_PRESETS_DIR = os.path.join(PRESETS_DIR, "fx")
 DOCUMENT_FILE = "document.json"
 
 from kokoro_gui.audio import post  # noqa: E402
-from kokoro_gui.audio.transport import ScheduledClip, Transport  # noqa: E402
+from kokoro_gui.audio.transport import MONITOR_MODES, ScheduledClip, Transport  # noqa: E402
 from kokoro_gui.daw.arrangement import clip_audio_duration_s  # noqa: E402
 from kokoro_gui.qt.characters_dialog import CharactersDialog  # noqa: E402
 from kokoro_gui.qt.docks import (  # noqa: E402
@@ -169,6 +172,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         # Set when the user turns down the Whisper download for alignment,
         # so the next Generate doesn't ask again this session.
         self._word_align_declined = False
+        # The transport dock's Dub / Original / Both choice (phase 5 D5):
+        # runtime state, kept in the root project dir's `session.json`.
+        self._monitor_mode = "dub"
         self.document = self._load_initial_document()
 
         self.selection = SelectionModel()
@@ -630,10 +636,11 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.file_menu.addAction(self.import_text_action)
         self.import_subtitles_action = self._action("Import S&ubtitles...", self.import_subtitles_dialog)
         self.file_menu.addAction(self.import_subtitles_action)
-        self.import_audio_action = QAction("Import Audio...", self)
-        self.import_audio_action.setEnabled(False)
-        self.import_audio_action.setToolTip("coming with ASR-anchored import")
+        self.import_audio_action = self._action("Import Au&dio...", self.import_audio_dialog)
+        self.import_audio_action.setToolTip("Add an audio file as a music bed on the Music track.")
         self.file_menu.addAction(self.import_audio_action)
+        self.import_source_track_action = self._action("Import Sou&rce Track...", self.import_source_track_dialog)
+        self.file_menu.addAction(self.import_source_track_action)
         self.load_video_action = self._action("Load &Video...", self.load_video_dialog)
         self.file_menu.addAction(self.load_video_action)
         self.export_action = self._action("&Export...", self.export_dialog, "Ctrl+E")
@@ -762,6 +769,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.transport_dock.pauseRequested.connect(self.transport.pause)
         self.transport_dock.stopRequested.connect(self.transport.stop)
         self.transport_dock.loopToggled.connect(self._on_loop_toggled)
+        self.transport_dock.monitorChanged.connect(self.set_monitor_mode)
 
         # A QMainWindow needs a central widget; the docks fill everything.
         # Hidden with an Ignored size policy, NOT setFixedSize(0, 0): a fixed
@@ -1104,6 +1112,11 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         resolution = fx_resolve.resolve_fx(self, clip=clip, project=project)
         config.update(resolution.values)
         config["apply_fx"] = resolution.apply_fx
+        # Fit to slot's stretch factor (a post key). Read off the overrides
+        # directly, like the take: it is per clip, never a preset value.
+        stretch = (clip.overrides or {}).get("time_stretch")
+        if stretch is not None:
+            config["time_stretch"] = stretch
         return config
 
     def _install_segment_key_fn(self, project=None) -> None:
@@ -1160,8 +1173,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         """The `POST_KEYS` subset of the clip's resolved config: what the
         transport, the exporter and the timeline waveform apply on top of
         the raw segment files. Changing any of it never dirties the clip.
-        A nested clip gets only the FX set on it (`nested_post_config`)."""
-        if clip.is_nested:
+        A nested clip or a music bed gets only the FX set on it
+        (`nested_post_config`): the project's volume, trim and normalize are
+        for speech."""
+        if clip.has_placeholder:
             return self.nested_post_config(clip, project)
         return post.extract_post_config(self._assemble_clip_config(clip, project))
 
@@ -1173,10 +1188,12 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         reading its file (`post.duration_hint`), and a segment with a
         `range` as `end - start`. Falls back to the raw
         durations while the docks are still being built. A nested clip is
-        its child's mixdown length, from `mixdown.json` (no read)."""
+        its child's mixdown length, from `mixdown.json` (no read). A music
+        bed is its trim or loop length, from the file's header
+        (`beds.bed_segments`)."""
         if clip.is_nested:
             return self.nested_duration_s(clip, project)
-        segments = [s for s in clip.segments if s.audio_path]
+        segments = playable_segments(clip)
         if not segments:
             return None
         if self.settings_dock is None or self.fx_dock is None:
@@ -1206,7 +1223,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                 return post.render(path, self.post_config_for_clip(clip, project), rate), rate
             except Exception:
                 return None
-        segments = sorted((s for s in clip.segments if s.audio_path), key=lambda s: s.order_index)
+        segments = playable_segments(clip)
         if not segments:
             return None
         post_config = self.post_config_for_clip(clip, project)
@@ -1391,6 +1408,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             self.settings_dock.rebuild_schema_form()
             self.settings_dock.refresh_scope_fields()
         if self.fx_dock is not None:
+            # The project dir's fx/ir/ joins the impulse response list.
+            self.fx_dock.refresh_ir_choices()
             self.fx_dock.refresh_for_selection()
         self._sync_video_dock()
         self.refresh_timeline()
@@ -1400,6 +1419,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             self.set_loop_range(loop[0], loop[1], remember=False)
         else:
             self.set_loop_range(None, None, remember=False)
+        monitor = (session or {}).get("monitor")
+        self.set_monitor_mode(monitor if monitor in MONITOR_MODES else "dub", remember=False)
         self._update_window_title()
         self.schedule_save()
 
@@ -1421,6 +1442,31 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                 project_io.write_session(self.root.project_dir, session)
             except OSError:
                 pass
+
+    def set_monitor_mode(self, mode: str, remember: bool = True) -> None:
+        """The transport dock's Dub / Original / Both (phase 5 D5). The
+        transport plays the dub whatever the choice while the playing
+        project has no source track; the choice comes back with one.
+        Runtime state, like the loop region: `session.json`, never the
+        document."""
+        if mode not in MONITOR_MODES:
+            return
+        self._monitor_mode = mode
+        self._apply_monitor_mode()
+        if remember and self.root.project_dir:
+            session = project_io.read_session(self.root.project_dir) or {}
+            session["monitor"] = mode
+            try:
+                project_io.write_session(self.root.project_dir, session)
+            except OSError:
+                pass
+
+    def _apply_monitor_mode(self) -> None:
+        level = self.level
+        available = project_io.source_track_path(level.document, level.project_dir) is not None
+        self.transport.set_monitor(self._monitor_mode if available else "dub")
+        if self.transport_dock is not None:
+            self.transport_dock.set_monitor(self._monitor_mode, available=available)
 
     def loop_range(self):
         """`(start_s, end_s)` of the loop region, or None."""
@@ -1813,6 +1859,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                 root.document, root.project_settings, path, root.project_dir, root.project_id,
                 self._backend_for, FX_PRESETS_DIR, project_io.read_session(root.project_dir), root.manifest,
                 pending_children={c.project_id for c, _p, _s in child_plans if c.parent_id == root.project_id},
+                project_fx=self.fx_dock.project_fx_state() if self.fx_dock is not None else None,
             )
             warnings = [*warnings, *root_warnings]
         except Exception as e:  # noqa: BLE001 - surfaced, never a crash
@@ -2078,6 +2125,112 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.on_characters_changed()
         self.set_status(f"Imported {len(cues)} subtitle cue(s) from {os.path.basename(path)}.")
         return command.clip_ids
+
+    def import_audio_dialog(self) -> None:
+        """File > Import Audio...: picks a file and adds it as a music bed.
+        Recording import (phase 5 P3) adds its own choice ahead of this
+        one; a bed is the only kind of audio import so far."""
+        path, _ = QFileDialog.getOpenFileName(self, "Import audio", "", project_io.AUDIO_FILTER)
+        if not path:
+            return
+        at_s = self._ask_bed_placement(self.transport.position())
+        if at_s is None:
+            return
+        self.import_music_bed(path, at_s)
+
+    def _ask_bed_placement(self, playhead_s: float):
+        """Where a new bed starts: 0.0, or the playhead when it isn't at
+        the start and the user picks it. None on Cancel. Its own method so
+        tests answer it without a modal."""
+        if playhead_s <= 0.0:
+            return 0.0
+        box = QMessageBox(self)
+        box.setWindowTitle("Import audio")
+        box.setText("Where should the audio start?")
+        start = box.addButton("At the start", QMessageBox.ButtonRole.AcceptRole)
+        playhead = box.addButton(f"At the playhead ({playhead_s:.1f}s)", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(start)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is start:
+            return 0.0
+        if clicked is playhead:
+            return float(playhead_s)
+        return None
+
+    def import_music_bed(self, path: str, at_s: float = 0.0):
+        """A music bed (phase 5 P2, grill Q30): the file is copied into the
+        focus project's `audio/imported/` (`project.import_audio_file`) and
+        becomes an imported clip on the "Music" track, pinned at `at_s`,
+        with its file name as a read-only line at the end of the
+        transcript (`kokoro_gui.daw.undo.ImportBedCommand`). One undo step.
+        Returns the new clip's id, or None when the file can't be read or
+        copied."""
+        try:
+            import soundfile as sf
+
+            sf.info(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Import failed", f"Can't read {os.path.basename(path)} as audio: {e}")
+            return None
+        try:
+            stored = project_io.import_audio_file(path, self.project_dir)
+        except (OSError, project_io.ProjectError) as e:
+            QMessageBox.critical(self, "Import failed", str(e))
+            return None
+        title = os.path.splitext(os.path.basename(path))[0].strip() or "Audio"
+        command = ImportBedCommand(stored, title, at_s)
+        self.document.undo_stack.push(command)
+        if self.editor is not None:
+            self.editor.load_text(self.document.text)
+            self.editor.rehighlight()
+        self.schedule_save()
+        self.refresh_timeline()
+        self.set_status(f"Imported {os.path.basename(path)} as a music bed.")
+        return command.clip_id
+
+    def import_source_track_dialog(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Import source track", filter=project_io.AUDIO_FILTER)
+        if path:
+            self.import_source_track(path)
+
+    def import_source_track(self, path: str) -> bool:
+        """File > Import Source Track (phase 5 D5): the original dialogue,
+        copied into the focus project's dir (`project.import_audio_file`)
+        and named project-relative in `Document.settings["source_track"]`,
+        one undo step. A second import replaces the first and keeps its
+        offset. The transport's Original and Both modes play it under each
+        clip that has a reference range; export is still the dub alone.
+        Returns False when nothing was imported."""
+        import soundfile as sf
+
+        project_dir = self.project_dir
+        if not project_dir:
+            QMessageBox.warning(self, "Import failed", "This project has no folder to copy the track into.")
+            return False
+        try:
+            sf.info(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Import failed", f"Couldn't read {os.path.basename(path)} as audio: {e}")
+            return False
+        try:
+            copied = project_io.import_audio_file(path, project_dir)
+        except (OSError, project_io.ProjectError) as e:
+            QMessageBox.critical(self, "Import failed", f"Import failed: {e}")
+            return False
+        previous = source_track_settings(self.document.settings)
+        value = {"path": project_io.source_track_relpath(copied, project_dir),
+                 "offset_s": previous["offset_s"] if previous else 0.0}
+        if self.document.settings.get(SOURCE_TRACK_KEY) != value:
+            self.document.undo_stack.push(SetFieldCommand("document", None, "settings", value,
+                                                          key=SOURCE_TRACK_KEY))
+        if self.settings_dock is not None:
+            self.settings_dock.refresh_scope_fields()
+        self.schedule_save()
+        self.refresh_timeline()
+        self.set_status(f"Source track: {os.path.basename(path)}.")
+        return True
 
     def export_dialog(self) -> None:
         dialog = ExportDialog(self)
@@ -2345,9 +2498,12 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         (`daw/mixplan.py`): muted and soloed-out tracks are left out; the
         track's gain, pan and automation and the clip's fades ride each
         entry. A clip's fade-in goes on its first segment and its fade-out
-        on its last. A segment with a `range` becomes a sliced entry; the
-        joins between an imported clip's ranges crossfade
-        (`imported.segment_plays`)."""
+        on its last. A segment with a `range` becomes a sliced entry; a
+        music bed plays its trim range, once per loop pass
+        (`beds.playable_segments`), and the joins between an imported
+        recording's ranges crossfade (`imported.segment_plays`, which reads
+        `playable_segments`). A clip on a ducked track carries `duck`, and
+        speech carries `sidechain`, for the mixer's ducking."""
         level = self.level
         self._arrangement = self.build_arrangement(level)
         rate = self.project_sample_rate()
@@ -2366,6 +2522,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                         clip_id=placed.clip.id, start_s=placed.start_s, path=path, post_config=post_config,
                         gain=mix.gain, pan=mix.pan, automation=mix.automation,
                         fade_in_s=mix.fade_in_s, fade_out_s=mix.fade_out_s,
+                        duck=mix.duck, sidechain=mix.sidechain,
                     ))
                 continue
             # One ScheduledClip per segment so multi-segment clips play
@@ -2378,7 +2535,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                     clip_id=placed.clip.id, start_s=offset, path=segment.audio_path, post_config=post_config,
                     gain=mix.gain, pan=mix.pan, automation=mix.automation,
                     fade_in_s=play.fade_in_s, fade_out_s=play.fade_out_s,
-                    slice=play.play_range_s,
+                    slice=play.play_range_s, duck=mix.duck, sidechain=mix.sidechain,
                 ))
                 try:
                     offset += post.rendered_duration_s(segment.audio_path, post_config, rate,
@@ -2387,10 +2544,26 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                 except Exception:
                     offset += segment.duration or 0.0
         self.transport.load(schedule, sample_rate=self.project_sample_rate(),
-                            total_duration_s=self._arrangement.total_duration_s)
+                            total_duration_s=self._arrangement.total_duration_s,
+                            alt_schedule=self._original_schedule(level, self._arrangement),
+                            duck_db=duck_db_setting(level.document))
+        self._apply_monitor_mode()
         if self.timeline_dock is not None:
             self.timeline_dock.timeline_view.set_arrangement(self._arrangement)
         self.transport_dock.set_position(self.transport.position(), self.transport.duration())
+
+    def _original_schedule(self, level, arrangement) -> list:
+        """The transport's alt schedule (phase 5 D5): the level's source
+        track sliced per clip by its reference range
+        (`kokoro_gui.daw.reference.reference_slices`), at unity, with no
+        track controls or post: the original is a reference, not part of
+        the mix. [] without a source track."""
+        path = project_io.source_track_path(level.document, level.project_dir)
+        if path is None:
+            return []
+        offset = source_track_settings(level.document.settings)["offset_s"]
+        return [ScheduledClip(clip_id=clip_id, start_s=start_s, path=path, slice=slice_s)
+                for clip_id, start_s, slice_s in reference_slices(arrangement, offset)]
 
     def _on_transport_position(self, seconds: float) -> None:
         self.transport_dock.set_position(seconds, self.transport.duration())
@@ -2401,6 +2574,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         word = None
         if self.transport.is_playing:
             hits = arrangement.at_time(seconds)
+            # The line being read, not the music under it.
+            hits = [h for h in hits if not h.clip.is_bed] or hits
             playing = hits[0].clip.id if hits else None
             if hits:
                 word = self.word_at(hits[0], seconds)

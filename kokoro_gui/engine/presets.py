@@ -37,7 +37,17 @@ ALLOWED_FX_PRESET_KEYS = frozenset({
     "pitch_shift_enabled", "pitch_shift_semitones",
     "limiter_enabled", "limiter_threshold", "limiter_release",
     "gain_enabled", "gain_db",
+    "convolution_ir", "convolution_mix",
 })
+
+# FX keys whose value is a string (a name). Every other FX key is a number or
+# a bool; `filter_fx_preset_values` drops a value of the wrong kind either way.
+FX_STRING_KEYS = frozenset({"convolution_ir"})
+
+# Global impulse-response store for the convolution reverb (grill Q31). A
+# project dir's `fx/ir/` is looked at first (grill TB3).
+FX_IR_DIR = os.path.join("presets", "fx", "ir")
+FX_IR_SUBDIR = os.path.join("fx", "ir")
 
 
 def filter_allowed_keys(preset_dict, allowed_keys):
@@ -46,6 +56,65 @@ def filter_allowed_keys(preset_dict, allowed_keys):
     allowed to merge into a trusted config dict, since preset files are
     untrusted, shareable input (see Claude/SECURITY_AUDIT.md)."""
     return {k: v for k, v in preset_dict.items() if k in allowed_keys}
+
+
+def filter_fx_preset_values(preset_dict):
+    """`filter_allowed_keys(preset_dict, ALLOWED_FX_PRESET_KEYS)` plus a type
+    check: a `FX_STRING_KEYS` value must be a str, and every other value a
+    number or a bool. A value of the wrong type is dropped, so a crafted
+    preset or `fx_override` can't hand a dict to Pedalboard or a list to the
+    impulse-response resolver."""
+    out = {}
+    for key, value in filter_allowed_keys(preset_dict, ALLOWED_FX_PRESET_KEYS).items():
+        if key in FX_STRING_KEYS:
+            if isinstance(value, str):
+                out[key] = value
+        elif isinstance(value, (bool, int, float)):
+            out[key] = value
+    return out
+
+
+def ir_safe_name(name):
+    """The file stem an impulse-response name maps to: `os.path.basename` of
+    it, or None for a non-string or empty name."""
+    if not isinstance(name, str):
+        return None
+    safe = os.path.basename(name.strip())
+    return safe or None
+
+
+def _ir_dirs(project_dir, global_dir):
+    dirs = []
+    if project_dir:
+        dirs.append(os.path.join(project_dir, FX_IR_SUBDIR))
+    dirs.append(global_dir or FX_IR_DIR)
+    return dirs
+
+
+def resolve_ir(name, project_dir=None, global_dir=None):
+    """The absolute path of impulse response `name`:
+    `<project_dir>/fx/ir/<name>.wav` first, then `<global_dir>/<name>.wav`
+    (`FX_IR_DIR` by default), else None. The name is reduced to its basename
+    and the result must stay inside the directory it was looked up in."""
+    safe = ir_safe_name(name)
+    if safe is None:
+        return None
+    for directory in _ir_dirs(project_dir, global_dir):
+        root = os.path.realpath(directory)
+        candidate = os.path.realpath(os.path.join(root, f"{safe}.wav"))
+        if candidate.startswith(root + os.sep) and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def list_ir_names(project_dir=None, global_dir=None):
+    """Every impulse response's name (no extension), sorted: the project's
+    `fx/ir/*.wav` plus the global store's, the union."""
+    names = set()
+    for directory in _ir_dirs(project_dir, global_dir):
+        if os.path.isdir(directory):
+            names.update(f[:-4] for f in os.listdir(directory) if f.endswith(".wav") and len(f) > 4)
+    return sorted(names)
 
 
 class PresetsMixin:

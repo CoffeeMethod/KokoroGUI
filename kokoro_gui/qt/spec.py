@@ -54,6 +54,7 @@ FX_PRESET_KEYS = [
     "pitch_shift_enabled", "pitch_shift_semitones",
     "limiter_enabled", "limiter_threshold", "limiter_release",
     "gain_enabled", "gain_db",
+    "convolution_ir", "convolution_mix",
 ]
 
 
@@ -72,6 +73,21 @@ class FXSliderSpec:
     enabled_key: Optional[str] = None   # bool field this is gated under, if any
     unit: str = ""
     decimals: int = 2
+
+
+@dataclass(frozen=True)
+class FXFileSpec:
+    """One FX field that names a file in an asset store instead of holding a
+    number: the dock shows a combo of the names in `store` (project-local
+    first, then global) with a "None" entry that stores "". `store` is
+    "ir" for impulse responses (`presets/fx/ir/*.wav`, grill Q31), the only
+    store so far."""
+    key: str
+    label: str
+    group: str
+    section: str
+    store: str = "ir"
+    enabled_key: Optional[str] = None
 
 
 FX_FIELD_SPECS = [
@@ -93,6 +109,9 @@ FX_FIELD_SPECS = [
     FXSliderSpec("delay_time", "Time", 0, 2, 100, "Spatial & Time", "Delay", "delay_enabled", "s", 2),
     FXSliderSpec("delay_feedback", "Feedback", 0, 1, 100, "Spatial & Time", "Delay", "delay_enabled", "", 2),
     FXSliderSpec("delay_mix", "Mix", 0, 1, 100, "Spatial & Time", "Delay", "delay_enabled", "", 2),
+    # Convolution reverb (grill Q31): an impulse response by name, "" for none.
+    FXFileSpec("convolution_ir", "Impulse response", "Spatial & Time", "Convolution Reverb"),
+    FXSliderSpec("convolution_mix", "Mix", 0, 1, 100, "Spatial & Time", "Convolution Reverb", None, "", 2),
     # --- Guitar / Modulation ---
     FXSliderSpec("chorus_rate", "Rate", 0.1, 10, 50, "Guitar / Modulation", "Chorus", "chorus_enabled", "Hz", 1),
     FXSliderSpec("chorus_depth", "Depth", 0, 1, 50, "Guitar / Modulation", "Chorus", "chorus_enabled", "", 2),
@@ -225,6 +244,8 @@ SETTINGS_DEFAULTS = {
     "limiter_release": 100.0,
     "gain_enabled": False,
     "gain_db": 0.0,
+    "convolution_ir": "",
+    "convolution_mix": 0.5,
     "engine_id": "kokoro",
     "asr_engine": "whisper",
     "lexicon": {},

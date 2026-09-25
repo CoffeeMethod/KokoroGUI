@@ -90,3 +90,69 @@ def test_fx_toggle_changes_output(engine, fx_key, overrides):
     out_enabled = engine.process_audio(audio.copy(), 24000, enabled_config)
 
     assert out_enabled.shape != out_disabled.shape or not np.allclose(out_enabled, out_disabled)
+
+
+# -- convolution reverb (grill Q31) -----------------------------------------
+
+def _impulse_response(path, samples, sr=24000):
+    import soundfile as sf
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(path), np.asarray(samples, dtype=np.float32), sr, subtype="FLOAT")
+
+
+def test_one_sample_impulse_response_is_the_identity(engine, tmp_path):
+    project_dir = tmp_path / "project"
+    _impulse_response(project_dir / "fx" / "ir" / "Unit.wav", [1.0])
+    audio = _sine(amp=0.5)
+
+    out = engine.process_audio(audio.copy(), 24000, {
+        "convolution_ir": "Unit", "convolution_mix": 1.0, "project_dir": str(project_dir),
+    })
+
+    assert out.shape[-1] == len(audio)
+    assert np.allclose(np.asarray(out).reshape(-1), audio, atol=1e-4)
+
+
+def test_impulse_response_changes_the_output_and_mix_blends_it(engine, tmp_path):
+    project_dir = tmp_path / "project"
+    # A 10 ms echo: the wet signal is the input delayed by 240 samples.
+    ir = np.zeros(241)
+    ir[240] = 1.0
+    _impulse_response(project_dir / "fx" / "ir" / "Echo.wav", ir)
+    audio = _sine(amp=0.5)
+    config = {"convolution_ir": "Echo", "project_dir": str(project_dir)}
+
+    wet = np.asarray(engine.process_audio(audio.copy(), 24000, dict(config, convolution_mix=1.0))).reshape(-1)
+    half = np.asarray(engine.process_audio(audio.copy(), 24000, dict(config, convolution_mix=0.5))).reshape(-1)
+
+    delayed = np.concatenate([np.zeros(240), audio[:-240]])
+    assert np.allclose(wet, delayed, atol=1e-4)
+    assert np.allclose(half, 0.5 * audio + 0.5 * delayed, atol=1e-4)
+
+
+def test_missing_impulse_response_is_a_logged_no_op(engine, tmp_path, caplog):
+    audio = _sine(amp=0.5)
+    config = {"convolution_ir": "NotThere", "convolution_mix": 1.0, "project_dir": str(tmp_path)}
+
+    with caplog.at_level("WARNING", logger="kokoro_gui.engine.audio_fx"):
+        out = engine.process_audio(audio.copy(), 24000, config)
+
+    assert np.array_equal(out, audio)
+    assert any("NotThere" in r.getMessage() for r in caplog.records)
+
+
+def test_unreadable_impulse_response_is_a_logged_no_op(engine, tmp_path, caplog):
+    project_dir = tmp_path / "project"
+    bad = project_dir / "fx" / "ir" / "Broken.wav"
+    bad.parent.mkdir(parents=True)
+    bad.write_bytes(b"not a wav")
+    audio = _sine(amp=0.5)
+
+    with caplog.at_level("WARNING", logger="kokoro_gui.engine.audio_fx"):
+        out = engine.process_audio(audio.copy(), 24000, {
+            "convolution_ir": "Broken", "convolution_mix": 1.0, "project_dir": str(project_dir),
+        })
+
+    assert np.array_equal(out, audio)
+    assert any("Broken" in r.getMessage() for r in caplog.records)

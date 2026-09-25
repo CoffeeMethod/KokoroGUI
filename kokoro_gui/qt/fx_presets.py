@@ -20,10 +20,21 @@ before `app.py` has ever been touched, hitting exactly that unresolved
 circular import. A plain sibling module (no dependency on the `docks`
 package, and no *module-level* dependency on `app.py` either - see below)
 sidesteps the whole problem.
+
+The impulse-response store for the convolution reverb (grill Q31) lives
+here too: `list_ir_names` for the dock's combo, `resolve_ir` for the file a
+name plays from, `import_ir_file` to add a wav to `presets/fx/ir/`. The
+resolver itself is `kokoro_gui.engine.presets.resolve_ir`, since
+`engine/audio_fx.py` can't import from `kokoro_gui.qt`.
 """
 from __future__ import annotations
 
+import filecmp
 import os
+import re
+import shutil
+
+from kokoro_gui.engine import presets as engine_presets
 
 
 def list_fx_preset_names(project_dir: str | None = None) -> list[str]:
@@ -49,3 +60,58 @@ def list_fx_preset_names(project_dir: str | None = None) -> list[str]:
         if os.path.isdir(directory):
             names.update(f[:-5] for f in os.listdir(directory) if f.endswith(".json"))
     return sorted(names)
+
+
+def _global_ir_dir() -> str:
+    import kokoro_gui.qt.app as qt_app_module
+
+    return os.path.join(qt_app_module.FX_PRESETS_DIR, "ir")
+
+
+def resolve_ir(name, project_dir: str | None = None) -> str | None:
+    """The file impulse response `name` plays from (grill Q31):
+    `<project_dir>/fx/ir/<name>.wav` first, then `presets/fx/ir/<name>.wav`,
+    else None. `kokoro_gui.engine.presets.resolve_ir` with the global store
+    read from `FX_PRESETS_DIR` the way `list_fx_preset_names` reads it."""
+    return engine_presets.resolve_ir(name, project_dir, _global_ir_dir())
+
+
+def list_ir_names(project_dir: str | None = None) -> list[str]:
+    """Every impulse response's name, sorted: the project's `fx/ir/*.wav`
+    plus `presets/fx/ir/*.wav`, the union."""
+    return engine_presets.list_ir_names(project_dir, _global_ir_dir())
+
+
+def import_ir_file(src_path: str) -> str:
+    """Copies the wav at `src_path` into the global IR store
+    (`presets/fx/ir/`) and returns the name it's stored under: the file's
+    stem with path and reserved characters removed. A different file already
+    stored under that name keeps it, and the new one gets a numbered name
+    (`Hall 2`). Raises ValueError for a file soundfile can't read as audio,
+    OSError for a failed copy."""
+    import soundfile as sf
+
+    src = os.path.abspath(src_path)
+    try:
+        sf.info(src)
+    except Exception as e:  # noqa: BLE001 - soundfile raises several types for a bad file
+        raise ValueError(f"not a readable audio file: {e}") from e
+    stem = os.path.splitext(os.path.basename(src))[0]
+    base = re.sub(r'[<>:"/\\|?*]', "", stem).strip() or "impulse"
+    directory = _global_ir_dir()
+    os.makedirs(directory, exist_ok=True)
+    root = os.path.realpath(directory)
+    name = base
+    counter = 2
+    while True:
+        target = os.path.realpath(os.path.join(root, f"{os.path.basename(name)}.wav"))
+        if not target.startswith(root + os.sep):
+            raise ValueError(f"invalid impulse response name {name!r}")
+        if not os.path.exists(target):
+            break
+        if filecmp.cmp(src, target, shallow=False):
+            return name
+        name = f"{base} {counter}"
+        counter += 1
+    shutil.copyfile(src, target)
+    return name

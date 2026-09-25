@@ -22,7 +22,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
-from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, filter_allowed_keys
+from kokoro_gui.engine.presets import filter_fx_preset_values
 
 PLACEHOLDER = "Select FX Preset..."
 
@@ -63,7 +63,7 @@ def load_fx_preset_values(app, name, project=None) -> Optional[dict]:
                     preset = json.load(fh)
             except Exception:
                 preset = None
-    return filter_allowed_keys(preset, ALLOWED_FX_PRESET_KEYS) if preset else None
+    return filter_fx_preset_values(preset) if preset else None
 
 
 def resolve_fx(app, clip=None, character=None, project=None) -> FxResolution:
@@ -100,7 +100,7 @@ def resolve_fx(app, clip=None, character=None, project=None) -> FxResolution:
         if own_name:
             preset_name = own_name
         if clip.fx_override:
-            values.update(filter_allowed_keys(clip.fx_override, ALLOWED_FX_PRESET_KEYS))
+            values.update(filter_fx_preset_values(clip.fx_override))
             scope_apply = True
             if not own_name:
                 preset_name = "custom"

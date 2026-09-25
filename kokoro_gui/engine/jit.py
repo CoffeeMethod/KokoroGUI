@@ -10,7 +10,7 @@ import os
 import time
 
 import kokoro_engine
-from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, ALLOWED_PRESET_KEYS, filter_allowed_keys
+from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys, filter_fx_preset_values
 
 
 class JITMixin:
@@ -53,7 +53,7 @@ class JITMixin:
                 if fx_name:
                     fx_preset = self.load_fx_preset(fx_name, config.get("project_dir"))
                     if fx_preset:
-                        seg_config.update(filter_allowed_keys(fx_preset, ALLOWED_FX_PRESET_KEYS))
+                        seg_config.update(filter_fx_preset_values(fx_preset))
                         seg_config['apply_fx'] = True
                         seg_config['fx_preset'] = fx_name
 

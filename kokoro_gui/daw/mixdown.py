@@ -12,8 +12,13 @@ walk for clip documents (that mixin stays for the no-clips whole-document
 path).
 
 The mix is stereo with the track controls (`kokoro_gui.daw.mixplan`):
-muted and soloed-out tracks are left out, and the fader, pan, fades and
-automation apply, so export is what the transport plays. `channels=1`
+muted and soloed-out tracks are left out, and the fader, pan, fades,
+automation and ducking apply, so export is what the transport plays. The
+mix runs `mixer.mix_block` block by block (`EXPORT_BLOCK_FRAMES`) with one
+`mixer.DuckState` carried through, as the transport does per device block;
+the sidechain's hops don't depend on block size, so the samples match. A
+music bed (`Clip.is_bed`) is read from its file through
+`beds.playable_segments` and gets no SRT row. `channels=1`
 averages the two channels. `range_s` renders only a region (between two
 markers): clips outside it are skipped, and the output, SRT and cue sheet
 start at the region's start.
@@ -48,6 +53,7 @@ from kokoro_gui.daw.timecode import format_position
 
 SOUNDFILE_FORMATS = {"wav", "flac", "ogg"}
 CUE_SHEET_COLUMNS = ("start", "end", "character", "source_text", "text", "status", "note")
+EXPORT_BLOCK_FRAMES = 1 << 16
 
 
 @dataclass
@@ -94,7 +100,7 @@ def write_srt(document, arrangement: Arrangement, path: str, granularity: str = 
     else:
         spans = []
         for placed in arrangement.placed:
-            if placed.estimated:
+            if placed.estimated or getattr(placed.clip, "is_bed", False):
                 continue
             text = document.clip_text(placed.clip).strip()
             if text:
@@ -147,10 +153,12 @@ def _clip_samples(clip, sample_rate: int, post_config: Optional[dict] = None,
                   nested_audio_path: Optional[Callable] = None) -> Optional[np.ndarray]:
     """All of a clip's segments concatenated at `sample_rate`, post-processed
     per `post_config`, or None if none of them can be read. A segment with a
-    `range` contributes only that slice of its file; an imported clip's
-    ranges join with a short crossfade (`_crossfaded_samples`). A nested
-    clip (a subproject) is its child's mixdown file,
-    `nested_audio_path(clip)`."""
+    `range` contributes only that slice of its file; a music bed is its
+    file's trim range, repeated when it loops; an imported recording's
+    ranges join with a short crossfade (`_crossfaded_samples`). The
+    segments come from `imported.segment_plays`, which reads
+    `beds.playable_segments`. A nested clip (a subproject) is its child's
+    mixdown file, `nested_audio_path(clip)`."""
     if getattr(clip, "source", None) == "nested":
         path = nested_audio_path(clip) if nested_audio_path is not None else None
         if not path:
@@ -276,10 +284,11 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
     total_frames = int(round(arrangement.total_duration_s * sample_rate))
     if range_s is None:
         total_frames = max(mixer.total_frames(loaded), total_frames)
-    if total_frames > 0:
-        mixed = mixer.mix_block(loaded, 0, total_frames)
-    else:
-        mixed = np.zeros((0, mixer.CHANNELS), dtype=np.float32)
+    mixed = np.zeros((max(0, total_frames), mixer.CHANNELS), dtype=np.float32)
+    duck = mixer.DuckState(sample_rate, duck_db_setting(document)) if any(c.duck for c in loaded) else None
+    for start in range(0, max(0, total_frames), EXPORT_BLOCK_FRAMES):
+        frames = min(EXPORT_BLOCK_FRAMES, total_frames - start)
+        mixer.mix_block(loaded, start, frames, out=mixed[start:start + frames], duck=duck)
     if int(channels) == 1:
         mixed = mixed.mean(axis=1).astype(np.float32)
     if progress:
@@ -325,4 +334,15 @@ def _loaded(placed, samples: np.ndarray, mix: ClipMix, sample_rate: int, range_s
         fade_in_frames=int(round(mix.fade_in_s * sample_rate)),
         fade_out_frames=int(round(mix.fade_out_s * sample_rate)),
         automation=automation,
+        duck=mix.duck,
+        sidechain=mix.sidechain,
     )
+
+
+def duck_db_setting(document) -> float:
+    """`document.settings["duck_db"]`, how far a ducked track goes down
+    under speech, or `mixer.DEFAULT_DUCK_DB`."""
+    try:
+        return min(0.0, float((document.settings or {}).get("duck_db", mixer.DEFAULT_DUCK_DB)))
+    except (TypeError, ValueError):
+        return mixer.DEFAULT_DUCK_DB

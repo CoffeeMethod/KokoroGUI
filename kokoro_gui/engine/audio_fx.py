@@ -1,12 +1,31 @@
-"""Post-processing audio FX chain (pitch, volume, Pedalboard FX, normalize, trim)."""
+"""Post-processing audio FX chain (pitch, volume, time stretch, Pedalboard FX, normalize, trim)."""
+import logging
+import math
+
 import numpy as np
 import scipy.signal
+from pedalboard import time_stretch as pedalboard_time_stretch
 from pedalboard import (
     Pedalboard, Reverb, Compressor, HighShelfFilter, LowShelfFilter,
     Chorus, Distortion, Phaser, Clipping, Gain, Limiter,
     HighpassFilter, LowpassFilter, LadderFilter, Delay, PitchShift,
-    GSMFullRateCompressor, Bitcrush
+    GSMFullRateCompressor, Bitcrush, Convolution, Chain, Mix
 )
+
+from kokoro_gui.engine.presets import resolve_ir
+
+logger = logging.getLogger(__name__)
+
+# Pedalboard's Convolution (JUCE underneath) scales every impulse response to
+# unit energy and then applies a fixed 0.125 (-18 dB) to the wet signal.
+# The chain undoes the fixed part, so a one-sample IR is the identity at mix
+# 1.0 and any IR's wet signal sits near the dry level. Measured on
+# pedalboard 0.9.23 (the pinned version).
+CONVOLUTION_WET_MAKEUP_DB = 20.0 * math.log10(8.0)
+
+# (name, project_dir) pairs already reported missing, so a clip with a
+# missing IR logs once, not once per segment.
+_warned_missing_irs = set()
 
 # Pitch range the Generation dock's spinbox allows (see pitch_spin.setRange
 # in kokoro_gui/qt/docks/generation_dock.py). A preset's `pitch` bypasses
@@ -23,6 +42,12 @@ TRIM_THRESHOLD = 0.01
 PITCH_SEMITONES_MIN = -12.0
 PITCH_SEMITONES_MAX = 12.0
 
+# `time_stretch` factor bounds (1.0 = none, above 1 = faster and shorter).
+# Fit to slot stays well inside them; the clamp is for a hand-edited
+# document.json, where 0.001 would ask for a thousandfold longer buffer.
+TIME_STRETCH_MIN = 0.5
+TIME_STRETCH_MAX = 2.0
+
 
 def clamp_pitch_semitones(pitch_semitones):
     """Coerces `pitch_semitones` to a float and clamps it to the GUI's
@@ -36,10 +61,70 @@ def clamp_pitch_semitones(pitch_semitones):
     return max(PITCH_SEMITONES_MIN, min(PITCH_SEMITONES_MAX, pitch_semitones))
 
 
+def _convolution_stage(config):
+    """The convolution reverb for `config` (grill Q31), or None when there's
+    nothing to add: no `convolution_ir`, a mix of 0, or a name that resolves
+    to no file (a logged warning, never an exception). The IR is looked up
+    by `resolve_ir(name, config["project_dir"])`: the project's
+    `fx/ir/<name>.wav` first, then `presets/fx/ir/<name>.wav`. A mix below
+    1.0 runs the dry signal and the wet chain in parallel."""
+    name = config.get('convolution_ir')
+    if not isinstance(name, str) or not name:
+        return None
+    try:
+        mix = min(1.0, max(0.0, float(config.get('convolution_mix', 0.5))))
+    except (TypeError, ValueError):
+        mix = 0.5
+    if mix <= 0.0:
+        return None
+    project_dir = config.get('project_dir')
+    path = resolve_ir(name, project_dir)
+    if path is None:
+        if (name, project_dir) not in _warned_missing_irs:
+            _warned_missing_irs.add((name, project_dir))
+            logger.warning("Impulse response %r not found; convolution reverb skipped", name)
+        return None
+    # Read with soundfile rather than handing Convolution the path: given a
+    # file it can't decode, Convolution loads nothing and passes the input
+    # through, which the makeup gain would then turn up by 18 dB.
+    try:
+        import soundfile as sf
+
+        data, ir_rate = sf.read(path, dtype="float32", always_2d=True)
+    except Exception as e:  # noqa: BLE001 - an unreadable IR is skipped like a missing one
+        logger.warning("Impulse response %r couldn't be read (%s); convolution reverb skipped", name, e)
+        return None
+    if data.size == 0 or not np.all(np.isfinite(data)) or not np.any(data):
+        logger.warning("Impulse response %r is empty or silent; convolution reverb skipped", name)
+        return None
+    impulse = np.ascontiguousarray(data[:, 0] if data.shape[1] == 1 else data.T)
+    try:
+        convolution = Convolution(impulse, 1.0, float(ir_rate))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Impulse response %r couldn't be loaded (%s); convolution reverb skipped", name, e)
+        return None
+    wet = Chain([convolution, Gain(gain_db=CONVOLUTION_WET_MAKEUP_DB + 20.0 * math.log10(mix))])
+    if mix >= 1.0:
+        return wet
+    return Mix([Gain(gain_db=20.0 * math.log10(1.0 - mix)), wet])
+
+
+def clamp_time_stretch(factor):
+    """`factor` as a float clamped to `TIME_STRETCH_MIN..TIME_STRETCH_MAX`;
+    1.0 (no stretch) for a missing or non-numeric value."""
+    try:
+        factor = float(factor)
+    except (TypeError, ValueError):
+        return 1.0
+    if not np.isfinite(factor):
+        return 1.0
+    return max(TIME_STRETCH_MIN, min(TIME_STRETCH_MAX, factor))
+
+
 def process_audio(audio, sr, config):
     """The post-processing stage, in the order the numbered comments below
-    run: trim silence, volume, pitch (resample), the Pedalboard FX chain,
-    normalize. Reads only `config`, never engine state, so it runs equally
+    run: trim silence, volume, pitch (resample), time stretch, the
+    Pedalboard FX chain, normalize. Reads only `config`, never engine state, so it runs equally
     well inside `process_chunk_task` (the whole-document path) and at read
     time from `kokoro_gui.audio.post.render` (clip playback/export, where FX
     are applied on top of the raw segment file every time the settings
@@ -70,7 +155,17 @@ def process_audio(audio, sr, config):
             except Exception as e:
                 print(f"Resample failed: {e}")
 
-    # 4. Pedalboard FX
+    # 4. Time stretch: length divided by the factor, pitch kept. Fit to
+    # slot sets it on a clip whose engine has no speed control.
+    stretch = clamp_time_stretch(config.get('time_stretch', 1.0))
+    if stretch != 1.0 and len(audio):
+        try:
+            stretched = pedalboard_time_stretch(np.asarray(audio, dtype=np.float32), sr, stretch)
+            audio = np.asarray(stretched, dtype=np.float32).reshape(-1)
+        except Exception as e:
+            print(f"Time stretch failed: {e}")
+
+    # 5. Pedalboard FX
     fx_chain = []
 
     if config.get('apply_fx', True):
@@ -143,6 +238,12 @@ def process_audio(audio, sr, config):
                 width=config.get('reverb_width', 1.0)
             ))
 
+        # Convolution reverb goes after the algorithmic reverb and before
+        # the dynamics, so the compressor and limiter see its tail.
+        convolution = _convolution_stage(config)
+        if convolution is not None:
+            fx_chain.append(convolution)
+
         # --- Dynamics ---
         if config.get('comp_enabled', False):
             fx_chain.append(Compressor(
@@ -171,7 +272,7 @@ def process_audio(audio, sr, config):
         except Exception as e:
             print(f"Pedalboard FX failed: {e}")
 
-    # 5. Normalization
+    # 6. Normalization
     if config.get('normalize', False):
         peak = np.max(np.abs(audio))
         if peak > 0:

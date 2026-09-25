@@ -47,9 +47,10 @@ _TOKEN = re.compile(r"\S+")
 
 def is_recording_clip(clip) -> bool:
     """True for an imported clip whose audio comes from its text's words:
-    `source == "imported"` with no `original_audio_path` (a music bed,
-    phase 5 P2, has one and plays that file instead)."""
-    return getattr(clip, "source", None) == IMPORTED and not getattr(clip, "original_audio_path", None)
+    `source == "imported"` and not a music bed (`Clip.is_bed`, phase 5
+    P2: one with an `original_audio_path`, which plays that file
+    instead)."""
+    return getattr(clip, "source", None) == IMPORTED and not getattr(clip, "is_bed", False)
 
 
 # -- deriving segments ---------------------------------------------------------------
@@ -325,17 +326,20 @@ class SegmentPlay:
 
 
 def segment_plays(clip, fade_in_s: float = 0.0, fade_out_s: float = 0.0) -> list:
-    """`SegmentPlay`s for the clip's segments that have audio, in order.
-    The clip's fade-in goes on the first and its fade-out on the last. For
-    an imported clip, each join between two sliced segments crossfades over
-    `JOIN_CROSSFADE_S`: the earlier segment reads that much past its range
-    and fades out over it while the next one fades in from its start, so
-    the next still starts where the earlier one's range ends and the clip's
-    length is unchanged."""
+    """`SegmentPlay`s for what the clip plays (`beds.playable_segments`: a
+    bed's virtual segments, else its own segments that have audio), in
+    order. The clip's fade-in goes on the first and its fade-out on the
+    last. For an imported recording clip, each join between two sliced
+    segments crossfades over `JOIN_CROSSFADE_S`: the earlier segment reads
+    that much past its range and fades out over it while the next one
+    fades in from its start, so the next still starts where the earlier
+    one's range ends and the clip's length is unchanged. A bed's loop
+    passes join as P2 plays them, with no crossfade."""
     from kokoro_gui.audio.post import segment_range
+    from kokoro_gui.daw.beds import playable_segments
 
-    segments = [s for s in sorted(clip.segments, key=lambda s: s.order_index) if s.audio_path]
-    joins = getattr(clip, "source", None) == IMPORTED
+    segments = playable_segments(clip)
+    joins = is_recording_clip(clip)
     plays = []
     last = len(segments) - 1
     for index, segment in enumerate(segments):

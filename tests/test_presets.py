@@ -62,3 +62,69 @@ def test_load_fx_preset_path_traversal_sanitized(engine, tmp_path, monkeypatch):
     (fx_dir / "s.json").write_text(json.dumps({"gain_db": 3.0}), encoding="utf-8")
 
     assert engine.load_fx_preset("../../s") == {"gain_db": 3.0}
+
+
+# -- FX value types and the impulse-response store (grill Q31) -------------
+
+def test_fx_filter_accepts_a_string_ir_name_and_numbers():
+    from kokoro_gui.engine.presets import filter_fx_preset_values
+
+    data = {"convolution_ir": "Hall", "convolution_mix": 0.4, "reverb_enabled": True, "gain_db": 3,
+            "out_dir": "/etc"}
+    assert filter_fx_preset_values(data) == {"convolution_ir": "Hall", "convolution_mix": 0.4,
+                                             "reverb_enabled": True, "gain_db": 3}
+
+
+def test_fx_filter_drops_wrong_types():
+    from kokoro_gui.engine.presets import filter_fx_preset_values
+
+    data = {"convolution_ir": ["../../etc/passwd"], "convolution_mix": "0.5",
+            "reverb_room_size": {"x": 1}, "gain_db": None}
+    assert filter_fx_preset_values(data) == {}
+    assert filter_fx_preset_values({"convolution_ir": 5}) == {}
+    # A string is only accepted for the one string key.
+    assert filter_fx_preset_values({"reverb_room_size": "Hall"}) == {}
+
+
+def _wav(path, value=1.0):
+    import numpy as np
+    import soundfile as sf
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(path), np.array([value], dtype=np.float32), 24000, subtype="FLOAT")
+    return str(path)
+
+
+def test_resolve_ir_prefers_the_project_copy_then_the_global_store(tmp_path, monkeypatch):
+    import os
+
+    from kokoro_gui.engine.presets import list_ir_names, resolve_ir
+
+    monkeypatch.chdir(tmp_path)
+    project_dir = tmp_path / "project"
+    global_hall = _wav(tmp_path / "presets" / "fx" / "ir" / "Hall.wav")
+    _wav(tmp_path / "presets" / "fx" / "ir" / "Room.wav")
+
+    assert resolve_ir("Hall", str(project_dir)) == os.path.realpath(global_hall)
+    local_hall = _wav(project_dir / "fx" / "ir" / "Hall.wav")
+    _wav(project_dir / "fx" / "ir" / "Cave.wav")
+    assert resolve_ir("Hall", str(project_dir)) == os.path.realpath(local_hall)
+    assert resolve_ir("Hall", None) == os.path.realpath(global_hall)
+    assert resolve_ir("Nope", str(project_dir)) is None
+    assert resolve_ir("", str(project_dir)) is None
+    assert resolve_ir(None, str(project_dir)) is None
+    assert list_ir_names(str(project_dir)) == ["Cave", "Hall", "Room"]
+    assert list_ir_names(None) == ["Hall", "Room"]
+
+
+def test_resolve_ir_sanitises_the_name_with_basename(tmp_path, monkeypatch):
+    import os
+
+    from kokoro_gui.engine.presets import resolve_ir
+
+    monkeypatch.chdir(tmp_path)
+    _wav(tmp_path / "presets" / "fx" / "secret.wav")
+    hall = _wav(tmp_path / "presets" / "fx" / "ir" / "Hall.wav")
+
+    assert resolve_ir("../secret") is None
+    assert resolve_ir("../../elsewhere/Hall") == os.path.realpath(hall)

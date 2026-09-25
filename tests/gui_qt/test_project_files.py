@@ -164,6 +164,90 @@ def test_bundle_round_trips_document_settings_audio_and_assets(tmp_path, isolate
     assert loaded.notices == []
 
 
+def _write_ir(path, value=1.0):
+    import numpy as np
+    import soundfile as sf
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    sf.write(path, np.array([value], dtype=np.float32), 24000, subtype="FLOAT")
+
+
+def test_used_fx_ir_names_reads_every_fx_scope(tmp_path):
+    fx_dir = tmp_path / "presets" / "fx"
+    fx_dir.mkdir(parents=True)
+    (fx_dir / "warm.json").write_text('{"convolution_ir": "Hall"}', encoding="utf-8")
+    (fx_dir / "phone.json").write_text('{"convolution_ir": "Booth"}', encoding="utf-8")
+    (fx_dir / "odd.json").write_text('{"convolution_ir": ["Nope"]}', encoding="utf-8")
+    project_dir = tmp_path / "project"
+    (project_dir / "fx").mkdir(parents=True)
+    # The project's copy of a preset wins over the global one.
+    (project_dir / "fx" / "phone.json").write_text('{"convolution_ir": "Car"}', encoding="utf-8")
+    character = Character.from_preset_dict("A", {"voice": "af_heart", "fx_preset": "warm"})
+    clip_preset = Clip(character_id=character.id, overrides={"fx_preset": "phone"})
+    clip_override = Clip(character_id=character.id, fx_override={"convolution_ir": "Cave"})
+    clip_bad = Clip(character_id=character.id, overrides={"fx_preset": "odd"}, fx_override={"convolution_ir": 3})
+    doc = Document(clips=[clip_preset, clip_override, clip_bad], characters=[character])
+
+    names = project_io.used_fx_ir_names(doc, str(project_dir), str(fx_dir), {"convolution_ir": "Stage"})
+
+    assert names == {"Hall", "Car", "Cave", "Stage"}
+    assert project_io.used_fx_ir_names(doc, str(project_dir), str(fx_dir), {"convolution_ir": ""}) == \
+        {"Hall", "Car", "Cave"}
+
+
+def test_bundle_carries_named_impulse_responses_project_copy_first(tmp_path, isolated_dirs):
+    fx_dir = tmp_path / "presets" / "fx"
+    fx_dir.mkdir(parents=True)
+    (fx_dir / "warm.json").write_text('{"convolution_ir": "Hall"}', encoding="utf-8")
+    _write_ir(str(fx_dir / "ir" / "Hall.wav"), 0.25)
+    _write_ir(str(fx_dir / "ir" / "Stage.wav"), 0.5)
+    project_dir, project_id = project_io.create_project_dir()
+    _write_ir(os.path.join(project_dir, "fx", "ir", "Hall.wav"), 1.0)
+    doc, _seg = _document_with_audio(project_dir)
+    doc.clips[0].fx_override = {"convolution_ir": "Gone"}
+    path = str(tmp_path / "proj.tbaw")
+
+    plan, warnings = project_io.plan_save(doc, {}, path, project_dir, project_id, lambda _id: None, str(fx_dir),
+                                          project_fx={"convolution_ir": "Stage"})
+    assert [w for w in warnings if "impulse" in w] == ["impulse response 'Gone' not found; not bundled"]
+    bundled = dict(plan.assets)
+    assert os.path.realpath(bundled["fx/ir/Hall.wav"]) == os.path.realpath(
+        os.path.join(project_dir, "fx", "ir", "Hall.wav"))
+    assert os.path.realpath(bundled["fx/ir/Stage.wav"]) == os.path.realpath(str(fx_dir / "ir" / "Stage.wav"))
+
+    project_io.save_project(doc, path, {}, project_dir, project_id, fx_presets_dir=str(fx_dir),
+                            project_fx={"convolution_ir": "Stage"})
+    with zipfile.ZipFile(path) as zf:
+        names = set(zf.namelist())
+        manifest = json.loads(zf.read("manifest.json"))
+        with open(os.path.join(project_dir, "fx", "ir", "Hall.wav"), "rb") as f:
+            assert zf.read("fx/ir/Hall.wav") == f.read()
+    assert {"fx/warm.json", "fx/ir/Hall.wav", "fx/ir/Stage.wav"} <= names
+    assert manifest["assets"]["fx/ir/Stage.wav"].startswith("sha256:")
+
+    # Opened elsewhere, the bundled IR resolves from the new project dir.
+    from kokoro_gui.engine.presets import resolve_ir
+
+    info = project_io.inspect_bundle(path)
+    other_dir = str(tmp_path / "other")
+    project_io.extract_small(info, other_dir)
+    assert resolve_ir("Stage", other_dir, str(tmp_path / "nowhere")) == \
+        os.path.realpath(os.path.join(other_dir, "fx", "ir", "Stage.wav"))
+
+
+def test_save_bundles_the_ir_the_project_fx_names(qt_app, tmp_path):
+    import kokoro_gui.qt.app as qt_app_module
+
+    _write_ir(os.path.join(qt_app_module.FX_PRESETS_DIR, "ir", "Hall.wav"))
+    qt_app.fx_dock.refresh_presets()
+    combo = qt_app.fx_dock._file_combos["convolution_ir"]
+    combo.setCurrentIndex(combo.findData("Hall"))
+
+    path = _save_as(qt_app, str(tmp_path / "reverb"))
+    with zipfile.ZipFile(path) as zf:
+        assert "fx/ir/Hall.wav" in zf.namelist()
+
+
 def test_missing_audio_on_open_leaves_the_segment_pathless_and_says_so(tmp_path, isolated_dirs):
     project_dir, project_id = project_io.create_project_dir()
     doc, _seg = _document_with_audio(project_dir)
@@ -374,6 +458,138 @@ def test_referenced_audio_and_close_time_gc_keep_imported_files(tmp_path, isolat
     assert os.path.isfile(imported)
 
 
+# -- source track (phase 5, D5) ------------------------------------------------------
+
+
+def _document_with_source_track(project_dir, tmp_path, offset=0.25):
+    src = tmp_path / "dialogue.wav"
+    src.write_bytes(b"RIFF" + b"\5" * 60)
+    imported = project_io.import_audio_file(str(src), project_dir)
+    rel = project_io.source_track_relpath(imported, project_dir)
+    doc = Document(runs=[], clips=[], settings={"source_track": {"path": rel, "offset_s": offset}})
+    return doc, imported, rel
+
+
+def test_source_track_is_stored_project_relative_and_resolves_inside_the_dir(tmp_path, isolated_dirs):
+    project_dir, _project_id = project_io.create_project_dir()
+    doc, imported, rel = _document_with_source_track(project_dir, tmp_path)
+
+    assert rel == "audio/imported/" + os.path.basename(imported)
+    assert project_io.source_track_path(doc, project_dir) == os.path.realpath(imported)
+    assert project_io.source_track_path(doc, None) is None
+    assert project_io.source_track_path(Document(runs=[], clips=[]), project_dir) is None
+    assert project_io.source_track_relpath(str(tmp_path / "dialogue.wav"), project_dir) is None
+
+
+@pytest.mark.parametrize("crafted", ["../secret.wav", "audio/../../secret.wav", "ABS"])
+def test_source_track_outside_the_project_dir_never_resolves_or_bundles(tmp_path, isolated_dirs, crafted):
+    project_dir, project_id = project_io.create_project_dir()
+    secret = os.path.join(os.path.dirname(os.path.realpath(project_dir)), "secret.wav")
+    with open(secret, "wb") as f:
+        f.write(b"RIFF")
+    doc = Document(runs=[], clips=[],
+                   settings={"source_track": {"path": secret if crafted == "ABS" else crafted, "offset_s": 0.0}})
+
+    assert project_io.source_track_path(doc, project_dir) is None
+    path = str(tmp_path / "proj.tbaw")
+    project_io.save_project(doc, path, {}, project_dir, project_id)
+    with zipfile.ZipFile(path) as zf:
+        assert not any("secret" in n for n in zf.namelist())
+        assert json.loads(zf.read("manifest.json"))["includes"]["imported_audio"] is False
+
+
+def test_source_track_is_bundled_flagged_and_resolved_after_open(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, imported, rel = _document_with_source_track(project_dir, tmp_path)
+    path = str(tmp_path / "proj.tbaw")
+
+    project_io.save_project(doc, path, {}, project_dir, project_id)
+
+    with zipfile.ZipFile(path) as zf:
+        assert rel in zf.namelist()
+        assert json.loads(zf.read("manifest.json"))["includes"]["imported_audio"] is True
+        assert json.loads(zf.read("document.json"))["settings"]["source_track"] == {"path": rel, "offset_s": 0.25}
+    info = project_io.inspect_bundle(path)
+    other = str(tmp_path / "other")
+    project_io.extract_small(info, other)
+    project_io.extract_audio(info, other)
+    loaded = project_io.finish_open(info, other)
+    assert loaded.notices == []
+    assert loaded.document.settings["source_track"] == {"path": rel, "offset_s": 0.25}
+    assert project_io.source_track_path(loaded.document, other) == \
+        os.path.realpath(os.path.join(other, "audio", "imported", os.path.basename(imported)))
+
+
+def test_include_imported_audio_off_leaves_the_source_track_out_and_open_says_so(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _imported, rel = _document_with_source_track(project_dir, tmp_path)
+    path = str(tmp_path / "proj.tbaw")
+
+    project_io.save_project(doc, path, {"bundle": {"include_imported_audio": False}}, project_dir, project_id)
+
+    with zipfile.ZipFile(path) as zf:
+        assert rel not in zf.namelist()
+        assert json.loads(zf.read("manifest.json"))["includes"]["imported_audio"] is False
+    info = project_io.inspect_bundle(path)
+    other = str(tmp_path / "other")
+    project_io.extract_small(info, other)
+    loaded = project_io.finish_open(info, other)
+    assert loaded.document.settings["source_track"]["path"] == rel
+    assert project_io.source_track_path(loaded.document, other) is None
+    assert any("source track" in n for n in loaded.notices)
+
+
+def test_referenced_audio_and_close_time_gc_keep_the_source_track(tmp_path, isolated_dirs):
+    project_dir, _project_id = project_io.create_project_dir()
+    doc, imported, _rel = _document_with_source_track(project_dir, tmp_path)
+
+    assert os.path.realpath(imported) in project_io.referenced_audio_paths(doc, project_dir)
+    assert project_io.referenced_audio_paths(doc) == set()
+    project_io.gc_project_dir(project_dir, doc)
+    assert os.path.isfile(imported)
+
+
+def _tone_wav(path, seconds=2.0, value=0.3, rate=24000):
+    import numpy as np
+    import soundfile as sf
+
+    sf.write(str(path), np.full(int(rate * seconds), value, dtype=np.float32), rate)
+    return str(path)
+
+
+def test_import_source_track_is_one_undo_step_and_survives_save_and_open(qt_app, tmp_path):
+    src = _tone_wav(tmp_path / "original.wav")
+
+    assert qt_app.import_source_track(src) is True
+
+    block = qt_app.document.settings["source_track"]
+    assert block["path"].startswith("audio/imported/") and block["offset_s"] == 0.0
+    copied = project_io.source_track_path(qt_app.document, qt_app.project_dir)
+    assert copied and os.path.dirname(copied) == os.path.realpath(os.path.join(qt_app.project_dir, "audio",
+                                                                               "imported"))
+    qt_app.undo()
+    assert "source_track" not in qt_app.document.settings
+    qt_app.redo()
+    assert qt_app.document.settings["source_track"] == block
+
+    path = _save_as(qt_app, str(tmp_path / "dub.tbaw"))
+    with zipfile.ZipFile(path) as zf:
+        assert block["path"] in zf.namelist()
+        assert json.loads(zf.read("manifest.json"))["includes"]["imported_audio"] is True
+    _open(qt_app, path)
+    assert qt_app.document.settings["source_track"] == block
+    assert project_io.source_track_path(qt_app.document, qt_app.project_dir) is not None
+
+
+def test_import_source_track_refuses_a_file_that_is_not_audio(qt_app, tmp_path):
+    bad = tmp_path / "notes.wav"
+    bad.write_text("not audio", encoding="utf-8")
+
+    assert qt_app.import_source_track(str(bad)) is False
+    assert "source_track" not in qt_app.document.settings
+    assert not os.path.isdir(os.path.join(qt_app.project_dir, "audio", "imported"))
+
+
 # -- imported recording edited as text (phase 5 P3) ---------------------------------
 
 def _document_with_recording(project_dir, tmp_path):
@@ -469,6 +685,13 @@ def test_referenced_audio_and_close_time_gc_keep_a_recording_source(tmp_path, is
     assert os.path.realpath(imported) in project_io.referenced_audio_paths(doc)
     project_io.gc_project_dir(project_dir, doc)
     assert os.path.isfile(imported)
+
+
+def test_imported_is_required_once_with_a_bed_and_a_recording(tmp_path, isolated_dirs):
+    project_dir, _project_id = project_io.create_project_dir()
+    doc, _imported, _source = _document_with_recording(project_dir, tmp_path)
+    doc.clips.append(Clip(source="imported", original_audio_path=_imported))
+    assert project_io.required_features(doc) == ["imported"]
 
 
 # -- reference video (phase 5, TB16) -------------------------------------------------
@@ -1462,6 +1685,41 @@ def test_a_bundle_with_parked_takes_round_trips_them_and_requires_takes(tmp_path
     take = loaded.document.clips[0].takes[0][0]
     assert take.audio_path == os.path.join(other_dir, "audio", "generated", "old_0.wav")
     assert take.duration == 2.0
+
+
+def test_a_bundle_with_a_music_bed_requires_imported_and_round_trips_it(tmp_path, isolated_dirs):
+    import numpy as np
+    import soundfile as sf
+
+    from kokoro_gui.daw.undo import ImportBedCommand
+
+    project_dir, project_id = project_io.create_project_dir()
+    src = str(tmp_path / "theme.wav")
+    sf.write(src, np.zeros(8000, dtype=np.float32), 8000)
+    doc = Document.from_plain_text("Hello.")
+    command = ImportBedCommand(project_io.import_audio_file(src, project_dir), "theme", at_s=1.0)
+    doc.undo_stack.push(command)
+    doc.tracks[0].duck = True
+    assert project_io.required_features(doc) == ["imported"]
+    path = str(tmp_path / "bed.tbaw")
+
+    project_io.save_project(doc, path, {}, project_dir, project_id, fx_presets_dir=str(tmp_path / "none"))
+
+    with zipfile.ZipFile(path) as zf:
+        assert json.loads(zf.read("manifest.json"))["requires"] == ["imported"]
+    info = project_io.inspect_bundle(path)  # "imported" is supported, so this opens
+    other_dir = str(tmp_path / "other")
+    project_io.extract_small(info, other_dir)
+    project_io.extract_audio(info, other_dir)
+    loaded = project_io.finish_open(info, other_dir)
+    bed = loaded.document.get_clip(command.clip_id)
+    assert bed.is_bed and bed.pinned and bed.timeline_timestamp == 1.0
+    assert os.path.isfile(bed.original_audio_path)
+    assert bed.original_audio_path.startswith(os.path.join(other_dir, "audio", "imported"))
+    assert [r.kind for r in loaded.document.runs if r.clip_id == bed.id] == ["placeholder"]
+    track = loaded.document.get_track(bed.track_id)
+    assert (track.role, track.duck) == ("music", True)
+    assert loaded.document.dirty_clips() == []
 
 
 def test_a_bundle_without_takes_requires_nothing(tmp_path, isolated_dirs):

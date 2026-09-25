@@ -3,6 +3,7 @@ qtbot-only, no full qt_app (QtTTSApp) fixture, mirroring
 test_waveform_view.py's app-independence, since this widget has no
 dependency on the running app - it only needs a kokoro_gui.daw.models.Document."""
 import numpy as np
+import pytest
 import soundfile as sf
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QMessageBox
@@ -1153,3 +1154,107 @@ def test_ruler_labels_in_timecode_when_enabled(qtbot):
     doc.settings["timecode"] = {"enabled": True, "frame_rate": 25.0, "start": "01:00:00:00"}
     _render(view, doc)
     assert view._ruler.label_for(2.0) == "01:00:02:00"
+
+
+# --- phase 5, D4: duration target, slot bracket, fit tint ---------------------------
+
+
+def _paint(view):
+    """Runs every item's paint() once, offscreen."""
+    from PySide6.QtGui import QImage, QPainter
+
+    image = QImage(800, 300, QImage.Format.Format_ARGB32)
+    painter = QPainter(image)
+    view._scene.render(painter)
+    painter.end()
+
+
+def test_a_clip_over_its_target_tints_and_labels_its_fit(qtbot, tmp_path):
+    from kokoro_gui.qt import theme
+    from kokoro_gui.qt.timeline_view import FIT_TINT_TOKENS
+
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _generated_doc(tmp_path)  # 1.0 s of audio
+    zoom = DEFAULT_PIXELS_PER_SECOND
+
+    for target, level, percent in ((0.8, "far_over", "125%"), (0.95, "over", "105%"), (1.0, "fit", "100%"),
+                                   (2.0, "fit", "50%")):
+        clip.overrides["target_duration_s"] = target
+        _render(view, doc)
+        block = _clip_block_items(view)[0]
+        assert block.fit_ratio == 1.0 / target
+        assert block.fit_level == level
+        assert block.fit_tint == FIT_TINT_TOKENS.get(level)
+        assert block.label.endswith(percent)
+        assert block.slot_px == (0.0, seconds_to_x(target, zoom))
+        _paint(view)
+
+    # The tint tokens exist in both palettes and aren't the overlap border.
+    for name in theme.THEME_NAMES:
+        pal = theme.palette_for(name)
+        assert pal.fit_far_over != pal.overlap_border
+        assert pal.fit_over and pal.fit_far_over
+
+
+def test_the_slot_bracket_can_run_past_the_block_but_clicks_stay_on_it(qtbot, tmp_path):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _generated_doc(tmp_path)
+    clip.overrides["target_duration_s"] = 2.0
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+    block_width = seconds_to_x(1.0, DEFAULT_PIXELS_PER_SECOND)
+
+    assert block.slot_px[1] == seconds_to_x(2.0, DEFAULT_PIXELS_PER_SECOND)
+    assert block.boundingRect().width() > block_width
+    assert block.shape().boundingRect().width() == block_width
+    # Past the block, over the bracket: no block there.
+    assert view._clip_block_at(view.mapFromScene(block.mapToScene(block_width + 20, 30))) is None
+
+
+def test_the_slot_starts_at_the_timestamp_not_the_aligned_start(qtbot, tmp_path):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _generated_doc(tmp_path)
+    clip.segments[0].onset_s = 0.2
+    clip.timeline_timestamp = 2.0
+    clip.pinned = True
+    clip.overrides["target_duration_s"] = 1.0
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+
+    assert block.start_s == 1.8  # onset aligned: the first word lands on 2.0
+    zoom = DEFAULT_PIXELS_PER_SECOND
+    assert block.slot_px == pytest.approx((seconds_to_x(0.2, zoom), seconds_to_x(1.2, zoom)))
+
+
+def test_an_estimated_clip_shows_its_slot_without_a_fit(qtbot):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _build_doc_with_one_clip()
+    clip.overrides["target_duration_s"] = 0.5
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+
+    assert block.slot_px is not None
+    assert block.fit_ratio is None and block.fit_tint is None
+    assert block.label == "Alice"
+
+
+def test_fit_to_slot_is_in_the_menu_only_for_a_clip_with_a_target(qtbot, tmp_path):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _generated_doc(tmp_path)
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+    pos = view.mapFromScene(block.mapToScene(10, 30))
+    assert "Fit to slot" not in [a.text() for a in view._build_context_menu(pos).actions()]
+
+    clip.overrides["target_duration_s"] = 0.8
+    _render(view, doc)
+    menu = view._build_context_menu(pos)
+    received = []
+    view.fitToSlotRequested.connect(received.append)
+    next(a for a in menu.actions() if a.text() == "Fit to slot").trigger()
+    assert received == [clip.id]

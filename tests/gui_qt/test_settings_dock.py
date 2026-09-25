@@ -358,6 +358,32 @@ def test_clip_scope_take_combo_picks_a_parked_take(qt_app):
     assert "take" not in clip.overrides
 
 
+def test_clip_scope_target_duration_edits_the_override_and_blank_clears_it(qt_app):
+    qt_app.document.text = "Hello there friend."
+    clip = qt_app.document.assign_character_to_range(0, 18, qt_app.document.characters[0].id)
+    clip.overrides["target_duration_s"] = 1.5
+    qt_app.selection.select_clip(clip.id)
+    target = qt_app.settings_dock.scope_fields.widgets["target_duration_s"]
+    stack = qt_app.document.undo_stack
+    assert target.value() == 1.5
+
+    steps = len(stack._undo)
+    target.setValue(2.25)
+    target.editingFinished.emit()
+    assert clip.overrides["target_duration_s"] == 2.25
+    assert len(stack._undo) == steps + 1
+    target.editingFinished.emit()  # no change, no step
+    assert len(stack._undo) == steps + 1
+
+    target.setValue(target.minimum())
+    target.editingFinished.emit()
+    assert "target_duration_s" not in clip.overrides
+    stack.undo()
+    assert clip.overrides["target_duration_s"] == 2.25
+    # Not a generation input: editing it never dirties the clip.
+    assert "target_duration_s" not in qt_app._assemble_generation_config(clip)
+
+
 def test_syllable_count_is_rough_but_stable():
     from kokoro_gui.qt.docks.scope_fields import syllable_count
 

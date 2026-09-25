@@ -247,6 +247,17 @@ def test_segment_plays_crossfade_the_joins_of_an_imported_clip():
         (0.1, JOIN_CROSSFADE_S), (JOIN_CROSSFADE_S, JOIN_CROSSFADE_S), (JOIN_CROSSFADE_S, 0.2)]
 
 
+def test_segment_plays_give_a_looped_bed_its_passes_without_a_crossfade(tmp_path):
+    path = tmp_path / "bed.wav"
+    sf.write(str(path), np.zeros(8000, dtype=np.float32), 8000)
+    bed = Clip(source="imported", original_audio_path=str(path),
+               overrides={"loop": True, "loop_length_s": 2.5})
+    plays = segment_plays(bed, fade_in_s=0.1, fade_out_s=0.2)
+    assert len(plays) == 3
+    assert all(p.play_range_s == p.range_s for p in plays)
+    assert [(p.fade_in_s, p.fade_out_s) for p in plays] == [(0.1, 0.0), (0.0, 0.0), (0.0, 0.2)]
+
+
 def test_segment_plays_leave_a_generated_clip_as_it_was():
     clip = Clip(segments=[Segment(order_index=1, audio_path="b.wav"), Segment(order_index=0, audio_path="a.wav"),
                           Segment(order_index=2)])

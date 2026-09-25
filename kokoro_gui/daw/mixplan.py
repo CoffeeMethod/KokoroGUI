@@ -7,6 +7,9 @@ the transport plays.
   non-solo track while any track is soloed, get no entry at all: the caller
   leaves them out of the schedule instead of loading them at gain 0.
 - Pan and the automation lane come from the clip's track.
+- `duck` is the track's `Track.duck`: the mixer turns the clip down while
+  speech plays. `sidechain` marks speech the ducking listens to: every
+  clip except a music bed (`Clip.is_bed`) and a ducked clip.
 - Fades are the clip's own `fade_in_s`/`fade_out_s`. With
   `document.settings["auto_crossfade"]` on, an edge that lies inside
   another placed clip (either track) gets at least `AUTO_CROSSFADE_S`: a
@@ -28,6 +31,8 @@ class ClipMix:
     fade_in_s: float = 0.0
     fade_out_s: float = 0.0
     automation: tuple = ()  # the track's `[seconds, gain]` pairs
+    duck: bool = False
+    sidechain: bool = True
 
 
 def _float(value, default: float) -> float:
@@ -59,8 +64,9 @@ def clip_mixes(document, arrangement) -> dict:
             gain = max(0.0, _float(track.gain, 1.0))
             pan = max(-1.0, min(1.0, _float(track.pan, 0.0)))
             automation = tuple(tuple(p) for p in (track.automation or []))
+            duck = bool(getattr(track, "duck", False))
         else:
-            gain, pan, automation = 1.0, 0.0, ()
+            gain, pan, automation, duck = 1.0, 0.0, (), False
         fade_in = max(0.0, _float(clip.fade_in_s, 0.0))
         fade_out = max(0.0, _float(clip.fade_out_s, 0.0))
         if auto_crossfade:
@@ -69,6 +75,7 @@ def clip_mixes(document, arrangement) -> dict:
                 fade_in = max(fade_in, AUTO_CROSSFADE_S)
             if _inside_another(others, item.end_s):
                 fade_out = max(fade_out, AUTO_CROSSFADE_S)
+        sidechain = not duck and not getattr(clip, "is_bed", False)
         mixes[clip.id] = ClipMix(gain=gain, pan=pan, fade_in_s=fade_in, fade_out_s=fade_out,
-                                 automation=automation)
+                                 automation=automation, duck=duck, sidechain=sidechain)
     return mixes

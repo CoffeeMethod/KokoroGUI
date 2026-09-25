@@ -21,6 +21,10 @@ The gap is the clip's own `gap_before_s` when set (a `[pause:x]` marker
 sets it), else `document.settings["paragraph_gap_s"]` when the text between
 the two clips holds a blank line, else `document.settings["gap_s"]`. The
 first clip gets only its own override. A pinned clip ignores gaps.
+A music bed placed by timestamp (`Clip.is_bed`, phase 5 P2) doesn't move
+the read-through: the clip after it in text order follows the clip before
+it, so a bed under the whole episode doesn't push new lines to its end. A
+bed in text order is a stinger between two lines and does.
 
 Onset alignment (`document.settings["align_onset"]`, `align_onset_enabled`):
 a pinned clip placed by timestamp starts its leading silence early, so the
@@ -116,7 +120,12 @@ def segment_seconds(segment) -> float:
 
 def clip_audio_duration_s(clip) -> Optional[float]:
     """Sum of the clip's segment lengths, or None when no segment carries
-    audio yet."""
+    audio yet. A music bed is measured from its file (`beds.bed_segments`)."""
+    if getattr(clip, "is_bed", False):
+        from kokoro_gui.daw.beds import bed_segments
+
+        segments = bed_segments(clip)
+        return float(sum(segment_seconds(s) for s in segments)) if segments else None
     if not any(getattr(s, "audio_path", None) for s in clip.segments):
         return None
     return float(sum(segment_seconds(s) for s in clip.segments))
@@ -267,6 +276,10 @@ def compute_arrangement(document, engine_id: Optional[str] = None,
         start = max(0.0, float(start))
         placed.append(PlacedClip(clip=clip, start_s=start, duration_s=duration, estimated=estimated,
                                  aligned_onset_s=aligned))
+        if getattr(clip, "is_bed", False) and clip.timeline_timestamp is not None:
+            # A bed placed in time runs under the read-through; the next
+            # clip follows the one before the bed.
+            continue
         cursor = start + duration
         previous_end = extent_end
 

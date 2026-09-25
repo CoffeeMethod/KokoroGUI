@@ -145,8 +145,13 @@ class Track:
     # character; clips of any character land on it by the lane rule.
     lane: Optional[int] = None
     # "subprojects" for the track nested clips land on by default (phase 4;
-    # `Document.subprojects_track`), else None.
+    # `Document.subprojects_track`), "music" for the one music beds land on
+    # (phase 5 P2; `Document.music_track`), else None.
     role: Optional[str] = None
+    # Ducked under speech: every clip on this track is turned down by the
+    # mixer's sidechain while the other clips play (kokoro_gui/audio/mixer.py,
+    # `DuckState`; depth from `Document.settings["duck_db"]`).
+    duck: bool = False
     id: str = field(default_factory=_new_id)
     extra: dict = field(default_factory=dict)  # unknown fields, see Character
 
@@ -210,8 +215,11 @@ class Segment:
 CLIP_STATUSES = ("todo", "generated", "approved", "needs_rewrite")
 # "nested": a subproject placed as a clip (phase 4, grill NP1-NP8). Its
 # audio is the child project's mixdown; it has no segments or takes.
+# "imported": audio that came from a file, never TTS. A music bed (phase 5
+# P2, grill Q30) is one with `original_audio_path` set.
 CLIP_SOURCES = ("generated", "imported", "nested")
-# `Run.kind` of the one read-only run a nested clip owns: the child's title.
+# `Run.kind` of the one read-only run a nested clip or a music bed owns: the
+# child's title, or the bed's file name.
 PLACEHOLDER = "placeholder"
 
 
@@ -266,10 +274,24 @@ class Clip:
         return self.source == "nested"
 
     @property
+    def is_bed(self) -> bool:
+        """A music bed (grill Q30): an imported clip that plays
+        `original_audio_path` and owns one placeholder run holding the file
+        name. An imported recording (phase 5 P3) keeps its timing on its
+        runs instead and has no `original_audio_path`, so it is not a bed."""
+        return self.source == "imported" and bool(self.original_audio_path)
+
+    @property
+    def has_placeholder(self) -> bool:
+        """True for the clips whose one run is a read-only placeholder: a
+        nested clip or a music bed."""
+        return self.is_nested or self.is_bed
+
+    @property
     def run_kind(self) -> str:
         """The `Run.kind` of this clip's runs: its source, or
-        `PLACEHOLDER` for a nested clip."""
-        return PLACEHOLDER if self.source == "nested" else self.source
+        `PLACEHOLDER` for a nested clip or a music bed."""
+        return PLACEHOLDER if self.has_placeholder else self.source
 
 
 @dataclass
@@ -289,7 +311,8 @@ class Run:
     `kind` mirrors the owning `Clip.source` ("generated"/"imported") for a
     tagged run, or is `None` for an untagged one. `"placeholder"`
     (`PLACEHOLDER`) is a nested clip's one read-only run, whose text is the
-    subproject's title (phase 4); the editor refuses edits inside it.
+    subproject's title (phase 4), or a music bed's, whose text is its file
+    name (phase 5 P2); the editor refuses edits inside it.
 
     `words` is the timing of an imported recording's text (phase 5 P3,
     grill Q32): one `[char_start, char_end, source, start_s, end_s]` entry
@@ -642,6 +665,12 @@ class Document:
             self.tracks.append(track)
         return track.id if track is not None else None
 
+    def music_track(self) -> Optional[str]:
+        """The id of the "Music" track music beds go on (phase 5 P2), or
+        None before the first bed (`undo.ImportBedCommand` makes it)."""
+        track = next((t for t in self.tracks if t.role == "music"), None)
+        return track.id if track is not None else None
+
     def used_tracks(self) -> list:
         """Tracks at least one clip sits on, in `order_index` order: the
         lanes the timeline draws. A track whose clips are all gone stays in
@@ -709,8 +738,9 @@ class Document:
         return out
 
     def overlaps_nested(self, start: int, end: int) -> bool:
-        """True when `[start, end)` touches a nested clip's placeholder run,
-        which no character assignment or split may retag."""
+        """True when `[start, end)` touches a placeholder run (a nested
+        clip's or a music bed's), which no character assignment or split
+        may retag."""
         for run, r_start, r_end in self._iter_runs_with_offsets():
             if run.kind == PLACEHOLDER and r_start < end and r_end > start:
                 return True
@@ -720,9 +750,10 @@ class Document:
         return [clip for clip in self.clips if clip.is_nested]
 
     def placeholder_extent(self, clip_id: str) -> Optional[tuple]:
-        """`clip_extent` of a nested clip's placeholder run, or None."""
+        """`clip_extent` of a nested clip's or a music bed's placeholder
+        run, or None."""
         clip = self.get_clip(clip_id)
-        return self.clip_extent(clip_id) if clip is not None and clip.is_nested else None
+        return self.clip_extent(clip_id) if clip is not None and clip.has_placeholder else None
 
     def insert_nested_clip(self, position: int, child: dict, title: str, character_id=None) -> Clip:
         """Inserts a nested clip at text offset `position`: one placeholder
@@ -887,7 +918,7 @@ class Document:
                 f"got start={start}, end={end}"
             )
         if self.overlaps_nested(start, end):
-            raise ValueError("assign_character_to_range can't retag a subproject's placeholder")
+            raise ValueError("assign_character_to_range can't retag a placeholder run")
 
         imported = self._imported_spans(start, end)
         if not imported:
