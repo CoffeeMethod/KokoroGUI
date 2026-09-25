@@ -138,6 +138,23 @@ def test_mixdown_applies_post_config_per_clip(tmp_path):
     assert np.allclose(data[8000:], 0.5, atol=1e-3)  # b: untouched
 
 
+def test_mixdown_reads_only_a_segments_range(tmp_path):
+    """A segment with `range` exports that slice of its file, placed at its
+    length (`end - start`), not the file's."""
+    ramp = (np.arange(8000) / 8000.0).astype(np.float32)
+    path = str(tmp_path / "ramp.wav")
+    sf.write(path, ramp, 8000, subtype="FLOAT")
+    clip = Clip(segments=[Segment(order_index=0, audio_path=path, range=[0.5, 0.75]),
+                          Segment(order_index=1, audio_path=path, range=[0.0, 0.25])])
+    doc = _doc("Sliced.", [(0, 7, clip)])
+
+    result = mixdown(doc, str(tmp_path / "mix.wav"), fmt="wav", sample_rate=8000, channels=1)
+
+    data, _rate = sf.read(str(tmp_path / "mix.wav"), dtype="float32")
+    assert result.duration_s == 0.5
+    assert np.allclose(data, np.concatenate([ramp[4000:6000], ramp[:2000]]), atol=1e-4)
+
+
 # -- phase 2: stereo, track controls, range, cue sheet, word SRT -----------------
 
 

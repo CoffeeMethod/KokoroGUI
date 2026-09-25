@@ -129,7 +129,7 @@ def test_rendered_duration_uses_the_hint_without_reading_the_file(tmp_path, monk
 
     post.clear_render_cache()
 
-    def no_reads(_path):
+    def no_reads(_path, _range_s=None):
         raise AssertionError("read the file")
 
     monkeypatch.setattr(post, "_read_mono", no_reads)
@@ -146,3 +146,104 @@ def test_rendered_duration_prefers_a_memoized_render_over_the_hint(tmp_path):
     post.clear_render_cache()
     post.render(path, {}, 8000)
     assert post.rendered_duration_s(path, {}, 8000, hint=9.0) == 1.0
+
+
+# -- slices (Segment.range, render_slice) -------------------------------------------
+
+
+def _ramp(path, frames=8000, rate=8000):
+    """Sample i holds i / frames, so a slice's first value names its frame."""
+    sf.write(str(path), (np.arange(frames) / frames).astype(np.float32), rate, subtype="FLOAT")
+    return str(path)
+
+
+def test_render_with_a_range_reads_only_those_frames(tmp_path):
+    path = _ramp(tmp_path / "ramp.wav")
+    raw, _rate = sf.read(path, dtype="float32")
+
+    part = post.render(path, None, 8000, range_s=(0.25, 0.5))
+    assert np.array_equal(part, raw[2000:4000])
+    assert np.array_equal(post.render_slice(path, 0.25, 0.5, None, 8000), part)
+    assert np.array_equal(load_clip_samples(path, 8000, None, range_s=[0.25, 0.5]), part)
+
+
+def test_a_slice_never_decodes_the_whole_file(tmp_path, monkeypatch):
+    path = _ramp(tmp_path / "ramp.wav")
+
+    def whole_file_read(*_args, **_kwargs):
+        raise AssertionError("read the whole file")
+
+    monkeypatch.setattr(sf, "read", whole_file_read)
+    assert len(post.render(path, None, 8000, range_s=(0.0, 0.1))) == 800
+
+
+def test_render_memo_is_keyed_by_range(tmp_path):
+    path = _ramp(tmp_path / "ramp.wav")
+    whole = post.render(path, None, 8000)
+    first = post.render(path, None, 8000, range_s=(0.0, 0.25))
+    second = post.render(path, None, 8000, range_s=(0.25, 0.5))
+
+    assert len(whole) == 8000 and len(first) == len(second) == 2000
+    assert not np.array_equal(first, second)
+    assert post.render(path, None, 8000, range_s=[0.0, 0.25]) is first
+    assert post.render(path, None, 8000) is whole
+
+
+def test_a_range_is_clamped_to_the_file_and_an_empty_one_is_empty(tmp_path):
+    path = _ramp(tmp_path / "ramp.wav")  # 1 s
+    raw, _rate = sf.read(path, dtype="float32")
+
+    assert np.array_equal(post.render(path, None, 8000, range_s=(0.75, 3.0)), raw[6000:])
+    assert np.array_equal(post.render(path, None, 8000, range_s=(-1.0, 0.1)), raw[:800])
+    for empty in ((0.5, 0.5), (0.6, 0.4), (2.0, 3.0)):
+        out = post.render(path, {"volume": 2.0, "apply_fx": False}, 8000, range_s=empty)
+        assert out.dtype == np.float32 and len(out) == 0, empty
+
+
+def test_a_slice_is_post_processed_and_resampled(tmp_path):
+    path = _ramp(tmp_path / "ramp.wav")
+    raw, _rate = sf.read(path, dtype="float32")
+
+    loud = post.render(path, {"volume": 2.0, "apply_fx": False}, 8000, range_s=(0.25, 0.5))
+    assert np.allclose(loud, raw[2000:4000] * 2.0, atol=1e-6)
+    assert len(post.render(path, None, 16000, range_s=(0.25, 0.5))) == 4000
+
+
+def test_trim_silence_does_not_apply_inside_a_slice(tmp_path):
+    rate = 8000
+    silence = np.zeros(rate // 2, dtype=np.float32)
+    tone = np.full(rate // 2, 0.3, dtype=np.float32)
+    path = tmp_path / "padded.wav"
+    sf.write(str(path), np.concatenate([silence, tone, silence]), rate)
+
+    # The range says where the audio starts; trim would move it.
+    sliced = post.render(str(path), {"trim_silence": True}, rate, range_s=(0.25, 1.25))
+    assert len(sliced) == rate
+    assert post.rendered_duration_s(str(path), {"trim_silence": True}, rate, range_s=(0.25, 1.25)) == 1.0
+
+
+def test_duration_hint_with_a_range_is_its_length_over_pitch():
+    from kokoro_gui.daw.models import Segment
+
+    segment = Segment(duration=9.0, range=[1.0, 3.0])
+    assert post.duration_hint(segment, {}) == 2.0
+    # Trim leaves a slice alone, so the hint does too.
+    assert post.duration_hint(segment, {"trim_silence": True}) == 2.0
+    assert post.duration_hint(segment, {"pitch": 12}) == pytest.approx(1.0)
+    assert post.duration_hint(Segment(range=[3.0, 1.0]), {}) == 0.0
+
+
+def test_segment_range_rejects_malformed_values():
+    from kokoro_gui.daw.models import Segment
+
+    assert post.segment_range(Segment(range=[1, 2.5])) == (1.0, 2.5)
+    assert post.segment_range(Segment()) is None
+    for bad in ([1.0], ["a", "b"], "12", [float("nan"), 1.0]):
+        assert post.segment_range(Segment(range=bad)) is None, bad
+
+
+def test_rendered_duration_of_a_range_reads_only_the_slice(tmp_path):
+    path = _ramp(tmp_path / "ramp.wav")
+    post.clear_render_cache()
+    assert post.rendered_duration_s(path, None, 8000, range_s=(0.5, 0.75)) == 0.25
+    assert post.rendered_duration_s(path, None, 8000) == 1.0

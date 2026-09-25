@@ -197,6 +197,10 @@ class Segment:
     # (a segment generated before these fields).
     onset_s: Optional[float] = None
     tail_s: Optional[float] = None
+    # `[start_s, end_s]` seconds into `audio_path`: the segment is that
+    # slice of the file (an imported recording's words, a trimmed bed).
+    # None is the whole file. Saved only when set.
+    range: Optional[list] = None
     id: str = field(default_factory=_new_id)
     extra: dict = field(default_factory=dict)  # unknown fields, see Character
 

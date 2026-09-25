@@ -5,7 +5,9 @@ change, like the schema form.
 Project: pacing (`Document.settings["gap_s"]` / `["paragraph_gap_s"]`,
 kokoro_gui/daw/arrangement.py), auto-crossfade (`["auto_crossfade"]`,
 kokoro_gui/daw/mixplan.py), ripple on regenerate (`["ripple"]`, on by
-default, kokoro_gui/daw/arrangement.py), the track layout (`["track_layout"]`,
+default, kokoro_gui/daw/arrangement.py), onset alignment of locked clips
+(`["align_onset"]`, derived from the pinned clips while unset,
+`arrangement.align_onset_enabled`), the track layout (`["track_layout"]`,
 kokoro_gui/daw/lanes.py), and timecode (`["timecode"]`,
 kokoro_gui/daw/timecode.py).
 
@@ -24,7 +26,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSpinBox, QWidget,
 )
 
-from kokoro_gui.daw.arrangement import DEFAULT_GAP_S, DEFAULT_PARAGRAPH_GAP_S
+from kokoro_gui.daw.arrangement import DEFAULT_GAP_S, DEFAULT_PARAGRAPH_GAP_S, align_onset_enabled
 from kokoro_gui.daw.models import CLIP_STATUSES
 from kokoro_gui.daw.timecode import FRAME_RATES, tc_to_frames, timecode_settings
 from kokoro_gui.daw.undo import SetActiveTakeCommand, SetFieldCommand
@@ -104,6 +106,14 @@ class ScopeFields(QWidget):
         ripple.toggled.connect(lambda on: self._set_setting("ripple", bool(on)))
         self.form.addRow("", ripple)
 
+        align = QCheckBox("Align locked clips to their first word")
+        align.setChecked(align_onset_enabled(self.app.document))
+        align.setToolTip("Start each clip locked in time a little early, by the silence before its first "
+                         "word, so the word lands on the clip's time. Skipped for a clip with trim on. "
+                         "On by default when the project has a locked clip.")
+        align.toggled.connect(lambda on: self._set_setting("align_onset", bool(on)))
+        self.form.addRow("", align)
+
         layout = self.app.document.track_layout()
         layout_combo = QComboBox()
         layout_combo.addItem("One per character", "character")
@@ -150,7 +160,7 @@ class ScopeFields(QWidget):
             signal.connect(lambda *_: self._commit_timecode())
         start.editingFinished.connect(self._commit_timecode)
         self.widgets = {"title": title, "gap_s": gap, "paragraph_gap_s": para, "auto_crossfade": crossfade,
-                        "ripple": ripple, "track_layout": layout_combo, "track_lanes": lanes, "tc_enabled": enabled, "tc_fps": fps, "tc_start": start, "tc_drop": drop}
+                        "ripple": ripple, "align_onset": align, "track_layout": layout_combo, "track_lanes": lanes, "tc_enabled": enabled, "tc_fps": fps, "tc_start": start, "tc_drop": drop}
 
     def build_clip(self, clip) -> None:
         self.clear()

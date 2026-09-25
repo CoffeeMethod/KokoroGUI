@@ -53,6 +53,9 @@ class ScheduledClip:
     fade_out_s: float = 0.0
     # The track's `[seconds, gain]` breakpoints, absolute on the timeline.
     automation: tuple = ()
+    # `(start_s, end_s)` into `path`: only that range plays (a
+    # `Segment.range`, a source track sliced per clip). None plays the file.
+    slice: Optional[tuple] = None
 
 
 def loaded_clip_for(item, samples: np.ndarray, sample_rate: int) -> "mixer.LoadedClip":
@@ -162,7 +165,7 @@ class Transport(QObject):
             if not item.path:
                 continue
             try:
-                samples = mixer.load_clip_samples(item.path, new_rate, item.post_config)
+                samples = mixer.load_clip_samples(item.path, new_rate, item.post_config, item.slice)
             except Exception:
                 continue
             clips.append(loaded_clip_for(item, samples, new_rate))

@@ -280,6 +280,25 @@ def test_phase_two_fields_default_when_absent():
     assert back.characters[0].variants == {}
 
 
+def test_segment_range_round_trips_and_is_left_out_when_unset():
+    import json
+
+    doc = _sample_document()
+    before = json.dumps(document_to_dict(doc), sort_keys=True)
+    assert "range" not in document_to_dict(doc)["clips"][0]["segments"][0]
+    # A document with no ranges saves exactly as before the field existed.
+    assert json.dumps(document_to_dict(document_from_dict(json.loads(before))), sort_keys=True) == before
+
+    doc.clips[0].segments[0].range = [1.5, 2.25]
+    doc.clips[0].takes = {1: [Segment(audio_path="t.wav", range=[0.0, 0.5])]}
+    data = json.loads(json.dumps(document_to_dict(doc)))
+    assert data["clips"][0]["segments"][0]["range"] == [1.5, 2.25]
+    back = document_from_dict(data)
+    assert back.clips[0].segments[0].range == [1.5, 2.25]
+    assert back.clips[0].takes[1][0].range == [0.0, 0.5]
+    assert back.clips[0].segments[0].extra == {}
+
+
 def test_rewrite_audio_paths_walks_parked_takes():
     from kokoro_gui.daw.serialization import rewrite_audio_paths
 

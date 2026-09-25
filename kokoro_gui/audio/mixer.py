@@ -14,8 +14,9 @@ every gain is applied to a copy, never in place.
 
 `load_clip_samples` reads a wav (or anything soundfile can open), applies
 the clip's post-processing config (`kokoro_gui.audio.post`), downmixes to
-mono and resamples to the target rate once; `post` memoizes the result by
-`(path, mtime, post_key, target_rate)` so re-loading an unchanged
+mono and resamples to the target rate once (or only a slice of it, with
+`range_s`); `post` memoizes the result by
+`(path, mtime, post_key, target_rate, range_s)` so re-loading an unchanged
 arrangement is free and an FX change re-renders only the clips it touched.
 """
 from __future__ import annotations
@@ -77,14 +78,16 @@ def resample(samples: np.ndarray, source_rate: int, target_rate: int) -> np.ndar
         return np.interp(dst_x, src_x, samples).astype(np.float32)
 
 
-def load_clip_samples(path: str, target_rate: int, post_config: dict | None = None) -> np.ndarray:
+def load_clip_samples(path: str, target_rate: int, post_config: dict | None = None,
+                      range_s: tuple | None = None) -> np.ndarray:
     """Mono float32 at `target_rate`, post-processed per `post_config`
-    (`kokoro_gui.audio.post.render`, which owns the memo). Raises whatever
-    soundfile raises for an unreadable path - callers decide whether to skip
-    the clip."""
+    (`kokoro_gui.audio.post.render`, which owns the memo). `range_s`
+    (`(start_s, end_s)` into the file) loads only that slice. Raises
+    whatever soundfile raises for an unreadable path - callers decide
+    whether to skip the clip."""
     from kokoro_gui.audio import post
 
-    return post.render(path, post_config, int(target_rate))
+    return post.render(path, post_config, int(target_rate), range_s)
 
 
 def clear_sample_cache() -> None:

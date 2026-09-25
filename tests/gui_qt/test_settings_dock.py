@@ -234,6 +234,23 @@ def test_project_scope_ripple_checkbox_defaults_on_and_writes_the_setting(qt_app
     assert "ripple" not in qt_app.document.settings
 
 
+def test_project_scope_align_onset_checkbox_shows_the_derived_default_and_writes_the_setting(qt_app):
+    clip, _character = _make_clip(qt_app)
+    qt_app.selection.clear()
+    align = qt_app.settings_dock.scope_fields.widgets["align_onset"]
+    assert not align.isChecked()  # no locked clip: off
+
+    clip.pinned = True
+    qt_app.settings_dock.refresh_scope_fields()
+    align = qt_app.settings_dock.scope_fields.widgets["align_onset"]
+    assert align.isChecked() and "align_onset" not in qt_app.document.settings
+
+    align.setChecked(False)
+    assert qt_app.document.settings["align_onset"] is False
+    qt_app.document.undo_stack.undo()
+    assert "align_onset" not in qt_app.document.settings
+
+
 def test_project_scope_track_layout_switches_both_ways(qt_app):
     """Grill PR4: Unified puts clips on "Lane N" tracks by the lane rule;
     One per character puts them back on character tracks. Each switch is
