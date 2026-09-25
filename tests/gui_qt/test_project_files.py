@@ -374,6 +374,138 @@ def test_referenced_audio_and_close_time_gc_keep_imported_files(tmp_path, isolat
     assert os.path.isfile(imported)
 
 
+# -- source track (phase 5, D5) ------------------------------------------------------
+
+
+def _document_with_source_track(project_dir, tmp_path, offset=0.25):
+    src = tmp_path / "dialogue.wav"
+    src.write_bytes(b"RIFF" + b"\5" * 60)
+    imported = project_io.import_audio_file(str(src), project_dir)
+    rel = project_io.source_track_relpath(imported, project_dir)
+    doc = Document(runs=[], clips=[], settings={"source_track": {"path": rel, "offset_s": offset}})
+    return doc, imported, rel
+
+
+def test_source_track_is_stored_project_relative_and_resolves_inside_the_dir(tmp_path, isolated_dirs):
+    project_dir, _project_id = project_io.create_project_dir()
+    doc, imported, rel = _document_with_source_track(project_dir, tmp_path)
+
+    assert rel == "audio/imported/" + os.path.basename(imported)
+    assert project_io.source_track_path(doc, project_dir) == os.path.realpath(imported)
+    assert project_io.source_track_path(doc, None) is None
+    assert project_io.source_track_path(Document(runs=[], clips=[]), project_dir) is None
+    assert project_io.source_track_relpath(str(tmp_path / "dialogue.wav"), project_dir) is None
+
+
+@pytest.mark.parametrize("crafted", ["../secret.wav", "audio/../../secret.wav", "ABS"])
+def test_source_track_outside_the_project_dir_never_resolves_or_bundles(tmp_path, isolated_dirs, crafted):
+    project_dir, project_id = project_io.create_project_dir()
+    secret = os.path.join(os.path.dirname(os.path.realpath(project_dir)), "secret.wav")
+    with open(secret, "wb") as f:
+        f.write(b"RIFF")
+    doc = Document(runs=[], clips=[],
+                   settings={"source_track": {"path": secret if crafted == "ABS" else crafted, "offset_s": 0.0}})
+
+    assert project_io.source_track_path(doc, project_dir) is None
+    path = str(tmp_path / "proj.tbaw")
+    project_io.save_project(doc, path, {}, project_dir, project_id)
+    with zipfile.ZipFile(path) as zf:
+        assert not any("secret" in n for n in zf.namelist())
+        assert json.loads(zf.read("manifest.json"))["includes"]["imported_audio"] is False
+
+
+def test_source_track_is_bundled_flagged_and_resolved_after_open(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, imported, rel = _document_with_source_track(project_dir, tmp_path)
+    path = str(tmp_path / "proj.tbaw")
+
+    project_io.save_project(doc, path, {}, project_dir, project_id)
+
+    with zipfile.ZipFile(path) as zf:
+        assert rel in zf.namelist()
+        assert json.loads(zf.read("manifest.json"))["includes"]["imported_audio"] is True
+        assert json.loads(zf.read("document.json"))["settings"]["source_track"] == {"path": rel, "offset_s": 0.25}
+    info = project_io.inspect_bundle(path)
+    other = str(tmp_path / "other")
+    project_io.extract_small(info, other)
+    project_io.extract_audio(info, other)
+    loaded = project_io.finish_open(info, other)
+    assert loaded.notices == []
+    assert loaded.document.settings["source_track"] == {"path": rel, "offset_s": 0.25}
+    assert project_io.source_track_path(loaded.document, other) == \
+        os.path.realpath(os.path.join(other, "audio", "imported", os.path.basename(imported)))
+
+
+def test_include_imported_audio_off_leaves_the_source_track_out_and_open_says_so(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _imported, rel = _document_with_source_track(project_dir, tmp_path)
+    path = str(tmp_path / "proj.tbaw")
+
+    project_io.save_project(doc, path, {"bundle": {"include_imported_audio": False}}, project_dir, project_id)
+
+    with zipfile.ZipFile(path) as zf:
+        assert rel not in zf.namelist()
+        assert json.loads(zf.read("manifest.json"))["includes"]["imported_audio"] is False
+    info = project_io.inspect_bundle(path)
+    other = str(tmp_path / "other")
+    project_io.extract_small(info, other)
+    loaded = project_io.finish_open(info, other)
+    assert loaded.document.settings["source_track"]["path"] == rel
+    assert project_io.source_track_path(loaded.document, other) is None
+    assert any("source track" in n for n in loaded.notices)
+
+
+def test_referenced_audio_and_close_time_gc_keep_the_source_track(tmp_path, isolated_dirs):
+    project_dir, _project_id = project_io.create_project_dir()
+    doc, imported, _rel = _document_with_source_track(project_dir, tmp_path)
+
+    assert os.path.realpath(imported) in project_io.referenced_audio_paths(doc, project_dir)
+    assert project_io.referenced_audio_paths(doc) == set()
+    project_io.gc_project_dir(project_dir, doc)
+    assert os.path.isfile(imported)
+
+
+def _tone_wav(path, seconds=2.0, value=0.3, rate=24000):
+    import numpy as np
+    import soundfile as sf
+
+    sf.write(str(path), np.full(int(rate * seconds), value, dtype=np.float32), rate)
+    return str(path)
+
+
+def test_import_source_track_is_one_undo_step_and_survives_save_and_open(qt_app, tmp_path):
+    src = _tone_wav(tmp_path / "original.wav")
+
+    assert qt_app.import_source_track(src) is True
+
+    block = qt_app.document.settings["source_track"]
+    assert block["path"].startswith("audio/imported/") and block["offset_s"] == 0.0
+    copied = project_io.source_track_path(qt_app.document, qt_app.project_dir)
+    assert copied and os.path.dirname(copied) == os.path.realpath(os.path.join(qt_app.project_dir, "audio",
+                                                                               "imported"))
+    qt_app.undo()
+    assert "source_track" not in qt_app.document.settings
+    qt_app.redo()
+    assert qt_app.document.settings["source_track"] == block
+
+    path = _save_as(qt_app, str(tmp_path / "dub.tbaw"))
+    with zipfile.ZipFile(path) as zf:
+        assert block["path"] in zf.namelist()
+        assert json.loads(zf.read("manifest.json"))["includes"]["imported_audio"] is True
+    _open(qt_app, path)
+    assert qt_app.document.settings["source_track"] == block
+    assert project_io.source_track_path(qt_app.document, qt_app.project_dir) is not None
+
+
+def test_import_source_track_refuses_a_file_that_is_not_audio(qt_app, tmp_path):
+    bad = tmp_path / "notes.wav"
+    bad.write_text("not audio", encoding="utf-8")
+
+    assert qt_app.import_source_track(str(bad)) is False
+    assert "source_track" not in qt_app.document.settings
+    assert not os.path.isdir(os.path.join(qt_app.project_dir, "audio", "imported"))
+
+
 # -- reference video (phase 5, TB16) -------------------------------------------------
 
 _VIDEO_BYTES = b"\0\0\0\x18ftypmp42" + bytes(range(256)) * 4

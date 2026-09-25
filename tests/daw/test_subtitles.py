@@ -193,11 +193,24 @@ def test_import_cues_appends_a_pinned_clip_per_cue_as_its_own_paragraph():
     first, second = (doc.get_clip(i) for i in command.clip_ids)
     assert doc.clip_text(first) == "Two lines"
     assert (first.timeline_timestamp, first.pinned, first.source_text) == (1.0, True, "Two\nlines")
-    assert first.overrides == {"target_duration_s": 1.5}
+    assert first.overrides == {"target_duration_s": 1.5, "reference_range": [1.0, 2.5]}
     assert first.character_id == bob.id and doc.get_character(bob.id) is not None
     assert doc.get_track(first.track_id).character_id == bob.id
     assert (second.character_id, second.timeline_timestamp, second.overrides["target_duration_s"]) == \
         (narrator.id, 3.0, 1.0)
+
+
+def test_import_cues_fills_each_clips_reference_range_from_its_cue():
+    from kokoro_gui.daw.reference import reference_range
+
+    doc, narrator = _cue_doc("")
+    command = ImportCuesCommand([Cue(0.5, 1.25, "A"), Cue(3.0, 4.5, "B")], [narrator.id, narrator.id])
+    doc.undo_stack.push(command)
+
+    assert [reference_range(doc.get_clip(i)) for i in command.clip_ids] == [(0.5, 1.25), (3.0, 4.5)]
+    doc.undo_stack.undo()
+    doc.undo_stack.redo()
+    assert [doc.get_clip(i).overrides["reference_range"] for i in command.clip_ids] == [[0.5, 1.25], [3.0, 4.5]]
 
 
 def test_import_cues_is_one_undo_step_and_redo_recreates_the_same_clips():
@@ -227,7 +240,7 @@ def test_imported_cue_fields_survive_a_save_and_load():
 
     clip = document_from_dict(document_to_dict(doc)).clips[0]
     assert (clip.timeline_timestamp, clip.pinned, clip.source_text, clip.overrides) == \
-        (1.0, True, "a\nb", {"target_duration_s": 1.5})
+        (1.0, True, "a\nb", {"target_duration_s": 1.5, "reference_range": [1.0, 2.5]})
 
 
 def test_import_cues_into_an_empty_document_starts_without_a_separator():
