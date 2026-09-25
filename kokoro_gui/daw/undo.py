@@ -542,6 +542,43 @@ class DeleteTakeCommand(Command):
             clip.takes[self.index] = self._segments
 
 
+class ReplaceWithNestedCommand(Command):
+    """New Subproject (phase 4): `[start, end)` of the text, with the clips
+    inside it, leaves this document (the app has already copied them into
+    the child) and one placeholder run for the child takes its place, on
+    the "Subprojects" track. The nested clip keeps `clip_id` across redo, so
+    the open child stays attached. Same whole-list snapshot as
+    `AssignCharacterCommand`; undo brings the text back and leaves the
+    child's project dir for close-time eviction."""
+
+    def __init__(self, start: int, end: int, child: dict, title: str, clip_id: str):
+        self.start = start
+        self.end = end
+        self.child = dict(child)
+        self.title = title
+        self.clip_id = clip_id
+        self._pre = None
+
+    def do(self, document) -> None:
+        self._pre = (copy.deepcopy(document.runs), copy.deepcopy(document.clips), copy.deepcopy(document.tracks))
+        if self.end > self.start:
+            text = document.text
+            document.replace_text(self.start, self.end - self.start, 0, text[:self.start] + text[self.end:])
+        clip = document.insert_nested_clip(self.start, self.child, self.title)
+        # The id is the command's, so redo re-creates the same clip.
+        for run in document.runs:
+            if run.clip_id == clip.id:
+                run.clip_id = self.clip_id
+        clip.id = self.clip_id
+        clip.track_id = document.subprojects_track(create=True)
+
+    def undo(self, document) -> None:
+        runs, clips, tracks = self._pre
+        document.runs = copy.deepcopy(runs)
+        document.clips = copy.deepcopy(clips)
+        document.tracks = copy.deepcopy(tracks)
+
+
 class RelaneCommand(Command):
     """Puts every clip on the track the document's track layout says
     (kokoro_gui/daw/lanes.py): the unified layout's lane rule, or each

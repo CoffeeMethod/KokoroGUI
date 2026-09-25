@@ -53,6 +53,7 @@ from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
 from kokoro_gui.qt import settings as qt_settings
 from kokoro_gui.qt.open_projects import OpenProject
+from kokoro_gui.qt.subprojects import SubprojectsMixin
 from kokoro_gui.qt.selection import SelectionModel
 from kokoro_gui.qt.signals import EngineSignalBridge, wire_engine
 from kokoro_gui.qt.workspace import ADVANCED, SIMPLE, WorkspaceManager
@@ -79,7 +80,7 @@ SCHEDULE_REBUILD_DEBOUNCE_MS = 100
 LIBRARY_WATCH_DEBOUNCE_MS = 150
 
 
-class QtTTSApp(QMainWindow):
+class QtTTSApp(SubprojectsMixin, QMainWindow):
     previewFinished = Signal(bool, str)
     themeChanged = Signal()
     exportProgress = Signal(float, str)
@@ -131,6 +132,9 @@ class QtTTSApp(QMainWindow):
         self.children: dict = {}
         self.focus = self.root
         self.level = self.root
+        # Child project ids whose bundle couldn't be opened (painted as
+        # missing, with Relink).
+        self._missing_children: set = set()
         self._io_thread: threading.Thread | None = None
         self._pending_open_path: str | None = None
         self._closing_after_save = False
@@ -558,12 +562,14 @@ class QtTTSApp(QMainWindow):
         # File
         self.file_menu = bar.addMenu("&File")
         self.new_action = self._action("&New", self.new_project, QKeySequence.StandardKey.New)
+        self.new_subproject_action = self._action("New &Subproject", self.new_subproject_from_selection)
         self.open_action = self._action("&Open...", self.open_project_dialog, QKeySequence.StandardKey.Open)
         self.recent_menu = self.file_menu.addMenu("Recent")
         self.welcome_action = self._action("&Welcome...", self.show_welcome)
         self.save_action = self._action("&Save", self.save_project, QKeySequence.StandardKey.Save)
         self.save_as_action = self._action("Save &As...", self.save_project_as_dialog, QKeySequence.StandardKey.SaveAs)
         self.file_menu.insertAction(self.recent_menu.menuAction(), self.new_action)
+        self.file_menu.insertAction(self.recent_menu.menuAction(), self.new_subproject_action)
         self.file_menu.insertAction(self.recent_menu.menuAction(), self.open_action)
         self.file_menu.addAction(self.welcome_action)
         self.file_menu.addSeparator()
@@ -868,31 +874,19 @@ class QtTTSApp(QMainWindow):
         sets the session's `dirty` iff the digest differs from what the
         last Save or Open recorded. A content comparison, not an mtime:
         `_switch_document`'s trailing `schedule_save` would otherwise dirty
-        every project a second after Open. Never touches the `.tbaw`."""
-        if not self.project_dir:
-            return
-        try:
-            digest = project_io.autosave_to_dir(self.document, self.project_settings, self.project_dir)
-        except Exception as e:  # noqa: BLE001 - autosave must never crash the UI
-            self.set_status(f"Autosave failed: {e}", "error")
-            return
-        session = project_io.read_session(self.project_dir) or {}
-        dirty = digest != session.get("saved_digest")
-        if bool(session.get("dirty")) != dirty:
-            session["dirty"] = dirty
-            try:
-                project_io.write_session(self.project_dir, session)
-            except OSError as e:
-                self.set_status(f"Autosave failed: {e}", "error")
-        self._project_dirty = dirty
+        every project a second after Open. Never touches the `.tbaw`. Runs
+        for the root and every open subproject."""
+        for project in self.open_projects():
+            self._autosave_one(project)
 
     def is_project_dirty(self) -> bool:
-        """True when the project dir is ahead of the `.tbaw` on disk (or an
-        Untitled project has edits). Flushes a pending autosave first so a
-        keystroke a moment ago counts."""
+        """True when a project dir is ahead of its `.tbaw` on disk (or an
+        Untitled project has edits): the root, or any open subproject, whose
+        bundle rides inside the root's. Flushes a pending autosave first so
+        a keystroke a moment ago counts."""
         if self._save_timer.isActive():
             self.save_settings()
-        return self._project_dirty
+        return self.any_project_dirty()
 
     def _set_setting(self, key: str, value) -> None:
         self.settings[key] = value
@@ -900,7 +894,7 @@ class QtTTSApp(QMainWindow):
 
     def _update_window_title(self, pending: bool = False) -> None:
         name = project_io.project_title(self.project_path)
-        star = "*" if (pending or self._project_dirty) else ""
+        star = "*" if (pending or self.any_project_dirty()) else ""
         self.setWindowTitle(f"{name}{star} - {APP_NAME}")
 
     # --- config assembly ----------------
@@ -1293,6 +1287,7 @@ class QtTTSApp(QMainWindow):
         self.project_path = os.path.abspath(path) if path else None
         self.project_settings = dict(project_settings or {})
         self._install_segment_key_fn()
+        self._install_nested_state_fn(self.root)
         for engine_id in self._document_engine_ids(document):
             self._ensure_backend_ready(self._backend_for(engine_id))
         for backend in list(self._backends.values()):
@@ -1313,7 +1308,7 @@ class QtTTSApp(QMainWindow):
         if self.fx_dock is not None:
             self.fx_dock.refresh_for_selection()
         self.refresh_timeline()
-        session = project_io.read_session(self.project_dir) if self.project_dir else None
+        session = project_io.read_session(self.root.project_dir) if self.root.project_dir else None
         loop = (session or {}).get("loop_s")
         if isinstance(loop, list) and len(loop) == 2:
             self.set_loop_range(loop[0], loop[1], remember=False)
@@ -1333,11 +1328,11 @@ class QtTTSApp(QMainWindow):
         self.transport.set_loop_range_s(*(loop or (None, None)))
         if self.timeline_dock is not None:
             self.timeline_dock.timeline_view.set_loop_s(loop)
-        if remember and self.project_dir:
-            session = project_io.read_session(self.project_dir) or {}
+        if remember and self.root.project_dir:
+            session = project_io.read_session(self.root.project_dir) or {}
             session["loop_s"] = list(loop) if loop else None
             try:
-                project_io.write_session(self.project_dir, session)
+                project_io.write_session(self.root.project_dir, session)
             except OSError:
                 pass
 
@@ -1362,7 +1357,7 @@ class QtTTSApp(QMainWindow):
         method so tests can replace it."""
         box = QMessageBox(self)
         box.setWindowTitle("Unsaved changes")
-        box.setText(f"{project_io.project_title(self.project_path)} has unsaved changes.")
+        box.setText(self._unsaved_changes_text())
         save_btn = box.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
         discard_btn = box.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
         box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
@@ -1375,11 +1370,20 @@ class QtTTSApp(QMainWindow):
             return "discard"
         return "cancel"
 
+    def _unsaved_changes_text(self) -> str:
+        """The close prompt's line: the root, and by name any subproject
+        whose unsaved edits it carries (one prompt for the whole tree)."""
+        text = f"{project_io.project_title(self.project_path)} has unsaved changes."
+        children = [c.title() for c in self.children.values() if c.dirty]
+        if children:
+            text += " Changed subprojects: " + ", ".join(children) + "."
+        return text
+
     def _close_current_project(self, then) -> None:
         """Runs `then()` once the open project is put away: a clean project
         is GC'd and released; a dirty one asks Save / Discard / Cancel, and
         Save continues after the background Save succeeds."""
-        if not self.project_dir:
+        if not self.root.project_dir:
             then()
             return
         if not self.is_project_dirty():
@@ -1407,29 +1411,32 @@ class QtTTSApp(QMainWindow):
         self._save_bundle(self.project_path, then=_after_save)
 
     def _teardown_project(self, discard: bool) -> None:
-        """Releases the lock; on Discard deletes the dir (the zip has the
-        last saved state), otherwise GCs orphaned segments (TB11: only at
-        close, when no undo history can point at them any more)."""
-        if self._project_lock is not None:
+        """Releases the locks (every open subproject's, then the root's); on
+        Discard deletes the dirs (the zip has the last saved state),
+        otherwise GCs orphaned segments (TB11: only at close, when no undo
+        history can point at them any more)."""
+        self._teardown_children(discard)
+        root = self.root
+        if root.lock is not None:
             if not discard:
                 try:
-                    project_io.gc_project_dir(self.project_dir, self.document)
+                    project_io.gc_project_dir(root.project_dir, root.document)
                 except OSError:
                     pass
-            self._project_lock.release()
-            self._project_lock = None
-        if discard and self.project_dir:
-            project_io.delete_project_dir(self.project_dir)
-        self.project_dir = None
-        self.project_id = None
-        self._project_manifest = {}
-        self._project_dirty = False
+            root.lock.release()
+            root.lock = None
+        if discard and root.project_dir:
+            project_io.delete_project_dir(root.project_dir)
+        root.project_dir = None
+        root.project_id = None
+        root.manifest = {}
+        root.dirty = False
 
     def _evict_other_project_dirs(self) -> None:
         """TB13: only the open project's dir stays; every other clean,
         unlocked dir under `cache/projects/` goes."""
         try:
-            project_io.evict_project_dirs(self.project_dir)
+            project_io.evict_project_dirs(self.root.project_dir)
         except OSError:
             pass
 
@@ -1521,7 +1528,12 @@ class QtTTSApp(QMainWindow):
         session = project_io.read_session(project_dir)
         recovered = False
         extract = True
-        if session and session.get("dirty") and os.path.isfile(os.path.join(project_dir, project_io.DOCUMENT)):
+        # Unsaved subproject edits (phase 4) count as the project's own: the
+        # recover prompt covers them, and taking the file drops them too.
+        child_dirs = [d for d in project_io.child_dirs_of(info.path) if not project_io.is_locked(d)]
+        dirty_children = [d for d in child_dirs if (project_io.read_session(d) or {}).get("dirty")]
+        has_document = os.path.isfile(os.path.join(project_dir, project_io.DOCUMENT))
+        if session and has_document and (session.get("dirty") or dirty_children):
             choice = self._ask_recover_choice(session, info, project_dir)
             if choice == "cancel":
                 lock.release()
@@ -1532,8 +1544,9 @@ class QtTTSApp(QMainWindow):
                 extract = False
             else:
                 project_io.wipe_project_dir(project_dir)
-        elif session and project_io.session_matches_file(session, info) \
-                and os.path.isfile(os.path.join(project_dir, project_io.DOCUMENT)):
+                for child_dir in child_dirs:
+                    project_io.delete_project_dir(child_dir)
+        elif session and project_io.session_matches_file(session, info) and has_document:
             extract = False  # a clean extraction of this very file: Resume is fast
         else:
             project_io.wipe_project_dir(project_dir)
@@ -1574,7 +1587,7 @@ class QtTTSApp(QMainWindow):
     def _start_untitled_after_failed_open(self) -> None:
         """The previous project was already put away when an Open fails
         partway; the window can't sit on a document with no dir."""
-        if self.project_dir:
+        if self.root.project_dir:
             return
         document = project_io.new_document_from(self.character_library, self.settings)
         self.project_settings = {}
@@ -1584,11 +1597,7 @@ class QtTTSApp(QMainWindow):
     def _finish_open(self, info, project_dir: str, lock, recovered: bool) -> None:
         """Steps 6 and 7: the document, the session record, the TB9 status
         line, and the backend's `on_project_opened`."""
-        versions = {}
-        for engine_id in [*self._backends, *(info.manifest.get("engines") or {})]:
-            backend = self._backend_for(engine_id)
-            if backend is not None:
-                versions[backend.id] = backend.engine_version()
+        versions = self._engine_versions(info.manifest)
         try:
             loaded = project_io.finish_open(info, project_dir, versions, recovered=recovered)
         except (OSError, ValueError, KeyError) as e:
@@ -1596,11 +1605,12 @@ class QtTTSApp(QMainWindow):
             QMessageBox.warning(self, "Open failed", f"Couldn't read the project: {e}")
             self._start_untitled_after_failed_open()
             return
-        self._project_lock = lock
-        self.project_dir = project_dir
-        self.project_id = info.project_id
-        self._project_manifest = dict(info.manifest)
-        self._project_dirty = bool(recovered)
+        root = self.root
+        root.lock = lock
+        root.project_dir = project_dir
+        root.project_id = info.project_id
+        root.manifest = dict(info.manifest)
+        root.dirty = bool(recovered)
         self._switch_document(loaded.document, info.path, loaded.project_settings)
         self._evict_other_project_dirs()
         for notice in loaded.notices:
@@ -1697,11 +1707,18 @@ class QtTTSApp(QMainWindow):
         written back here. `then()` runs after a successful save."""
         if self._save_timer.isActive():
             self.save_settings()
+        root = self.root
         try:
-            plan, warnings = project_io.plan_save(
-                self.document, self.project_settings, path, self.project_dir, self.project_id,
-                self._backend_for, FX_PRESETS_DIR, project_io.read_session(self.project_dir), self._project_manifest,
+            # Open subprojects first (deepest first): an embedded child's
+            # bundle goes into its parent's project dir, where the parent's
+            # plan picks it up; a linked child's to its own file.
+            child_plans, warnings = self._plan_child_saves(FX_PRESETS_DIR)
+            plan, root_warnings = project_io.plan_save(
+                root.document, root.project_settings, path, root.project_dir, root.project_id,
+                self._backend_for, FX_PRESETS_DIR, project_io.read_session(root.project_dir), root.manifest,
+                pending_children={c.project_id for c, _p, _s in child_plans if c.parent_id == root.project_id},
             )
+            warnings = [*warnings, *root_warnings]
         except Exception as e:  # noqa: BLE001 - surfaced, never a crash
             self.set_status(f"Save failed: {e}", "error")
             return
@@ -1711,19 +1728,25 @@ class QtTTSApp(QMainWindow):
         self._begin_project_io(f"Saving {project_io.project_title(path)}...", read_only=False)
 
         def _work():
-            return project_io.write_bundle(plan, known_ids, progress=self._io_progress("Writing bundle"))
+            child_results = [project_io.write_bundle(child_plan, known_ids) for _c, child_plan, _s in child_plans]
+            # The parent's plan listed its children's bundles by path; their
+            # bytes are the ones just written.
+            return child_results, project_io.write_bundle(plan, known_ids,
+                                                          progress=self._io_progress("Writing bundle"))
 
         def _done(result, error):
             self._end_project_io(read_only=False)
             if error is not None:
                 self.set_status(f"Save failed: {error}", "error")
                 return
+            child_results, result = result
+            self._record_child_saves(child_plans, child_results)
             try:
-                project_io.record_save(self.project_dir, path, result)
+                project_io.record_save(root.project_dir, path, result)
             except OSError as e:
                 self.set_status(f"Saved, but couldn't record the session: {e}", "warning")
-            self._project_manifest = dict(plan.manifest)
-            self._project_dirty = False
+            root.manifest = dict(plan.manifest)
+            root.dirty = False
             self._update_window_title()
             self.set_status(f"Saved {project_io.project_title(path)}.", "success")
             if then is not None:
@@ -2315,7 +2338,7 @@ class QtTTSApp(QMainWindow):
             event.ignore()
             return
         self.save_settings()
-        if self.project_dir and not self._closing_after_save and self._project_dirty:
+        if self.root.project_dir and not self._closing_after_save and self.any_project_dirty():
             choice = self._ask_close_choice()
             if choice == "cancel":
                 event.ignore()
@@ -2339,9 +2362,9 @@ class QtTTSApp(QMainWindow):
             self._teardown_project(discard=True)
         keep = None
         last = self.settings.get("last_project")
-        if self.project_dir and last and self.project_path and os.path.abspath(last) == self.project_path:
-            keep = self.project_dir
-        if self.project_dir:
+        if self.root.project_dir and last and self.project_path and os.path.abspath(last) == self.project_path:
+            keep = self.root.project_dir
+        if self.root.project_dir:
             self._teardown_project(discard=False)
         try:
             project_io.evict_project_dirs(keep)

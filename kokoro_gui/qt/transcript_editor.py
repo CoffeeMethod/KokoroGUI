@@ -490,7 +490,10 @@ class TranscriptEditor(QTextEdit):
     def _on_custom_stack_changed(self) -> None:
         """Called by `undo_coordinator` after every custom-stack undo/redo -
         a custom-stack action changed `app.document.runs`/`clips` directly,
-        with no signal Qt can observe on its own."""
+        with no signal Qt can observe on its own. A command that changed the
+        text (a sub-range replace, a reorder, New Subproject) reloads it."""
+        if self.toPlainText() != self.app.document.text:
+            self.load_text(self.app.document.text)
         self.rehighlight()
         self.app.schedule_save()
         self.app.refresh_timeline()

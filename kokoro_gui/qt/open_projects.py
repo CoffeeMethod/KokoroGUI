@@ -35,6 +35,8 @@ class OpenProject:
     # in the parent's document that stands for this project.
     parent_id: Optional[str] = None
     clip_id: Optional[str] = None
+    # A child's `Clip.child["kind"]`: "embedded" or "linked". None for the root.
+    kind: Optional[str] = None
     manifest: dict = field(default_factory=dict)
     # The project dir is ahead of the file (autosave's digest differs from
     # the last Save or Open).

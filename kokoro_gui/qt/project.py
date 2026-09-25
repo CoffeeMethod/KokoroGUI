@@ -65,12 +65,22 @@ AUDIO_GENERATED = "audio/generated"
 AUDIO_IMPORTED = "audio/imported"
 FX_DIR = "fx"
 ENGINES_DIR = "engines"
+# Embedded subprojects (phase 4): `projects/<child project_id>.tbaw`, each a
+# complete bundle, stored uncompressed.
+PROJECTS_DIR = "projects"
+# A child project dir's `session.json` names its source as
+# `<parent source>#<child id>`, so `choose_project_dir` and
+# `sweep_orphan_dirs` can tell an embedded child from a root.
+CHILD_SOURCE_SEP = "#"
 
 # Entry prefixes this version owns and rewrites on every Save. Anything else
 # in a bundle (a directory a newer KokoroGUI or a fourth engine added) is
 # copied through byte for byte so a file survives a round trip.
 _OWNED_FILES = {MANIFEST, DOCUMENT, PROJECT_JSON}
-_OWNED_DIRS = (FX_DIR + "/", AUDIO_GENERATED + "/", AUDIO_IMPORTED + "/")
+_OWNED_DIRS = (FX_DIR + "/", AUDIO_GENERATED + "/", AUDIO_IMPORTED + "/", PROJECTS_DIR + "/")
+# Entries extracted with the audio on the worker thread, not before the
+# first paint: the audio, and embedded children (each carries its own).
+_HEAVY_PREFIXES = ("audio/", PROJECTS_DIR + "/")
 # The project dir's own bookkeeping. A bundle carrying one of these names is
 # never extracted over it: `lock` is held open while Open runs, and
 # `session.json` is what the sweep and the recover prompt trust.
@@ -106,7 +116,8 @@ class LoadedProject:
 @dataclass
 class BundleInfo:
     """What `inspect_bundle` learns from a zip's central directory without
-    extracting a byte."""
+    extracting a byte. `audio_bytes` counts everything extracted on the
+    worker thread: `audio/` and embedded `projects/`."""
     path: str
     manifest: dict
     project_id: str
@@ -370,7 +381,7 @@ def inspect_bundle(path: str) -> BundleInfo:
         if any(e.filename.endswith(".pt") for e in entries) and not torch_weights_only_available():
             raise ProjectError("This bundle carries a voice mix (.pt) and this machine's torch is older than 2.6, "
                                "which can't load it safely. Upgrade torch to open it.")
-        audio_bytes = sum(e.file_size for e in entries if e.filename.startswith("audio/"))
+        audio_bytes = sum(e.file_size for e in entries if e.filename.replace("\\", "/").startswith(_HEAVY_PREFIXES))
     stat = os.stat(path)
     return BundleInfo(path=os.path.abspath(path), manifest=manifest, project_id=project_id, entries=entries,
                       audio_bytes=audio_bytes, zip_size=stat.st_size, zip_mtime=stat.st_mtime)
@@ -526,6 +537,77 @@ def create_project_dir(project_id: str | None = None) -> tuple:
     return project_dir, project_id
 
 
+def safe_child_id(child_id) -> str | None:
+    """A child project id as a bare file stem, or None."""
+    if not isinstance(child_id, str):
+        return None
+    stem = os.path.basename(child_id.strip())
+    if not stem or stem.startswith(".") or CHILD_SOURCE_SEP in stem:
+        return None
+    return stem
+
+
+def embedded_child_path(project_dir: str, child_id: str) -> str | None:
+    """`<project_dir>/projects/<child_id>.tbaw`: where an embedded child's
+    bundle sits in its parent's project dir."""
+    stem = safe_child_id(child_id)
+    if stem is None or not project_dir:
+        return None
+    return os.path.join(project_dir, PROJECTS_DIR, f"{stem}{DEFAULT_EXTENSION}")
+
+
+def embedded_child_ids(document: Document) -> list:
+    """The project ids of `document`'s embedded subprojects, in clip order."""
+    out = []
+    for clip in document.clips:
+        child = clip.child if clip.source == "nested" else None
+        if isinstance(child, dict) and child.get("kind") == "embedded":
+            stem = safe_child_id(child.get("id"))
+            if stem and stem not in out:
+                out.append(stem)
+    return out
+
+
+def parent_source_of(source: str) -> str:
+    """The root file of a `<parent>#<child id>[#<grandchild id>...]`
+    source; `source` itself for a root's."""
+    while CHILD_SOURCE_SEP in source:
+        head, tail = source.rsplit(CHILD_SOURCE_SEP, 1)
+        if safe_child_id(tail) != tail:
+            break
+        source = head
+    return source
+
+
+def child_dirs_of(source_path: str | None) -> list:
+    """Every project dir under `cache/projects/` whose session names an
+    embedded child (at any depth) of the project whose source is
+    `source_path`."""
+    if not source_path:
+        return []
+    root = projects_root()
+    if not os.path.isdir(root):
+        return []
+    prefix = os.path.abspath(source_path) + CHILD_SOURCE_SEP
+    out = []
+    for name in sorted(os.listdir(root)):
+        full = os.path.join(root, name)
+        session = read_session(full) if os.path.isdir(full) else None
+        source = (session or {}).get("source_path")
+        if isinstance(source, str) and source.startswith(prefix):
+            out.append(full)
+    return out
+
+
+def child_source_path(parent_source: str | None, child_id: str) -> str | None:
+    """`session.json`'s `source_path` for an embedded child of a parent
+    whose own source is `parent_source` (its `.tbaw`, or None while
+    Untitled)."""
+    if not parent_source:
+        return None
+    return f"{os.path.abspath(parent_source)}{CHILD_SOURCE_SEP}{child_id}"
+
+
 def document_digest(document_bytes: bytes, project_bytes: bytes) -> str:
     return hashlib.sha256(document_bytes + b"\n" + project_bytes).hexdigest()
 
@@ -569,26 +651,28 @@ def _extract_entry(zf: zipfile.ZipFile, info: zipfile.ZipInfo, project_dir: str)
 
 
 def extract_small(info: BundleInfo, project_dir: str) -> None:
-    """Step 4: everything but `audio/`. Small, needed before the first paint."""
+    """Step 4: everything but `audio/` and `projects/`. Small, needed
+    before the first paint."""
     os.makedirs(project_dir, exist_ok=True)
     with zipfile.ZipFile(info.path) as zf:
         for entry in info.entries:
             name = entry.filename.replace("\\", "/")
-            if name.startswith("audio/") or name in _DIR_PRIVATE:
+            if name.startswith(_HEAVY_PREFIXES) or name in _DIR_PRIVATE:
                 continue
             _extract_entry(zf, entry, project_dir)
 
 
 def extract_audio(info: BundleInfo, project_dir: str, progress=None, cancelled=None) -> None:
-    """Step 5: `audio/`, eagerly, meant for a worker thread. `progress(done,
-    total)` in bytes; `cancelled()` is polled between entries."""
+    """Step 5: `audio/` and embedded `projects/`, eagerly, meant for a
+    worker thread. `progress(done, total)` in bytes; `cancelled()` is
+    polled between entries."""
     total = max(1, info.audio_bytes)
     done = 0
     with zipfile.ZipFile(info.path) as zf:
         for entry in info.entries:
             if cancelled is not None and cancelled():
                 return
-            if not entry.filename.replace("\\", "/").startswith("audio/"):
+            if not entry.filename.replace("\\", "/").startswith(_HEAVY_PREFIXES):
                 continue
             _extract_entry(zf, entry, project_dir)
             done += entry.file_size
@@ -596,13 +680,10 @@ def extract_audio(info: BundleInfo, project_dir: str, progress=None, cancelled=N
                 progress(done, total)
 
 
-def finish_open(info: BundleInfo, project_dir: str, engine_versions: dict | None = None,
-                recovered: bool = False) -> LoadedProject:
-    """Steps 6 and 7: the document from the project dir with paths made
-    absolute (a missing file becomes `None`, so the clip reads as dirty),
-    `project.json`, a fresh `session.json` unless the session was recovered
-    (then it stays as it is, `dirty` included), and the TB9 notice when a
-    manifest engine version differs from `engine_versions[id]`."""
+def _load_dir(project_dir: str) -> tuple:
+    """`(document, project_settings, notices)` from a project dir's
+    `document.json` and `project.json`, audio paths made absolute (a file
+    that isn't inside the dir becomes `None`, so its clip reads as dirty)."""
     with open(os.path.join(project_dir, DOCUMENT), "r", encoding="utf-8") as f:
         data = json.load(f)
     project_settings = {}
@@ -639,6 +720,27 @@ def finish_open(info: BundleInfo, project_dir: str, engine_versions: dict | None
     document = serialization.document_from_dict(data)
     if missing:
         notices.append(f"{len(missing)} audio file(s) missing from the bundle; those clips will regenerate.")
+    return document, project_settings, notices
+
+
+def load_project_dir(project_dir: str, project_id: str | None = None, manifest: dict | None = None) -> LoadedProject:
+    """A project straight from its project dir, with no bundle and no
+    session change: a subproject made this session, or one whose dir is
+    already extracted (clean, or ahead of its bundle)."""
+    document, project_settings, notices = _load_dir(project_dir)
+    return LoadedProject(document=document, project_settings=project_settings, project_dir=project_dir,
+                         project_id=project_id, manifest=dict(manifest or {}), notices=notices)
+
+
+def finish_open(info: BundleInfo, project_dir: str, engine_versions: dict | None = None,
+                recovered: bool = False, source_path: str | None = None) -> LoadedProject:
+    """Steps 6 and 7: the document from the project dir with paths made
+    absolute (a missing file becomes `None`, so the clip reads as dirty),
+    `project.json`, a fresh `session.json` unless the session was recovered
+    (then it stays as it is, `dirty` included), and the TB9 notice when a
+    manifest engine version differs from `engine_versions[id]`. An embedded
+    child passes its `<parent>#<id>` `source_path`."""
+    document, project_settings, notices = _load_dir(project_dir)
 
     for engine_id, block in (info.manifest.get("engines") or {}).items():
         if not isinstance(block, dict):
@@ -653,7 +755,7 @@ def finish_open(info: BundleInfo, project_dir: str, engine_versions: dict | None
         document_bytes, project_bytes = serialize_for_dir(document, project_settings, project_dir)
         previous = read_session(project_dir) or {}
         write_session(project_dir, {
-            "source_path": info.path,
+            "source_path": source_path or info.path,
             "zip_size": info.zip_size,
             "zip_mtime": info.zip_mtime,
             "saved_digest": document_digest(document_bytes, project_bytes),
@@ -792,7 +894,11 @@ def project_stats(document: Document) -> dict:
     for clip in document.clips:
         for segment in clip.segments:
             duration += float(segment.duration or 0.0)
-    return {"clips": len(document.clips), "characters": len(document.characters), "duration_s": round(duration, 3)}
+    stats = {"clips": len(document.clips), "characters": len(document.characters), "duration_s": round(duration, 3)}
+    subprojects = sum(1 for clip in document.clips if clip.source == "nested")
+    if subprojects:
+        stats["subprojects"] = subprojects
+    return stats
 
 
 @dataclass
@@ -816,9 +922,11 @@ class SavePlan:
 
 def plan_save(document: Document, project_settings: dict, path: str, project_dir: str, project_id: str,
               backend_for, fx_presets_dir: str, previous_session: dict | None = None,
-              previous_manifest: dict | None = None) -> tuple:
+              previous_manifest: dict | None = None, pending_children=()) -> tuple:
     """`(SavePlan, warnings)`. Serializes the document with bundle-relative
-    audio paths, collects assets and the referenced audio files."""
+    audio paths, collects assets and the referenced audio files.
+    `pending_children` are embedded child ids whose bundle the same Save
+    writes into the project dir before this plan is written."""
     options = bundle_options(project_settings)
     data = serialization.document_to_dict(document)
     audio_files = []
@@ -843,6 +951,14 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
         return abs_path.replace("\\", "/")
 
     serialization.rewrite_audio_paths(data, to_relative)
+    # Embedded subprojects: each child's bundle as its parent's project dir
+    # holds it (the app writes an open child's bundle there first).
+    embedded = []
+    for child_id in embedded_child_ids(document):
+        child_path = embedded_child_path(project_dir, child_id)
+        if child_path and (os.path.isfile(child_path) or child_id in pending_children):
+            audio_files.append((f"{PROJECTS_DIR}/{child_id}{DEFAULT_EXTENSION}", os.path.abspath(child_path)))
+            embedded.append(child_id)
     if not options["include_generated_audio"]:
         audio_files = [a for a in audio_files if not a[0].startswith(AUDIO_GENERATED + "/")]
     if not options["include_imported_audio"]:
@@ -862,6 +978,7 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
         "includes": {
             "generated_audio": bool(options["include_generated_audio"]),
             "imported_audio": bool(options["include_imported_audio"]),
+            "projects": embedded,
         },
         "audio": {"format": options["audio_format"]},
         "stats": project_stats(document),
@@ -993,11 +1110,14 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
                       saved_digest=plan.dir_digest)
 
 
-def record_save(project_dir: str, path: str, result: SaveResult) -> None:
-    """Step 5, on the GUI thread: `session.json` after a Save."""
+def record_save(project_dir: str, path: str, result: SaveResult, source_path: str | None = None) -> None:
+    """Step 5, on the GUI thread: `session.json` after a Save. An embedded
+    child passes its `<parent>#<id>` `source_path`; `path` is then the
+    bundle inside the parent's project dir."""
     session = read_session(project_dir) or {}
     session.update({
-        "source_path": os.path.abspath(path), "zip_size": result.zip_size, "zip_mtime": result.zip_mtime,
+        "source_path": source_path or os.path.abspath(path), "zip_size": result.zip_size,
+        "zip_mtime": result.zip_mtime,
         "saved_digest": result.saved_digest, "dirty": False, "asset_index": result.asset_index,
     })
     write_session(project_dir, session)
@@ -1106,6 +1226,9 @@ def sweep_orphan_dirs() -> list:
         source = session.get("source_path")
         if not isinstance(source, str) or not source:
             continue
+        # An embedded child's source is `<parent file>#<id>`: it's an orphan
+        # when the parent file is gone.
+        source = parent_source_of(source)
         # `record_save` and `finish_open` write an absolute path; a relative
         # or drive-relative one is a corrupt session, not grounds to delete.
         norm = os.path.normpath(source)

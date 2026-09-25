@@ -142,6 +142,9 @@ class Track:
     # tracks (kokoro_gui/daw/lanes.py), else None. Such a track has no
     # character; clips of any character land on it by the lane rule.
     lane: Optional[int] = None
+    # "subprojects" for the track nested clips land on by default (phase 4;
+    # `Document.subprojects_track`), else None.
+    role: Optional[str] = None
     id: str = field(default_factory=_new_id)
     extra: dict = field(default_factory=dict)  # unknown fields, see Character
 
@@ -439,6 +442,16 @@ class Document:
         track = Track(name=character.name, character_id=character.id, order_index=order)
         self.tracks.append(track)
         return track.id
+
+    def subprojects_track(self, create: bool = False) -> Optional[str]:
+        """The id of the "Subprojects" track nested clips go on, made on
+        first use like a character's track."""
+        track = next((t for t in self.tracks if t.role == "subprojects"), None)
+        if track is None and create:
+            order = max((t.order_index for t in self.tracks), default=-1) + 1
+            track = Track(name="Subprojects", order_index=order, role="subprojects")
+            self.tracks.append(track)
+        return track.id if track is not None else None
 
     def used_tracks(self) -> list:
         """Tracks at least one clip sits on, in `order_index` order: the
