@@ -198,10 +198,17 @@ def test_fit_all_over_slot_fits_only_the_clips_over_their_target(qt_app):
     assert "Fitted 2 clips" in qt_app.transport_dock.status_text()
 
 
-def test_the_header_button_runs_fit_all(qt_app, monkeypatch):
+def test_the_header_button_shows_with_a_target_and_runs_fit_all(qt_app, monkeypatch):
+    dock = qt_app.timeline_dock
+    dock.refresh()
+    assert dock.fit_all_button.isHidden()
+    _clip(qt_app, "A line.", 2.0)
+    dock.refresh()
+    assert not dock.fit_all_button.isHidden()
+
     calls = []
-    monkeypatch.setattr(qt_app.timeline_dock, "fit_all_over_slot", lambda: calls.append(True))
-    qt_app.timeline_dock.fit_all_button.click()
+    monkeypatch.setattr(dock, "fit_all_over_slot", lambda: calls.append(True))
+    dock.fit_all_button.click()
     assert calls == [True]
 
 

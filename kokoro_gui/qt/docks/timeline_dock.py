@@ -220,6 +220,8 @@ class TimelineDock(QDockWidget):
 
     def refresh(self) -> None:
         self.refresh_breadcrumb()
+        # Shown once the timeline has a clip with a target (a subtitle import).
+        self.fit_all_button.setVisible(any(fit_ops.TARGET_KEY in (c.overrides or {}) for c in self._doc.clips))
         arrangement = self.app.build_arrangement()
         level = self.app.level
         self.timeline_view.render_document(self._doc, arrangement,
