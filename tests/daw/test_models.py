@@ -291,3 +291,318 @@ def test_unknown_or_no_character_makes_no_track():
     assert clip.track_id is None and doc.tracks == []
     doc.assign_character_to_range(0, 5, "nobody")
     assert doc.tracks == []
+
+
+# ---------------------------------------------------------------------------
+# Imported text (phase 5 P3, grill Q32): timing belongs to the text
+# ---------------------------------------------------------------------------
+
+SOURCE = "0123456789abcdef"
+SOURCE_PATH = "/p/audio/imported/%s.wav" % SOURCE
+
+
+def _word_rows(text, times, source=SOURCE):
+    """`Run.words` for the space-separated words of `text`, one `(start_s,
+    end_s)` pair each."""
+    rows, pos = [], 0
+    for token, (start_s, end_s) in zip(text.split(" "), times):
+        at = text.index(token, pos)
+        rows.append([at, at + len(token), source, start_s, end_s])
+        pos = at + len(token)
+    return rows
+
+
+def _recording(*paragraphs, character=None):
+    """A document of imported clips, one per `(text, times)` paragraph,
+    joined by blank lines, over one source file."""
+    runs, clips, tracks = [], [], []
+    if character is not None:
+        tracks.append(Track(name=character.name, character_id=character.id))
+    for index, (text, times) in enumerate(paragraphs):
+        if index:
+            runs.append(Run(text="\n\n"))
+        clip = Clip(source="imported", character_id=character.id if character else None,
+                    track_id=tracks[0].id if tracks else None)
+        clips.append(clip)
+        runs.append(Run(text=text, clip_id=clip.id, kind="imported", words=_word_rows(text, times)))
+    doc = Document(runs=runs, clips=clips, tracks=tracks, characters=[character] if character else [],
+                   settings={"sources": {SOURCE: {"path": SOURCE_PATH, "sample_rate": 24000,
+                                                  "duration_s": 10.0}}})
+    doc.refresh_imported_segments()
+    return doc, clips
+
+
+HELLO = ("Hello there world", ((0.0, 0.5), (0.5, 1.0), (1.0, 1.5)))
+
+
+def _ranges(clip):
+    return [list(s.range) for s in clip.segments]
+
+
+def _words_text(doc, clip):
+    """The text each of the clip's words covers, in order."""
+    out = []
+    for run in doc.runs:
+        if run.clip_id == clip.id:
+            out.extend(run.text[w[0]:w[1]] for w in run.words)
+    return out
+
+
+def test_an_imported_clip_derives_one_segment_from_contiguous_words():
+    doc, (clip,) = _recording(HELLO)
+    assert _ranges(clip) == [[0.0, 1.5]]
+    segment = clip.segments[0]
+    assert segment.audio_path == SOURCE_PATH
+    assert segment.words == [["Hello", 0.0, 0.5], ["there", 0.5, 1.0], ["world", 1.0, 1.5]]
+    assert doc.dirty_clips() == []
+
+
+def test_deleting_a_middle_word_drops_its_timing_and_closes_up_the_audio():
+    doc, (clip,) = _recording(HELLO)
+    doc.replace_text(6, 6, 0, "Hello world")  # "there "
+    assert doc.text == "Hello world"
+    assert _words_text(doc, clip) == ["Hello", "world"]
+    assert doc.runs[0].words == [[0, 5, SOURCE, 0.0, 0.5], [6, 11, SOURCE, 1.0, 1.5]]
+    assert _ranges(clip) == [[0.0, 0.5], [1.0, 1.5]]
+
+
+def test_deleting_the_first_word_leaves_one_contiguous_range():
+    doc, (clip,) = _recording(HELLO)
+    doc.replace_text(0, 6, 0, "there world")
+    assert _words_text(doc, clip) == ["there", "world"]
+    assert _ranges(clip) == [[0.5, 1.5]]
+
+
+def test_deleting_half_a_word_deletes_its_audio_and_keeps_the_rest_as_untimed_text():
+    doc, (clip,) = _recording(HELLO)
+    doc.replace_text(8, 3, 0, "Hello th world")  # "ere" of "there"
+    assert doc.text == "Hello th world"
+    assert [c.id for c in doc.clips] == [clip.id]
+    assert doc.clip_text(clip) == "Hello th world"
+    assert _words_text(doc, clip) == ["Hello", "world"]
+    assert _ranges(clip) == [[0.0, 0.5], [1.0, 1.5]]
+
+
+def test_typing_inside_an_imported_run_splits_the_clip_around_an_untagged_run():
+    host = Character.from_preset_dict("Host", {})
+    doc, (clip,) = _recording(HELLO, character=host)
+    doc.replace_text(12, 0, 3, "Hello there my world")  # "my " before "world"
+    assert doc.text == "Hello there my world"
+    assert [(r.text, r.kind) for r in doc.runs] == [
+        ("Hello there ", "imported"), ("my ", None), ("world", "imported")]
+    assert doc.runs[1].clip_id is None
+    first, second = doc.clips
+    assert first is clip and second.id != clip.id
+    assert second.source == "imported"
+    assert second.character_id == host.id and second.track_id == clip.track_id
+    assert doc.runs[2].clip_id == second.id
+    assert _words_text(doc, first) == ["Hello", "there"]
+    assert _words_text(doc, second) == ["world"]
+    assert _ranges(first) == [[0.0, 1.0]]
+    assert _ranges(second) == [[1.0, 1.5]]
+    assert doc.dirty_clips() == []
+
+
+def test_typing_inside_a_word_drops_that_words_timing():
+    doc, (clip,) = _recording(HELLO)
+    doc.replace_text(8, 0, 1, "Hello thXere world")
+    first, second = doc.clips
+    assert _words_text(doc, first) == ["Hello"]
+    assert doc.clip_text(first) == "Hello th"
+    assert _words_text(doc, second) == ["world"]
+    assert doc.clip_text(second) == "ere world"
+    assert _ranges(first) == [[0.0, 0.5]] and _ranges(second) == [[1.0, 1.5]]
+
+
+def test_typing_at_the_start_or_end_of_an_imported_run_does_not_split_it():
+    doc, (clip,) = _recording(HELLO)
+    doc.replace_text(0, 0, 3, "Oh Hello there world")
+    doc.replace_text(20, 0, 1, "Oh Hello there world!")
+    assert [(r.text, r.clip_id) for r in doc.runs] == [
+        ("Oh ", None), ("Hello there world", clip.id), ("!", None)]
+    assert doc.clips == [clip]
+    assert _ranges(clip) == [[0.0, 1.5]]
+
+
+def test_replacing_a_word_by_typing_over_it_splits_around_the_new_text():
+    doc, (clip,) = _recording(HELLO)
+    doc.replace_text(6, 5, 4, "Hello here world")  # "there" -> "here"
+    assert [(r.text, r.kind) for r in doc.runs] == [
+        ("Hello ", "imported"), ("here", None), (" world", "imported")]
+    first, second = doc.clips
+    assert _ranges(first) == [[0.0, 0.5]] and _ranges(second) == [[1.0, 1.5]]
+
+
+def test_deleting_across_the_boundary_of_two_imported_clips_keeps_both():
+    doc, (a, b) = _recording(("Hello there", ((0.0, 0.5), (0.5, 1.0))),
+                             ("Good morning", ((2.0, 2.4), (2.4, 3.0))))
+    assert doc.text == "Hello there\n\nGood morning"
+    doc.replace_text(6, 12, 0, "Hello morning")  # "there\n\nGood "
+    assert doc.text == "Hello morning"
+    assert [c.id for c in doc.clips] == [a.id, b.id]
+    assert doc.clip_text(a) == "Hello " and doc.clip_text(b) == "morning"
+    assert _ranges(a) == [[0.0, 0.5]] and _ranges(b) == [[2.4, 3.0]]
+    assert b.segments[0].words == [["morning", 0.0, 0.6]]
+
+
+def test_deleting_a_whole_imported_clip_removes_it():
+    doc, (a, b) = _recording(("Hello there", ((0.0, 0.5), (0.5, 1.0))),
+                             ("Good morning", ((2.0, 2.4), (2.4, 3.0))))
+    removed = doc.replace_text(0, 13, 0, "Good morning")
+    assert removed == [a]
+    assert doc.clips == [b] and _ranges(b) == [[2.0, 3.0]]
+
+
+def test_undoing_a_text_edit_restores_the_words_and_the_one_clip():
+    from kokoro_gui.daw.undo import TextEditCommand
+
+    doc, (clip,) = _recording(HELLO)
+    doc.undo_stack.push(TextEditCommand(12, 0, 3, "Hello there my world"))
+    doc.undo_stack.push(TextEditCommand(0, 6, 0, "there my world"))
+    assert len(doc.clips) == 2
+    doc.undo_stack.undo()
+    doc.undo_stack.undo()
+    assert doc.text == "Hello there world"
+    assert [c.id for c in doc.clips] == [clip.id]
+    restored = doc.clips[0]
+    assert _words_text(doc, restored) == ["Hello", "there", "world"]
+    assert _ranges(restored) == [[0.0, 1.5]]
+
+
+def test_assigning_a_character_to_the_typed_run_makes_an_ordinary_generated_clip():
+    host = Character.from_preset_dict("Host", {})
+    doc, (clip,) = _recording(HELLO, character=host)
+    doc.replace_text(12, 0, 3, "Hello there my world")
+    first, second = list(doc.clips)
+    new = doc.assign_character_to_range(12, 15, host.id)
+    assert new.source == "generated" and new.segments == []
+    assert new in doc.dirty_clips()
+    assert doc.get_clip(first.id) is first and doc.get_clip(second.id) is second
+    assert _ranges(first) == [[0.0, 1.0]] and _ranges(second) == [[1.0, 1.5]]
+    assert [(r.text, r.kind) for r in doc.runs] == [
+        ("Hello there ", "imported"), ("my ", "generated"), ("world", "imported")]
+
+
+def test_assigning_another_character_to_imported_text_only_changes_its_label():
+    host = Character.from_preset_dict("Host", {})
+    guest = Character.from_preset_dict("Guest", {})
+    doc, (clip,) = _recording(HELLO, character=host)
+    doc.characters.append(guest)
+    segments = list(clip.segments)
+
+    result = doc.assign_character_to_range(0, len(doc.text), guest.id)
+
+    assert result is clip and doc.clips == [clip]
+    assert clip.source == "imported" and clip.character_id == guest.id
+    assert doc.get_track(clip.track_id).character_id == guest.id
+    assert _words_text(doc, clip) == ["Hello", "there", "world"]
+    assert clip.segments == segments
+    assert doc.dirty_clips() == []
+
+
+def test_assigning_a_character_to_part_of_an_imported_clip_splits_off_a_relabeled_clip():
+    host = Character.from_preset_dict("Host", {})
+    guest = Character.from_preset_dict("Guest", {})
+    doc, (clip,) = _recording(HELLO, character=host)
+    doc.characters.append(guest)
+
+    middle = doc.assign_character_to_range(6, 11, guest.id)  # "there"
+
+    assert [c.source for c in doc.clips] == ["imported"] * 3
+    before, after = clip, next(c for c in doc.clips if c not in (clip, middle))
+    assert middle.character_id == guest.id
+    assert before.character_id == host.id and after.character_id == host.id
+    assert doc.clip_text(before) == "Hello " and doc.clip_text(middle) == "there"
+    assert doc.clip_text(after) == " world"
+    assert _ranges(before) == [[0.0, 0.5]]
+    assert _ranges(middle) == [[0.5, 1.0]]
+    assert _ranges(after) == [[1.0, 1.5]]
+
+
+def test_assigning_over_imported_and_typed_text_relabels_one_and_generates_the_other():
+    host = Character.from_preset_dict("Host", {})
+    guest = Character.from_preset_dict("Guest", {})
+    doc, (clip,) = _recording(HELLO, character=host)
+    doc.characters.append(guest)
+    doc.replace_text(17, 0, 7, "Hello there world, again")  # untagged ", again"
+
+    new = doc.assign_character_to_range(0, len(doc.text), guest.id)
+
+    assert new.source == "generated" and doc.clip_text(new) == ", again"
+    assert clip.character_id == guest.id and clip.source == "imported"
+    assert _ranges(clip) == [[0.0, 1.5]]
+
+
+def test_apply_words_tags_a_pasted_span_as_a_new_imported_clip():
+    host = Character.from_preset_dict("Host", {})
+    doc = Document.from_plain_text("Intro. ", characters=[host])
+    sources = {SOURCE: {"path": SOURCE_PATH, "sample_rate": 24000, "duration_s": 10.0}}
+
+    doc.replace_text(7, 0, 5, "Intro. there")
+    clip_id = doc.apply_words(7, 5, [[0, 5, SOURCE, 0.5, 1.0]], sources, character_id=host.id)
+
+    clip = doc.get_clip(clip_id)
+    assert clip.source == "imported" and clip.character_id == host.id
+    assert clip.track_id == doc.track_for_character(host.id)
+    assert doc.clip_extent(clip_id) == (7, 12)
+    assert _ranges(clip) == [[0.5, 1.0]]
+    assert doc.sources == sources
+
+
+def test_apply_words_on_a_generated_clip_carves_the_span_out_of_it():
+    host = Character.from_preset_dict("Host", {})
+    doc = Document.from_plain_text("Say hi now", characters=[host])
+    generated = doc.assign_character_to_range(0, 10, host.id)
+    sources = {SOURCE: {"path": SOURCE_PATH, "sample_rate": 24000, "duration_s": 10.0}}
+    doc.replace_text(4, 0, 6, "Say there hi now")  # the paste joined the generated clip
+
+    clip_id = doc.apply_words(4, 6, [[0, 5, SOURCE, 0.5, 1.0]], sources)
+
+    assert doc.clip_extent(clip_id) == (4, 10)
+    assert generated not in doc.clips
+    kinds = [(r.text, r.kind) for r in doc.runs]
+    assert kinds == [("Say ", "generated"), ("there ", "imported"), ("hi now", "generated")]
+
+
+def test_pasting_a_cut_word_back_rejoins_the_two_halves():
+    doc, (clip,) = _recording(HELLO)
+    doc.replace_text(6, 6, 0, "Hello world")  # cut "there "
+    assert _ranges(clip) == [[0.0, 0.5], [1.0, 1.5]]
+    doc.replace_text(6, 0, 6, "Hello there world")  # the plain paste splits the clip
+    assert len(doc.clips) == 2
+
+    clip_id = doc.apply_words(6, 6, [[0, 5, SOURCE, 0.5, 1.0]], {})
+
+    assert clip_id == clip.id and doc.clips == [clip]
+    assert _words_text(doc, clip) == ["Hello", "there", "world"]
+    assert _ranges(clip) == [[0.0, 1.5]]
+
+
+def test_apply_words_extends_the_imported_clip_it_lands_at_the_edge_of():
+    doc, (clip,) = _recording(("Hello there", ((0.0, 0.5), (0.5, 1.0))))
+    doc.replace_text(11, 0, 6, "Hello there world")
+    clip_id = doc.apply_words(11, 6, [[1, 6, SOURCE, 1.0, 1.5]], {})
+    assert clip_id == clip.id
+    assert doc.clip_extent(clip.id) == (0, 17)
+    assert _ranges(clip) == [[0.0, 1.5]]
+
+
+def test_apply_words_with_an_unknown_source_leaves_the_span_untagged():
+    doc = Document.from_plain_text("there")
+    assert doc.apply_words(0, 5, [[0, 5, "missing", 0.5, 1.0]], {}) is None
+    assert doc.apply_words(0, 5, [[0, 5, "gone", 0.5, 1.0]], {"gone": {"path": None}}) is None
+    assert doc.clips == [] and doc.runs[0].clip_id is None
+
+
+def test_apply_words_command_undo_restores_runs_clips_and_sources():
+    from kokoro_gui.daw.undo import ApplyWordsCommand
+
+    doc = Document.from_plain_text("there")
+    sources = {SOURCE: {"path": SOURCE_PATH, "sample_rate": 24000, "duration_s": 10.0}}
+    command = ApplyWordsCommand(0, 5, [[0, 5, SOURCE, 0.5, 1.0]], sources)
+    doc.undo_stack.push(command)
+    assert command.clip_id is not None and doc.get_clip(command.clip_id).source == "imported"
+    doc.undo_stack.undo()
+    assert doc.clips == [] and doc.runs[0].words == [] and "sources" not in doc.settings
+    doc.undo_stack.redo()
+    assert doc.sources == sources and len(doc.clips) == 1

@@ -31,6 +31,8 @@ is never the authoritative field.
 """
 from __future__ import annotations
 
+import copy
+import math
 import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -288,12 +290,65 @@ class Run:
     tagged run, or is `None` for an untagged one. `"placeholder"`
     (`PLACEHOLDER`) is a nested clip's one read-only run, whose text is the
     subproject's title (phase 4); the editor refuses edits inside it.
+
+    `words` is the timing of an imported recording's text (phase 5 P3,
+    grill Q32): one `[char_start, char_end, source, start_s, end_s]` entry
+    per word, char offsets relative to this run's text, `source` a key of
+    `Document.sources`, times in seconds into that file. Only a run of
+    `kind == "imported"` carries any; whitespace and punctuation between
+    words carry nothing. Characters no word covers are untimed text.
     """
 
     text: str = ""
     clip_id: Optional[str] = None
     kind: Optional[str] = None
+    words: list = field(default_factory=list)
     extra: dict = field(default_factory=dict)  # unknown fields, see Character
+
+
+# `Run.kind` (and `Clip.source`) of an imported recording's text.
+IMPORTED = "imported"
+# The `Document.settings` key holding `Document.sources`.
+SOURCES_KEY = "sources"
+
+
+def clean_words(words, length: int) -> list:
+    """`words` as `[char_start, char_end, source, start_s, end_s]` lists
+    sorted by `char_start`, keeping only entries whose span lies inside
+    `[0, length)` and whose times are numbers with `end_s > start_s`. What
+    `apply_words` accepts from a paste (untrusted mime data)."""
+    out = []
+    for word in words or []:
+        try:
+            char_start, char_end = int(word[0]), int(word[1])
+            source = str(word[2])
+            start_s, end_s = float(word[3]), float(word[4])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if not (0 <= char_start < char_end <= length) or not source:
+            continue
+        if not (math.isfinite(start_s) and math.isfinite(end_s)) or end_s <= start_s or start_s < 0:
+            continue
+        out.append([char_start, char_end, source, start_s, end_s])
+    out.sort(key=lambda w: w[0])
+    return out
+
+
+def _shift_words(words, delta: int) -> list:
+    return [[w[0] + delta, w[1] + delta, *w[2:]] for w in words]
+
+
+def _split_words(words, cut: int) -> tuple:
+    """`(left, right)` for a run split at `cut`: a word goes with the side
+    holding its first character (clipped to it), so a split never
+    duplicates or loses a word's audio."""
+    left, right = [], []
+    for word in words:
+        if word[0] < cut:
+            left.append([word[0], min(word[1], cut), *word[2:]])
+        else:
+            right.append([word[0] - cut, word[1] - cut, *word[2:]])
+    return left, right
 
 
 @dataclass
@@ -414,6 +469,113 @@ class Document:
 
     def get_clip(self, clip_id: str) -> Optional[Clip]:
         return next((c for c in self.clips if c.id == clip_id), None)
+
+    # -- imported recordings (phase 5 P3) -----------------------------------
+
+    @property
+    def sources(self) -> dict:
+        """`source -> {"path", "sample_rate", "duration_s"}` for every
+        imported recording a run's words name, stored as
+        `settings["sources"]` so it rides the settings round trip. `path`
+        is absolute in memory (bundle-relative in a `.tbaw`, like a
+        segment's `audio_path`) and None when the file is missing. An empty
+        dict, not stored, when the document has none; add entries with
+        `add_sources`."""
+        value = (self.settings or {}).get(SOURCES_KEY)
+        return value if isinstance(value, dict) else {}
+
+    def add_sources(self, entries: dict) -> list:
+        """Adds each `source -> entry` the document doesn't already have
+        (a source's name is its content hash, so a known one is the same
+        file). An entry without a `path` string is skipped. Returns the
+        names added."""
+        added = []
+        for source, entry in (entries or {}).items():
+            if not isinstance(entry, dict) or not isinstance(entry.get("path"), str) or not entry["path"]:
+                continue
+            if source in self.sources:
+                continue
+            self.settings.setdefault(SOURCES_KEY, {})[str(source)] = {
+                "path": entry["path"],
+                "sample_rate": entry.get("sample_rate"),
+                "duration_s": entry.get("duration_s"),
+            }
+            added.append(str(source))
+        return added
+
+    def source_path(self, source: str) -> Optional[str]:
+        """The file `source` names, or None (unknown, or missing on open)."""
+        entry = self.sources.get(source)
+        path = entry.get("path") if isinstance(entry, dict) else None
+        return path if isinstance(path, str) and path else None
+
+    def refresh_imported_segments(self, clip_ids=None) -> None:
+        """Rebuilds `clip.segments` of each imported recording clip (all of
+        them, or those in `clip_ids`) from its runs' words
+        (`imported.segments_for`). The segments are a cache every reader of
+        `clip.segments` uses unchanged; a clip whose derived segments equal
+        what it has keeps its list. Every edit that touches such a clip's
+        runs calls this."""
+        from kokoro_gui.daw.imported import is_recording_clip, same_segments, segments_for
+
+        for clip in self.clips:
+            if clip_ids is not None and clip.id not in clip_ids:
+                continue
+            if not is_recording_clip(clip):
+                continue
+            segments = segments_for(self, clip)
+            if not same_segments(clip.segments, segments):
+                clip.segments = segments
+
+    def _recording_clip_of(self, run: Optional[Run]) -> Optional[Clip]:
+        """`run`'s clip when it is an imported recording clip, else None."""
+        from kokoro_gui.daw.imported import is_recording_clip
+
+        if run is None or run.clip_id is None or run.kind != IMPORTED:
+            return None
+        clip = self.get_clip(run.clip_id)
+        return clip if clip is not None and is_recording_clip(clip) else None
+
+    def _split_clip_at(self, clip: Clip, offset: int) -> Clip:
+        """Moves `clip`'s runs at or after text offset `offset` to a new
+        imported clip (fresh id, same character, track, overrides and FX),
+        inserted after `clip` in `clips`, and returns it. The new clip
+        follows the old one with no added silence (`gap_before_s = 0`) and
+        takes its fade-out, so the recording plays as it did. Segments are
+        left for `refresh_imported_segments`."""
+        self._split_at(offset)
+        new_clip = Clip(
+            character_id=clip.character_id, track_id=clip.track_id,
+            overrides=copy.deepcopy(clip.overrides), fx_override=copy.deepcopy(clip.fx_override),
+            source=clip.source, gap_before_s=0.0, fade_out_s=clip.fade_out_s, status=clip.status,
+        )
+        clip.fade_out_s = 0.0
+        for run, start, _end in self._iter_runs_with_offsets():
+            if run.clip_id == clip.id and start >= offset:
+                run.clip_id = new_clip.id
+        self.clips.insert(self.clips.index(clip) + 1, new_clip)
+        return new_clip
+
+    def _merge_clip_into(self, target: Clip, other: Clip) -> None:
+        """Retags `other`'s runs with `target` and drops `other`, which
+        takes over its fade-out. For two imported halves that are adjacent
+        again."""
+        for run in self.runs:
+            if run.clip_id == other.id:
+                run.clip_id = target.id
+        target.fade_out_s = other.fade_out_s
+        self.clips = [c for c in self.clips if c.id != other.id]
+
+    def _last_word_source(self, clip_id: str, last: bool = True) -> Optional[str]:
+        """The source of the clip's last (or, `last=False`, first) word in
+        text order, or None when it has no words."""
+        found = None
+        for run in self.runs:
+            if run.clip_id == clip_id and run.words:
+                if not last:
+                    return run.words[0][2]
+                found = run.words[-1][2]
+        return found
 
     def track_layout(self) -> dict:
         """`settings["track_layout"]` normalised: `{"mode": "character"}`
@@ -583,7 +745,8 @@ class Document:
         boundary, so later code can retag/replace an exact `[start, end)`
         span without disturbing text on either side of it. A no-op if
         `offset` already falls on a run boundary (including the document's
-        own start/end)."""
+        own start/end). An imported run's words split with it
+        (`_split_words`)."""
         if offset <= 0 or offset >= len(self.text):
             return
         pos = 0
@@ -591,9 +754,10 @@ class Document:
             end = pos + len(run.text)
             if pos < offset < end:
                 cut = offset - pos
+                left_words, right_words = _split_words(run.words, cut)
                 self.runs[i:i + 1] = [
-                    Run(text=run.text[:cut], clip_id=run.clip_id, kind=run.kind),
-                    Run(text=run.text[cut:], clip_id=run.clip_id, kind=run.kind),
+                    Run(text=run.text[:cut], clip_id=run.clip_id, kind=run.kind, words=left_words),
+                    Run(text=run.text[cut:], clip_id=run.clip_id, kind=run.kind, words=right_words),
                 ]
                 return
             pos = end
@@ -603,28 +767,37 @@ class Document:
         `clip_id`/`kind` - the run-list equivalent of Qt's own "typing
         inside a run just extends it" merge behavior, kept true here too so
         two operations that happen to retag neighboring spans identically
-        don't leave a meaningless split between them."""
+        don't leave a meaningless split between them. Merged runs keep
+        their words, shifted; a run that isn't imported keeps none."""
         merged: list = []
         for run in self.runs:
             if not run.text:
                 continue
+            if run.words and run.kind != IMPORTED:
+                run.words = []
             if merged and merged[-1].clip_id == run.clip_id and merged[-1].kind == run.kind:
-                merged[-1] = Run(text=merged[-1].text + run.text, clip_id=run.clip_id, kind=run.kind)
+                previous = merged[-1]
+                merged[-1] = Run(text=previous.text + run.text, clip_id=run.clip_id, kind=run.kind,
+                                 words=previous.words + _shift_words(run.words, len(previous.text)))
             else:
                 merged.append(run)
         self.runs = merged
 
-    def _retag_range(self, start: int, end: int, clip_id: Optional[str], kind: Optional[str]) -> None:
+    def _retag_range(self, start: int, end: int, clip_id: Optional[str], kind: Optional[str],
+                     words: Optional[list] = None) -> None:
         """Replaces whatever runs currently occupy `[start, end)` with a
         single run of that same text, tagged `clip_id`/`kind` - the shared
         "retag an exact span" primitive `assign_character_to_range` below
         applies once per clip it touches (the new clip's span, plus one per
-        leftover fragment). Never changes `len(self.text)`."""
+        leftover fragment). Never changes `len(self.text)`. The new run
+        carries `words` (relative to `start`) when given, else the words
+        the replaced runs had, when `kind` is imported."""
         self._split_at(start)
         self._split_at(end)
 
         new_runs: list = []
         merged_text_parts: list = []
+        merged_words: list = []
         inserted_at: Optional[int] = None
         pos = 0
         for run in self.runs:
@@ -632,13 +805,19 @@ class Document:
             if run_end <= start or pos >= end:
                 new_runs.append(run)
             else:
+                merged_words.extend(_shift_words(run.words, pos - start))
                 merged_text_parts.append(run.text)
                 if inserted_at is None:
                     inserted_at = len(new_runs)
                     new_runs.append(None)
             pos = run_end
 
-        new_runs[inserted_at] = Run(text="".join(merged_text_parts), clip_id=clip_id, kind=kind)
+        if words is not None:
+            merged_words = [list(w) for w in words]
+        elif kind != IMPORTED:
+            merged_words = []
+        new_runs[inserted_at] = Run(text="".join(merged_text_parts), clip_id=clip_id, kind=kind,
+                                    words=merged_words)
         self.runs = new_runs
         self._normalize_runs()
 
@@ -665,6 +844,16 @@ class Document:
         No manual dirty-marking is needed - every clip this method touches
         ends up with no `segments`, which `dirty.is_clip_dirty` already
         treats as dirty.
+
+        Imported recording text in the range (phase 5 P3, grill Q32) is
+        different: it keeps its clip, words and audio, and only its label
+        changes. An imported clip wholly inside the range gets the new
+        character (and its track); one partly inside is split so the part
+        inside becomes its own imported clip with the new character. The
+        rest of the range goes through the rule above, one new clip per
+        stretch between imported text (a whitespace-only stretch is left
+        alone). Returns the first new generated clip, or the first
+        relabeled imported clip when the range held nothing else.
         """
         if end <= start:
             raise ValueError(f"assign_character_to_range requires end > start, got start={start}, end={end}")
@@ -677,7 +866,67 @@ class Document:
         if self.overlaps_nested(start, end):
             raise ValueError("assign_character_to_range can't retag a subproject's placeholder")
 
+        imported = self._imported_spans(start, end)
+        if not imported:
+            return self._assign_generated(start, end, character_id)
+
+        relabeled = self._relabel_imported(start, end, character_id)
+        text = self.text
+        first_new = None
+        cursor = start
+        for span_start, span_end in imported + [(end, end)]:
+            if span_start > cursor and text[cursor:span_start].strip():
+                clip = self._assign_generated(cursor, span_start, character_id)
+                first_new = first_new or clip
+            cursor = max(cursor, span_end)
+        return first_new or relabeled[0]
+
+    def _imported_spans(self, start: int, end: int) -> list:
+        """The maximal `(start, end)` stretches of `[start, end)` covered by
+        imported recording clips' runs, in order."""
+        spans: list = []
+        for run, r_start, r_end in self._iter_runs_with_offsets():
+            lo, hi = max(start, r_start), min(end, r_end)
+            if hi <= lo or self._recording_clip_of(run) is None:
+                continue
+            if spans and spans[-1][1] == lo:
+                spans[-1] = (spans[-1][0], hi)
+            else:
+                spans.append((lo, hi))
+        return spans
+
+    def _relabel_imported(self, start: int, end: int, character_id: Optional[str]) -> list:
+        """Gives the imported recording text inside `[start, end)` the
+        character `character_id` without touching its runs' text, words or
+        kind (see `assign_character_to_range`). Returns the relabeled clips
+        in text order."""
         track_id = self.track_for_character(character_id, create=True)
+        ids: list = []
+        for run, r_start, r_end in self._iter_runs_with_offsets():
+            if r_start < end and r_end > start and self._recording_clip_of(run) is not None:
+                if run.clip_id not in ids:
+                    ids.append(run.clip_id)
+        relabeled = []
+        for clip_id in ids:
+            clip = self.get_clip(clip_id)
+            c_start, c_end = self.clip_extent(clip_id)
+            lo, hi = max(start, c_start), min(end, c_end)
+            if hi < c_end:
+                self._split_clip_at(clip, hi)
+            target = self._split_clip_at(clip, lo) if lo > c_start else clip
+            target.character_id = character_id
+            target.track_id = track_id
+            relabeled.append(target)
+        self._normalize_runs()
+        self.refresh_imported_segments()
+        return relabeled
+
+    def _assign_generated(self, start: int, end: int, character_id: Optional[str], create: bool = True):
+        """The split-or-create rule of `assign_character_to_range` for
+        `[start, end)`. With `create=False` no new clip is made and the
+        span is left untagged (what `apply_words` needs before it tags a
+        paste); returns None then."""
+        track_id = self.track_for_character(character_id, create=True) if create else None
 
         overlapping_ids = set()
         for run, r_start, r_end in self._iter_runs_with_offsets():
@@ -704,18 +953,24 @@ class Document:
             for (_l_start, _l_end, old_clip) in leftover_ranges
         ]
 
-        new_clip = Clip(character_id=character_id, track_id=track_id)
+        new_clip = Clip(character_id=character_id, track_id=track_id) if create else None
 
         self.clips = [c for c in self.clips if c.id not in overlapping_ids]
         self.clips.extend(leftover_clips)
-        self.clips.append(new_clip)
+        if new_clip is not None:
+            self.clips.append(new_clip)
 
         # None of these _retag_range calls change len(self.text), so it's
         # safe to apply them in any order using offsets all computed above,
         # against the pre-edit run layout.
-        self._retag_range(start, end, new_clip.id, new_clip.run_kind)
+        if new_clip is not None:
+            self._retag_range(start, end, new_clip.id, new_clip.run_kind)
+        else:
+            self._retag_range(start, end, None, None)
         for (l_start, l_end, _old_clip), leftover_clip in zip(leftover_ranges, leftover_clips):
             self._retag_range(l_start, l_end, leftover_clip.id, leftover_clip.run_kind)
+        if any(c.source == IMPORTED for c in leftover_clips):
+            self.refresh_imported_segments({c.id for c in leftover_clips})
 
         return new_clip
 
@@ -745,10 +1000,23 @@ class Document:
         very start of the document, or right after a clip that this same
         edit fully consumed, leaves the inserted text untagged.
 
+        Imported recording text (phase 5 P3, grill Q32) follows two more
+        rules. Delete: a word whose span the removed range touches loses its
+        timing entry whole (its audio goes with it; any of its characters
+        left behind stay as untimed text), and the rest keep theirs. Type:
+        inserted text never joins an imported run; it becomes an untagged
+        run, and when it lands strictly inside an imported clip (the text on
+        both sides belongs to it) the clip splits there, the part after the
+        insertion becoming a new imported clip (`_split_clip_at`). A word
+        the insertion point falls inside loses its timing too. Typing at
+        either edge of an imported clip doesn't split it. The touched
+        clips' segments are rebuilt (`refresh_imported_segments`).
+
         Returns the list of `Clip`s removed by this edit, for callers that
         need to react (e.g. dropping them from a track view).
         """
         removed_end = position + chars_removed
+        self._drop_touched_words(position, removed_end, chars_added > 0)
 
         overlapping_ids = set()
         for run, r_start, r_end in self._iter_runs_with_offsets():
@@ -771,6 +1039,17 @@ class Document:
         # Text typed after a subproject's placeholder line is never part of
         # it: the placeholder holds the child's title and nothing else.
         if inherited_kind == PLACEHOLDER or inherited_clip_id in fully_consumed_ids:
+            inherited_clip_id = None
+            inherited_kind = None
+        # Typed text has no timing, so it never joins an imported recording
+        # clip; inside one, the clip splits around it.
+        split_clip = None
+        recording = self._recording_clip_of(inherited) if inherited_clip_id is not None else None
+        if recording is not None:
+            if chars_added > 0 and removed_end < len(self.text):
+                right = self._run_covering(removed_end)
+                if right is not None and right.clip_id == recording.id:
+                    split_clip = recording
             inherited_clip_id = None
             inherited_kind = None
 
@@ -800,5 +1079,81 @@ class Document:
             new_runs.append(new_run)
 
         self.runs = new_runs
+        touched = overlapping_ids - fully_consumed_ids
+        if split_clip is not None:
+            touched.add(split_clip.id)
+            touched.add(self._split_clip_at(split_clip, position + chars_added).id)
         self._normalize_runs()
+        self.refresh_imported_segments(touched)
         return removed_clips
+
+    def apply_words(self, position: int, length: int, words, sources=None,
+                    character_id: Optional[str] = None) -> Optional[str]:
+        """Tags `[position, position + length)`, text already inserted (a
+        paste or drop of timed text), as imported recording text carrying
+        `words` (`Run.words` entries, char offsets relative to `position`).
+        `sources` entries the document lacks are added first
+        (`add_sources`); a word whose source still has no file is dropped.
+        With no word left, nothing changes and None is returned: the span
+        stays as it is, untimed (grill Q32).
+
+        The span is cut out of any clip it sits in (the `assign` rule with
+        no new clip), then joins the imported clip it touches when the
+        sources meet: the clip ending at `position` whose last word has the
+        first pasted word's source, else the clip starting right after the
+        span whose first word has the last pasted word's source. When both
+        sides are such clips with the same character, the right one merges
+        into the left, so pasting a cut word back where it was leaves one
+        clip. Otherwise a new imported clip is made with `character_id`, on
+        that character's track. Returns the id of the clip the span belongs
+        to."""
+        end = position + length
+        if length <= 0 or position < 0 or end > len(self.text):
+            raise ValueError(f"apply_words requires a span inside the text, got {position}+{length}")
+        if self.overlaps_nested(position, end):
+            raise ValueError("apply_words can't retag a subproject's placeholder")
+        self.add_sources(sources or {})
+        cleaned = [w for w in clean_words(words, length) if self.source_path(w[2])]
+        if not cleaned:
+            return None
+
+        if any(run.clip_id is not None for run, r_start, r_end in self._iter_runs_with_offsets()
+               if r_start < end and r_end > position):
+            self._assign_generated(position, end, None, create=False)
+
+        left = self._recording_clip_of(self._run_covering(position - 1)) if position > 0 else None
+        right = self._recording_clip_of(self._run_covering(end))
+        if left is not None and self._last_word_source(left.id) != cleaned[0][2]:
+            left = None
+        if right is not None and self._last_word_source(right.id, last=False) != cleaned[-1][2]:
+            right = None
+
+        if left is not None:
+            target = left
+            if right is not None and right.id != left.id and right.character_id == left.character_id:
+                self._merge_clip_into(left, right)
+        elif right is not None:
+            target = right
+        else:
+            target = Clip(character_id=character_id, track_id=self.track_for_character(character_id, create=True),
+                          source=IMPORTED)
+            self.clips.append(target)
+        self._retag_range(position, end, target.id, IMPORTED, words=cleaned)
+        self.refresh_imported_segments({target.id})
+        return target.id
+
+    def _drop_touched_words(self, position: int, removed_end: int, inserting: bool) -> None:
+        """The whole-word rule of `replace_text`: drops every word entry
+        whose span overlaps `[position, removed_end)`, or, for a pure
+        insertion, whose span has `position` strictly inside it."""
+        for run, r_start, _r_end in self._iter_runs_with_offsets():
+            if not run.words:
+                continue
+            if removed_end > position:
+                kept = [w for w in run.words if not (r_start + w[0] < removed_end and r_start + w[1] > position)]
+            elif inserting:
+                kept = [w for w in run.words if not (r_start + w[0] < position < r_start + w[1])]
+            else:
+                continue
+            if len(kept) != len(run.words):
+                run.words = kept

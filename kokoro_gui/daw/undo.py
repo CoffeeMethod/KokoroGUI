@@ -660,6 +660,147 @@ class ImportCuesCommand(Command):
             document.characters = [c for c in document.characters if c.id not in added]
 
 
+def _sources_snapshot(document):
+    """A deep copy of `settings["sources"]`, or `_MISSING` when unset."""
+    from kokoro_gui.daw.models import SOURCES_KEY
+
+    value = document.settings.get(SOURCES_KEY, _MISSING)
+    return value if value is _MISSING else copy.deepcopy(value)
+
+
+def _restore_sources(document, snapshot) -> None:
+    from kokoro_gui.daw.models import SOURCES_KEY
+
+    if snapshot is _MISSING:
+        document.settings.pop(SOURCES_KEY, None)
+    else:
+        document.settings[SOURCES_KEY] = copy.deepcopy(snapshot)
+
+
+class ApplyWordsCommand(Command):
+    """Wraps `Document.apply_words`: tags an already-inserted span (a paste
+    or drop of timed text, phase 5 P3) as imported recording text. The
+    plain insert rides the editor's native undo; this is the custom-stack
+    step after it. Snapshots runs, clips and `settings["sources"]` like
+    `AssignCharacterCommand`, and removes a track the new clip's character
+    got for it. `clip_id` is the clip the span joined, or None when no word
+    had a known source (nothing changed)."""
+
+    def __init__(self, position: int, length: int, words, sources=None, character_id=None):
+        self.position = position
+        self.length = length
+        self.words = copy.deepcopy(list(words or []))
+        self.sources = copy.deepcopy(dict(sources or {}))
+        self.character_id = character_id
+        self.clip_id = None
+        self._pre = None
+        self._created_track_ids: list = []
+
+    def do(self, document) -> None:
+        self._pre = (copy.deepcopy(document.runs), copy.deepcopy(document.clips), _sources_snapshot(document))
+        track_ids = {t.id for t in document.tracks}
+        self.clip_id = document.apply_words(self.position, self.length, self.words, self.sources,
+                                            character_id=self.character_id)
+        self._created_track_ids = [t.id for t in document.tracks if t.id not in track_ids]
+
+    def undo(self, document) -> None:
+        runs, clips, sources = self._pre
+        document.runs = copy.deepcopy(runs)
+        document.clips = copy.deepcopy(clips)
+        _restore_sources(document, sources)
+        created = set(self._created_track_ids)
+        if created:
+            document.tracks = [t for t in document.tracks if t.id not in created]
+
+
+class ImportRecordingCommand(Command):
+    """Import Recording's commit (phase 5 P3, grill Q19/Q32): each row
+    becomes a paragraph appended to the end of the text (a blank line
+    before it) and an imported recording clip over it whose run carries the
+    row's words. A row is a dict: `"text"`, `"words"` (`Run.words` for
+    that text, from `imported.run_from_asr_words` or
+    `imported.words_from_cue`), `"character_id"`, and optionally
+    `"gap_before_s"`. Without it, a row whose first word follows the
+    previous row's last word in the same source gets the pause between
+    them, so the recording keeps its pacing; the first row gets the
+    document's gap. `sources` are added to `Document.sources` and
+    `new_characters` (an "Unknown speaker" with no voice, or the caption
+    speakers the mapping made) to the document, in the same step.
+
+    Clip ids are fixed here, so a redo recreates the same clips. Undo
+    restores runs, clips and sources and removes the characters and tracks
+    `do` added."""
+
+    def __init__(self, rows, sources, new_characters=()):
+        import uuid
+
+        self.rows = []
+        previous = None
+        for row in rows:
+            words = copy.deepcopy(list(row.get("words") or []))
+            gap = row.get("gap_before_s")
+            if "gap_before_s" not in row and previous and words and previous[2] == words[0][2]:
+                gap = round(max(0.0, float(words[0][3]) - float(previous[4])), 6)
+            self.rows.append((str(row.get("text") or ""), words, row.get("character_id"), gap, uuid.uuid4().hex))
+            if words:
+                previous = words[-1]
+        self.sources = copy.deepcopy(dict(sources or {}))
+        self.new_characters = [copy.deepcopy(c) for c in new_characters]
+        self._pre = None
+        self._created_track_ids: list = []
+        self._added_character_ids: list = []
+
+    @property
+    def clip_ids(self) -> list:
+        return [row[-1] for row in self.rows]
+
+    def do(self, document) -> None:
+        from kokoro_gui.daw.models import IMPORTED, Clip, Run
+
+        self._pre = (copy.deepcopy(document.runs), copy.deepcopy(document.clips), _sources_snapshot(document))
+        track_ids = {t.id for t in document.tracks}
+        known = {c.id for c in document.characters}
+        self._added_character_ids = []
+        for character in self.new_characters:
+            if character.id not in known:
+                document.characters.append(copy.deepcopy(character))
+                self._added_character_ids.append(character.id)
+        document.add_sources(self.sources)
+
+        tail = document.text[-2:]
+        for text, words, character_id, gap, clip_id in self.rows:
+            if not text:
+                continue
+            if not tail or tail == "\n\n":
+                separator = ""
+            elif tail.endswith("\n"):
+                separator = "\n"
+            else:
+                separator = "\n\n"
+            if separator:
+                document.runs.append(Run(text=separator))
+            clip = Clip(character_id=character_id, track_id=document.track_for_character(character_id, create=True),
+                        source=IMPORTED, gap_before_s=gap, id=clip_id)
+            document.clips.append(clip)
+            document.runs.append(Run(text=text, clip_id=clip.id, kind=IMPORTED, words=copy.deepcopy(words)))
+            tail = text[-2:]
+        document._normalize_runs()
+        document.refresh_imported_segments(set(self.clip_ids))
+        self._created_track_ids = [t.id for t in document.tracks if t.id not in track_ids]
+
+    def undo(self, document) -> None:
+        runs, clips, sources = self._pre
+        document.runs = copy.deepcopy(runs)
+        document.clips = copy.deepcopy(clips)
+        _restore_sources(document, sources)
+        created = set(self._created_track_ids)
+        if created:
+            document.tracks = [t for t in document.tracks if t.id not in created]
+        added = set(self._added_character_ids)
+        if added:
+            document.characters = [c for c in document.characters if c.id not in added]
+
+
 class RelaneCommand(Command):
     """Puts every clip on the track the document's track layout says
     (kokoro_gui/daw/lanes.py): the unified layout's lane rule, or each

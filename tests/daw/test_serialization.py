@@ -1,9 +1,12 @@
 """Tests for kokoro_gui/daw/serialization.py's document.json round trip."""
+import json
+
 from kokoro_gui.daw.models import Character, Clip, Document, Run, Segment, Track
 from kokoro_gui.daw.serialization import (
     document_from_dict,
     document_to_dict,
     load_document,
+    rewrite_audio_paths,
     save_document,
 )
 
@@ -333,3 +336,66 @@ def test_character_library_id_round_trips():
 def test_character_without_library_id_loads_local():
     doc = document_from_dict({"characters": [{"name": "Old", "id": "c1", "preset_data": {}}]})
     assert doc.characters[0].library_id is None
+
+
+# ---------------------------------------------------------------------------
+# Imported text: Run.words and Document.sources (phase 5 P3)
+# ---------------------------------------------------------------------------
+
+def _imported_document():
+    clip = Clip(source="imported")
+    words = [[0, 5, "abc", 0.0, 0.5], [6, 11, "abc", 0.5, 1.0]]
+    doc = Document(runs=[Run(text="Hello there", clip_id=clip.id, kind="imported", words=words), Run(text=".")],
+                   clips=[clip],
+                   settings={"sources": {"abc": {"path": "/p/audio/imported/abc.wav", "sample_rate": 24000,
+                                                 "duration_s": 3.0}}})
+    doc.refresh_imported_segments()
+    return doc, clip
+
+
+def test_run_words_and_sources_round_trip():
+    doc, clip = _imported_document()
+    data = document_to_dict(doc)
+    assert data["runs"][0]["words"] == [[0, 5, "abc", 0.0, 0.5], [6, 11, "abc", 0.5, 1.0]]
+    assert "words" not in data["runs"][1]
+    assert data["settings"]["sources"]["abc"]["path"] == "/p/audio/imported/abc.wav"
+
+    restored = document_from_dict(json.loads(json.dumps(data)))
+    assert restored.runs[0].words == doc.runs[0].words
+    assert restored.runs[1].words == []
+    assert restored.sources == doc.sources
+    assert restored.source_path("abc") == "/p/audio/imported/abc.wav"
+    assert [s.range for s in restored.clips[0].segments] == [[0.0, 1.0]]
+    assert restored.runs[0].extra == {}
+
+
+def test_a_document_without_imported_text_saves_as_before():
+    doc = Document(runs=[Run(text="hi")])
+    data = document_to_dict(doc)
+    assert data["runs"] == [{"text": "hi", "clip_id": None, "kind": None}]
+    assert data["settings"] == {}
+
+
+def test_malformed_saved_words_are_dropped_on_load():
+    data = {"runs": [{"text": "Hello", "clip_id": "c", "kind": "imported",
+                      "words": [[0, 5, "abc", 0.0, 0.5], [3, 99, "abc", 0.0, 1.0], ["x"], [0, 5, "abc", 1.0, 0.5]]}],
+            "clips": [{"id": "c", "source": "imported"}]}
+    doc = document_from_dict(data)
+    assert doc.runs[0].words == [[0, 5, "abc", 0.0, 0.5]]
+
+
+def test_load_rebuilds_a_stale_segment_cache_from_the_words():
+    doc, clip = _imported_document()
+    data = document_to_dict(doc)
+    data["clips"][0]["segments"] = [{"audio_path": "/elsewhere.wav", "range": [5.0, 9.0], "raw": True}]
+    restored = document_from_dict(data)
+    segment, = restored.clips[0].segments
+    assert segment.audio_path == "/p/audio/imported/abc.wav" and segment.range == [0.0, 1.0]
+
+
+def test_rewrite_audio_paths_includes_sources_and_leaves_the_document_alone():
+    doc, clip = _imported_document()
+    data = rewrite_audio_paths(document_to_dict(doc), lambda p: "X" + p)
+    assert data["settings"]["sources"]["abc"]["path"] == "X/p/audio/imported/abc.wav"
+    assert data["clips"][0]["segments"][0]["audio_path"] == "X/p/audio/imported/abc.wav"
+    assert doc.sources["abc"]["path"] == "/p/audio/imported/abc.wav"

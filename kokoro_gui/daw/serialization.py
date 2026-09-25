@@ -24,11 +24,12 @@ plan's version policy depends on this). `Character.preset_data` is filtered
 through `ALLOWED_PRESET_KEYS` on the way in, and the stripped keys ride in
 `extra["preset_data"]`.
 """
+import copy
 import dataclasses
 import json
 import os
 
-from kokoro_gui.daw.models import Character, Clip, Document, Run, Segment, Track
+from kokoro_gui.daw.models import SOURCES_KEY, Character, Clip, Document, Run, Segment, Track, clean_words
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys
 
 
@@ -68,6 +69,15 @@ def _segment_to_dict(segment: Segment) -> dict:
     data = _to_dict(segment)
     if data.get("range") is None:
         data.pop("range", None)
+    return data
+
+
+def _run_to_dict(run: Run) -> dict:
+    """A run's dict, without `words` when it has none, so a document with
+    no imported text saves exactly as it did before the field."""
+    data = _to_dict(run)
+    if not data.get("words"):
+        data.pop("words", None)
     return data
 
 
@@ -114,19 +124,29 @@ def document_to_dict(doc: Document) -> dict:
                          for index, segments in sorted(clip.takes.items())}
         clips.append(data)
     return {
-        "runs": [_to_dict(r) for r in doc.runs],
+        "runs": [_run_to_dict(r) for r in doc.runs],
         "clips": clips,
         "tracks": [_to_dict(t) for t in doc.tracks],
         "characters": [_character_to_dict(c) for c in doc.characters],
-        "settings": dict(doc.settings),
+        # A deep copy: `rewrite_audio_paths` edits the source paths inside
+        # it in place, and they must not reach the live document.
+        "settings": copy.deepcopy(dict(doc.settings)),
     }
 
 
 def rewrite_audio_paths(data: dict, fn) -> dict:
-    """Applies `fn(path) -> path` to every `Segment.audio_path` and
-    `Clip.original_audio_path` in a `document_to_dict`-shaped dict, in
-    place, skipping `None`. Used in both directions by the `.tbaw` bundle
-    (absolute inside the project dir <-> bundle-relative)."""
+    """Applies `fn(path) -> path` to every `Segment.audio_path`,
+    `Clip.original_audio_path` and imported recording source path
+    (`settings["sources"][name]["path"]`, phase 5 P3) in a
+    `document_to_dict`-shaped dict, in place, skipping `None`. Used in both
+    directions by the `.tbaw` bundle (absolute inside the project dir <->
+    bundle-relative)."""
+    settings = data.get("settings")
+    sources = settings.get(SOURCES_KEY) if isinstance(settings, dict) else None
+    if isinstance(sources, dict):
+        for entry in sources.values():
+            if isinstance(entry, dict) and isinstance(entry.get("path"), str) and entry["path"]:
+                entry["path"] = fn(entry["path"])
     for clip in data.get("clips", []):
         if clip.get("original_audio_path"):
             clip["original_audio_path"] = fn(clip["original_audio_path"])
@@ -222,17 +242,27 @@ def document_from_dict(data: dict) -> Document:
         runs = []
         for r in data["runs"]:
             known, extra = _split_unknown(Run, r)
+            if "words" in known:
+                # Untrusted like the rest of the file: keep well-formed
+                # entries inside the run's text only.
+                known["words"] = clean_words(known["words"] if isinstance(known["words"], list) else [],
+                                              len(known.get("text") or ""))
             runs.append(Run(extra=extra, **known))
     else:
         runs = _runs_from_legacy_offsets(data.get("text", ""), clips, legacy_offsets)
 
-    return Document(
+    document = Document(
         runs=runs,
         clips=clips,
         tracks=tracks,
         characters=characters,
         settings=dict(data.get("settings", {})),
     )
+    # An imported recording clip's saved segments are a cache of its words;
+    # rebuild it so it never disagrees with them (a hand edit, a source
+    # file missing on open).
+    document.refresh_imported_segments()
+    return document
 
 
 def save_document(doc: Document, path: str) -> None:
