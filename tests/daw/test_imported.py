@@ -283,13 +283,17 @@ def test_realign_words_keeps_the_times_of_a_corrected_line():
     text, words = run_from_asr_words([("Helo", 1.0, 1.4), ("wrld", 1.4, 1.9)], A)
     heard = imported.heard_words(text, words)
     assert heard == [("Helo", 1.0, 1.4), ("wrld", 1.4, 1.9)]
-    # Both words respelled: nothing matches, so the line spreads over what
-    # was heard, which is the same two slots.
-    assert imported.realign_words("Hello world", heard, A) == [[0, 5, A, 1.0, 1.45], [6, 11, A, 1.45, 1.9]]
-    # One respelled, one matched: the matched word keeps its times exactly
-    # and the corrected first word gets what was heard before it.
-    assert imported.realign_words("Hello wrld", heard, A) == [[0, 5, A, 1.0, 1.4], [6, 10, A, 1.4, 1.9]]
-    # A word added past the end was never heard: it stays untimed.
+    # As many words as were heard: each keeps the time of the one in its place.
+    assert imported.realign_words("Hello world", heard, A) == [[0, 5, A, 1.0, 1.4], [6, 11, A, 1.4, 1.9]]
+    # A word dropped: the matched one keeps its times exactly.
+    assert imported.realign_words("wrld", heard, A) == [[0, 4, A, 1.4, 1.9]]
+    # A word added in front, before anything matched, gets what was heard
+    # before the first match; one added past the end was never heard and
+    # stays untimed.
+    early = [("uh", 0.2, 0.6)] + heard
+    assert imported.realign_words("Hi there Helo wrld", early, A) == [
+        [0, 2, A, 0.2, 0.6], [3, 8, A, 0.6, 1.0], [9, 13, A, 1.0, 1.4], [14, 18, A, 1.4, 1.9]]
+    assert imported.realign_words("So Helo wrld", heard, A) == [[3, 7, A, 1.0, 1.4], [8, 12, A, 1.4, 1.9]]
     assert imported.realign_words("Helo wrld again", heard, A) == [[0, 4, A, 1.0, 1.4], [5, 9, A, 1.4, 1.9]]
 
 

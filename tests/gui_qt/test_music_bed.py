@@ -26,6 +26,7 @@ def _wav(tmp_path, name="Theme Song.wav", seconds=4.0, value=0.1):
 def _import(qt_app, tmp_path, monkeypatch, at_s=0.0, **wav):
     path = _wav(tmp_path, **wav)
     monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (path, "")))
+    monkeypatch.setattr(qt_app, "_ask_audio_import", lambda path: {"kind": "bed"})
     asked = []
     monkeypatch.setattr(qt_app, "_ask_bed_placement", lambda playhead: asked.append(playhead) or at_s)
     before = {c.id for c in qt_app.document.clips}

@@ -320,12 +320,21 @@ def realign_words(text: str, heard: list, source: str) -> list:
     """`Run.words` for `text` aligned to `heard` (`[(word, start_s,
     end_s)]`, from Whisper or from the line as it was) with
     `wordalign.align`: a word that still matches keeps its times, a new or
-    respelled one takes the times around it. `align` gives the unmatched
-    words before the first match (or after the last) no length; here they
-    share what was heard before that match (or after it), so a corrected
-    first or last word keeps its audio. The text is never changed."""
+    respelled one takes the times around it. When the text has as many
+    words as were heard, each word takes the heard word in its place
+    instead, so a line whose spelling was corrected keeps every time.
+    `align` gives the unmatched words before the first match (or after the
+    last) no length; here they share what was heard before that match (or
+    after it), so a corrected first or last word keeps its audio. The text
+    is never changed."""
     from kokoro_gui.daw.wordalign import align
 
+    tokens = (text or "").split()
+    if tokens and len(tokens) == len(heard or []):
+        try:
+            return run_words_for_text(text, [[t, float(h[1]), float(h[2])] for t, h in zip(tokens, heard)], source)
+        except (TypeError, ValueError, IndexError):
+            pass
     rows = align(text, heard)
     timed = [i for i, row in enumerate(rows) if row[2] > row[1]]
     if rows and timed and heard:
