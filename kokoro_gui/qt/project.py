@@ -6,9 +6,10 @@ TB1-TB15): one zip holding `manifest.json`, `document.json`
 `project_settings` block: export defaults, workspace override, bundle
 options), every generated segment under `audio/generated/` named by its
 segment key, and every named asset a character or clip points at (`fx/`,
-`engines/<id>/...`). A `.json` project (the 4.0-preview format, the document
-shape plus a top-level `"project_settings"`) still opens and is migrated to
-`.tbaw` on open (`migrate_json_project`).
+`engines/<id>/...`), and, when `include_video` is on, the reference
+video under `video/` (phase 5, TB16). A `.json` project (the 4.0-preview
+format, the document shape plus a top-level `"project_settings"`) still
+opens and is migrated to `.tbaw` on open (`migrate_json_project`).
 
 The live project is a directory, `cache/projects/<project_id>/` (the
 "project dir"), extracted from the zip on Open and written by autosave
@@ -48,6 +49,7 @@ from kokoro_gui.engine.caching import RESERVED_SUFFIX, compute_cache_key, effect
 
 MAX_RECENT = 10
 PROJECT_FILTER = "KokoroGUI project (*.tbaw *.json)"
+VIDEO_FILTER = "Video (*.mp4 *.mov *.mkv *.webm *.avi *.m4v);;All files (*)"
 DEFAULT_EXTENSION = ".tbaw"
 
 FORMAT = "tbaw"
@@ -68,6 +70,9 @@ ENGINES_DIR = "engines"
 # Embedded subprojects (phase 4): `projects/<child project_id>.tbaw`, each a
 # complete bundle, stored uncompressed.
 PROJECTS_DIR = "projects"
+# The reference video (phase 5, TB16), when the `include_video` bundle
+# option is on: `video/<sha256[:16]>.<ext>`, stored uncompressed.
+VIDEO_DIR = "video"
 # A subproject's rendered mix, in its own project dir (phase 4, NP2):
 # `mixdown.<fmt>` plus `mixdown.json` recording the document digest it was
 # rendered from, its length and rate. Derived data: never bundled, always
@@ -83,16 +88,18 @@ CHILD_SOURCE_SEP = "#"
 # in a bundle (a directory a newer KokoroGUI or a fourth engine added) is
 # copied through byte for byte so a file survives a round trip.
 _OWNED_FILES = {MANIFEST, DOCUMENT, PROJECT_JSON}
-_OWNED_DIRS = (FX_DIR + "/", AUDIO_GENERATED + "/", AUDIO_IMPORTED + "/", PROJECTS_DIR + "/")
+_OWNED_DIRS = (FX_DIR + "/", AUDIO_GENERATED + "/", AUDIO_IMPORTED + "/", PROJECTS_DIR + "/", VIDEO_DIR + "/")
 # Entries extracted with the audio on the worker thread, not before the
-# first paint: the audio, and embedded children (each carries its own).
-_HEAVY_PREFIXES = ("audio/", PROJECTS_DIR + "/")
+# first paint: the audio, embedded children (each carries its own) and the
+# reference video.
+_HEAVY_PREFIXES = ("audio/", PROJECTS_DIR + "/", VIDEO_DIR + "/")
 # The project dir's own bookkeeping. A bundle carrying one of these names is
 # never extracted over it: `lock` is held open while Open runs, and
 # `session.json` is what the sweep and the recover prompt trust.
 _DIR_PRIVATE = {SESSION, LOCK, SESSION + ".tmp", DOCUMENT + ".tmp", PROJECT_JSON + ".tmp"}
 
-DEFAULT_BUNDLE_OPTIONS = {"include_generated_audio": True, "include_imported_audio": True, "audio_format": "wav"}
+DEFAULT_BUNDLE_OPTIONS = {"include_generated_audio": True, "include_imported_audio": True, "include_video": False,
+                          "audio_format": "wav"}
 
 # `torch.load` defaults to `weights_only=True` from 2.6, which is what makes
 # a `.pt` from someone else's bundle safe to load. Checked once at import.
@@ -117,6 +124,9 @@ class LoadedProject:
     # One-line notices for the status bar (a missing audio file, a version
     # difference), not errors.
     notices: list = field(default_factory=list)
+    # The reference video to play (`video_source`): the settings path when
+    # that file exists, else the bundled copy in the project dir, else None.
+    video_path: str | None = None
 
 
 @dataclass
@@ -724,16 +734,21 @@ def extract_small(info: BundleInfo, project_dir: str) -> None:
 
 
 def extract_audio(info: BundleInfo, project_dir: str, progress=None, cancelled=None) -> None:
-    """Step 5: `audio/` and embedded `projects/`, eagerly, meant for a
-    worker thread. `progress(done, total)` in bytes; `cancelled()` is
-    polled between entries."""
-    total = max(1, info.audio_bytes)
+    """Step 5: `audio/`, embedded `projects/` and `video/`, eagerly, meant
+    for a worker thread. The video is skipped when the path in
+    `project.json` is a file here (`bundled_video_needed`).
+    `progress(done, total)` in bytes; `cancelled()` is polled between
+    entries."""
+    skip_video = not bundled_video_needed(info)
+    total = max(1, heavy_bytes(info))
     done = 0
     with zipfile.ZipFile(info.path) as zf:
         for entry in info.entries:
             if cancelled is not None and cancelled():
                 return
             if not entry.filename.replace("\\", "/").startswith(_HEAVY_PREFIXES):
+                continue
+            if skip_video and _is_video_entry(entry):
                 continue
             _extract_entry(zf, entry, project_dir)
             done += entry.file_size
@@ -790,7 +805,8 @@ def load_project_dir(project_dir: str, project_id: str | None = None, manifest: 
     already extracted (clean, or ahead of its bundle)."""
     document, project_settings, notices = _load_dir(project_dir)
     return LoadedProject(document=document, project_settings=project_settings, project_dir=project_dir,
-                         project_id=project_id, manifest=dict(manifest or {}), notices=notices)
+                         project_id=project_id, manifest=dict(manifest or {}), notices=notices,
+                         video_path=video_source(project_settings, None, project_dir, manifest))
 
 
 def finish_open(info: BundleInfo, project_dir: str, engine_versions: dict | None = None,
@@ -825,7 +841,8 @@ def finish_open(info: BundleInfo, project_dir: str, engine_versions: dict | None
         })
 
     return LoadedProject(document=document, project_settings=project_settings, project_dir=project_dir,
-                         project_id=info.project_id, manifest=info.manifest, notices=notices)
+                         project_id=info.project_id, manifest=info.manifest, notices=notices,
+                         video_path=video_source(project_settings, info.path, project_dir, info.manifest))
 
 
 def session_matches_file(session: dict | None, info: BundleInfo) -> bool:
@@ -894,6 +911,147 @@ def import_audio_file(src_path: str, project_dir: str, max_bytes: int = MAX_IMPO
     shutil.copyfile(source, tmp)
     _replace_with_retries(tmp, target)
     return target
+
+
+# --- reference video (phase 5, TB16) -----------------------------------------------
+
+
+def video_settings(project_settings) -> dict | None:
+    """`project_settings["video"]` as `{"path": str, "offset_s": float}`, or
+    None when the project has no reference video."""
+    block = project_settings.get("video") if isinstance(project_settings, dict) else None
+    if not isinstance(block, dict):
+        return None
+    path = block.get("path")
+    if not isinstance(path, str) or not path.strip():
+        return None
+    try:
+        offset = float(block.get("offset_s") or 0.0)
+    except (TypeError, ValueError):
+        offset = 0.0
+    if offset != offset or offset in (float("inf"), float("-inf")):
+        offset = 0.0
+    return {"path": path, "offset_s": offset}
+
+
+def video_path_for(file_path: str, project_file: str | None) -> str:
+    """`file_path` as `project_settings["video"]["path"]`: relative to the
+    project's `.tbaw` when there is one on the same drive, else absolute
+    (the rule a linked subproject's path follows, NP4)."""
+    file_path = os.path.abspath(file_path)
+    if project_file:
+        base_dir = os.path.dirname(os.path.abspath(project_file))
+        if os.path.splitdrive(base_dir)[0].lower() == os.path.splitdrive(file_path)[0].lower():
+            return os.path.relpath(file_path, base_dir).replace("\\", "/")
+    return file_path
+
+
+def resolve_video_path(project_settings, project_file: str | None) -> str | None:
+    """The absolute path `project_settings["video"]["path"]` names, a
+    relative one taken from the folder of `project_file` (the `.tbaw`),
+    whether or not the file is there. None when there's no video, or a
+    relative path and no file to be relative to. The path comes from
+    `project.json`, so it's normalised and checked before anything reads it."""
+    block = video_settings(project_settings)
+    if block is None:
+        return None
+    raw = block["path"]
+    if os.path.isabs(raw):
+        candidate = raw
+    elif project_file:
+        candidate = os.path.join(os.path.dirname(os.path.abspath(project_file)), *raw.replace("\\", "/").split("/"))
+    else:
+        return None
+    real = os.path.realpath(os.path.abspath(candidate))
+    drive = os.path.splitdrive(real)[0]
+    if not real.startswith(drive + os.sep):
+        return None
+    return real
+
+
+def bundled_video_path(project_dir: str | None, manifest: dict | None = None) -> str | None:
+    """The reference video Open extracted into `<project_dir>/video/`: the
+    one `manifest.assets` names when it's there, else the first file in the
+    folder by name. None when there is none."""
+    if not project_dir:
+        return None
+    folder = os.path.realpath(os.path.join(project_dir, VIDEO_DIR))
+    if not os.path.isdir(folder):
+        return None
+    # The manifest's names are bundle data: each is checked to stay inside
+    # the folder like any other path read from a file.
+    assets = manifest.get("assets") if isinstance(manifest, dict) else None
+    names = [os.path.basename(k) for k in assets if isinstance(k, str) and k.startswith(VIDEO_DIR + "/")] \
+        if isinstance(assets, dict) else []
+    names += sorted(os.listdir(folder))
+    for name in names:
+        if not name or name.startswith(".") or name.endswith(".tmp"):
+            continue
+        full = os.path.realpath(os.path.join(folder, name))
+        if full.startswith(folder + os.sep) and os.path.isfile(full):
+            return full
+    return None
+
+
+def video_source(project_settings, project_file: str | None, project_dir: str | None,
+                 manifest: dict | None = None) -> str | None:
+    """The file the video dock plays and Save bundles: the settings path
+    when that file exists (TB16: it always wins), else the bundled copy in
+    the project dir, else None."""
+    if video_settings(project_settings) is None:
+        return None
+    path = resolve_video_path(project_settings, project_file)
+    if path and os.path.isfile(path):
+        return path
+    return bundled_video_path(project_dir, manifest)
+
+
+def _is_video_entry(info: zipfile.ZipInfo) -> bool:
+    return info.filename.replace("\\", "/").startswith(VIDEO_DIR + "/")
+
+
+def bundled_video_needed(info: BundleInfo) -> bool:
+    """Whether Open extracts the bundle's `video/` entry: only when the
+    bundle has one and the path its `project.json` names isn't a file on
+    this machine. Re-opening a bundle where the video already is skips
+    gigabytes (TB16)."""
+    if not any(_is_video_entry(e) for e in info.entries):
+        return False
+    try:
+        with zipfile.ZipFile(info.path) as zf:
+            settings = json.loads(zf.read(PROJECT_JSON).decode("utf-8"))
+    except (OSError, zipfile.BadZipFile, KeyError, json.JSONDecodeError, UnicodeDecodeError):
+        return True
+    path = resolve_video_path(settings, info.path)
+    return not (path and os.path.isfile(path))
+
+
+def heavy_bytes(info: BundleInfo) -> int:
+    """What `extract_audio` will write: `info.audio_bytes`, less the video
+    entry when Open skips it."""
+    if bundled_video_needed(info):
+        return info.audio_bytes
+    return info.audio_bytes - sum(e.file_size for e in info.entries if _is_video_entry(e))
+
+
+def video_extract_pending(info: BundleInfo, project_dir: str) -> bool:
+    """True when Open needs the bundled video and the project dir doesn't
+    hold it (an earlier Open skipped it because the path was there then),
+    so a clean dir can't be reused as it is."""
+    return bundled_video_needed(info) and bundled_video_path(project_dir, info.manifest) is None
+
+
+def _cached_video_digest(previous_index: dict, source: str, stat) -> str | None:
+    """The digest the last Save recorded for `source` when its size and
+    mtime haven't changed. Video entries are keyed by their bundle name,
+    which is the hash, so the lookup goes by the source path stored with them."""
+    for name, entry in (previous_index or {}).items():
+        if not (isinstance(name, str) and name.startswith(VIDEO_DIR + "/")):
+            continue
+        if isinstance(entry, list) and len(entry) == 4 and entry[3] == source and entry[0] == stat.st_size \
+                and abs(float(entry[1]) - stat.st_mtime) < 1e-6:
+            return entry[2]
+    return None
 
 
 def used_voice_names(document: Document) -> dict:
@@ -1024,6 +1182,9 @@ class SavePlan:
     # (absolute paths), which is what `session.json`'s `saved_digest`
     # compares against; the zip's copy has bundle-relative paths.
     dir_digest: str = ""
+    # The reference video to store under `video/` (`include_video` on), or
+    # None. Hashed by `write_bundle`, on the worker thread.
+    video_file: str | None = None
 
 
 def plan_save(document: Document, project_settings: dict, path: str, project_dir: str, project_id: str,
@@ -1071,6 +1232,11 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
         audio_files = [a for a in audio_files if not a[0].startswith(AUDIO_IMPORTED + "/")]
 
     assets, engines, warnings = collect_assets(document, backend_for, project_dir, fx_presets_dir)
+    video_file = None
+    if options["include_video"] and video_settings(project_settings) is not None:
+        video_file = video_source(project_settings, path, project_dir, previous_manifest)
+        if video_file is None:
+            warnings.append("reference video not found; not bundled")
     now = datetime.datetime.now().replace(microsecond=0).isoformat()
     created = (previous_manifest or {}).get("created") or now
     manifest = {
@@ -1086,6 +1252,7 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
             "imported_audio": bool(options["include_imported_audio"])
             and any(name.startswith(AUDIO_IMPORTED + "/") for name, _src in audio_files),
             "projects": embedded,
+            "video": video_file is not None,
         },
         "audio": {"format": options["audio_format"]},
         "stats": project_stats(document),
@@ -1099,7 +1266,7 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
         project_bytes=json.dumps(dict(project_settings or {}), indent=2).encode("utf-8"),
         assets=assets, audio_files=audio_files,
         previous_asset_index=dict((previous_session or {}).get("asset_index") or {}),
-        dir_digest=document_digest(dir_document, dir_project),
+        dir_digest=document_digest(dir_document, dir_project), video_file=video_file,
     )
     return plan, warnings
 
@@ -1151,8 +1318,25 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
         asset_index[bundle_path] = [stat.st_size, stat.st_mtime, digest]
         manifest["assets"][bundle_path] = digest
 
+    # The reference video: named by its hash, which is only recomputed when
+    # the file's size or mtime changed since the last Save.
+    video = None
+    if plan.video_file:
+        try:
+            stat = os.stat(plan.video_file)
+        except OSError:
+            stat = None
+        if stat is not None:
+            digest = _cached_video_digest(plan.previous_asset_index, plan.video_file, stat) \
+                or _sha256_file(plan.video_file)
+            name = f"{VIDEO_DIR}/{digest.split(':', 1)[-1][:16]}.{_import_extension(plan.video_file)}"
+            video = (name, plan.video_file)
+            asset_index[name] = [stat.st_size, stat.st_mtime, digest, plan.video_file]
+            manifest["assets"][name] = digest
+    manifest["includes"] = dict(manifest.get("includes") or {}, video=video is not None)
+
     needed = len(plan.document_bytes) + len(plan.project_bytes)
-    for _bundle_path, source in plan.assets + plan.audio_files:
+    for _bundle_path, source in plan.assets + plan.audio_files + ([video] if video else []):
         try:
             needed += os.path.getsize(source)
         except OSError:
@@ -1185,7 +1369,7 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
                 if os.path.isfile(source):
                     zf.write(source, bundle_path, compress_type=zipfile.ZIP_DEFLATED)
                     done += os.path.getsize(source)
-            for bundle_path, source in plan.audio_files:
+            for bundle_path, source in plan.audio_files + ([video] if video else []):
                 if not os.path.isfile(source):
                     continue
                 zf.write(source, bundle_path, compress_type=zipfile.ZIP_STORED)

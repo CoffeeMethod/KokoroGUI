@@ -374,6 +374,182 @@ def test_referenced_audio_and_close_time_gc_keep_imported_files(tmp_path, isolat
     assert os.path.isfile(imported)
 
 
+# -- reference video (phase 5, TB16) -------------------------------------------------
+
+_VIDEO_BYTES = b"\0\0\0\x18ftypmp42" + bytes(range(256)) * 4
+
+
+def _video_file(tmp_path, name="clip.mp4", payload=_VIDEO_BYTES):
+    """Any file named .mp4 does: nothing in the bundle code parses it."""
+    path = tmp_path / "footage" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+    return str(path)
+
+
+def _video_settings(video, bundle_path, include=None, offset=1.5):
+    settings = {"video": {"path": project_io.video_path_for(video, bundle_path), "offset_s": offset}}
+    if include is not None:
+        settings["bundle"] = {"include_video": include}
+    return settings
+
+
+def test_include_video_defaults_off_and_writes_only_the_relative_path(tmp_path, isolated_dirs):
+    assert project_io.bundle_options({})["include_video"] is False
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _seg = _document_with_audio(project_dir)
+    video = _video_file(tmp_path)
+    path = str(tmp_path / "proj.tbaw")
+
+    result = project_io.save_project(doc, path, _video_settings(video, path), project_dir, project_id)
+
+    with zipfile.ZipFile(path) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+        settings = json.loads(zf.read("project.json"))
+        assert not any(n.startswith("video/") for n in zf.namelist())
+    assert settings["video"] == {"path": "footage/clip.mp4", "offset_s": 1.5}
+    assert manifest["includes"]["video"] is False
+    assert not any(k.startswith("video/") for k in manifest["assets"])
+    assert not any(k.startswith("video/") for k in result.asset_index)
+
+    info = project_io.inspect_bundle(path)
+    other = str(tmp_path / "other")
+    project_io.extract_small(info, other)
+    loaded = project_io.finish_open(info, other)
+    assert loaded.video_path == os.path.realpath(video)
+
+
+def test_include_video_on_stores_it_uncompressed_under_its_hash(tmp_path, isolated_dirs):
+    import hashlib
+
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _seg = _document_with_audio(project_dir)
+    video = _video_file(tmp_path)
+    path = str(tmp_path / "proj.tbaw")
+
+    result = project_io.save_project(doc, path, _video_settings(video, path, include=True), project_dir, project_id)
+
+    digest = hashlib.sha256(_VIDEO_BYTES).hexdigest()
+    name = f"video/{digest[:16]}.mp4"
+    with zipfile.ZipFile(path) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+        assert zf.getinfo(name).compress_type == zipfile.ZIP_STORED
+        assert zf.read(name) == _VIDEO_BYTES
+        assert json.loads(zf.read("project.json"))["video"]["path"] == "footage/clip.mp4"
+    assert manifest["includes"]["video"] is True
+    assert manifest["assets"][name] == "sha256:" + digest
+    assert result.asset_index[name][2] == manifest["assets"][name]
+
+
+def test_open_prefers_the_video_path_and_falls_back_to_the_bundled_copy(tmp_path, isolated_dirs):
+    import hashlib
+
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _seg = _document_with_audio(project_dir)
+    video = _video_file(tmp_path)
+    path = str(tmp_path / "proj.tbaw")
+    project_io.save_project(doc, path, _video_settings(video, path, include=True), project_dir, project_id)
+    bundled_name = f"{hashlib.sha256(_VIDEO_BYTES).hexdigest()[:16]}.mp4"
+
+    # The video is still at its path: it wins, and Open doesn't extract
+    # the bundled copy for nothing.
+    info = project_io.inspect_bundle(path)
+    assert project_io.bundled_video_needed(info) is False
+    assert project_io.heavy_bytes(info) == info.audio_bytes - len(_VIDEO_BYTES)
+    here = str(tmp_path / "here")
+    project_io.extract_small(info, here)
+    project_io.extract_audio(info, here)
+    loaded = project_io.finish_open(info, here)
+    assert loaded.video_path == os.path.realpath(video)
+    assert not os.path.exists(os.path.join(here, "video"))
+    assert os.path.isfile(os.path.join(here, "audio", "generated", "abc_0.wav"))
+
+    # Handed to someone without the file: Open extracts the copy and plays it.
+    os.remove(video)
+    assert project_io.bundled_video_needed(info) is True
+    assert project_io.heavy_bytes(info) == info.audio_bytes
+    elsewhere = str(tmp_path / "elsewhere")
+    project_io.extract_small(info, elsewhere)
+    project_io.extract_audio(info, elsewhere)
+    loaded = project_io.finish_open(info, elsewhere)
+    assert loaded.video_path == os.path.join(elsewhere, "video", bundled_name)
+    with open(loaded.video_path, "rb") as f:
+        assert f.read() == _VIDEO_BYTES
+    assert loaded.project_settings["video"]["path"] == "footage/clip.mp4"  # the record is unchanged
+    # The clean dir from the first Open lacks the copy, so it can't be reused.
+    assert project_io.video_extract_pending(info, here) is True
+    assert project_io.video_extract_pending(info, elsewhere) is False
+
+    # Saving again from the fallback copy keeps the video in the bundle.
+    resaved = str(tmp_path / "resaved.tbaw")
+    project_io.save_project(loaded.document, resaved, loaded.project_settings, elsewhere, project_id)
+    with zipfile.ZipFile(resaved) as zf:
+        assert f"video/{bundled_name}" in zf.namelist()
+
+
+def test_video_hash_is_reused_while_size_and_mtime_hold(tmp_path, isolated_dirs, monkeypatch):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _seg = _document_with_audio(project_dir)
+    video = _video_file(tmp_path)
+    path = str(tmp_path / "proj.tbaw")
+    settings = _video_settings(video, path, include=True)
+    hashed = []
+    real_sha = project_io._sha256_file
+    monkeypatch.setattr(project_io, "_sha256_file", lambda p: hashed.append(p) or real_sha(p))
+
+    project_io.save_project(doc, path, settings, project_dir, project_id)
+    assert hashed == [os.path.realpath(video)]
+    hashed.clear()
+    project_io.save_project(doc, path, settings, project_dir, project_id)
+    assert hashed == []
+
+    os.utime(video, (1_000_000_000, 1_000_000_000))
+    project_io.save_project(doc, path, settings, project_dir, project_id)
+    assert hashed == [os.path.realpath(video)]
+
+
+def test_turning_include_video_off_drops_the_old_entry(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _seg = _document_with_audio(project_dir)
+    video = _video_file(tmp_path)
+    path = str(tmp_path / "proj.tbaw")
+    project_io.save_project(doc, path, _video_settings(video, path, include=True), project_dir, project_id)
+    project_io.save_project(doc, path, _video_settings(video, path, include=False), project_dir, project_id)
+    with zipfile.ZipFile(path) as zf:
+        assert not any(n.startswith("video/") for n in zf.namelist())
+        assert json.loads(zf.read("manifest.json"))["includes"]["video"] is False
+
+
+def test_include_video_with_the_file_missing_warns_and_bundles_nothing(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _seg = _document_with_audio(project_dir)
+    path = str(tmp_path / "proj.tbaw")
+    settings = {"video": {"path": "footage/gone.mp4", "offset_s": 0.0}, "bundle": {"include_video": True}}
+    plan, warnings = project_io.plan_save(doc, settings, path, project_dir, project_id, lambda _id: None,
+                                          str(tmp_path / "fx"))
+    assert plan.video_file is None
+    assert plan.manifest["includes"]["video"] is False
+    assert "reference video not found; not bundled" in warnings
+
+
+def test_video_paths_are_relative_to_the_bundle_and_normalised(tmp_path):
+    bundle = str(tmp_path / "work" / "proj.tbaw")
+    video = str(tmp_path / "footage" / "clip.mp4")
+    assert project_io.video_path_for(video, bundle) == "../footage/clip.mp4"
+    assert project_io.video_path_for(video, None) == os.path.abspath(video)
+    settings = {"video": {"path": "../footage/clip.mp4"}}
+    assert project_io.resolve_video_path(settings, bundle) == os.path.realpath(video)
+    # A relative path with no file to be relative to names nothing.
+    assert project_io.resolve_video_path(settings, None) is None
+    # An absolute path is normalised before anything reads it.
+    dotted = {"video": {"path": str(tmp_path / "work" / ".." / "footage" / "clip.mp4")}}
+    assert project_io.resolve_video_path(dotted, None) == os.path.realpath(video)
+    for bad in ({}, {"video": "clip.mp4"}, {"video": {"path": ""}}, {"video": {"path": 7}}):
+        assert project_io.resolve_video_path(bad, bundle) is None
+        assert project_io.video_source(bad, bundle, str(tmp_path)) is None
+    assert project_io.video_settings({"video": {"path": "a.mp4", "offset_s": "x"}})["offset_s"] == 0.0
+
+
 def test_open_never_extracts_the_dirs_own_session_or_lock(tmp_path, isolated_dirs):
     path = str(tmp_path / "planted.tbaw")
     _write_bundle(path, _manifest(), {"session.json": b'{"dirty": true, "source_path": "/elsewhere"}',
@@ -1033,7 +1209,8 @@ def test_bundle_toggles_live_in_the_export_dialog_and_feed_the_clip_config(qt_ap
     run_export(qt_app, dialog.values(), bundle=dialog.bundle_values())  # no clips: nothing scheduled
 
     assert qt_app.project_settings["bundle"] == {
-        "include_generated_audio": False, "include_imported_audio": True, "audio_format": "flac",
+        "include_generated_audio": False, "include_imported_audio": True, "include_video": False,
+        "audio_format": "flac",
     }
     clip = _generated_clip(qt_app)
     assert qt_app._assemble_clip_config(clip)["format"] == "flac"
