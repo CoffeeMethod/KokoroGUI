@@ -94,7 +94,7 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
     into the impulse response library (`presets/fx/ir/`). Save bundles every impulse response the
     project uses, and a project's own copy wins over the library's. A missing one plays dry and
     logs a warning.
--   **Music beds with ducking.** File > Import Audio... adds a WAV, FLAC, OGG, MP3 or AIFF file
+-   **Music beds with ducking.** File > Import Audio... > "Music bed" adds a WAV, FLAC, OGG, MP3 or AIFF file
     as a music bed on a Music track, locked in time at 0:00 or at the playhead, with its file
     name as a read-only line at the end of the transcript. Drag a bed's edges to trim it, and
     right-click for Loop (then drag the right edge to set how long it runs), Reset trim, Lock in
@@ -102,13 +102,19 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
     clips on tracks without `D` play, by Settings > Project > Ducking (default -12 dB). The
     original dialogue neither ducks nor is ducked. Export sounds the same as playback. A project
     with imported audio needs this version or newer to open.
-<!-- P3 GUI: draft bullet, adjust to the UI once it lands.
--   **Edit a recording as text.** File > Import Audio > "Recording to edit as text" transcribes
-    a recording and puts its words in the transcript with their timing ... deleting words cuts
-    the audio (5 ms crossfade); typed text has no character and splits the recording around it;
-    assigning a character makes it ordinary TTS; cut and paste carry the audio; timed words are
-    underlined. The recording is bundled under audio/imported/.
--->
+-   **Edit a recording as text.** File > Import Audio... > "Recording to edit as text" puts a
+    recording's words in the transcript, each one tied to where it was said. The transcript
+    comes from Whisper (in the background, with progress) or from an SRT, VTT or ASS caption
+    file, optionally with "Refine word timing with Whisper". A review step lists each clip with a
+    play button; a corrected word keeps its place in the recording. You pick one speaker for the
+    whole recording from your voice-cloning characters, or "Unknown speaker"; a caption file's
+    speaker names go through the same mapping dialog as subtitles. Then edit the text and the
+    audio follows: delete words and the recording closes up with a 5 ms crossfade, cut, copy,
+    paste or drag words and their audio moves with them (into another project too). Text you
+    type inside a recording has no audio: it shows grey with a hollow circle in the gutter and
+    splits the recording around it until you assign a character, which makes it an ordinary TTS
+    clip. Recorded words have a faint underline and recording clips get a play button in the
+    gutter. The recording is saved in the project under `audio/imported/`.
 
 ## New in 4.0.0-beta.3
 

@@ -989,7 +989,7 @@ class SubprojectsMixin:
         child_document = Document(runs=runs, clips=clips, tracks=tracks,
                                   characters=self._seed_child_characters(document, moved), settings=settings)
         child_document._normalize_runs()
-        _copy_imported_audio(child_document, project_dir)
+        _copy_imported_audio(child_document, project_dir, parent.project_dir)
         generated = os.path.join(project_dir, *project_io.AUDIO_GENERATED.split("/"))
         os.makedirs(generated, exist_ok=True)
         for clip in child_document.clips:
@@ -1179,14 +1179,17 @@ class SubprojectsMixin:
         self.focus = self.level = self.root
 
 
-def _copy_imported_audio(document, project_dir: str) -> None:
+def _copy_imported_audio(document, project_dir: str, parent_dir: str | None = None) -> None:
     """New Subproject's imported audio (phase 5 P3): each recording source
-    the moved text's words use, and each moved music bed's file, is copied
+    the moved text's words use, each moved music bed's file and the
+    parent's source track (D5, a path relative to `parent_dir`) are copied
     into the child's `audio/imported/` (`project.import_audio_file`) and
-    named there, so the child plays and saves it from its own dir. The
+    named there, so the child plays and saves them from its own dir. The
     child's `settings["sources"]` keeps only the sources it uses; one whose
-    file is missing stays listed with no path. Recording clips' segments
-    are rebuilt on the copies."""
+    file is missing stays listed with no path. A source track whose file
+    is missing is dropped. Recording clips' segments are rebuilt on the
+    copies."""
+    from kokoro_gui.daw.reference import SOURCE_TRACK_KEY
     from kokoro_gui.daw import imported
     from kokoro_gui.daw.models import SOURCES_KEY
 
@@ -1212,6 +1215,20 @@ def _copy_imported_audio(document, project_dir: str) -> None:
                 clip.original_audio_path = project_io.import_audio_file(clip.original_audio_path, project_dir)
             except (OSError, project_io.ProjectError):
                 pass
+    if SOURCE_TRACK_KEY in document.settings:
+        source_track = project_io.source_track_path(document, parent_dir)
+        block = dict(document.settings[SOURCE_TRACK_KEY]) if isinstance(
+            document.settings[SOURCE_TRACK_KEY], dict) else {}
+        try:
+            copied = project_io.import_audio_file(source_track, project_dir) if source_track else None
+        except (OSError, project_io.ProjectError):
+            copied = None
+        relpath = project_io.source_track_relpath(copied, project_dir) if copied else None
+        if relpath:
+            block["path"] = relpath
+            document.settings[SOURCE_TRACK_KEY] = block
+        else:
+            document.settings.pop(SOURCE_TRACK_KEY, None)
     document.refresh_imported_segments()
 
 

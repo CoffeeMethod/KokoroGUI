@@ -151,3 +151,16 @@ def test_file_menu_import_source_track_asks_for_an_audio_file(qt_app, tmp_path, 
     assert "*.wav" in filters[0]
     assert qt_app.document.settings["source_track"]["path"].startswith("audio/imported/")
     assert qt_app.import_source_track_action in qt_app.file_menu.actions()
+
+
+def test_new_subproject_copies_the_source_track_into_the_child(qt_app, tmp_path):
+    clip_ids = _with_cues_and_track(qt_app, tmp_path)
+    parent_dir = qt_app.project_dir
+    extent = qt_app.document.clip_extent(clip_ids[0])
+
+    child = qt_app.new_subproject(*extent, title="Scene")
+
+    path = project_io.source_track_path(child.document, child.project_dir)
+    assert path is not None and path.startswith(child.project_dir)
+    assert not path.startswith(parent_dir + "/")
+    assert child.document.settings["source_track"]["path"].startswith("audio/imported/")

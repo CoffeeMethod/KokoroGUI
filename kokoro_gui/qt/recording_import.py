@@ -163,7 +163,7 @@ class ImportAudioDialog(QDialog):
         self.setWindowTitle("Import audio")
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(f"Import {file_name} as:"))
-        self.bed_radio = QRadioButton("Music bed (plays under the speech, ducked)")
+        self.bed_radio = QRadioButton("Music bed (plays under the speech)")
         self.recording_radio = QRadioButton("Recording to edit as text")
         self.bed_radio.setChecked(True)
         kinds = QButtonGroup(self)
