@@ -284,7 +284,8 @@ class TimelineDock(QDockWidget):
                 self._pending_results[clip_id] = results
             self.clipGenerationFinished.emit(clip_id, success, error)
 
-        future = self.app.engine.worker.run_coro(self.app.engine.generate_clip_audio((0, text, config)))
+        engine = self.app.backend_for(clip).engine
+        future = engine.worker.run_coro(engine.generate_clip_audio((0, text, config)))
         future.add_done_callback(_done)
 
     def on_lock_in_time_requested(self, clip_id: str, pinned: bool) -> None:
@@ -525,11 +526,16 @@ class TimelineDock(QDockWidget):
         if not dirty:
             return
 
+        # One batch per engine: each clip generates with its character's
+        # backend, and the backends run side by side on their own workers.
+        groups: dict = {}
         clips_with_configs = []
         for clip in dirty:
             text = self.app.document.clip_text(clip)
             config = self.app._assemble_clip_config(clip)
             clips_with_configs.append((clip.id, text, config))
+            engine = self.app.backend_for(clip).engine
+            groups.setdefault(id(engine), (engine, []))[1].append((clip.id, text, config))
 
         total = len(clips_with_configs)
         self._batch_completed = 0
@@ -542,27 +548,36 @@ class TimelineDock(QDockWidget):
                 completed = self._batch_completed
             self.batchGenerationProgress.emit(completed, total, clip_id)
 
-        def _done(future):
-            try:
-                outcomes = future.result()
-            except Exception as e:
-                # An exception here means the batch never even ran a single
-                # clip (e.g. the coroutine itself failed to schedule) -
-                # generate_dirty_clips already catches every per-clip
-                # exception internally via return_exceptions=True, so this
-                # branch is the "total failure" case, not a per-clip one.
-                outcomes = [
-                    {"clip_id": cid, "success": False, "results": [], "error": str(e), "cancelled": False}
-                    for cid, _text, _cfg in clips_with_configs
-                ]
+        outcomes: list = []
+        remaining = [len(groups)]
 
-            self._pending_batch = outcomes
-            self._batchGenerationRaw.emit()
+        def _done_for(group):
+            def _done(future):
+                try:
+                    group_outcomes = future.result()
+                except Exception as e:
+                    # An exception here means the batch never even ran a
+                    # single clip (e.g. the coroutine itself failed to
+                    # schedule) - generate_dirty_clips already catches every
+                    # per-clip exception internally via
+                    # return_exceptions=True, so this branch is the "total
+                    # failure" case, not a per-clip one.
+                    group_outcomes = [
+                        {"clip_id": cid, "success": False, "results": [], "error": str(e), "cancelled": False}
+                        for cid, _text, _cfg in group
+                    ]
+                with self._batch_progress_lock:
+                    outcomes.extend(group_outcomes)
+                    remaining[0] -= 1
+                    last = remaining[0] == 0
+                if last:
+                    self._pending_batch = outcomes
+                    self._batchGenerationRaw.emit()
+            return _done
 
-        future = self.app.engine.worker.run_coro(
-            self.app.engine.generate_dirty_clips(clips_with_configs, progress_callback=_on_clip_progress)
-        )
-        future.add_done_callback(_done)
+        for engine, group in groups.values():
+            future = engine.worker.run_coro(engine.generate_dirty_clips(group, progress_callback=_on_clip_progress))
+            future.add_done_callback(_done_for(group))
 
     def _on_batch_generation_raw(self) -> None:
         self.app.set_ui_state(False)

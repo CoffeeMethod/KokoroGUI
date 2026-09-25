@@ -136,7 +136,7 @@ class DummyBackendAdapter(BackendHooksMixin):
     def __init__(self, engine=None):
         """Same convention as `KokoroBackendAdapter`: wraps an existing
         `DummyEngine` when given (tests), otherwise builds its own - used
-        when the GUI switches its active backend at runtime."""
+        when the GUI makes the backend resident for a character."""
         self._engine = engine if engine is not None else DummyEngine()
 
     @property

@@ -22,9 +22,9 @@ from PySide6.QtCore import QObject, Signal
 
 
 class EngineSignalBridge(QObject):
-    """One instance per active engine. Reconnected (not reused) across
-    `switch_engine` calls so a stale engine's callbacks never emit into a
-    dock the app has already rebuilt for a different backend."""
+    """One instance per resident engine (app.py's `_add_backend`): each
+    backend's callbacks reach the app through its own bridge, so several
+    engines can report at once."""
 
     # func(msg: str, is_error: bool) - kokoro_engine.py:72
     status = Signal(str, bool)

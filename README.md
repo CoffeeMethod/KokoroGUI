@@ -272,8 +272,9 @@ real backend, and projects that live in one file.
         pipeline per worker thread for true parallel generation.
     -   **Audio8** (voice cloning): zero-shot cloning from a reference WAV + transcript, 44,100 Hz,
         one shared lock-serialized model.
-    -   Both register behind the same backend abstraction, so switching engines (Options > Engine) swaps
-        voices, sample rate, and the docks that make sense for that engine, live.
+    -   Both register behind the same backend abstraction. Each character picks its engine in Edit >
+        Characters, so one project can mix Kokoro and Audio8 voices; the Settings and Voices tabs
+        follow the selected clip's character.
 -   **Generation modes:**
     -   **Standard:** parallel batch processing across a thread pool.
     -   **JIT (real-time):** streamed generation with immediate playback, for engines fast enough

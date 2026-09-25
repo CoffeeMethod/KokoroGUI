@@ -27,8 +27,10 @@ _TRANSCRIBE_TARGET = "kokoro_gui.qt.docks.voice_clone_dock.transcribe_wav"
 
 
 def _switch_to_audio8(qt_app, monkeypatch):
+    """The first character generates with Audio8 (engine follows the
+    character), which makes Audio8 the active backend."""
     monkeypatch.setattr(audio8_tts, "_get_model", lambda: (object(), object()))
-    qt_app.switch_engine("audio8")
+    assert qt_app.set_character_engine(qt_app.document.characters[0], "audio8")
 
 
 def _write_wav(path):
@@ -48,7 +50,7 @@ def test_audio8_backend_shows_voice_clone_dock_and_hides_mixing(qt_app, monkeypa
 
 def test_switch_back_to_kokoro_hides_voice_clone_dock_and_restores_mixing(qt_app, monkeypatch):
     _switch_to_audio8(qt_app, monkeypatch)
-    qt_app.switch_engine("kokoro")
+    assert qt_app.set_character_engine(qt_app.document.characters[0], "kokoro")
     assert qt_app.voice_clone_dock is None
     assert qt_app.mixing_dock is not None
 

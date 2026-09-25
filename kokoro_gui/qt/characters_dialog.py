@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.daw import library as library_ops
+from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character
 from kokoro_gui.qt import theme
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
@@ -133,10 +134,17 @@ class CharactersDialog(QDialog):
         color_row.addWidget(self.color_edit, 1)
         form.addRow("Color:", color_row)
 
+        # The engine this character generates with (grill V3): each
+        # character picks its own; the app keeps every engine in use
+        # resident.
+        self.engine_combo = QComboBox()
+        for engine_id in engine_registry.list_engines():
+            self.engine_combo.addItem(engine_registry.get_display_name(engine_id), engine_id)
+        self.engine_combo.activated.connect(lambda _i: self._on_engine_picked())
+        form.addRow("Engine:", self.engine_combo)
+
         self.voice_combo = QComboBox()
         self.voice_combo.setEditable(True)
-        for voice in self.app.get_all_voices():
-            self.voice_combo.addItem(voice)
         self.voice_combo.currentTextChanged.connect(self._on_voice_changed)
         form.addRow("Voice:", self.voice_combo)
 
@@ -232,7 +240,8 @@ class CharactersDialog(QDialog):
         self._loading = True
         try:
             enabled = character is not None
-            for w in (self.name_edit, self.color_btn, self.color_edit, self.voice_combo, self.fx_combo, self.remove_btn):
+            for w in (self.name_edit, self.color_btn, self.color_edit, self.engine_combo, self.voice_combo,
+                      self.fx_combo, self.remove_btn):
                 w.setEnabled(enabled)
             self._show_scope(character)
             if character is None:
@@ -242,6 +251,9 @@ class CharactersDialog(QDialog):
                 return
             self.name_edit.setText(character.name)
             self._set_color_widgets(character.highlight_color)
+            index = self.engine_combo.findData(character.backend_id or "kokoro")
+            self.engine_combo.setCurrentIndex(max(0, index))
+            self._fill_voices(character)
             voice = character.preset_data.get("voice", "")
             if voice and self.voice_combo.findText(voice) < 0:
                 self.voice_combo.addItem(voice)
@@ -265,7 +277,7 @@ class CharactersDialog(QDialog):
     def _reference_combo(self, value: str) -> QComboBox:
         combo = QComboBox()
         combo.setEditable(True)
-        for voice in self.app.get_all_voices():
+        for voice in self.app.get_all_voices(backend=self.app.backend_for_character(self._current)):
             combo.addItem(voice)
         if value and combo.findText(value) < 0:
             combo.addItem(value)
@@ -378,6 +390,29 @@ class CharactersDialog(QDialog):
         if item is not None:
             item.setForeground(QColor(color))
         self._changed()
+
+    def _fill_voices(self, character) -> None:
+        """The voice list of the character's own engine."""
+        self.voice_combo.clear()
+        for voice in self.app.get_all_voices(backend=self.app.backend_for_character(character)):
+            self.voice_combo.addItem(voice)
+
+    def _on_engine_picked(self) -> None:
+        engine_id = self.engine_combo.currentData()
+        self.set_engine(engine_id)
+
+    def set_engine(self, engine_id: str) -> bool:
+        """Switches the current character to `engine_id` (and, when linked,
+        its library entry). Refused while a job runs."""
+        character = self._current
+        if character is None or not engine_id or engine_id == (character.backend_id or "kokoro"):
+            return False
+        if not self.app.set_character_engine(character, engine_id):
+            self._show(character)
+            return False
+        self._show(character)
+        self._changed()
+        return True
 
     def _on_voice_changed(self, text: str) -> None:
         if self._loading or self._current is None:

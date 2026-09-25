@@ -45,8 +45,8 @@ class KokoroBackendAdapter(BackendHooksMixin):
         """`engine`, when given, is an existing `KokoroEngine` instance the
         adapter wraps rather than constructing its own (used by the GUI at
         startup and by tests). When omitted, the adapter builds a fresh
-        `KokoroEngine()` itself - used when switching the GUI's active
-        backend at runtime (see the Qt frontend's `switch_engine`), where
+        `KokoroEngine()` itself - used when the GUI makes a backend
+        resident on first use (the Qt frontend's `_backend_for`), where
         nothing already owns an engine instance to hand in."""
         self._engine = engine if engine is not None else kokoro_engine.KokoroEngine()
 

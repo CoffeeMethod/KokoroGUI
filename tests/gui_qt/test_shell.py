@@ -30,9 +30,10 @@ def test_edit_menu_actions(qt_app):
     assert _action_texts(qt_app.edit_menu) == ["Undo", "Redo", "Cut", "Copy", "Paste", "Characters..."]
 
 
-def test_options_menu_holds_engine_device_theme_and_toggles(qt_app):
+def test_options_menu_holds_device_theme_and_toggles(qt_app):
+    # No Engine menu: each character picks its engine (grill V3).
     texts = _action_texts(qt_app.options_menu)
-    assert texts[:3] == ["Engine", "Device", "Theme"]
+    assert texts[:2] == ["Device", "Theme"]
     assert "Copy carries character/FX" in texts
     assert "Paste splits character/FX" in texts
     assert any(t.startswith("JIT streaming") for t in texts)
@@ -78,9 +79,10 @@ def test_all_panels_are_docks_in_the_grid(qt_app):
 
 
 def test_voices_tab_keeps_its_title_across_engines(qt_app):
-    qt_app.switch_engine("dummy")
+    character = qt_app.document.characters[0]
+    assert qt_app.set_character_engine(character, "dummy")
     assert qt_app.mixing_dock is None and qt_app.voice_clone_dock is None
-    qt_app.switch_engine("kokoro")
+    assert qt_app.set_character_engine(character, "kokoro")
     assert qt_app.mixing_dock.windowTitle() == "Voices"
     assert qt_app.mixing_dock in qt_app.tabifiedDockWidgets(qt_app.settings_dock)
 

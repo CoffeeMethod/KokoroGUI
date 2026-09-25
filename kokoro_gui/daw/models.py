@@ -291,7 +291,7 @@ class Document:
     undo_stack: Optional[UndoStack] = field(default=None, init=False, repr=False)
     # Runtime-only like `undo_stack`: `(text, clip, engine_version=None) ->
     # segment key`, set by the app (kokoro_gui/qt/app.py's
-    # `_switch_document`) as a closure over the active backend and the
+    # `_switch_document`) as a closure over each clip's backend and the
     # project dir, since this daw layer has neither. `dirty_clips` hands it
     # to `dirty.is_clip_dirty`; unset (tests, headless use) the check falls
     # back to the name-only `compute_cache_key`. Never serialized.

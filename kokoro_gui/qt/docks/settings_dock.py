@@ -211,7 +211,7 @@ class SettingsDock(QDockWidget):
             self.scope_fields.clear()
             self.scope_group.hide()
 
-    # --- schema form (rebuilt on selection change AND on engine switch) ---
+    # --- schema form (rebuilt on selection change AND on a character's engine change) ---
 
     def _project_default_snapshot(self) -> dict:
         """A valid `_none_values`-shaped dict sourced purely from
@@ -299,8 +299,9 @@ class SettingsDock(QDockWidget):
                     widget.setEnabled(False)
 
     def rebuild_schema_form(self) -> None:
-        """Called by app.py's switch_engine - re-renders this dock's schema
-        fields for the newly-active backend, keeping whatever
+        """Called by app.py's `set_character_engine` - re-renders this
+        dock's schema fields for the active backend (the selected clip's or
+        character's engine, else the first character's), keeping whatever
         clip/character/none mode is currently selected."""
         self._build_schema_form()
 
