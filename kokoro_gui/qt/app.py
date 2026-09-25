@@ -43,11 +43,12 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBo
 from kokoro_engine import KokoroEngine
 from kokoro_gui.daw import library as character_library, wordalign
 from kokoro_gui.daw.migration import import_presets_to_library, link_exact_matches
-from kokoro_gui.daw.models import Document
+from kokoro_gui.daw import subtitles
+from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character, Document
 from kokoro_gui.daw.arrangement import compute_arrangement, segment_timeline
 from kokoro_gui.daw.mixplan import clip_mixes
 from kokoro_gui.daw.auto_split import plan_auto_split_clips, plan_pause_gaps
-from kokoro_gui.daw.undo import AssignCharacterCommand
+from kokoro_gui.daw.undo import AssignCharacterCommand, ImportCuesCommand
 from kokoro_gui.engine import caching
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
@@ -55,6 +56,9 @@ from kokoro_gui.qt import settings as qt_settings
 from kokoro_gui.qt.open_projects import OpenProject
 from kokoro_gui.qt.subprojects import ParentStore, SubprojectsMixin
 from kokoro_gui.qt.selection import SelectionModel
+from kokoro_gui.qt.speaker_mapping_dialog import (
+    NARRATOR, NO_SPEAKER, SpeakerMappingDialog, resolve_mapping, speaker_rows,
+)
 from kokoro_gui.qt.signals import EngineSignalBridge, wire_engine
 from kokoro_gui.qt.workspace import ADVANCED, SIMPLE, WorkspaceManager
 
@@ -622,6 +626,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.file_menu.addSeparator()
         self.import_text_action = self._action("Import &Text...", self.import_text_dialog)
         self.file_menu.addAction(self.import_text_action)
+        self.import_subtitles_action = self._action("Import S&ubtitles...", self.import_subtitles_dialog)
+        self.file_menu.addAction(self.import_subtitles_action)
         self.import_audio_action = QAction("Import Audio...", self)
         self.import_audio_action.setEnabled(False)
         self.import_audio_action.setToolTip("coming with ASR-anchored import")
@@ -1921,6 +1927,60 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         cursor.endEditBlock()
         editor.setTextCursor(cursor)
         self.set_status(f"Imported {os.path.basename(path)}.")
+
+    def import_subtitles_dialog(self) -> None:
+        patterns = " ".join("*" + ext for ext in subtitles.SUBTITLE_EXTENSIONS)
+        path, _ = QFileDialog.getOpenFileName(self, "Import subtitles", filter=f"Subtitles ({patterns})")
+        if path:
+            self.import_subtitles(path)
+
+    def _ask_speaker_mapping(self, speakers: list, characters: list):
+        """The speaker mapping dialog: `{speaker: choice}` or None on
+        Cancel. Its own method so tests answer it without a modal."""
+        return SpeakerMappingDialog.ask(speakers, characters, self)
+
+    def _new_speaker_character(self, name: str, index: int):
+        """A local character for a speaker the mapping dialog marked new,
+        made the way Edit > Characters' Add makes one. No track until a
+        clip uses it (grill PR4)."""
+        color = DEFAULT_HIGHLIGHT_PALETTE[index % len(DEFAULT_HIGHLIGHT_PALETTE)]
+        return Character.from_preset_dict(name, {"voice": self.settings.get("voice", "af_heart")},
+                                          highlight_color=color, backend_id=self.backend.id)
+
+    def import_subtitles(self, path: str) -> list:
+        """File > Import Subtitles (phase 5 D2): every cue of an SRT, VTT or
+        ASS file becomes a paragraph at the end of the focus project's
+        transcript and a clip locked in time at the cue's start, with the
+        cue as its `source_text` and the cue's length as its target
+        duration (`kokoro_gui.daw.undo.ImportCuesCommand`). When the file
+        names speakers, the mapping dialog asks once which character voices
+        each; Cancel imports nothing. One undo step. Returns the new clips'
+        ids ([] when nothing was imported)."""
+        try:
+            cues = subtitles.parse(path)
+        except (OSError, subtitles.SubtitleError) as e:
+            QMessageBox.critical(self, "Import failed", f"Read failed: {e}")
+            return []
+        if not cues:
+            QMessageBox.warning(self, "Empty", "No subtitle cues found in that file.")
+            return []
+        document = self.document
+        rows = speaker_rows(cues)
+        mapping = {row: NARRATOR for row in rows or [NO_SPEAKER]}
+        if rows:
+            answer = self._ask_speaker_mapping(rows, list(document.characters))
+            if answer is None:
+                return []
+            mapping.update({k: v for k, v in answer.items() if k in mapping})
+        character_ids, new_characters = resolve_mapping(mapping, document.characters, self._new_speaker_character)
+        command = ImportCuesCommand(cues, [character_ids[cue.speaker or NO_SPEAKER] for cue in cues],
+                                    new_characters)
+        document.undo_stack.push(command)
+        if self.editor is not None:
+            self.editor.load_text(document.text)
+        self.on_characters_changed()
+        self.set_status(f"Imported {len(cues)} subtitle cue(s) from {os.path.basename(path)}.")
+        return command.clip_ids
 
     def export_dialog(self) -> None:
         dialog = ExportDialog(self)

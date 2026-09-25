@@ -6,7 +6,9 @@ import os
 
 import pytest
 
+from kokoro_gui.daw.models import Character, Document
 from kokoro_gui.daw.subtitles import Cue, SubtitleError, decode_bytes, format_for_path, parse, parse_text
+from kokoro_gui.daw.undo import ImportCuesCommand
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "subtitles")
 
@@ -169,3 +171,78 @@ def test_cue_is_frozen():
     with pytest.raises(Exception):
         cue.text = "y"
     assert cue.duration_s == 1.0
+
+
+# -- ImportCuesCommand (kokoro_gui/daw/undo.py) -------------------------------------
+
+
+def _cue_doc(text="Intro."):
+    narrator = Character.from_preset_dict("Default", {})
+    return Document.from_plain_text(text, characters=[narrator]), narrator
+
+
+def test_import_cues_appends_a_pinned_clip_per_cue_as_its_own_paragraph():
+    doc, narrator = _cue_doc()
+    bob = Character.from_preset_dict("Bob", {})
+    cues = [Cue(1.0, 2.5, "Two\nlines", "Alice"), Cue(3.0, 4.0, "Hi.", None)]
+
+    command = ImportCuesCommand(cues, [bob.id, narrator.id], new_characters=[bob])
+    doc.undo_stack.push(command)
+
+    assert doc.text == "Intro.\n\nTwo lines\n\nHi."
+    first, second = (doc.get_clip(i) for i in command.clip_ids)
+    assert doc.clip_text(first) == "Two lines"
+    assert (first.timeline_timestamp, first.pinned, first.source_text) == (1.0, True, "Two\nlines")
+    assert first.overrides == {"target_duration_s": 1.5}
+    assert first.character_id == bob.id and doc.get_character(bob.id) is not None
+    assert doc.get_track(first.track_id).character_id == bob.id
+    assert (second.character_id, second.timeline_timestamp, second.overrides["target_duration_s"]) == \
+        (narrator.id, 3.0, 1.0)
+
+
+def test_import_cues_is_one_undo_step_and_redo_recreates_the_same_clips():
+    doc, narrator = _cue_doc("Intro.\n")
+    bob = Character.from_preset_dict("Bob", {})
+    command = ImportCuesCommand([Cue(0.0, 1.0, "A", "Bob"), Cue(1.0, 2.0, "B", None)], [bob.id, narrator.id],
+                                new_characters=[bob])
+    doc.undo_stack.push(command)
+    # One newline is already there: one more makes the blank line.
+    assert doc.text == "Intro.\n\nA\n\nB"
+
+    doc.undo_stack.undo()
+    assert doc.text == "Intro.\n"
+    assert doc.clips == [] and doc.tracks == []
+    assert [c.name for c in doc.characters] == ["Default"]
+
+    doc.undo_stack.redo()
+    assert [c.id for c in doc.clips] == command.clip_ids
+    assert {c.name for c in doc.characters} == {"Default", "Bob"}
+
+
+def test_imported_cue_fields_survive_a_save_and_load():
+    from kokoro_gui.daw.serialization import document_from_dict, document_to_dict
+
+    doc, narrator = _cue_doc("")
+    doc.undo_stack.push(ImportCuesCommand([Cue(1.0, 2.5, "a\nb")], [narrator.id]))
+
+    clip = document_from_dict(document_to_dict(doc)).clips[0]
+    assert (clip.timeline_timestamp, clip.pinned, clip.source_text, clip.overrides) == \
+        (1.0, True, "a\nb", {"target_duration_s": 1.5})
+
+
+def test_import_cues_into_an_empty_document_starts_without_a_separator():
+    doc, narrator = _cue_doc("")
+    doc.undo_stack.push(ImportCuesCommand([Cue(0.0, 1.0, "Only.")], [narrator.id]))
+
+    assert doc.text == "Only."
+
+
+def test_imported_cues_are_laned_in_the_unified_layout():
+    doc, narrator = _cue_doc("")
+    doc.settings["track_layout"] = {"mode": "unified", "lanes": 2}
+    command = ImportCuesCommand([Cue(0.0, 1.0, "A"), Cue(0.5, 1.5, "B")], [narrator.id, narrator.id])
+    doc.undo_stack.push(command)
+
+    assert all(doc.get_clip(i).track_id is not None for i in command.clip_ids)
+    doc.undo_stack.undo()
+    assert doc.clips == [] and doc.tracks == []

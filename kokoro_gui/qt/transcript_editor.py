@@ -513,6 +513,11 @@ class TranscriptEditor(QTextEdit):
         if self.toPlainText() != self.app.document.text:
             self.load_text(self.app.document.text)
         self.rehighlight()
+        # A subtitle import adds characters in the same step; its undo
+        # takes them away again.
+        dock = getattr(self.app, "transcript_dock", None)
+        if dock is not None:
+            dock.refresh_character_choices()
         self.app.schedule_save()
         self.app.refresh_timeline()
 
