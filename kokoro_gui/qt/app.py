@@ -1390,6 +1390,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             self.settings_dock.rebuild_schema_form()
             self.settings_dock.refresh_scope_fields()
         if self.fx_dock is not None:
+            # The project dir's fx/ir/ joins the impulse response list.
+            self.fx_dock.refresh_ir_choices()
             self.fx_dock.refresh_for_selection()
         self._sync_video_dock()
         self.refresh_timeline()
@@ -1812,6 +1814,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                 root.document, root.project_settings, path, root.project_dir, root.project_id,
                 self._backend_for, FX_PRESETS_DIR, project_io.read_session(root.project_dir), root.manifest,
                 pending_children={c.project_id for c, _p, _s in child_plans if c.parent_id == root.project_id},
+                project_fx=self.fx_dock.project_fx_state() if self.fx_dock is not None else None,
             )
             warnings = [*warnings, *root_warnings]
         except Exception as e:  # noqa: BLE001 - surfaced, never a crash

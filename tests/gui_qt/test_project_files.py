@@ -164,6 +164,90 @@ def test_bundle_round_trips_document_settings_audio_and_assets(tmp_path, isolate
     assert loaded.notices == []
 
 
+def _write_ir(path, value=1.0):
+    import numpy as np
+    import soundfile as sf
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    sf.write(path, np.array([value], dtype=np.float32), 24000, subtype="FLOAT")
+
+
+def test_used_fx_ir_names_reads_every_fx_scope(tmp_path):
+    fx_dir = tmp_path / "presets" / "fx"
+    fx_dir.mkdir(parents=True)
+    (fx_dir / "warm.json").write_text('{"convolution_ir": "Hall"}', encoding="utf-8")
+    (fx_dir / "phone.json").write_text('{"convolution_ir": "Booth"}', encoding="utf-8")
+    (fx_dir / "odd.json").write_text('{"convolution_ir": ["Nope"]}', encoding="utf-8")
+    project_dir = tmp_path / "project"
+    (project_dir / "fx").mkdir(parents=True)
+    # The project's copy of a preset wins over the global one.
+    (project_dir / "fx" / "phone.json").write_text('{"convolution_ir": "Car"}', encoding="utf-8")
+    character = Character.from_preset_dict("A", {"voice": "af_heart", "fx_preset": "warm"})
+    clip_preset = Clip(character_id=character.id, overrides={"fx_preset": "phone"})
+    clip_override = Clip(character_id=character.id, fx_override={"convolution_ir": "Cave"})
+    clip_bad = Clip(character_id=character.id, overrides={"fx_preset": "odd"}, fx_override={"convolution_ir": 3})
+    doc = Document(clips=[clip_preset, clip_override, clip_bad], characters=[character])
+
+    names = project_io.used_fx_ir_names(doc, str(project_dir), str(fx_dir), {"convolution_ir": "Stage"})
+
+    assert names == {"Hall", "Car", "Cave", "Stage"}
+    assert project_io.used_fx_ir_names(doc, str(project_dir), str(fx_dir), {"convolution_ir": ""}) == \
+        {"Hall", "Car", "Cave"}
+
+
+def test_bundle_carries_named_impulse_responses_project_copy_first(tmp_path, isolated_dirs):
+    fx_dir = tmp_path / "presets" / "fx"
+    fx_dir.mkdir(parents=True)
+    (fx_dir / "warm.json").write_text('{"convolution_ir": "Hall"}', encoding="utf-8")
+    _write_ir(str(fx_dir / "ir" / "Hall.wav"), 0.25)
+    _write_ir(str(fx_dir / "ir" / "Stage.wav"), 0.5)
+    project_dir, project_id = project_io.create_project_dir()
+    _write_ir(os.path.join(project_dir, "fx", "ir", "Hall.wav"), 1.0)
+    doc, _seg = _document_with_audio(project_dir)
+    doc.clips[0].fx_override = {"convolution_ir": "Gone"}
+    path = str(tmp_path / "proj.tbaw")
+
+    plan, warnings = project_io.plan_save(doc, {}, path, project_dir, project_id, lambda _id: None, str(fx_dir),
+                                          project_fx={"convolution_ir": "Stage"})
+    assert [w for w in warnings if "impulse" in w] == ["impulse response 'Gone' not found; not bundled"]
+    bundled = dict(plan.assets)
+    assert os.path.realpath(bundled["fx/ir/Hall.wav"]) == os.path.realpath(
+        os.path.join(project_dir, "fx", "ir", "Hall.wav"))
+    assert os.path.realpath(bundled["fx/ir/Stage.wav"]) == os.path.realpath(str(fx_dir / "ir" / "Stage.wav"))
+
+    project_io.save_project(doc, path, {}, project_dir, project_id, fx_presets_dir=str(fx_dir),
+                            project_fx={"convolution_ir": "Stage"})
+    with zipfile.ZipFile(path) as zf:
+        names = set(zf.namelist())
+        manifest = json.loads(zf.read("manifest.json"))
+        with open(os.path.join(project_dir, "fx", "ir", "Hall.wav"), "rb") as f:
+            assert zf.read("fx/ir/Hall.wav") == f.read()
+    assert {"fx/warm.json", "fx/ir/Hall.wav", "fx/ir/Stage.wav"} <= names
+    assert manifest["assets"]["fx/ir/Stage.wav"].startswith("sha256:")
+
+    # Opened elsewhere, the bundled IR resolves from the new project dir.
+    from kokoro_gui.engine.presets import resolve_ir
+
+    info = project_io.inspect_bundle(path)
+    other_dir = str(tmp_path / "other")
+    project_io.extract_small(info, other_dir)
+    assert resolve_ir("Stage", other_dir, str(tmp_path / "nowhere")) == \
+        os.path.realpath(os.path.join(other_dir, "fx", "ir", "Stage.wav"))
+
+
+def test_save_bundles_the_ir_the_project_fx_names(qt_app, tmp_path):
+    import kokoro_gui.qt.app as qt_app_module
+
+    _write_ir(os.path.join(qt_app_module.FX_PRESETS_DIR, "ir", "Hall.wav"))
+    qt_app.fx_dock.refresh_presets()
+    combo = qt_app.fx_dock._file_combos["convolution_ir"]
+    combo.setCurrentIndex(combo.findData("Hall"))
+
+    path = _save_as(qt_app, str(tmp_path / "reverb"))
+    with zipfile.ZipFile(path) as zf:
+        assert "fx/ir/Hall.wav" in zf.namelist()
+
+
 def test_missing_audio_on_open_leaves_the_segment_pathless_and_says_so(tmp_path, isolated_dirs):
     project_dir, project_id = project_io.create_project_dir()
     doc, _seg = _document_with_audio(project_dir)

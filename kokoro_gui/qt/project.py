@@ -6,10 +6,11 @@ TB1-TB15): one zip holding `manifest.json`, `document.json`
 `project_settings` block: export defaults, workspace override, bundle
 options), every generated segment under `audio/generated/` named by its
 segment key, and every named asset a character or clip points at (`fx/`,
-`engines/<id>/...`), and, when `include_video` is on, the reference
-video under `video/` (phase 5, TB16). A `.json` project (the 4.0-preview
-format, the document shape plus a top-level `"project_settings"`) still
-opens and is migrated to `.tbaw` on open (`migrate_json_project`).
+`engines/<id>/...`, with convolution impulse responses under `fx/ir/`), and,
+when `include_video` is on, the reference video under `video/` (phase 5,
+TB16). A `.json` project (the 4.0-preview format, the document shape plus a
+top-level `"project_settings"`) still opens and is migrated to `.tbaw` on
+open (`migrate_json_project`).
 
 The live project is a directory, `cache/projects/<project_id>/` (the
 "project dir"), extracted from the zip on Open and written by autosave
@@ -46,6 +47,7 @@ from kokoro_gui import APP_VERSION
 from kokoro_gui.daw import serialization
 from kokoro_gui.daw.models import Document
 from kokoro_gui.engine.caching import RESERVED_SUFFIX, compute_cache_key, effective_speed
+from kokoro_gui.engine.presets import filter_fx_preset_values, ir_safe_name, resolve_ir
 
 MAX_RECENT = 10
 PROJECT_FILTER = "KokoroGUI project (*.tbaw *.json)"
@@ -66,6 +68,7 @@ LOCK = "lock"
 AUDIO_GENERATED = "audio/generated"
 AUDIO_IMPORTED = "audio/imported"
 FX_DIR = "fx"
+FX_IR_NAME = "ir"  # fx/ir/<name>.wav: convolution impulse responses (grill Q31)
 ENGINES_DIR = "engines"
 # Embedded subprojects (phase 4): `projects/<child project_id>.tbaw`, each a
 # complete bundle, stored uncompressed.
@@ -1088,11 +1091,68 @@ def used_fx_preset_names(document: Document) -> set:
     return names
 
 
-def collect_assets(document: Document, backend_for, project_dir: str | None, fx_presets_dir: str) -> tuple:
+def _fx_preset_source(name: str, project_dir: str | None, fx_presets_dir: str) -> str | None:
+    """The file FX preset `name` loads from: the project's `fx/<name>.json`
+    first, then `<fx_presets_dir>/<name>.json`, else None. The name comes
+    from the document, so it's reduced to its basename and the result must
+    stay inside the directory it was looked up in."""
+    safe = os.path.basename(name)
+    directories = [os.path.join(project_dir, FX_DIR)] if project_dir else []
+    directories.append(fx_presets_dir)
+    for directory in directories:
+        root = os.path.realpath(directory)
+        candidate = os.path.realpath(os.path.join(root, f"{safe}.json"))
+        if candidate.startswith(root + os.sep) and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _preset_ir_name(name: str, project_dir: str | None, fx_presets_dir: str) -> str | None:
+    source = _fx_preset_source(name, project_dir, fx_presets_dir)
+    if source is None:
+        return None
+    try:
+        with open(source, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return filter_fx_preset_values(data).get("convolution_ir") or None
+
+
+def used_fx_ir_names(document: Document, project_dir: str | None = None,
+                     fx_presets_dir: str = os.path.join("presets", "fx"), project_fx: dict | None = None) -> set:
+    """Every convolution impulse-response name (grill Q31) the project plays:
+    from the project-scope FX values (`project_fx`, the Audio FX tab's "none"
+    state), from each FX preset a character or clip names (read from the
+    project's `fx/` first, then `fx_presets_dir`), and from each clip's
+    `fx_override`. Values go through `filter_fx_preset_values`, so a
+    non-string `convolution_ir` names nothing."""
+    names = set()
+    ir = filter_fx_preset_values(project_fx or {}).get("convolution_ir")
+    if ir:
+        names.add(ir)
+    for preset_name in used_fx_preset_names(document):
+        ir = _preset_ir_name(preset_name, project_dir, fx_presets_dir)
+        if ir:
+            names.add(ir)
+    for clip in document.clips:
+        if isinstance(clip.fx_override, dict):
+            ir = filter_fx_preset_values(clip.fx_override).get("convolution_ir")
+            if ir:
+                names.add(ir)
+    return {n for n in names if ir_safe_name(n)}
+
+
+def collect_assets(document: Document, backend_for, project_dir: str | None, fx_presets_dir: str,
+                   project_fx: dict | None = None) -> tuple:
     """`(assets, engines, warnings)`: every `(bundle_path, source_path)` the
     document needs, the `manifest.engines` block (version + meta per used
     backend), and one warning per asset that resolves nowhere. `backend_for(id)`
-    returns an adapter or `None` for an engine that isn't registered."""
+    returns an adapter or `None` for an engine that isn't registered.
+    Impulse responses land at `fx/ir/<name>.wav`, the project's copy first,
+    then `<fx_presets_dir>/ir/`."""
     assets = []
     engines = {}
     warnings = []
@@ -1115,15 +1175,18 @@ def collect_assets(document: Document, backend_for, project_dir: str | None, fx_
         engines[backend_id] = {"version": backend.engine_version(), "meta": dict(meta or {})}
     for name in sorted(used_fx_preset_names(document)):
         safe = os.path.basename(name)
-        candidates = []
-        if project_dir:
-            candidates.append(os.path.join(project_dir, FX_DIR, f"{safe}.json"))
-        candidates.append(os.path.join(fx_presets_dir, f"{safe}.json"))
-        source = next((c for c in candidates if os.path.isfile(c)), None)
+        source = _fx_preset_source(name, project_dir, fx_presets_dir)
         if source is None:
             warnings.append(f"FX preset {name!r} not found; not bundled")
             continue
         assets.append((f"{FX_DIR}/{safe}.json", os.path.abspath(source)))
+    ir_dir = os.path.join(fx_presets_dir, FX_IR_NAME)
+    for name in sorted(used_fx_ir_names(document, project_dir, fx_presets_dir, project_fx)):
+        source = resolve_ir(name, project_dir, ir_dir)
+        if source is None:
+            warnings.append(f"impulse response {name!r} not found; not bundled")
+            continue
+        assets.append((f"{FX_DIR}/{FX_IR_NAME}/{ir_safe_name(name)}.wav", source))
     return assets, engines, warnings
 
 
@@ -1189,11 +1252,14 @@ class SavePlan:
 
 def plan_save(document: Document, project_settings: dict, path: str, project_dir: str, project_id: str,
               backend_for, fx_presets_dir: str, previous_session: dict | None = None,
-              previous_manifest: dict | None = None, pending_children=()) -> tuple:
+              previous_manifest: dict | None = None, pending_children=(),
+              project_fx: dict | None = None) -> tuple:
     """`(SavePlan, warnings)`. Serializes the document with bundle-relative
     audio paths, collects assets and the referenced audio files.
     `pending_children` are embedded child ids whose bundle the same Save
-    writes into the project dir before this plan is written."""
+    writes into the project dir before this plan is written. `project_fx`
+    is the project-scope FX values, read for the impulse response they
+    name."""
     options = bundle_options(project_settings)
     data = serialization.document_to_dict(document)
     audio_files = []
@@ -1231,7 +1297,7 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
     if not options["include_imported_audio"]:
         audio_files = [a for a in audio_files if not a[0].startswith(AUDIO_IMPORTED + "/")]
 
-    assets, engines, warnings = collect_assets(document, backend_for, project_dir, fx_presets_dir)
+    assets, engines, warnings = collect_assets(document, backend_for, project_dir, fx_presets_dir, project_fx)
     video_file = None
     if options["include_video"] and video_settings(project_settings) is not None:
         video_file = video_source(project_settings, path, project_dir, previous_manifest)
@@ -1417,7 +1483,7 @@ def record_save(project_dir: str, path: str, result: SaveResult, source_path: st
 def save_project(document: Document, path: str, project_settings: dict | None = None,
                  project_dir: str | None = None, project_id: str | None = None,
                  backend_for=None, fx_presets_dir: str = os.path.join("presets", "fx"),
-                 known_engine_ids=()) -> SaveResult:
+                 known_engine_ids=(), project_fx: dict | None = None) -> SaveResult:
     """Synchronous Save for callers without an app (tests, tooling): plans
     and writes in one go. A `.json` path is written in the legacy shape."""
     if format_for_path(path) != "tbaw":
@@ -1428,7 +1494,8 @@ def save_project(document: Document, path: str, project_settings: dict | None = 
     if project_dir is None:
         project_dir, project_id = create_project_dir(project_id)
     plan, _warnings = plan_save(document, project_settings, path, project_dir, project_id or new_project_id(),
-                                backend_for or (lambda _id: None), fx_presets_dir, read_session(project_dir))
+                                backend_for or (lambda _id: None), fx_presets_dir, read_session(project_dir),
+                                project_fx=project_fx)
     result = write_bundle(plan, known_engine_ids)
     record_save(project_dir, path, result)
     return result
