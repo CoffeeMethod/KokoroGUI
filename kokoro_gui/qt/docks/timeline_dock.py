@@ -72,6 +72,7 @@ class TimelineDock(QDockWidget):
         self.timeline_view.clipMoved.connect(self.on_clip_moved)
         self.timeline_view.unpinRequested.connect(self.on_clip_unpin_requested)
         self.timeline_view.lockInTimeRequested.connect(self.on_lock_in_time_requested)
+        self.timeline_view.subprojectActionRequested.connect(self.app.on_subproject_action)
         self.timeline_view.playClipRequested.connect(self.on_play_clip_requested)
         self.timeline_view.fadeChanged.connect(self.on_fade_changed)
         self.timeline_view.takeSelected.connect(self.on_take_selected)
@@ -100,6 +101,15 @@ class TimelineDock(QDockWidget):
         column.setSpacing(2)
         filter_row = QHBoxLayout()
         filter_row.setContentsMargins(4, 2, 4, 0)
+        # Breadcrumb (phase 4, NP5): one button per level from the root to
+        # the subproject the timeline shows. Hidden at a root with no
+        # subprojects.
+        self.breadcrumb = QWidget()
+        self.breadcrumb_layout = QHBoxLayout(self.breadcrumb)
+        self.breadcrumb_layout.setContentsMargins(0, 0, 0, 0)
+        self.breadcrumb_layout.setSpacing(2)
+        filter_row.addWidget(self.breadcrumb)
+        filter_row.addSpacing(8)
         filter_row.addWidget(QLabel("Show:"))
         filter_row.addWidget(self.status_filter_combo)
         filter_row.addStretch(1)
@@ -130,16 +140,41 @@ class TimelineDock(QDockWidget):
 
         self.refresh()
 
+    def refresh_breadcrumb(self) -> None:
+        """`Book › Chapter 12`: a button per project from the root to the
+        level; clicking one shows it."""
+        while self.breadcrumb_layout.count():
+            item = self.breadcrumb_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        app = self.app
+        chain = app.chain_of(app.level) if hasattr(app, "chain_of") else []
+        show = len(chain) > 1 or bool(chain and chain[0].document.nested_clips())
+        self.breadcrumb.setVisible(show)
+        self.breadcrumb_buttons = []
+        for index, project in enumerate(chain):
+            if index:
+                self.breadcrumb_layout.addWidget(QLabel("\u203a"))
+            button = QPushButton(project.title())
+            button.setFlat(True)
+            button.setEnabled(project is not app.level)
+            button.clicked.connect(lambda checked=False, p=project: self.app.set_level(p))
+            self.breadcrumb_layout.addWidget(button)
+            self.breadcrumb_buttons.append(button)
+
     @property
     def _doc(self):
         """The document the timeline shows: the `level` project's."""
         return self.app.level.document
 
     def refresh(self) -> None:
+        self.refresh_breadcrumb()
         arrangement = self.app.build_arrangement()
         level = self.app.level
         self.timeline_view.render_document(self._doc, arrangement,
-                                           clip_samples=lambda clip: self.app.rendered_clip_samples(clip, level))
+                                           clip_samples=lambda clip: self.app.rendered_clip_samples(clip, level),
+                                           nested_state=lambda clip: self.app.nested_state(clip, level))
 
     # -- seconds-axis drags (UI9) ------------------------------------------------
 

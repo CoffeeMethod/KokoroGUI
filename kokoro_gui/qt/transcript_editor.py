@@ -164,7 +164,11 @@ class ClipHighlighter(QSyntaxHighlighter):
             if hi <= lo:
                 continue
             fmt = QTextCharFormat()
-            if character is not None:
+            if run.kind == "placeholder":
+                # A subproject's line (phase 4): its title, read-only.
+                fmt.setBackground(QColor(theme.current().panel_alt))
+                fmt.setFontItalic(True)
+            elif character is not None:
                 tint = QColor(character.highlight_color)
                 tint.setAlpha(HIGHLIGHT_ALPHA)
                 fmt.setBackground(tint)
@@ -461,11 +465,16 @@ class TranscriptEditor(QTextEdit):
         """Sets the editor's text without treating it as a user edit -
         `app.document.replace_text` is not called. Used at construction to
         seed from `app.document.text`, and by "load a different project"."""
+        # A reload isn't the user moving the caret: it mustn't select the
+        # clip that happens to sit at offset 0 (a subproject's line would
+        # move the docks into it).
         self._suppress_contents_change = True
+        was_updating, self._updating_from_model = self._updating_from_model, True
         try:
             self.setPlainText(text)
         finally:
             self._suppress_contents_change = False
+            self._updating_from_model = was_updating
         self.rehighlight()
 
     def rebind_document(self) -> None:
@@ -617,6 +626,14 @@ class TranscriptEditor(QTextEdit):
                 sel.format.setFontUnderline(True)
                 selections.append(sel)
         self.setExtraSelections(selections)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        # A placeholder line's first click put its subproject in the docks;
+        # the double-click enters it (NP6).
+        if hasattr(self.app, "enter_recently_selected_subproject") and self.app.enter_recently_selected_subproject():
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().mousePressEvent(event)

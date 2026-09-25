@@ -221,6 +221,9 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
     # only applies them.
     level = getattr(app, "level", None)
     post_configs = {p.clip.id: app.post_config_for_clip(p.clip, level) for p in arrangement.placed}
+    # Subprojects export as their mixdowns (phase 4).
+    nested_paths = {p.clip.id: app.nested_audio_path(p.clip, level)
+                    for p in arrangement.placed if p.clip.is_nested} if hasattr(app, "nested_audio_path") else {}
 
     app.transport_dock.set_busy(True)
     app.transport_dock.set_status("Exporting...", "busy")
@@ -235,6 +238,7 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
             values["srt"], values["keep_clip_files"], arrangement, app.backend.id, _progress,
             lambda clip: post_configs.get(clip.id), values.get("channels", 2), range_s,
             "word" if values.get("srt_words") else "clip", bool(values.get("cue_sheet")),
+            lambda clip: nested_paths.get(clip.id),
         )
 
     def _done(future):

@@ -279,3 +279,283 @@ def test_the_placeholder_line_is_read_only(qt_app, qtbot):
     qt_app.root.document.replace_text(end, 0, 1, qt_app.root.document.text[:end] + "X" +
                                       qt_app.root.document.text[end:])
     assert qt_app.root.document.clip_text(qt_app.root.document.get_clip(child.clip_id)) == "Chapter 1"
+
+
+# -- step 5: the child's mixdown and staleness (NP2) ---------------------------------
+
+
+def _render(qt_app, child):
+    assert qt_app.render_subproject(child)
+    qt_app.wait_for_project_io()
+
+
+def test_a_new_child_is_stale_until_rendered(qt_app):
+    _intro, chapter, child = _book(qt_app)
+    nested = qt_app.document.get_clip(child.clip_id)
+    assert child.document.dirty_clips() == []  # the moved clip kept its audio
+    assert qt_app.nested_state(nested) == "stale"
+    assert nested in qt_app.document.dirty_clips()
+    assert qt_app.clip_duration_s(nested) is None
+
+    _render(qt_app, child)
+
+    info = project_io.read_mixdown_info(child.project_dir)
+    assert info["file"].startswith(child.project_dir)
+    assert info["digest"] == child.digest
+    assert info["duration_s"] > 0
+    assert qt_app.nested_state(nested) == "ok"
+    assert nested not in qt_app.document.dirty_clips()
+    assert abs(qt_app.clip_duration_s(nested) - info["duration_s"]) < 1e-6
+    samples, rate = qt_app.rendered_clip_samples(nested)
+    assert len(samples) > 0 and rate == qt_app.project_sample_rate()
+    block = qt_app.timeline_dock.timeline_view._blocks_by_clip_id[nested.id]
+    assert block.nested_state == "ok"
+    assert not block.estimated
+
+
+def test_editing_the_child_makes_its_block_stale_again(qt_app):
+    _intro, _chapter, child = _book(qt_app)
+    _render(qt_app, child)
+    nested = qt_app.document.get_clip(child.clip_id)
+    child.document.settings["gap_s"] = 0.9
+    qt_app.save_settings()
+    assert qt_app.nested_state(nested) == "stale"
+
+
+def test_the_transport_plays_the_childs_mixdown(qt_app, monkeypatch):
+    intro, _chapter, child = _book(qt_app)
+    _render(qt_app, child)
+    loaded = []
+    real_load = qt_app.transport.load
+    monkeypatch.setattr(qt_app.transport, "load", lambda schedule, **k: (loaded.append(schedule),
+                                                                          real_load(schedule, **k)))
+    qt_app._rebuild_transport_schedule()
+    paths = {c.clip_id: c.path for c in loaded[-1]}
+    nested = qt_app.document.get_clip(child.clip_id)
+    assert paths[nested.id] == project_io.read_mixdown_info(child.project_dir)["file"]
+    assert intro.id in paths
+
+
+def test_the_parent_applies_only_fx_set_on_the_nested_clip(qt_app):
+    _intro, _chapter, child = _book(qt_app)
+    nested = qt_app.document.get_clip(child.clip_id)
+    qt_app.settings_dock.volume_spin.setValue(1.5)  # a project default, already in the mixdown
+    assert qt_app.post_config_for_clip(nested) == {}
+    nested.fx_override = {"reverb_enabled": True}
+    config = qt_app.post_config_for_clip(nested)
+    assert config.get("reverb_enabled") is True and config.get("apply_fx") is True
+    assert "volume" not in config
+
+
+def test_the_gutter_button_generates_and_renders_a_stale_subproject(qt_app):
+    _intro, _chapter, child = _book(qt_app)
+    nested = qt_app.document.get_clip(child.clip_id)
+    qt_app.generate_clip(nested.id)
+    qt_app.wait_for_project_io()
+    assert qt_app.nested_state(nested) == "ok"
+
+
+def test_generate_renders_stale_subprojects_after_the_parents_clips(qt_app):
+    _intro, _chapter, child = _book(qt_app)
+    nested = qt_app.document.get_clip(child.clip_id)
+    qt_app.on_generate_clicked()  # the parent's own clips are clean
+    qt_app.wait_for_project_io()
+    assert qt_app.nested_state(nested) == "ok"
+
+
+def test_a_child_with_stale_clips_generates_them_before_rendering(qt_app):
+    _intro, chapter, child = _book(qt_app)
+    moved = child.document.get_clip(chapter.id)
+    moved.segments = []  # stale
+    nested = qt_app.document.get_clip(child.clip_id)
+    assert qt_app.render_subproject(child) is False
+
+    qt_app.generate_subproject(nested)
+    # The child's batch went to its engine; the render waits for it.
+    assert qt_app.engine.generate_dirty_clips.called
+    group = qt_app.engine.generate_dirty_clips.call_args[0][0]
+    assert [cid for cid, _t, _c in group] == [chapter.id]
+    key = child.document.segment_key_fn("Chapter text.", moved)
+    path = os.path.join(child.project_dir, "audio", "generated", f"{key}_0.wav")
+    sf.write(path, np.full(2400, 0.1, dtype=np.float32), 24000)
+    qt_app.engine.worker.run_coro.return_value.set_result([{
+        "clip_id": chapter.id, "success": True, "error": "", "cancelled": False,
+        "results": [{"path": path, "text": "Chapter text.", "duration": 0.1, "seg_idx": 0,
+                     "cache_key": key, "take": 0, "engine_version": qt_app.backend.engine_version()}],
+    }])
+    qt_app.wait_for_project_io()
+    assert moved.segments and moved.segments[0].audio_path == path
+    assert project_io.read_mixdown_info(child.project_dir) is not None
+
+
+def test_export_mixes_the_childs_mixdown(qt_app, tmp_path):
+    from kokoro_gui.qt.docks.export_dialog import run_export
+
+    _intro, _chapter, child = _book(qt_app)
+    _render(qt_app, child)
+    values = {"out_dir": str(tmp_path / "out"), "filename": "book", "format": "wav", "srt": False,
+              "keep_clip_files": False, "channels": 1}
+    assert run_export(qt_app, values)
+    future = qt_app.engine.worker.run_coro.call_args[0][0]
+    import asyncio
+
+    result = asyncio.run(future)
+    data, _rate = sf.read(result.audio_path)
+    assert result.skipped_clip_ids == []
+    assert np.abs(data).max() > 0.1
+
+
+# -- step 6: entering a subproject, the breadcrumb (NP5, NP6) ------------------------
+
+
+def test_entering_a_subproject_shows_it_in_the_timeline(qt_app):
+    _intro, chapter, child = _book(qt_app)
+    qt_app.on_subproject_action(child.clip_id, "enter")
+
+    assert qt_app.level is child and qt_app.focus is child
+    view = qt_app.timeline_dock.timeline_view
+    assert chapter.id in view._blocks_by_clip_id
+    assert child.clip_id not in view._blocks_by_clip_id
+    buttons = qt_app.timeline_dock.breadcrumb_buttons
+    assert [b.text() for b in buttons] == ["Untitled", "Chapter 1"]
+    assert not qt_app.timeline_dock.breadcrumb.isHidden()
+    assert qt_app.scope_text() is None
+
+    buttons[0].click()
+    assert qt_app.level is qt_app.root and qt_app.focus is qt_app.root
+    assert child.clip_id in qt_app.timeline_dock.timeline_view._blocks_by_clip_id
+
+
+def test_double_clicking_a_nested_block_enters_it(qt_app, qtbot):
+    from PySide6.QtCore import Qt
+
+    _intro, _chapter, child = _book(qt_app)
+    view = qt_app.timeline_dock.timeline_view
+    block = view._blocks_by_clip_id[child.clip_id]
+    pos = view.mapFromScene(block.mapToScene(5, 10))
+    qtbot.mouseDClick(view.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+    assert qt_app.level is child
+
+
+def test_breadcrumb_hidden_at_a_root_without_subprojects(qt_app):
+    qt_app.refresh_timeline()
+    assert qt_app.timeline_dock.breadcrumb.isHidden()
+
+
+# -- step 7: linked children, relink, detach, embed, remove (NP4) -------------------
+
+
+def _saved_project(qt_app, tmp_path, name, text):
+    """A separate .tbaw on disk (made by this app, then put away)."""
+    qt_app.document.text = text
+    qt_app.editor.load_text(text)
+    qt_app.save_project_as(str(tmp_path / name))
+    qt_app.wait_for_project_io()
+    path, project_id = qt_app.project_path, qt_app.project_id
+    qt_app.new_project()
+    return path, project_id
+
+
+def test_add_subproject_links_an_existing_file(qt_app, tmp_path):
+    other_path, other_id = _saved_project(qt_app, tmp_path, "episode", "Guest segment.")
+    qt_app.document.text = "Show intro."
+    qt_app.editor.load_text(qt_app.document.text)
+    qt_app.save_project_as(str(tmp_path / "show"))
+    qt_app.wait_for_project_io()
+
+    child = qt_app.add_subproject(other_path)
+
+    nested = qt_app.document.get_clip(child.clip_id)
+    assert nested.child == {"kind": "linked", "id": other_id, "path": "episode.tbaw"}
+    assert child.kind == "linked" and child.path == other_path
+    assert child.document.text == "Guest segment."
+    assert qt_app.document.clip_text(nested) == "episode"
+
+    # Saving the parent doesn't copy a linked child into it.
+    qt_app.save_project()
+    qt_app.wait_for_project_io()
+    with zipfile.ZipFile(qt_app.project_path) as zf:
+        assert not any(n.startswith("projects/") for n in zf.namelist())
+    # Adding the same project twice is refused.
+    assert qt_app.add_subproject(other_path) is None
+
+
+def test_a_missing_linked_file_is_missing_and_relinks(qt_app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    other_path, other_id = _saved_project(qt_app, tmp_path, "episode", "Guest segment.")
+    qt_app.save_project_as(str(tmp_path / "show"))
+    qt_app.wait_for_project_io()
+    child = qt_app.add_subproject(other_path)
+    clip_id = child.clip_id
+    qt_app.save_project()
+    qt_app.wait_for_project_io()
+    moved = str(tmp_path / "moved.tbaw")
+    os.replace(other_path, moved)
+
+    show = qt_app.project_path
+    qt_app.new_project()
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No))
+    qt_app.open_project(show)
+    qt_app.wait_for_project_io()
+    nested = qt_app.document.get_clip(clip_id)
+    assert qt_app.open_child(nested) is None
+    assert qt_app.nested_state(nested) == "missing"
+    assert qt_app.timeline_dock.timeline_view._blocks_by_clip_id[clip_id].nested_state == "missing"
+
+    # A file with another project id is refused, with the id shown.
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: warned.append(a[2])))
+    assert qt_app.relink_subproject(nested, show) is False
+    assert qt_app.root.project_id in warned[0]
+
+    assert qt_app.relink_subproject(nested, moved) is True
+    assert nested.child["path"] == "moved.tbaw"
+    assert qt_app.child_project(nested).document.text == "Guest segment."
+    assert qt_app.nested_state(nested) != "missing"
+
+
+def test_detach_then_embed_round_trip(qt_app, tmp_path):
+    _intro, _chapter, child = _book(qt_app)
+    qt_app.save_project_as(str(tmp_path / "book"))
+    qt_app.wait_for_project_io()
+    nested = qt_app.document.get_clip(child.clip_id)
+
+    assert qt_app.detach_subproject(nested, str(tmp_path / "chapter1"))
+    assert nested.child == {"kind": "linked", "id": child.project_id, "path": "chapter1.tbaw"}
+    assert os.path.isfile(tmp_path / "chapter1.tbaw")
+    assert child.kind == "linked"
+    qt_app.document.undo_stack.undo()
+    assert nested.child["kind"] == "embedded"
+    qt_app.document.undo_stack.redo()
+
+    assert qt_app.embed_subproject(nested)
+    assert nested.child == {"kind": "embedded", "id": child.project_id}
+    assert os.path.isfile(os.path.join(qt_app.project_dir, "projects", f"{child.project_id}.tbaw"))
+    qt_app.save_project()
+    qt_app.wait_for_project_io()
+    with zipfile.ZipFile(qt_app.project_path) as zf:
+        assert f"projects/{child.project_id}.tbaw" in zf.namelist()
+
+
+def test_remove_takes_the_placeholder_out_in_one_undo_step(qt_app):
+    _intro, _chapter, child = _book(qt_app)
+    nested = qt_app.document.get_clip(child.clip_id)
+    assert qt_app.remove_subproject(nested)
+    assert qt_app.document.get_clip(child.clip_id) is None
+    assert qt_app.document.text == "Intro.  Outro."
+    assert child.project_id not in qt_app.children
+    qt_app.document.undo_stack.undo()
+    assert qt_app.document.get_clip(child.clip_id) is not None
+
+
+def test_save_as_rebases_linked_paths(qt_app, tmp_path):
+    other_path, _other_id = _saved_project(qt_app, tmp_path, "episode", "Guest.")
+    qt_app.save_project_as(str(tmp_path / "show"))
+    qt_app.wait_for_project_io()
+    child = qt_app.add_subproject(other_path)
+    nested = qt_app.document.get_clip(child.clip_id)
+    os.makedirs(tmp_path / "sub")
+    qt_app.save_project_as(str(tmp_path / "sub" / "show2"))
+    qt_app.wait_for_project_io()
+    assert nested.child["path"] == "../episode.tbaw"

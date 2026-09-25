@@ -45,6 +45,12 @@ class OpenProject:
     # from (`mixdown.json`), for a child; see app.py's subproject mixdown.
     mixdown_path: Optional[str] = None
     mixdown_digest: Optional[str] = None
+    # The digest of the document as autosave last wrote it; what a mixdown
+    # is compared against.
+    digest: Optional[str] = None
+    # "ok" / "stale" for a child, computed on demand and dropped on any edit
+    # (app.py's `child_state`).
+    state_cache: Optional[str] = None
 
     @property
     def is_root(self) -> bool:

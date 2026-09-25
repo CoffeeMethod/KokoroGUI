@@ -231,9 +231,19 @@ class SubprojectsMixin:
             self._missing_children.add(child_id)
         self.set_status(f"Subproject unavailable: {message}", "warning")
         self.refresh_timeline()
+        if (clip.child or {}).get("kind") == "linked" and not getattr(self, "_offering_relink", False):
+            # NP4: a missing or wrong linked file asks for the right one.
+            self._offering_relink = True
+            try:
+                answer = QMessageBox.question(self, "Subproject not found",
+                                              f"{message}\nFind the subproject's file?")
+                if answer == QMessageBox.StandardButton.Yes:
+                    self.relink_subproject_dialog(clip)
+            finally:
+                self._offering_relink = False
         if then is not None:
-            then(None)
-        return None
+            then(self.child_project(clip))
+        return self.child_project(clip)
 
     def _attach_child(self, parent, clip, loaded, lock, path, dirty: bool) -> OpenProject:
         child = OpenProject(
@@ -265,8 +275,216 @@ class SubprojectsMixin:
         self.library_missing |= set(report.missing)
 
     def _install_nested_state_fn(self, project) -> None:
-        """Placeholder until the mixdown lands: a nested clip is stale."""
-        project.document.nested_state_fn = lambda clip: True
+        """`Document.nested_state_fn` for `project`'s document: a nested clip
+        is stale unless its child's mixdown is current (NP2)."""
+        project.document.nested_state_fn = lambda clip: self.nested_state(clip, project) != "ok"
+
+    # -- subproject mixdown and staleness (NP2) -------------------------------------
+
+    def _closed_child_dir(self, parent, clip):
+        """The project dir a not-yet-open child would open into, when one
+        exists already (a previous session's)."""
+        child_id = self.child_id_of(clip)
+        if child_id is None:
+            return None
+        kind = (clip.child or {}).get("kind", "embedded")
+        source = self.child_bundle_path(parent, clip) if kind == "linked" else \
+            project_io.child_source_path(self.source_of(parent), child_id)
+        project_dir = project_io.choose_project_dir(child_id, source)
+        return project_dir if os.path.isfile(os.path.join(project_dir, project_io.DOCUMENT)) else None
+
+    def child_state(self, child) -> str:
+        """"ok" when the child has no stale clip and its mixdown was
+        rendered from its document as it is now; else "stale". Cached until
+        the next edit (`schedule_save` drops every child's cache)."""
+        if child.state_cache is None:
+            info = project_io.read_mixdown_info(child.project_dir)
+            if child.digest is None:
+                child.digest = project_io.project_digest(child.document, child.project_settings, child.project_dir)
+            fresh = info is not None and info.get("digest") == child.digest
+            child.state_cache = "ok" if fresh and not child.document.dirty_clips() else "stale"
+        return child.state_cache
+
+    def nested_state(self, clip, project=None) -> str:
+        """"ok", "stale" or "missing" for a nested clip. A child that isn't
+        open is "ok" when its project dir from an earlier session holds a
+        mixdown of its document as last saved there."""
+        if clip is None or not clip.is_nested:
+            return "ok"
+        child = self.child_project(clip)
+        if child is not None:
+            return self.child_state(child)
+        if self.is_child_missing(clip):
+            return "missing"
+        parent = project or self.project_for(clip)
+        project_dir = self._closed_child_dir(parent, clip)
+        info = project_io.read_mixdown_info(project_dir)
+        session = project_io.read_session(project_dir) if project_dir else None
+        if info and session and not session.get("dirty") and info.get("digest") == session.get("saved_digest"):
+            return "ok"
+        return "stale"
+
+    def invalidate_child_states(self) -> None:
+        for child in self.children.values():
+            child.state_cache = None
+
+    def nested_audio_path(self, clip, project=None):
+        """The child's mixdown file for a nested clip (the last one rendered,
+        current or not, the way a stale clip still plays its old audio), or
+        None."""
+        child = self.child_project(clip)
+        if child is not None:
+            project_dir = child.project_dir
+        else:
+            project_dir = self._closed_child_dir(project or self.project_for(clip), clip)
+        info = project_io.read_mixdown_info(project_dir)
+        return info["file"] if info else None
+
+    def nested_duration_s(self, clip, project=None):
+        child = self.child_project(clip)
+        if child is not None:
+            project_dir = child.project_dir
+        else:
+            project_dir = self._closed_child_dir(project or self.project_for(clip), clip)
+        info = project_io.read_mixdown_info(project_dir)
+        return info["duration_s"] if info else None
+
+    def nested_post_config(self, clip, project=None) -> dict:
+        """What the parent applies over a child's mixdown: nothing but FX
+        the parent set on the nested clip itself. The mixdown already has
+        the child's volume, trim, normalize and FX; applying the project's
+        again would double them (PHASE_4, Risks)."""
+        from kokoro_gui.audio import post
+        from kokoro_gui.qt import fx_resolve
+
+        own = fx_resolve.real_preset_name(clip.overrides.get("fx_preset"))
+        if not clip.fx_override and not own:
+            return {}
+        values = {}
+        preset = fx_resolve.load_fx_preset_values(self, own, project or self.project_for(clip)) if own else None
+        if preset:
+            values.update(preset)
+        if clip.fx_override:
+            values.update(clip.fx_override)
+        values["apply_fx"] = True
+        return post.extract_post_config(values)
+
+    def render_subproject(self, child, then=None) -> bool:
+        """Renders `child`'s mixdown on the worker (the same `mixdown()`
+        Export runs, its own subprojects as their mixdowns). Refused while
+        the child has stale clips. `then(ok)` runs on the GUI thread."""
+        from kokoro_gui.daw.mixdown import mixdown
+
+        if child is None or child.parent_id is None:
+            return False
+        if [c for c in child.document.dirty_clips() if not c.is_nested]:
+            self.set_status(f"{child.title()} has clips to generate first.", "warning")
+            return False
+        self._autosave_one(child)
+        digest = child.digest
+        arrangement = self.build_arrangement(child)
+        post_configs = {p.clip.id: self.post_config_for_clip(p.clip, child) for p in arrangement.placed}
+        nested_paths = {p.clip.id: self.nested_audio_path(p.clip, child)
+                        for p in arrangement.placed if p.clip.is_nested}
+        rate = self.project_sample_rate()
+        fmt = project_io.bundle_options(child.project_settings)["audio_format"]
+        target = project_io.mixdown_file(child.project_dir, fmt)
+        tmp = os.path.join(child.project_dir, f"{project_io.MIXDOWN}.tmp.{fmt}")
+        document = child.document
+        self._begin_project_io(f"Rendering {child.title()}...", read_only=False)
+
+        def _work():
+            result = mixdown(document, tmp, fmt, rate, arrangement=arrangement,
+                             post_config_for_clip=lambda clip: post_configs.get(clip.id),
+                             nested_audio_path=lambda clip: nested_paths.get(clip.id))
+            os.replace(tmp, target)
+            return result
+
+        def _done(result, error):
+            self._end_project_io(read_only=False)
+            if error is not None:
+                self.set_status(f"Rendering {child.title()} failed: {error}", "error")
+                if then is not None:
+                    then(False)
+                return
+            project_io.write_mixdown_info(child.project_dir, target, digest, result.duration_s, rate)
+            child.mixdown_path, child.mixdown_digest = target, digest
+            child.state_cache = None
+            self.set_status(f"Rendered {child.title()}.", "success")
+            parent = self.parent_of(child)
+            if parent is not None and parent.parent_id is not None:
+                parent.state_cache = None
+            if self.editor is not None:
+                self.editor.rehighlight()
+            self.refresh_timeline()
+            if then is not None:
+                then(True)
+
+        self._run_project_io(_work, _done)
+        return True
+
+    def generate_subproject(self, clip, then=None) -> None:
+        """A stale nested clip's play button: open the child, generate its
+        stale clips, then render its mixdown (NP2)."""
+        self._subproject_queue.append((clip, then))
+        if len(self._subproject_queue) == 1 and not self.is_busy():
+            self._advance_subproject_queue()
+
+    def generate_stale_subprojects(self, project) -> int:
+        """Queues every stale nested clip of `project`'s document."""
+        stale = [c for c in project.document.nested_clips() if self.nested_state(c, project) == "stale"]
+        for clip in stale:
+            self._subproject_queue.append((clip, None))
+        if stale and not self.is_busy():
+            self._advance_subproject_queue()
+        return len(stale)
+
+    def _advance_subproject_queue(self) -> None:
+        if not self._subproject_queue or self.is_busy():
+            return
+        clip, then = self._subproject_queue[0]
+
+        def _finished(ok):
+            self._subproject_queue.pop(0)
+            if then is not None:
+                then(ok)
+            self._advance_subproject_queue()
+
+        def _opened(child):
+            if child is None:
+                _finished(False)
+                return
+            stale = [c for c in child.document.dirty_clips() if not c.is_nested]
+            if stale:
+                self._pending_render_after_generate[child.project_id] = _finished
+                self.timeline_dock.generate_dirty_clips_requested(child)
+                return
+            nested_stale = [c for c in child.document.nested_clips() if self.nested_state(c, child) == "stale"]
+            if nested_stale:
+                # Grandchildren first, then this child again.
+                self._subproject_queue[1:1] = [(c, None) for c in nested_stale]
+                self._subproject_queue.append((clip, then))
+                self._subproject_queue.pop(0)
+                self._advance_subproject_queue()
+                return
+            if not self.render_subproject(child, then=_finished):
+                _finished(False)
+
+        self.open_child(clip, then=_opened)
+
+    def _after_project_generated(self, project) -> None:
+        """A generate finished in `project`: a child with nothing stale left
+        renders its mixdown (the queue's own step, or on its own)."""
+        if project.parent_id is None:
+            return
+        project.state_cache = None
+        waiting = self._pending_render_after_generate.pop(project.project_id, None)
+        if [c for c in project.document.dirty_clips() if not c.is_nested]:
+            if waiting is not None:
+                waiting(False)
+            return
+        if not self.render_subproject(project, then=waiting) and waiting is not None:
+            waiting(False)
 
     # -- focus: what the transcript, Settings and FX docks show (NP1) --------------
 
@@ -326,6 +544,7 @@ class SubprojectsMixin:
             selection.project_id = owner.project_id
             clip = owner.document.get_clip(selection.selected_clip_id)
             if clip is not None and clip.is_nested:
+                self.note_nested_selected(clip.id)
                 if self.is_child_missing(clip) and self.child_project(clip) is None:
                     self.set_focus(owner)
                     return
@@ -352,6 +571,307 @@ class SubprojectsMixin:
             self.transcript_dock.refresh_scope()
         self.schedule_save()
         self.refresh_timeline()
+
+    def on_subproject_action(self, clip_id: str, action: str) -> None:
+        """A nested block's context menu (or double-click, "enter")."""
+        project = self.project_of_clip_id(clip_id)
+        clip = project.document.get_clip(clip_id) if project is not None else None
+        if clip is None or not clip.is_nested:
+            return
+        if action == "render":
+            self.generate_subproject(clip)
+        elif action == "enter":
+            self.enter_subproject(clip)
+        elif action == "relink":
+            self.relink_subproject_dialog(clip)
+        elif action == "detach":
+            self.detach_subproject_dialog(clip)
+        elif action == "embed":
+            self.embed_subproject(clip)
+        elif action == "remove":
+            self.remove_subproject(clip)
+
+    # -- level: what the timeline and transport show (NP5) --------------------------
+
+    def set_level(self, project) -> None:
+        """The timeline and transport show `project`; the docks follow.
+        The breadcrumb is `chain_of(level)`."""
+        if project is None:
+            return
+        if project is self.level and project is self.focus:
+            return
+        self.transport.stop()
+        self.level = project
+        self._focus_switching = True
+        try:
+            self.selection.clear()
+        finally:
+            self._focus_switching = False
+        self._set_focus_forced(project)
+        if self.timeline_dock is not None:
+            self.timeline_dock.refresh_breadcrumb()
+        self.refresh_timeline()
+        self._rebuild_transport_schedule()
+
+    def _set_focus_forced(self, project) -> None:
+        self.focus = project
+        self.selection.project_id = project.project_id
+        self._refresh_focus_docks()
+
+    def enter_subproject(self, clip) -> None:
+        """Double-click on a nested block or its placeholder: the timeline
+        shows the child (opened if needed)."""
+        self.open_child(clip, then=lambda child: self.set_level(child) if child is not None else None)
+
+    def note_nested_selected(self, clip_id) -> None:
+        import time
+
+        self._last_nested_selected = (clip_id, time.monotonic())
+
+    def enter_recently_selected_subproject(self, window_s: float = 0.8) -> bool:
+        """The transcript's double-click on a placeholder line: its first
+        click already put the child in the docks; the second enters it."""
+        import time
+
+        last = getattr(self, "_last_nested_selected", None)
+        if not last or time.monotonic() - last[1] > window_s:
+            return False
+        project = self.project_of_clip_id(last[0])
+        clip = project.document.get_clip(last[0]) if project is not None else None
+        if clip is None or not clip.is_nested:
+            return False
+        self._last_nested_selected = None
+        self.enter_subproject(clip)
+        return True
+
+    # -- linked children, relink, detach, embed, remove (NP4) ---------------------
+
+    def _linked_path_for(self, parent, file_path: str) -> str:
+        """`file_path` as `Clip.child["path"]`: relative to the parent's
+        file when there is one on the same drive, else absolute."""
+        file_path = os.path.abspath(file_path)
+        base = self._parent_file(parent)
+        if base:
+            base_dir = os.path.dirname(os.path.abspath(base))
+            if os.path.splitdrive(base_dir)[0].lower() == os.path.splitdrive(file_path)[0].lower():
+                return os.path.relpath(file_path, base_dir).replace("\\", "/")
+        return file_path
+
+    def add_subproject(self, path: str, position: int | None = None):
+        """File > Add Subproject...: links an existing `.tbaw` into the focus
+        project as a nested clip (NP4: "add an existing project" links).
+        Returns the child, or None when refused."""
+        from kokoro_gui.daw.models import _new_id
+        from kokoro_gui.daw.undo import ReplaceWithNestedCommand
+
+        parent = self.focus
+        try:
+            info = project_io.inspect_bundle(path)
+        except project_io.ProjectError as e:
+            QMessageBox.warning(self, "Add subproject", str(e))
+            return None
+        tree_ids = {p.project_id for p in self.open_projects()}
+        tree_ids |= {self.child_id_of(c) for p in self.open_projects() for c in p.document.nested_clips()}
+        if info.project_id in tree_ids:
+            QMessageBox.warning(self, "Add subproject",
+                                f"{os.path.basename(path)} (project {info.project_id}) is already in this project.")
+            return None
+        document = parent.document
+        position = len(document.text) if position is None else max(0, min(int(position), len(document.text)))
+        loaded = project_io.load_project(path)
+        title = project_io.display_title(loaded.project_settings if loaded else {}, path, "Subproject")
+        child_ref = {"kind": "linked", "id": info.project_id, "path": self._linked_path_for(parent, path)}
+        clip_id = _new_id()
+        document.undo_stack.push(ReplaceWithNestedCommand(position, position, child_ref, title, clip_id))
+        if parent is self.focus and self.editor is not None:
+            self.editor.load_text(document.text)
+        clip = document.get_clip(clip_id)
+        child = self.open_child(clip)
+        self.wait_for_project_io()
+        child = child or self.child_project(clip)
+        self.on_characters_changed()
+        return child
+
+    def add_subproject_dialog(self):
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(self, "Add subproject", "", "KokoroGUI project (*.tbaw)")
+        if path:
+            editor = self.editor
+            position = None
+            if editor is not None:
+                cursor = editor.textCursor()
+                position = cursor.block().position() + cursor.block().length() - 1
+            return self.add_subproject(path, position)
+        return None
+
+    def relink_subproject(self, clip, path: str) -> bool:
+        """Points a nested clip at `path`, refused unless the file's
+        `project_id` is the one the clip names."""
+        from kokoro_gui.daw.undo import SetFieldCommand
+
+        child_id = self.child_id_of(clip)
+        try:
+            info = project_io.inspect_bundle(path)
+        except project_io.ProjectError as e:
+            QMessageBox.warning(self, "Relink", str(e))
+            return False
+        if info.project_id != child_id:
+            QMessageBox.warning(self, "Relink", f"{os.path.basename(path)} is project {info.project_id}; "
+                                                f"this subproject is {child_id}.")
+            return False
+        parent = self.project_for(clip)
+        new_child = dict(clip.child or {})
+        new_child.update({"kind": "linked", "path": self._linked_path_for(parent, path)})
+        parent.document.undo_stack.push(SetFieldCommand("clip", clip.id, "child", new_child))
+        self._missing_children.discard(child_id)
+        self.open_child(clip)
+        self.wait_for_project_io()
+        self.refresh_timeline()
+        return True
+
+    def relink_subproject_dialog(self, clip) -> bool:
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(self, "Relink subproject", "", "KokoroGUI project (*.tbaw)")
+        return bool(path) and self.relink_subproject(clip, path)
+
+    def _write_child_bundle(self, child, target: str) -> None:
+        """Writes `child`'s bundle to `target` now (on this thread) and
+        records it in the child's session."""
+        plan, _warnings = project_io.plan_save(
+            child.document, child.project_settings, target, child.project_dir, child.project_id,
+            self._backend_for, self._fx_presets_dir(), project_io.read_session(child.project_dir), child.manifest,
+        )
+        import kokoro_gui.engines.registry as engine_registry
+
+        result = project_io.write_bundle(plan, list(engine_registry.list_engines()))
+        return plan, result
+
+    @staticmethod
+    def _fx_presets_dir() -> str:
+        import kokoro_gui.qt.app as qt_app_module
+
+        return qt_app_module.FX_PRESETS_DIR
+
+    def detach_subproject(self, clip, path: str) -> bool:
+        """Detach to file...: the embedded child is written to `path` and the
+        clip links to it from now on (an undoable parent edit). The child's
+        project dir stays where it is (it's keyed by id)."""
+        from kokoro_gui.daw.undo import SetFieldCommand
+
+        child = self.child_project(clip) or self.open_child(clip)
+        self.wait_for_project_io()
+        child = child or self.child_project(clip)
+        if child is None:
+            return False
+        path = os.path.abspath(project_io.bundle_path_for(path))
+        self._autosave_one(child)
+        plan, result = self._write_child_bundle(child, path)
+        project_io.record_save(child.project_dir, path, result)
+        child.kind, child.path, child.dirty, child.manifest = "linked", path, False, dict(plan.manifest)
+        parent = self.project_for(clip)
+        new_child = {"kind": "linked", "id": child.project_id, "path": self._linked_path_for(parent, path)}
+        parent.document.undo_stack.push(SetFieldCommand("clip", clip.id, "child", new_child))
+        self.schedule_save()
+        self.refresh_timeline()
+        self.set_status(f"{child.title()} is now {os.path.basename(path)}.")
+        return True
+
+    def detach_subproject_dialog(self, clip) -> bool:
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getSaveFileName(self, "Detach subproject to", "", "KokoroGUI project (*.tbaw)")
+        return bool(path) and self.detach_subproject(clip, path)
+
+    def embed_subproject(self, clip) -> bool:
+        """Embed: the linked child's bundle is copied into the parent (its
+        project dir's `projects/`) and the clip embeds it from now on."""
+        from kokoro_gui.daw.undo import SetFieldCommand
+
+        child = self.child_project(clip) or self.open_child(clip)
+        self.wait_for_project_io()
+        child = child or self.child_project(clip)
+        if child is None:
+            return False
+        parent = self.project_for(clip)
+        target = project_io.embedded_child_path(parent.project_dir, child.project_id)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        self._autosave_one(child)
+        plan, result = self._write_child_bundle(child, target)
+        new_child = {"kind": "embedded", "id": child.project_id}
+        parent.document.undo_stack.push(SetFieldCommand("clip", clip.id, "child", new_child))
+        child.kind, child.path, child.manifest = "embedded", None, dict(plan.manifest)
+        project_io.record_save(child.project_dir, target, result, source_path=self.source_of(child))
+        child.dirty = False
+        self.schedule_save()
+        self.refresh_timeline()
+        self.set_status(f"{child.title()} is embedded in {parent.title()}.")
+        return True
+
+    def remove_subproject(self, clip) -> bool:
+        """Remove: the placeholder line (and with it the nested clip) leaves
+        the parent, one undo step. An open child is put away, its dir left
+        for close-time eviction."""
+        from kokoro_gui.daw.undo import TextEditCommand
+
+        parent = self.project_for(clip)
+        extent = parent.document.clip_extent(clip.id)
+        if extent is None:
+            return False
+        child = self.child_project(clip)
+        if child is not None:
+            if child is self.level or self.level in self._descendants_of(child):
+                self.set_level(parent)
+            if self.focus is child:
+                self._set_focus_forced(parent)
+            self._autosave_one(child)
+            for gone in [*self._descendants_of(child), child]:
+                if gone.lock is not None:
+                    gone.lock.release()
+                    gone.lock = None
+                self.children.pop(gone.project_id, None)
+        start, end = extent
+        text = parent.document.text
+        parent.document.undo_stack.push(TextEditCommand(start, end - start, 0, text[:start] + text[end:]))
+        if parent is self.focus and self.editor is not None:
+            self.editor.load_text(parent.document.text)
+        self.schedule_save()
+        self.refresh_timeline()
+        return True
+
+    def _descendants_of(self, project) -> list:
+        out = []
+        for child in self.children.values():
+            parent = self.parent_of(child)
+            while parent is not None:
+                if parent is project:
+                    out.append(child)
+                    break
+                parent = self.parent_of(parent)
+        return out
+
+    def _rebase_linked_paths(self, new_root_path: str) -> None:
+        """Save As moved the root: every linked path relative to it is
+        rewritten for the new location (the files didn't move)."""
+        old_root_path = self.root.path
+        for project in self.open_projects():
+            # Only paths relative to the root's file; a linked child's own
+            # links are relative to that child's file, which didn't move.
+            if self._parent_file(project) != old_root_path:
+                continue
+            for clip in project.document.nested_clips():
+                child = clip.child or {}
+                if child.get("kind") != "linked" or not child.get("path"):
+                    continue
+                absolute = self.child_bundle_path(project, clip)
+                if not absolute:
+                    continue
+                base_dir = os.path.dirname(os.path.abspath(new_root_path))
+                if os.path.splitdrive(base_dir)[0].lower() == os.path.splitdrive(absolute)[0].lower():
+                    child["path"] = os.path.relpath(absolute, base_dir).replace("\\", "/")
+                else:
+                    child["path"] = absolute
 
     # -- making a child -----------------------------------------------------------
 
@@ -508,6 +1028,9 @@ class SubprojectsMixin:
         except Exception as e:  # noqa: BLE001 - autosave must never crash the UI
             self.set_status(f"Autosave failed: {e}", "error")
             return
+        if digest != project.digest:
+            project.digest = digest
+            project.state_cache = None
         session = project_io.read_session(project.project_dir) or {}
         dirty = digest != session.get("saved_digest")
         if bool(session.get("dirty")) != dirty:

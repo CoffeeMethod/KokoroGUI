@@ -135,6 +135,12 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         # Child project ids whose bundle couldn't be opened (painted as
         # missing, with Relink).
         self._missing_children: set = set()
+        # Stale subprojects waiting to be generated and rendered, one at a
+        # time behind is_busy: [(nested clip, then)], and the render step a
+        # child's batch generate hands back to.
+        self._subproject_queue: list = []
+        self._pending_render_after_generate: dict = {}
+        self._nested_after_batch = None
         self._io_thread: threading.Thread | None = None
         self._pending_open_path: str | None = None
         self._closing_after_save = False
@@ -193,6 +199,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         # --- Engines: one resident backend per engine id in use ---
         self._add_backend(engine_registry.get_engine("kokoro", engine=KokoroEngine()))
         self._install_segment_key_fn()
+        self._install_nested_state_fn(self.root)
 
         self.previewFinished.connect(self._on_preview_finished)
         self.exportProgress.connect(self._on_export_progress)
@@ -573,6 +580,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.save_as_action = self._action("Save &As...", self.save_project_as_dialog, QKeySequence.StandardKey.SaveAs)
         self.file_menu.insertAction(self.recent_menu.menuAction(), self.new_action)
         self.file_menu.insertAction(self.recent_menu.menuAction(), self.new_subproject_action)
+        self.add_subproject_action = self._action("Add Su&bproject...", self.add_subproject_dialog)
+        self.file_menu.insertAction(self.recent_menu.menuAction(), self.add_subproject_action)
         self.file_menu.insertAction(self.recent_menu.menuAction(), self.open_action)
         self.file_menu.addAction(self.welcome_action)
         self.file_menu.addSeparator()
@@ -838,6 +847,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     # --- settings persistence -
 
     def schedule_save(self) -> None:
+        self.invalidate_child_states()
         self._save_timer.start(1000)
         self._update_window_title(pending=True)
 
@@ -1101,7 +1111,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     def post_config_for_clip(self, clip, project=None) -> dict:
         """The `POST_KEYS` subset of the clip's resolved config: what the
         transport, the exporter and the timeline waveform apply on top of
-        the raw segment files. Changing any of it never dirties the clip."""
+        the raw segment files. Changing any of it never dirties the clip.
+        A nested clip gets only the FX set on it (`nested_post_config`)."""
+        if clip.is_nested:
+            return self.nested_post_config(clip, project)
         return post.extract_post_config(self._assemble_clip_config(clip, project))
 
     def clip_duration_s(self, clip, project=None):
@@ -1110,7 +1123,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         for a file that can't be read, or None with no audio at all. A
         segment with a stored onset and tail is measured from those, without
         reading its file (`post.duration_hint`). Falls back to the raw
-        durations while the docks are still being built."""
+        durations while the docks are still being built. A nested clip is
+        its child's mixdown length, from `mixdown.json` (no read)."""
+        if clip.is_nested:
+            return self.nested_duration_s(clip, project)
         segments = [s for s in clip.segments if s.audio_path]
         if not segments:
             return None
@@ -1131,6 +1147,15 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         """`(samples, rate)` for the clip's segments concatenated and
         post-processed, or None. The timeline draws its waveform from this
         so it shows what the transport plays."""
+        if clip.is_nested:
+            path = self.nested_audio_path(clip, project)
+            if not path:
+                return None
+            rate = self.project_sample_rate()
+            try:
+                return post.render(path, self.post_config_for_clip(clip, project), rate), rate
+            except Exception:
+                return None
         segments = sorted((s for s in clip.segments if s.audio_path), key=lambda s: s.order_index)
         if not segments:
             return None
@@ -1689,7 +1714,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         if self.is_busy():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before saving.")
             return
-        self.project_path = os.path.abspath(project_io.bundle_path_for(path))
+        new_path = os.path.abspath(project_io.bundle_path_for(path))
+        self._rebase_linked_paths(new_path)
+        self.project_path = new_path
         project_io.remember_recent(self.settings, self.project_path)
         self._rebuild_recent_menu()
         self._update_window_title()
@@ -1911,6 +1938,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self._rebuild_transport_schedule()
 
     def set_ui_state(self, is_running: bool) -> None:
+        if not is_running and self._subproject_queue:
+            # The next stale subproject, once this job's handler is done.
+            QTimer.singleShot(0, self._advance_subproject_queue)
         self.transport_dock.set_busy(is_running)
         threads_widget = self.settings_dock.schema_form.widget_for("num_threads")
         if threads_widget is not None:
@@ -1986,11 +2016,12 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         """The Transport dock's Generate button. A document with no clips
         yet falls back to whole-document `start_conversion()`; a document
         with clips dispatches the dirty-scoped batch path."""
-        if not self.document.clips:
+        level = self.level
+        if not level.document.clips:
             self.start_conversion()
             return
 
-        dirty = self.document.dirty_clips()
+        dirty = level.document.dirty_clips()
         if not dirty:
             QMessageBox.information(self, "Up to date", "All clips are already generated.")
             return
@@ -1998,15 +2029,25 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         # Once a document has any clips, Generate always runs the
         # dirty-scoped batch path - even with JIT enabled (JIT has no
         # per-clip output shape; it stays reachable via the no-clips
-        # fallback above).
-        self.timeline_dock.generate_dirty_clips_requested()
+        # fallback above). Stale subprojects follow, one at a time (phase 4).
+        if any(not clip.is_nested for clip in dirty):
+            self._nested_after_batch = level if any(clip.is_nested for clip in dirty) else None
+            self.timeline_dock.generate_dirty_clips_requested(level)
+        else:
+            self.generate_stale_subprojects(level)
 
     def generate_clip(self, clip_id: str) -> None:
         """UI3: the gutter's per-clip play button and the timeline's
         context menu both land here. On a clip that is already clean the
         request means "regenerate": the engine bumps the clip's take and
         writes fresh audio under a new key instead of serving the cached
-        file (grill TB8)."""
+        file (grill TB8). A nested clip generates its subproject's stale
+        clips and renders its mixdown."""
+        project = self.project_of_clip_id(clip_id)
+        nested = project.document.get_clip(clip_id) if project is not None else None
+        if nested is not None and nested.is_nested:
+            self.generate_subproject(nested)
+            return
         clip = self.document.get_clip(clip_id)
         regenerate = clip is not None and clip not in self.document.dirty_clips()
         self.timeline_dock.on_generate_clip_requested(clip_id, regenerate=regenerate)
@@ -2014,6 +2055,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     def on_project_generated(self, project) -> None:
         """A generate finished and its results are in `project`'s document.
         A subproject's mixdown follows (phase 4); the root has none."""
+        self._after_project_generated(project)
 
     def on_batch_generation_progress(self, completed: int, total: int, current_clip_label: str) -> None:
         percent = int((completed / total) * 100) if total else 0
@@ -2032,6 +2074,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         else:
             self.set_status(f"Generated {succeeded} of {total} clips ({failed} failed)", "warning")
         self._rebuild_transport_schedule()
+        project, self._nested_after_batch = self._nested_after_batch, None
+        if project is not None:
+            self.generate_stale_subprojects(project)
 
     def auto_split_and_generate(self) -> None:
         """Generate menu > "Auto-split then generate": turns every
@@ -2115,6 +2160,16 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             if placed.estimated or mix is None:
                 continue
             post_config = self.post_config_for_clip(placed.clip, level)
+            if placed.clip.is_nested:
+                # A subproject plays its mixdown (NP2).
+                path = self.nested_audio_path(placed.clip, level)
+                if path:
+                    schedule.append(ScheduledClip(
+                        clip_id=placed.clip.id, start_s=placed.start_s, path=path, post_config=post_config,
+                        gain=mix.gain, pan=mix.pan, automation=mix.automation,
+                        fade_in_s=mix.fade_in_s, fade_out_s=mix.fade_out_s,
+                    ))
+                continue
             # One ScheduledClip per segment so multi-segment clips play
             # back to back at their real (rendered) offsets.
             offset = placed.start_s

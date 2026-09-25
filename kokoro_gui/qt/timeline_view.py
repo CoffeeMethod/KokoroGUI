@@ -58,7 +58,7 @@ import time
 from typing import Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QGraphicsItem, QGraphicsLineItem, QGraphicsProxyWidget, QGraphicsRectItem, QGraphicsScene,
     QGraphicsSimpleTextItem, QGraphicsView, QHBoxLayout, QMenu, QMessageBox, QSlider, QToolButton, QWidget,
@@ -168,6 +168,9 @@ class ClipBlockItem(QGraphicsItem):
         self._fx_active = False
         self._estimated = False
         self._overlap = False
+        # A subproject's block (phase 4): None for an ordinary clip, else
+        # "ok", "stale" or "missing".
+        self._nested_state = None
         self._fade_in_px = 0.0
         self._fade_out_px = 0.0
         self.clip_id: Optional[str] = None
@@ -211,6 +214,14 @@ class ClipBlockItem(QGraphicsItem):
     @property
     def estimated(self) -> bool:
         return self._estimated
+
+    def set_nested_state(self, state) -> None:
+        self._nested_state = state
+        self.update()
+
+    @property
+    def nested_state(self):
+        return self._nested_state
 
     def set_overlap(self, overlap: bool) -> None:
         self._overlap = overlap
@@ -269,9 +280,31 @@ class ClipBlockItem(QGraphicsItem):
             painter.setPen(QPen(base.darker(135), 1))
         painter.setBrush(fill)
         painter.drawRoundedRect(rect, CLIP_RADIUS_PX, CLIP_RADIUS_PX)
+        label_left = 6
+        if self._nested_state is not None:
+            # A subproject: a folder glyph before the title; a stale one is
+            # hatched like a stale clip, a missing one crossed out.
+            painter.save()
+            if self._nested_state in ("stale", "missing"):
+                pattern = Qt.BrushStyle.DiagCrossPattern if self._nested_state == "missing" \
+                    else Qt.BrushStyle.BDiagPattern
+                hatch = QColor(pal.dirty_underline if self._nested_state == "missing" else pal.estimated_outline)
+                hatch.setAlpha(150)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(hatch, pattern))
+                painter.drawRoundedRect(rect, CLIP_RADIUS_PX, CLIP_RADIUS_PX)
+            painter.setPen(QPen(QColor(pal.text), 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            folder = QRectF(6, 6, 12, 9)
+            painter.drawRect(folder)
+            painter.drawLine(QPointF(6, 6), QPointF(9, 3.5))
+            painter.drawLine(QPointF(9, 3.5), QPointF(12, 3.5))
+            painter.drawLine(QPointF(12, 3.5), QPointF(13, 6))
+            painter.restore()
+            label_left = 22
         if self._label:
             painter.setPen(label_color_for(base) if not self._estimated else QColor(pal.text))
-            painter.drawText(rect.adjusted(6, 3, -4, -2), 0, self._label)
+            painter.drawText(rect.adjusted(label_left, 3, -4, -2), 0, self._label)
 
         if not self._estimated:
             # Fade ramps: a line from the bottom corner up to where the fade
@@ -611,6 +644,9 @@ class TimelineView(QGraphicsView):
     clipMoved = Signal(str, float)  # (clip_id, new_start_s)
     unpinRequested = Signal(str)
     lockInTimeRequested = Signal(str, bool)  # (clip_id, pinned)
+    # Phase 4: a subproject block's menu and double-click. The action is
+    # "enter", "render", "relink", "detach", "embed" or "remove".
+    subprojectActionRequested = Signal(str, str)  # (clip_id, action)
     seekRequested = Signal(float)
     zoomChanged = Signal(float)
     fadeChanged = Signal(str, str, float)  # (clip_id, "fade_in_s" | "fade_out_s", seconds)
@@ -661,6 +697,7 @@ class TimelineView(QGraphicsView):
         self._drag_payload = None
 
         self._automation_shown: set = set()
+        self._nested_state_fn = None
         self._automation_items: dict = {}
         self._status_filter = "all"
         self._loop_s: Optional[tuple] = None
@@ -716,6 +753,9 @@ class TimelineView(QGraphicsView):
             return None
 
         menu = QMenu(self)
+        clip = self._document.get_clip(block.clip_id) if self._document is not None else None
+        if clip is not None and clip.is_nested:
+            return self._build_subproject_menu(menu, clip)
         generate_action = menu.addAction("Generate")
         generate_action.triggered.connect(
             lambda checked=False, cid=block.clip_id: self.generateClipRequested.emit(cid)
@@ -752,6 +792,20 @@ class TimelineView(QGraphicsView):
                 align = menu.addAction("Align words")
                 align.triggered.connect(lambda checked=False, cid=clip.id: self.alignWordsRequested.emit(cid))
 
+        return menu
+
+    def _build_subproject_menu(self, menu: QMenu, clip) -> QMenu:
+        """A nested block: Enter, Generate and render, Detach to file... or
+        Embed, Relink..., Remove."""
+        kind = (clip.child or {}).get("kind", "embedded")
+        items = [("Enter", "enter"), ("Generate and render", "render")]
+        items.append(("Detach to file...", "detach") if kind == "embedded" else ("Embed", "embed"))
+        items.append(("Relink...", "relink"))
+        items.append(("Remove", "remove"))
+        for label, action_name in items:
+            action = menu.addAction(label)
+            action.triggered.connect(
+                lambda checked=False, cid=clip.id, a=action_name: self.subprojectActionRequested.emit(cid, a))
         return menu
 
     def _add_take_menu(self, menu: QMenu, clip) -> None:
@@ -855,6 +909,12 @@ class TimelineView(QGraphicsView):
         return True
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        block = self._clip_block_at(event.position().toPoint())
+        if block is not None and block.nested_state is not None and block.clip_id is not None:
+            # A subproject's block: enter it (NP6).
+            self.subprojectActionRequested.emit(block.clip_id, "enter")
+            event.accept()
+            return
         scene_pos = self.mapToScene(event.position().toPoint())
         if event.button() == Qt.MouseButton.LeftButton:
             if scene_pos.y() < RULER_HEIGHT_PX:
@@ -1199,8 +1259,12 @@ class TimelineView(QGraphicsView):
         return peaks
 
     def render_document(self, document, arrangement: Optional[Arrangement] = None,
-                        clip_samples=None) -> None:
+                        clip_samples=None, nested_state=None) -> None:
+        """`nested_state(clip)` gives a subproject block's state ("ok",
+        "stale", "missing"); unset, every nested block paints "stale"."""
         pal = theme.current()
+        if nested_state is not None:
+            self._nested_state_fn = nested_state
         self._document = document
         if arrangement is None:
             arrangement = compute_arrangement(document)
@@ -1254,6 +1318,8 @@ class TimelineView(QGraphicsView):
                 continue
             character = document.get_character(clip.character_id)
             color = character.highlight_color if character is not None else FALLBACK_CLIP_COLOR
+            if clip.is_nested:
+                color = pal.accent
 
             x = seconds_to_x(placed.start_s, self._zoom)
             width = max(seconds_to_x(placed.duration_s, self._zoom), MIN_CLIP_WIDTH_PX)
@@ -1264,7 +1330,12 @@ class TimelineView(QGraphicsView):
             block.set_overlap(clip.id in overlapping)
             block.set_clip_id(clip.id)
             block.set_color(color)
-            block.set_label(character.name if character is not None else "")
+            if clip.is_nested:
+                block.set_label(document.clip_text(clip))
+                state_fn = getattr(self, "_nested_state_fn", None)
+                block.set_nested_state(state_fn(clip) if state_fn is not None else "stale")
+            else:
+                block.set_label(character.name if character is not None else "")
             block.set_geometry(x, y, width, height)
             block.set_estimated(placed.estimated)
             block.start_s = placed.start_s
@@ -1337,5 +1408,5 @@ class TimelineWidget(QWidget):
         self.view.verticalScrollBar().valueChanged.connect(self.header.verticalScrollBar().setValue)
 
     def render_document(self, document, arrangement: Optional[Arrangement] = None,
-                        clip_samples=None) -> None:
-        self.view.render_document(document, arrangement, clip_samples=clip_samples)
+                        clip_samples=None, nested_state=None) -> None:
+        self.view.render_document(document, arrangement, clip_samples=clip_samples, nested_state=nested_state)

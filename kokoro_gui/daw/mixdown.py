@@ -142,9 +142,19 @@ def _safe_component(name: str) -> str:
     return name or "clip"
 
 
-def _clip_samples(clip, sample_rate: int, post_config: Optional[dict] = None) -> Optional[np.ndarray]:
+def _clip_samples(clip, sample_rate: int, post_config: Optional[dict] = None,
+                  nested_audio_path: Optional[Callable] = None) -> Optional[np.ndarray]:
     """All of a clip's segments concatenated at `sample_rate`, post-processed
-    per `post_config`, or None if none of them can be read."""
+    per `post_config`, or None if none of them can be read. A nested clip
+    (a subproject) is its child's mixdown file, `nested_audio_path(clip)`."""
+    if getattr(clip, "source", None) == "nested":
+        path = nested_audio_path(clip) if nested_audio_path is not None else None
+        if not path:
+            return None
+        try:
+            return mixer.load_clip_samples(path, sample_rate, post_config).astype(np.float32)
+        except Exception:
+            return None
     parts = []
     for segment in sorted(clip.segments, key=lambda s: s.order_index):
         if not segment.audio_path:
@@ -189,10 +199,11 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
             progress: Optional[Callable[[float, str], None]] = None,
             post_config_for_clip: Optional[Callable] = None, channels: int = 2,
             range_s: Optional[tuple] = None, srt_granularity: str = "clip",
-            include_cue_sheet: bool = False) -> ExportResult:
+            include_cue_sheet: bool = False, nested_audio_path: Optional[Callable] = None) -> ExportResult:
     """`post_config_for_clip(clip)` returns the clip's resolved read-time
     post-processing config (the app passes `QtTTSApp.post_config_for_clip`);
-    None exports the raw segment files as they are."""
+    None exports the raw segment files as they are. `nested_audio_path(clip)`
+    names a subproject's mixdown file (phase 4)."""
     if arrangement is None:
         arrangement = compute_arrangement(document, engine_id=engine_id)
     mixes = clip_mixes(document, arrangement)
@@ -215,7 +226,7 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
         if mix is None:
             continue  # muted, or soloed out
         post_config = post_config_for_clip(placed.clip) if post_config_for_clip else None
-        samples = _clip_samples(placed.clip, sample_rate, post_config)
+        samples = _clip_samples(placed.clip, sample_rate, post_config, nested_audio_path)
         if samples is None:
             skipped.append(placed.clip.id)
             continue

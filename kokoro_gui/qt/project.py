@@ -68,6 +68,12 @@ ENGINES_DIR = "engines"
 # Embedded subprojects (phase 4): `projects/<child project_id>.tbaw`, each a
 # complete bundle, stored uncompressed.
 PROJECTS_DIR = "projects"
+# A subproject's rendered mix, in its own project dir (phase 4, NP2):
+# `mixdown.<fmt>` plus `mixdown.json` recording the document digest it was
+# rendered from, its length and rate. Derived data: never bundled, always
+# rebuildable.
+MIXDOWN = "mixdown"
+MIXDOWN_JSON = "mixdown.json"
 # A child project dir's `session.json` names its source as
 # `<parent source>#<child id>`, so `choose_project_dir` and
 # `sweep_orphan_dirs` can tell an embedded child from a root.
@@ -606,6 +612,61 @@ def child_source_path(parent_source: str | None, child_id: str) -> str | None:
     if not parent_source:
         return None
     return f"{os.path.abspath(parent_source)}{CHILD_SOURCE_SEP}{child_id}"
+
+
+def mixdown_file(project_dir: str, fmt: str = "wav") -> str:
+    return os.path.join(project_dir, f"{MIXDOWN}.{fmt}")
+
+
+def read_mixdown_info(project_dir: str | None) -> dict | None:
+    """`mixdown.json` when it names a mixdown file that exists: `{"file",
+    "digest", "duration_s", "sample_rate"}` with `file` absolute. None
+    otherwise."""
+    if not project_dir:
+        return None
+    path = os.path.join(project_dir, MIXDOWN_JSON)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            info = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(info, dict):
+        return None
+    name = os.path.basename(str(info.get("file") or ""))
+    if not name.startswith(MIXDOWN + "."):
+        return None
+    full = os.path.join(project_dir, name)
+    if not os.path.isfile(full):
+        return None
+    try:
+        duration = float(info.get("duration_s") or 0.0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    return {"file": full, "digest": info.get("digest"), "duration_s": duration,
+            "sample_rate": info.get("sample_rate")}
+
+
+def write_mixdown_info(project_dir: str, file_path: str, digest: str, duration_s: float, sample_rate: int) -> None:
+    tmp = os.path.join(project_dir, MIXDOWN_JSON + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"file": os.path.basename(file_path), "digest": digest, "duration_s": round(float(duration_s), 6),
+                   "sample_rate": int(sample_rate)}, f, indent=2)
+    os.replace(tmp, os.path.join(project_dir, MIXDOWN_JSON))
+
+
+def remove_mixdown(project_dir: str) -> None:
+    info = read_mixdown_info(project_dir)
+    for path in ((info or {}).get("file"), os.path.join(project_dir, MIXDOWN_JSON)):
+        if path:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+def project_digest(document: Document, project_settings: dict, project_dir: str) -> str:
+    """The digest autosave would record for the project as it is now."""
+    return document_digest(*serialize_for_dir(document, project_settings, project_dir))
 
 
 def document_digest(document_bytes: bytes, project_bytes: bytes) -> str:
