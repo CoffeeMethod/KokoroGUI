@@ -49,6 +49,9 @@ def isolated_dirs(tmp_path, monkeypatch):
     # _process_text_async run in the suite would write a real
     # generation_stats.json into the repo working directory.
     monkeypatch.setattr(kokoro_engine, "STATS_FILE", str(tmp_path / "generation_stats.json"))
+    # The global character library (kokoro_gui/daw/library.py), same idea.
+    from kokoro_gui.daw import library as library_module
+    monkeypatch.setattr(library_module, "LIBRARY_DIR", str(tmp_path / "characters"))
     return SimpleNamespace(custom_voices=custom_voices, cache_dir=cache_dir, out_dir=out_dir)
 
 

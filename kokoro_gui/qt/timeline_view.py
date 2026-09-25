@@ -2,7 +2,8 @@
 Claude/PLAN_ui_shell_redesign.md, section 4).
 
 `TimelineView` owns the scene: a ruler across the top, one lane per
-`Document.track`, one `ClipBlockItem` per placed clip, and a playhead. x is
+track that has clips (`Document.used_tracks`; an unused track isn't
+drawn), one `ClipBlockItem` per placed clip, and a playhead. x is
 `seconds * self._zoom` (Ctrl+wheel, 20-400 px/s). Where a clip sits comes
 from `kokoro_gui.daw.arrangement.compute_arrangement` - the same placement
 the transport plays and the exporter writes - never from text offsets.
@@ -946,7 +947,7 @@ class TimelineView(QGraphicsView):
         self._select_clip_block_at(pos)
 
     def _track_at_y(self, document, y: float):
-        tracks = sorted(document.tracks, key=lambda t: t.order_index)
+        tracks = document.used_tracks()
         index = int((y - RULER_HEIGHT_PX) // LANE_HEIGHT_PX)
         if y < RULER_HEIGHT_PX:
             return None
@@ -1193,7 +1194,9 @@ class TimelineView(QGraphicsView):
         self._playhead_item = None
         self._ruler = None
 
-        tracks = sorted(document.tracks, key=lambda t: t.order_index)
+        # Only tracks with clips are drawn (grill PR4); an unused one keeps
+        # its mixer settings in the model.
+        tracks = document.used_tracks()
         lane_index_by_track_id = {track.id: i for i, track in enumerate(tracks)}
         self._lane_count = len(tracks)
 

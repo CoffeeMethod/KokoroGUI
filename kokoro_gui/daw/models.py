@@ -80,6 +80,11 @@ class Character:
     # `overrides["variant"]` swaps the reference and the segment key follows
     # through the normal voice fingerprint. Ignored for other backends.
     variants: dict = field(default_factory=dict)
+    # The global character library entry this record is a live-linked view
+    # of (grill WF12, kokoro_gui/daw/library.py), or None for a character
+    # local to this project. The record stays inlined either way, so a
+    # project opens where the library entry doesn't exist.
+    library_id: Optional[str] = None
     id: str = field(default_factory=_new_id)
     # Fields this version doesn't know, carried through a load/save so an
     # older KokoroGUI doesn't strip what a newer one wrote (see
@@ -89,7 +94,8 @@ class Character:
     extra: dict = field(default_factory=dict)
 
     @classmethod
-    def from_preset_dict(cls, name, preset_data, highlight_color=None, backend_id="kokoro", id=None):
+    def from_preset_dict(cls, name, preset_data, highlight_color=None, backend_id="kokoro", id=None,
+                         library_id=None):
         """Wraps a preset dict already loaded via `PresetsMixin.load_preset`
         (or an equivalent plain `json.load`) into a `Character`. Only keys in
         `ALLOWED_PRESET_KEYS` are kept, mirroring the same untrusted-preset
@@ -102,6 +108,8 @@ class Character:
             kwargs["backend_id"] = backend_id
         if id is not None:
             kwargs["id"] = id
+        if library_id is not None:
+            kwargs["library_id"] = library_id
         return cls(**kwargs)
 
     def to_preset_dict(self) -> dict:
@@ -363,6 +371,45 @@ class Document:
     def get_clip(self, clip_id: str) -> Optional[Clip]:
         return next((c for c in self.clips if c.id == clip_id), None)
 
+    def track_layout(self) -> dict:
+        """`settings["track_layout"]` normalised: `{"mode": "character"}`
+        (one track per used character, the default) or `{"mode":
+        "unified", "lanes": N}` (grill PR4, kokoro_gui/daw/lanes.py)."""
+        raw = (self.settings or {}).get("track_layout")
+        if isinstance(raw, dict) and raw.get("mode") == "unified":
+            try:
+                lanes = int(raw.get("lanes", 3))
+            except (TypeError, ValueError):
+                lanes = 3
+            return {"mode": "unified", "lanes": max(1, min(lanes, 16))}
+        return {"mode": "character"}
+
+    def track_for_character(self, character_id: Optional[str], create: bool = False) -> Optional[str]:
+        """The id of `character_id`'s track. With `create`, a character
+        that has none gets one, appended and named after it (grill PR4: a
+        track exists only once its character is used). Never creates in
+        the unified layout, where lanes are assigned after the edit, or
+        for an unknown character."""
+        track = next((t for t in self.tracks if t.character_id == character_id), None) if character_id else None
+        if track is not None:
+            return track.id
+        if not create or self.track_layout()["mode"] == "unified":
+            return None
+        character = self.get_character(character_id)
+        if character is None:
+            return None
+        order = max((t.order_index for t in self.tracks), default=-1) + 1
+        track = Track(name=character.name, character_id=character.id, order_index=order)
+        self.tracks.append(track)
+        return track.id
+
+    def used_tracks(self) -> list:
+        """Tracks at least one clip sits on, in `order_index` order: the
+        lanes the timeline draws. A track whose clips are all gone stays in
+        `tracks` with its mixer settings and comes back when used again."""
+        used = {clip.track_id for clip in self.clips if clip.track_id is not None}
+        return sorted((t for t in self.tracks if t.id in used), key=lambda t: t.order_index)
+
     def clip_covering(self, position: int) -> Optional[Clip]:
         """The `Clip` covering text offset `position`, if any (inclusive
         start, exclusive end) - reads whichever run's tag covers that
@@ -517,7 +564,7 @@ class Document:
                 f"got start={start}, end={end}"
             )
 
-        track_id = next((t.id for t in self.tracks if t.character_id == character_id), None)
+        track_id = self.track_for_character(character_id, create=True)
 
         overlapping_ids = set()
         for run, r_start, r_end in self._iter_runs_with_offsets():

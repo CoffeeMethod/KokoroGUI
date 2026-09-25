@@ -127,19 +127,27 @@ class AssignCharacterCommand(Command):
         self.clip_fields = dict(clip_fields or {})
         self._pre_runs: "list | None" = None
         self._pre_clips: "list | None" = None
+        self._created_track_ids: list = []
         self.new_clip_id: "str | None" = None
 
     def do(self, document) -> None:
         self._pre_runs = copy.deepcopy(document.runs)
         self._pre_clips = copy.deepcopy(document.clips)
+        track_ids = {t.id for t in document.tracks}
         new_clip = document.assign_character_to_range(self.start, self.end, self.character_id)
         for name, value in self.clip_fields.items():
             setattr(new_clip, name, copy.deepcopy(value))
         self.new_clip_id = new_clip.id
+        # A character's first use makes its track (grill PR4); undo takes it
+        # away again.
+        self._created_track_ids = [t.id for t in document.tracks if t.id not in track_ids]
 
     def undo(self, document) -> None:
         document.runs = copy.deepcopy(self._pre_runs)
         document.clips = copy.deepcopy(self._pre_clips)
+        created = set(self._created_track_ids)
+        if created:
+            document.tracks = [t for t in document.tracks if t.id not in created]
 
 
 class TextEditCommand(Command):

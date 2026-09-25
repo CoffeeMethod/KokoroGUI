@@ -1201,16 +1201,12 @@ def project_summary(path: str) -> dict | None:
     }
 
 
-def new_document_from(previous: Document | None) -> Document:
-    """WF3: a new project inherits the previous project's characters (a
-    copy for now - the global library from WF4-WF7 is future work) and one
-    track per character."""
-    import copy
+def new_document_from(library, settings: dict | None = None) -> Document:
+    """File > New: an empty document seeded with every character library
+    entry, linked (WF3 through the WF4-WF7 library), and no tracks; a
+    character gets its track the first time the transcript uses it (grill
+    PR4). An empty library gives one local "Default" character from
+    `settings`. The previous project's characters are not copied."""
+    from kokoro_gui.daw.migration import migrate_legacy_settings_to_document
 
-    from kokoro_gui.daw.models import Track
-
-    if previous is None or not previous.characters:
-        return Document(runs=[], clips=[], tracks=[], characters=[], settings={})
-    characters = copy.deepcopy(previous.characters)
-    tracks = [Track(name=c.name, character_id=c.id, order_index=i) for i, c in enumerate(characters)]
-    return Document(runs=[], clips=[], tracks=tracks, characters=characters, settings={})
+    return migrate_legacy_settings_to_document(settings or {}, library)

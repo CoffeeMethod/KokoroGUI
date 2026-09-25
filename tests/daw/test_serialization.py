@@ -192,7 +192,7 @@ def test_unknown_keys_on_every_object_survive_a_round_trip():
         }],
         "tracks": [{"name": "T", "id": "t1", "future_track_key": "x"}],
         "characters": [{
-            "name": "Alice", "id": "ch1", "library_id": "lib-1",
+            "name": "Alice", "id": "ch1", "future_character_key": "lib-1",
             "preset_data": {"voice": "af_bella", "unknown_preset_key": 7},
         }],
         "settings": {},
@@ -201,7 +201,7 @@ def test_unknown_keys_on_every_object_survive_a_round_trip():
 
     # The whitelist still guards what reaches a config dict.
     assert doc.characters[0].preset_data == {"voice": "af_bella"}
-    assert doc.characters[0].extra == {"library_id": "lib-1", "preset_data": {"unknown_preset_key": 7}}
+    assert doc.characters[0].extra == {"future_character_key": "lib-1", "preset_data": {"unknown_preset_key": 7}}
     assert doc.clips[0].extra == {"future_clip_key": {"nested": True}}
     assert doc.clips[0].segments[0].extra == {"word_timings": [[0, 0.5]]}
     assert doc.runs[0].extra == {"future_run_key": 1}
@@ -212,7 +212,7 @@ def test_unknown_keys_on_every_object_survive_a_round_trip():
     assert out["clips"][0]["future_clip_key"] == {"nested": True}
     assert out["clips"][0]["segments"][0]["word_timings"] == [[0, 0.5]]
     assert out["tracks"][0]["future_track_key"] == "x"
-    assert out["characters"][0]["library_id"] == "lib-1"
+    assert out["characters"][0]["future_character_key"] == "lib-1"
     assert out["characters"][0]["preset_data"] == {"voice": "af_bella", "unknown_preset_key": 7}
     assert "extra" not in out["clips"][0] and "extra" not in out["characters"][0]
 
@@ -289,3 +289,28 @@ def test_rewrite_audio_paths_walks_parked_takes():
     data = rewrite_audio_paths(document_to_dict(doc), lambda p: "X/" + p)
     assert data["clips"][0]["segments"][0]["audio_path"] == "X/a.wav"
     assert data["clips"][0]["takes"]["2"][0]["audio_path"] == "X/b.wav"
+
+
+# ---------------------------------------------------------------------------
+# Character.library_id (phase 3, grill WF12)
+# ---------------------------------------------------------------------------
+
+def test_character_library_id_round_trips():
+    linked = Character.from_preset_dict("Narrator", {"voice": "af_bella"}, library_id="lib-7")
+    local = Character.from_preset_dict("Guest", {"voice": "am_adam"})
+    doc = Document(characters=[linked, local])
+
+    data = document_to_dict(doc)
+    assert data["characters"][0]["library_id"] == "lib-7"
+    assert data["characters"][1]["library_id"] is None
+
+    restored = document_from_dict(data)
+    assert restored.characters[0].library_id == "lib-7"
+    assert restored.characters[0].id == linked.id
+    assert restored.characters[1].library_id is None
+    assert restored.characters[0].extra == {}
+
+
+def test_character_without_library_id_loads_local():
+    doc = document_from_dict({"characters": [{"name": "Old", "id": "c1", "preset_data": {}}]})
+    assert doc.characters[0].library_id is None

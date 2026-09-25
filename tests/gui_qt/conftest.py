@@ -56,6 +56,8 @@ def qt_app(tmp_path, monkeypatch, qtbot):
     monkeypatch.setattr(qt_app_module, "FX_PRESETS_DIR", str(tmp_path / "presets" / "fx"))
     monkeypatch.setattr(qt_app_module, "DOCUMENT_FILE", str(tmp_path / "document.json"))
     monkeypatch.setattr(qt_app_module, "KokoroEngine", StubEngine)
+    from kokoro_gui.daw import library as library_module
+    monkeypatch.setattr(library_module, "LIBRARY_DIR", str(tmp_path / "characters"))
     (tmp_path / "custom_voices").mkdir(exist_ok=True)
 
     # Modal dialogs (QMessageBox.exec/QInputDialog.exec/...) block on the

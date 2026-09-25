@@ -36,12 +36,14 @@ import threading
 import time
 
 import playback
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import QFileSystemWatcher, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QWidget
 
 from kokoro_engine import KokoroEngine
-from kokoro_gui.daw import wordalign
+from kokoro_gui.daw import library as character_library, wordalign
+from kokoro_gui.daw.migration import import_presets_to_library, link_exact_matches
+from kokoro_gui.daw.models import Document
 from kokoro_gui.daw.arrangement import compute_arrangement, segment_timeline
 from kokoro_gui.daw.mixplan import clip_mixes
 from kokoro_gui.daw.auto_split import plan_auto_split_clips, plan_pause_gaps
@@ -73,6 +75,7 @@ from kokoro_gui.qt.welcome_dialog import WelcomeDialog  # noqa: E402
 
 APP_NAME = "KokoroGUI"
 SCHEDULE_REBUILD_DEBOUNCE_MS = 100
+LIBRARY_WATCH_DEBOUNCE_MS = 150
 
 
 class QtTTSApp(QMainWindow):
@@ -98,6 +101,17 @@ class QtTTSApp(QMainWindow):
         os.makedirs(FX_PRESETS_DIR, exist_ok=True)
 
         self.settings = qt_settings.load_settings(CONFIG_FILE)
+        # The global character library (phase 3, grill WF4-WF7/WF12).
+        # `library_missing` holds the document character ids whose entry
+        # the last resolve didn't find (the Characters dialog's "not found
+        # here"). `_library_link_ids` is set by the one-time presets import
+        # and consumed by the next `_switch_document`.
+        self.character_library = character_library.CharacterLibrary()
+        os.makedirs(self.character_library.root, exist_ok=True)
+        self.library_missing: set = set()
+        self._library_link_ids: list | None = None
+        self._library_mtime = 0
+        self._import_presets_once()
         self.jit_enabled = self.settings.get("jit_enabled", False)
         self.timecode_format = "%Y%m%d%H%M%S"
 
@@ -141,6 +155,17 @@ class QtTTSApp(QMainWindow):
         self._schedule_timer.setSingleShot(True)
         self._schedule_timer.setInterval(SCHEDULE_REBUILD_DEBOUNCE_MS)
         self._schedule_timer.timeout.connect(self._rebuild_transport_schedule)
+
+        # Another window (or process) editing the library reaches this one:
+        # a directory change re-resolves the open document, debounced so
+        # one save's .tmp + os.replace is one pass.
+        self._library_timer = QTimer(self)
+        self._library_timer.setSingleShot(True)
+        self._library_timer.setInterval(LIBRARY_WATCH_DEBOUNCE_MS)
+        self._library_timer.timeout.connect(self._on_library_changed_on_disk)
+        self._library_watcher = QFileSystemWatcher(self)
+        self._library_watcher.addPath(os.path.abspath(self.character_library.root))
+        self._library_watcher.directoryChanged.connect(lambda _path: self._library_timer.start())
 
         self.welcome_dialog: WelcomeDialog | None = None
         self.transcript_dock: TranscriptDock | None = None
@@ -203,7 +228,7 @@ class QtTTSApp(QMainWindow):
         config, which migrates to `document.tbaw`) is opened right after
         the docks exist, since Open extracts on a thread with progress on
         the transport bar. Characters for a first run come from the
-        presets directory, as before."""
+        character library."""
         candidates = []
         last = self.settings.get("last_project")
         if last and os.path.isfile(last):
@@ -214,11 +239,51 @@ class QtTTSApp(QMainWindow):
         self.project_path = None
         self.project_settings = {}
         if self._pending_open_path:
-            document = project_io.new_document_from(None)
+            # A placeholder until the Open lands.
+            document = Document(runs=[], clips=[], tracks=[], characters=[], settings={})
         else:
-            document = document_state.load_or_create_document(DOCUMENT_FILE, self.settings, PRESETS_DIR)
+            document = document_state.load_or_create_document(DOCUMENT_FILE, self.settings, self.character_library)
+            self._resolve_library_into(document)
         self._begin_untitled_project_dir(document)
         return document
+
+    def _import_presets_once(self) -> None:
+        """Phase 3 migration: the first launch with the library copies every
+        `presets/*.json` into it (the files stay) and remembers the ids so
+        the project opened next can link its characters that match one
+        exactly. `settings["library_imported"]` makes it one-time."""
+        if self.settings.get("library_imported"):
+            return
+        try:
+            self._library_link_ids = import_presets_to_library(PRESETS_DIR, self.character_library)
+        except OSError:
+            # The flag stays unset, so the next launch tries again.
+            self._library_link_ids = None
+            return
+        self.settings["library_imported"] = True
+
+    # --- character library ------------------------------------------------
+
+    def _resolve_library_into(self, document) -> character_library.ResolveReport:
+        report = character_library.resolve_characters(document, [self.character_library])
+        self.library_missing = set(report.missing)
+        self._library_mtime = self.character_library.mtime()
+        return report
+
+    def resolve_library(self, refresh: bool = True) -> character_library.ResolveReport:
+        """Re-reads every linked character of the open document from the
+        library (the live link, WF5). With `refresh`, a change reaches the
+        editor, transcript, timeline and autosave through
+        `on_characters_changed`."""
+        report = self._resolve_library_into(self.document)
+        if report.changed and refresh:
+            self.on_characters_changed()
+        return report
+
+    def _on_library_changed_on_disk(self) -> None:
+        if self.character_library.mtime() == self._library_mtime:
+            return
+        self.resolve_library()
 
     def _begin_untitled_project_dir(self, document) -> None:
         """New: a fresh dir with an empty `document.json` and the lock, so an
@@ -1038,6 +1103,13 @@ class QtTTSApp(QMainWindow):
     def _switch_document(self, document, path: str | None, project_settings: dict | None = None) -> None:
         self.transport.stop()
         self.document = document
+        if self._library_link_ids is not None:
+            # First launch with the library: link what the presets import
+            # made an exact copy of (one time only).
+            entries = [e for e in self.character_library.list() if e.library_id in set(self._library_link_ids)]
+            link_exact_matches(document, entries)
+            self._library_link_ids = None
+        self._resolve_library_into(document)
         self.project_path = os.path.abspath(path) if path else None
         self.project_settings = dict(project_settings or {})
         self._install_segment_key_fn()
@@ -1181,15 +1253,13 @@ class QtTTSApp(QMainWindow):
     # -- new ------------------------------------------------------------------
 
     def new_project(self) -> None:
-        previous = self.document
-
         def _start():
-            document = project_io.new_document_from(previous)
+            document = project_io.new_document_from(self.character_library, self.settings)
             self.project_settings = {}
             self._begin_untitled_project_dir(document)
             self._switch_document(document, None)
             self._evict_other_project_dirs()
-            self.set_status("New project (characters inherited from the previous one). Save As to name it.")
+            self.set_status("New project with the library's characters. Save As to name it.")
 
         self._close_current_project(_start)
 
@@ -1323,7 +1393,7 @@ class QtTTSApp(QMainWindow):
         partway; the window can't sit on a document with no dir."""
         if self.project_dir:
             return
-        document = project_io.new_document_from(self.document)
+        document = project_io.new_document_from(self.character_library, self.settings)
         self.project_settings = {}
         self._begin_untitled_project_dir(document)
         self._switch_document(document, None)

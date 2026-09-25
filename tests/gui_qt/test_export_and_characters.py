@@ -117,6 +117,9 @@ def test_run_export_schedules_mixdown_on_the_worker_and_writes_the_file(qt_app, 
 
 def test_characters_dialog_lists_and_edits_name_color_voice_fx(qt_app):
     alice = qt_app.document.characters[0]
+    assert qt_app.document.tracks == []  # a track is made on first use
+    _type(qt_app.editor, "hello")
+    qt_app.document.assign_character_to_range(0, 5, alice.id)
     dialog = CharactersDialog(qt_app)
     assert [dialog.list.item(i).text() for i in range(dialog.list.count())] == ["Default"]
 
@@ -139,7 +142,8 @@ def test_characters_dialog_add_and_remove(qt_app, monkeypatch):
     dialog = CharactersDialog(qt_app)
     new = dialog.add_character()
     assert new in qt_app.document.characters
-    assert any(t.character_id == new.id for t in qt_app.document.tracks)
+    assert new.library_id is None
+    assert not any(t.character_id == new.id for t in qt_app.document.tracks)
 
     dialog.remove_current()
     assert new not in qt_app.document.characters
@@ -208,6 +212,9 @@ def test_characters_changed_refreshes_header_and_timeline(qt_app):
     dialog = CharactersDialog(qt_app)
     added = dialog.add_character()
     assert qt_app.transcript_dock.character_combo.findData(added.id) >= 0
+    _type(qt_app.editor, "hello")
+    qt_app.document.assign_character_to_range(0, 5, added.id)
+    qt_app.on_characters_changed()
     labels = [item.text() for item in qt_app.timeline_dock.timeline_widget.header._scene.items()
               if hasattr(item, "text")]
     assert added.name in labels
@@ -268,3 +275,107 @@ def test_transcript_variant_combo_sets_the_override_undoably(qt_app):
     assert clip.overrides["variant"] == "angry"
     qt_app.document.undo_stack.undo()
     assert "variant" not in clip.overrides
+
+
+# -- the character library in the dialog (phase 3 step 5) -----------------------------
+
+
+def _scopes(dialog):
+    from kokoro_gui.qt.characters_dialog import _SCOPE_ROLE
+    return [dialog.list.item(i).data(_SCOPE_ROLE) for i in range(dialog.list.count())]
+
+
+def test_promote_makes_a_library_entry_and_links_the_record(qt_app):
+    from kokoro_gui.qt.characters_dialog import SCOPE_LIBRARY, SCOPE_LOCAL
+
+    character = qt_app.document.characters[0]
+    dialog = CharactersDialog(qt_app)
+    assert _scopes(dialog) == [SCOPE_LOCAL]
+    assert dialog.promote_btn.isEnabled()
+    assert not dialog.rename_in_library_btn.isEnabled()
+
+    library_id = dialog.promote_current()
+
+    assert character.library_id == library_id
+    entry = qt_app.character_library.get(library_id)
+    assert entry.name == character.name
+    assert entry.preset_data == character.preset_data
+    assert _scopes(dialog) == [SCOPE_LIBRARY]
+    assert dialog.scope_label.text() == SCOPE_LIBRARY
+    assert not dialog.promote_btn.isEnabled()  # greyed once linked
+    assert dialog.promote_current() is None
+
+
+def test_editing_a_linked_character_writes_the_library_entry(qt_app):
+    character = qt_app.document.characters[0]
+    dialog = CharactersDialog(qt_app)
+    library_id = dialog.promote_current()
+
+    dialog.voice_combo.setCurrentText("am_adam")
+    dialog.set_color("#654321")
+
+    entry = qt_app.character_library.get(library_id)
+    assert entry.preset_data["voice"] == "am_adam"
+    assert entry.highlight_color == "#654321"
+    assert character.preset_data["voice"] == "am_adam"
+
+
+def test_renaming_edits_the_project_only_until_rename_in_library(qt_app):
+    dialog = CharactersDialog(qt_app)
+    library_id = dialog.promote_current()
+    original = qt_app.character_library.get(library_id).name
+
+    dialog.name_edit.setText("Narrator here")
+    dialog.name_edit.textEdited.emit("Narrator here")
+    assert qt_app.document.characters[0].name == "Narrator here"
+    assert qt_app.character_library.get(library_id).name == original
+
+    assert dialog.rename_in_library_btn.isEnabled()
+    assert dialog.rename_in_library() is True
+    assert qt_app.character_library.get(library_id).name == "Narrator here"
+
+
+def test_add_from_library_inlines_a_linked_copy(qt_app):
+    from kokoro_gui.daw.models import Character
+
+    library = qt_app.character_library
+    host_id = library.save(Character.from_preset_dict("Host", {"voice": "am_adam"}, highlight_color="#3fae7a"))
+    guest_id = library.save(Character.from_preset_dict("Guest", {"voice": "af_bella"}))
+    dialog = CharactersDialog(qt_app)
+    assert {e.library_id for e in dialog.library_entries_to_add()} == {host_id, guest_id}
+
+    added = dialog.add_from_library([host_id])
+
+    assert len(added) == 1
+    host = added[0]
+    assert host in qt_app.document.characters
+    assert host.library_id == host_id
+    assert host.id != host_id
+    assert host.preset_data == {"voice": "am_adam"}
+    assert host.highlight_color == "#3fae7a"
+    assert not any(t.character_id == host.id for t in qt_app.document.tracks)
+    assert [e.library_id for e in dialog.library_entries_to_add()] == [guest_id]
+    assert qt_app.transcript_dock.character_combo.findData(host.id) >= 0
+
+
+def test_a_character_missing_from_this_library_plays_its_snapshot(qt_app):
+    from kokoro_gui.daw.models import Character
+    from kokoro_gui.qt.characters_dialog import SCOPE_MISSING
+
+    orphan = Character.from_preset_dict("Visitor", {"voice": "bf_emma"}, library_id="from-another-machine")
+    qt_app.document.characters.append(orphan)
+    report = qt_app.resolve_library()
+    assert report.missing == [orphan.id]
+    assert orphan.id in qt_app.library_missing
+    assert orphan.preset_data == {"voice": "bf_emma"}
+
+    dialog = CharactersDialog(qt_app)
+    dialog.list.setCurrentRow(len(qt_app.document.characters) - 1)
+    assert dialog.scope_label.text() == SCOPE_MISSING
+    assert not dialog.promote_btn.isEnabled()
+    assert not dialog.rename_in_library_btn.isEnabled()
+
+    # Edits stay on the snapshot; nothing is written to this library.
+    dialog.voice_combo.setCurrentText("am_adam")
+    assert orphan.preset_data["voice"] == "am_adam"
+    assert qt_app.character_library.get("from-another-machine") is None

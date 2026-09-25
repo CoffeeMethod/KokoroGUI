@@ -71,6 +71,25 @@ def _character_to_dict(character: Character) -> dict:
     return data
 
 
+def character_from_dict(data: dict) -> Character:
+    """One `Character` from its `document.json` dict: `preset_data` through
+    the `ALLOWED_PRESET_KEYS` whitelist, the keys it strips kept in
+    `extra["preset_data"]`. Also reads a character library file
+    (kokoro_gui/daw/library.py), which holds the same shape."""
+    known, extra = _split_unknown(Character, data)
+    preset_data = known.get("preset_data") or {}
+    if isinstance(preset_data, dict):
+        stripped = {k: v for k, v in preset_data.items() if k not in ALLOWED_PRESET_KEYS}
+        known["preset_data"] = filter_allowed_keys(preset_data, ALLOWED_PRESET_KEYS)
+        if stripped:
+            extra["preset_data"] = stripped
+    return Character(extra=extra, **known)
+
+
+# The writer's name for the library module, alongside `character_from_dict`.
+character_to_dict = _character_to_dict
+
+
 def document_to_dict(doc: Document) -> dict:
     """Plain-JSON-serializable shape for `doc`.
 
@@ -188,16 +207,7 @@ def document_from_dict(data: dict) -> Document:
         known, extra = _split_unknown(Track, t)
         tracks.append(Track(extra=extra, **known))
 
-    characters = []
-    for c in data.get("characters", []):
-        known, extra = _split_unknown(Character, c)
-        preset_data = known.get("preset_data") or {}
-        if isinstance(preset_data, dict):
-            stripped = {k: v for k, v in preset_data.items() if k not in ALLOWED_PRESET_KEYS}
-            known["preset_data"] = filter_allowed_keys(preset_data, ALLOWED_PRESET_KEYS)
-            if stripped:
-                extra["preset_data"] = stripped
-        characters.append(Character(extra=extra, **known))
+    characters = [character_from_dict(c) for c in data.get("characters", [])]
 
     if "runs" in data:
         runs = []

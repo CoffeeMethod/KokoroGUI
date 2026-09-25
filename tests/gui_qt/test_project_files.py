@@ -84,16 +84,31 @@ def test_clear_recent_empties_list_but_keeps_last_project(tmp_path):
     assert settings["last_project"].endswith("a.tbaw")
 
 
-def test_new_document_inherits_characters_as_copies():
-    alice = Character.from_preset_dict("Alice", {"voice": "af_heart"})
-    previous = Document.from_plain_text("old text", characters=[alice])
+def test_new_document_seeds_linked_characters_from_the_library(tmp_path):
+    from kokoro_gui.daw.library import CharacterLibrary
 
-    fresh = project_io.new_document_from(previous)
+    library = CharacterLibrary(str(tmp_path / "characters"))
+    alice_id = library.save(Character.from_preset_dict("Alice", {"voice": "af_heart"}))
+    bob_id = library.save(Character.from_preset_dict("Bob", {"voice": "am_adam"}))
+
+    fresh = project_io.new_document_from(library, {"voice": "ignored"})
 
     assert fresh.text == ""
-    assert [c.name for c in fresh.characters] == ["Alice"]
-    assert fresh.characters[0] is not alice
-    assert fresh.tracks[0].character_id == fresh.characters[0].id
+    assert [c.name for c in fresh.characters] == ["Alice", "Bob"]
+    assert [c.library_id for c in fresh.characters] == [alice_id, bob_id]
+    assert fresh.tracks == []  # made on first use (grill PR4)
+
+
+def test_new_document_with_an_empty_library_gets_one_local_default(tmp_path):
+    from kokoro_gui.daw.library import CharacterLibrary
+    from kokoro_gui.daw.migration import DEFAULT_CHARACTER_NAME
+
+    fresh = project_io.new_document_from(CharacterLibrary(str(tmp_path / "characters")), {"voice": "af_bella"})
+
+    assert [c.name for c in fresh.characters] == [DEFAULT_CHARACTER_NAME]
+    assert fresh.characters[0].library_id is None
+    assert fresh.characters[0].preset_data["voice"] == "af_bella"
+    assert fresh.tracks == []
 
 
 # -- project.py: the bundle without an app -------------------------------------------
@@ -888,9 +903,12 @@ def test_recent_menu_lists_projects_and_opens_them(qt_app, tmp_path):
     assert qt_app.project_path.endswith("one.tbaw")
 
 
-def test_new_project_inherits_characters_and_clears_selection(qt_app):
-    bob = Character.from_preset_dict("Bob", {})
+def test_new_project_seeds_the_library_and_clears_selection(qt_app):
+    bob = Character.from_preset_dict("Bob", {"voice": "am_adam"})
     qt_app.document.characters.append(bob)
+    bob.library_id = qt_app.character_library.save(bob)  # promoted
+    local = Character.from_preset_dict("Only here", {})
+    qt_app.document.characters.append(local)
     _type(qt_app.editor, "hello")
     qt_app.document.assign_character_to_range(0, 5, bob.id)
     qt_app.editor.rehighlight()
@@ -898,10 +916,32 @@ def test_new_project_inherits_characters_and_clears_selection(qt_app):
 
     qt_app.new_project()
 
-    assert [c.name for c in qt_app.document.characters] == ["Default", "Bob"]
+    # The library's entries, linked; the previous project's local
+    # characters ("Default", "Only here") don't come along.
+    assert [c.name for c in qt_app.document.characters] == ["Bob"]
+    assert qt_app.document.characters[0].library_id == bob.library_id
+    assert qt_app.document.characters[0].id != bob.id
+    assert qt_app.document.tracks == []  # New makes no tracks until a character is assigned
     assert qt_app.document.clips == []
     assert qt_app.selection.kind == "none"
-    assert qt_app.transcript_dock.character_combo.findData(qt_app.document.characters[1].id) >= 0
+    assert qt_app.transcript_dock.character_combo.findData(qt_app.document.characters[0].id) >= 0
+
+
+def test_new_project_with_an_empty_library_gets_a_local_default(qt_app):
+    from kokoro_gui.daw.migration import DEFAULT_CHARACTER_NAME
+
+    assert qt_app.character_library.list() == []
+    qt_app.document.characters.append(Character.from_preset_dict("Bob", {}))
+
+    qt_app.new_project()
+
+    assert [c.name for c in qt_app.document.characters] == [DEFAULT_CHARACTER_NAME]
+    assert qt_app.document.characters[0].library_id is None
+    assert qt_app.document.tracks == []
+
+    _type(qt_app.editor, "hello")
+    qt_app.document.assign_character_to_range(0, 5, qt_app.document.characters[0].id)
+    assert [t.name for t in qt_app.document.tracks] == [DEFAULT_CHARACTER_NAME]
 
 
 def test_open_missing_project_warns_and_forgets_it(qt_app, tmp_path, monkeypatch):

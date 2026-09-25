@@ -1,31 +1,69 @@
-"""Edit > Characters... - the character library dialog (UI13: name, color,
-voice, FX preset; the Audio8 reference-pair picker stays in the Voice
-Reference dock until the WF4 global library exists).
+"""Edit > Characters... - the project's characters and their link to the
+global character library (UI13: name, color, voice, FX preset; phase 3:
+the library, grill WF4-WF7 and WF12).
+
+Each row carries a scope badge: "Library" for a character linked to a
+library entry (`Character.library_id`), "Local" for one that lives only in
+this project, and "Library (not found here)" for a linked character whose
+entry isn't in this machine's library (the inlined snapshot plays).
+
+Editing a linked character's voice, FX, color or variants writes the
+library entry too, then re-resolves the open document (the live link,
+WF5). Renaming edits this project's name only; "Rename in library" copies
+it to the entry. "Promote to Library" turns a local character into a new
+entry (WF7). "Add" is a split button: a new local character, or a linked
+copy of library entries not yet in the project.
 
 A character on a cloning backend (Audio8) also gets a variants table:
 variant name -> reference (`Character.variants`), which a clip picks with
 the transcript's Variant combo.
 
-Edits `app.document.characters` directly. Adding a character also adds a
-`Track` for it (Q8's auto-placement default, same as migration.py does).
-Removing one is refused while any clip still uses it.
+Edits `app.document.characters` directly. Adding a character makes no
+`Track`; `Document.assign_character_to_range` makes one on first use
+(grill PR4). Removing one is refused while any clip still uses it; the
+library entry stays.
 
-`apply_changes()` is separated from the widgets so tests can drive the
-dialog without `exec()`.
+Every button calls a public method (`add_character`, `add_from_library`,
+`promote_current`, `rename_in_library`, ...), so tests drive the dialog
+without `exec()`.
 """
 from __future__ import annotations
 
+from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QColorDialog, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QColorDialog, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
+    QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
 
-from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character, Track
+from kokoro_gui.daw import library as library_ops
+from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character
+from kokoro_gui.qt import theme
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
 
+SCOPE_LOCAL = "Local"
+SCOPE_LIBRARY = "Library"
+SCOPE_MISSING = "Library (not found here)"
+_ID_ROLE = 0x0100
+_SCOPE_ROLE = 0x0101
+
 _FX_NONE = "(none)"
+
+
+class _ScopeBadgeDelegate(QStyledItemDelegate):
+    """Paints the row's scope right-aligned in the muted text color."""
+
+    def paint(self, painter, option, index) -> None:  # noqa: N802 (Qt override)
+        super().paint(painter, option, index)
+        scope = index.data(_SCOPE_ROLE)
+        if not scope:
+            return
+        painter.save()
+        painter.setPen(QColor(theme.current().text_muted))
+        rect = QRect(option.rect).adjusted(0, 0, -6, 0)
+        painter.drawText(rect, int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), scope)
+        painter.restore()
 
 
 class CharactersDialog(QDialog):
@@ -41,23 +79,48 @@ class CharactersDialog(QDialog):
 
         left = QVBoxLayout()
         self.list = QListWidget()
+        self.list.setItemDelegate(_ScopeBadgeDelegate(self.list))
         self.list.currentItemChanged.connect(self._on_current_changed)
         left.addWidget(self.list, 1)
         btn_row = QHBoxLayout()
-        self.add_btn = QPushButton("Add")
+        # Split button: the face adds a local character, the arrow offers
+        # "From library...".
+        self.add_btn = QToolButton()
+        self.add_btn.setText("Add")
+        self.add_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self.add_btn.clicked.connect(self.add_character)
+        add_menu = QMenu(self.add_btn)
+        self.add_local_action = add_menu.addAction("New local character")
+        self.add_local_action.triggered.connect(self.add_character)
+        self.add_library_action = add_menu.addAction("From library...")
+        self.add_library_action.triggered.connect(self.pick_from_library)
+        self.add_btn.setMenu(add_menu)
         self.remove_btn = QPushButton("Remove")
         self.remove_btn.clicked.connect(self.remove_current)
         btn_row.addWidget(self.add_btn)
         btn_row.addWidget(self.remove_btn)
         left.addLayout(btn_row)
+        self.promote_btn = QPushButton("Promote to Library")
+        self.promote_btn.setToolTip("Make this character a library entry, shared with every project.")
+        self.promote_btn.clicked.connect(self.promote_current)
+        left.addWidget(self.promote_btn)
         root.addLayout(left, 1)
 
         right = QWidget()
         form = QFormLayout(right)
         self.name_edit = QLineEdit()
+        self.name_edit.setToolTip("The name in this project. The library entry keeps its own.")
         self.name_edit.textEdited.connect(self._on_name_edited)
         form.addRow("Name:", self.name_edit)
+
+        scope_row = QHBoxLayout()
+        self.scope_label = QLabel()
+        self.rename_in_library_btn = QPushButton("Rename in library")
+        self.rename_in_library_btn.setToolTip("Give the library entry this project's name for the character.")
+        self.rename_in_library_btn.clicked.connect(self.rename_in_library)
+        scope_row.addWidget(self.scope_label, 1)
+        scope_row.addWidget(self.rename_in_library_btn)
+        form.addRow("Scope:", scope_row)
 
         color_row = QHBoxLayout()
         self.color_btn = QPushButton()
@@ -115,13 +178,25 @@ class CharactersDialog(QDialog):
 
     # -- list ------------------------------------------------------------------
 
+    @property
+    def library(self):
+        return self.app.character_library
+
+    def scope_of(self, character: Character) -> str:
+        if not character.library_id:
+            return SCOPE_LOCAL
+        if self.library.get(character.library_id) is None:
+            return SCOPE_MISSING
+        return SCOPE_LIBRARY
+
     def reload(self) -> None:
         self._loading = True
         try:
             self.list.clear()
             for character in self.app.document.characters:
                 item = QListWidgetItem(character.name)
-                item.setData(0x0100, character.id)
+                item.setData(_ID_ROLE, character.id)
+                item.setData(_SCOPE_ROLE, self.scope_of(character))
                 item.setForeground(QColor(character.highlight_color))
                 self.list.addItem(item)
         finally:
@@ -131,11 +206,26 @@ class CharactersDialog(QDialog):
         else:
             self._show(None)
 
+    def _select(self, character: Character) -> None:
+        for row in range(self.list.count()):
+            if self.list.item(row).data(_ID_ROLE) == character.id:
+                self.list.setCurrentRow(row)
+                return
+
     def _on_current_changed(self, current, _previous) -> None:
         if self._loading:
             return
-        cid = current.data(0x0100) if current is not None else None
+        cid = current.data(_ID_ROLE) if current is not None else None
         self._show(self.app.document.get_character(cid) if cid else None)
+
+    def _show_scope(self, character: Character | None) -> None:
+        scope = self.scope_of(character) if character is not None else ""
+        self.scope_label.setText(scope)
+        self.promote_btn.setEnabled(scope == SCOPE_LOCAL)
+        self.rename_in_library_btn.setEnabled(scope == SCOPE_LIBRARY)
+        item = self.list.currentItem()
+        if item is not None and character is not None:
+            item.setData(_SCOPE_ROLE, scope)
 
     def _show(self, character: Character | None) -> None:
         self._current = character
@@ -144,6 +234,7 @@ class CharactersDialog(QDialog):
             enabled = character is not None
             for w in (self.name_edit, self.color_btn, self.color_edit, self.voice_combo, self.fx_combo, self.remove_btn):
                 w.setEnabled(enabled)
+            self._show_scope(character)
             if character is None:
                 self.name_edit.clear()
                 self.color_edit.clear()
@@ -259,7 +350,8 @@ class CharactersDialog(QDialog):
         for track in self.app.document.tracks:
             if track.character_id == self._current.id:
                 track.name = text
-        self._changed()
+        # The project's name only (WF12); "Rename in library" is separate.
+        self._changed(write_through=False)
 
     def _pick_color(self) -> None:
         if self._current is None:
@@ -306,6 +398,8 @@ class CharactersDialog(QDialog):
         self._changed()
 
     def add_character(self) -> Character:
+        """A new local character (WF6). No track until the transcript uses
+        it (grill PR4)."""
         doc = self.app.document
         index = len(doc.characters)
         color = DEFAULT_HIGHLIGHT_PALETTE[index % len(DEFAULT_HIGHLIGHT_PALETTE)]
@@ -319,11 +413,83 @@ class CharactersDialog(QDialog):
         character = Character.from_preset_dict(name, {"voice": self.app.settings.get("voice", "af_heart")},
                                                highlight_color=color, backend_id=self.app.backend.id)
         doc.characters.append(character)
-        doc.tracks.append(Track(name=name, character_id=character.id, order_index=len(doc.tracks)))
         self.reload()
         self.list.setCurrentRow(self.list.count() - 1)
-        self._changed()
+        self._changed(write_through=False)
         return character
+
+    # -- the library (phase 3) ----------------------------------------------------
+
+    def library_entries_to_add(self) -> list:
+        """Library entries no character in this project links to yet."""
+        linked = {c.library_id for c in self.app.document.characters if c.library_id}
+        return [entry for entry in self.library.list() if entry.library_id not in linked]
+
+    def add_from_library(self, library_ids) -> list:
+        """Inlines a linked copy of each entry (fresh document id,
+        `library_id` set) and returns the new records."""
+        added = []
+        for library_id in library_ids:
+            entry = self.library.get(library_id)
+            if entry is None:
+                continue
+            record = library_ops.linked_copy(entry)
+            self.app.document.characters.append(record)
+            added.append(record)
+        if added:
+            self.reload()
+            self._select(added[-1])
+            self._changed(write_through=False)
+        return added
+
+    def pick_from_library(self) -> list:
+        entries = self.library_entries_to_add()
+        if not entries:
+            QMessageBox.information(self, "Character library",
+                                    "Every library character is already in this project.")
+            return []
+        picker = QDialog(self)
+        picker.setWindowTitle("Add from library")
+        layout = QVBoxLayout(picker)
+        listing = QListWidget()
+        listing.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        for entry in entries:
+            item = QListWidgetItem(entry.name)
+            item.setData(_ID_ROLE, entry.library_id)
+            item.setForeground(QColor(entry.highlight_color))
+            listing.addItem(item)
+        listing.itemDoubleClicked.connect(lambda _item: picker.accept())
+        layout.addWidget(listing)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(picker.accept)
+        buttons.rejected.connect(picker.reject)
+        layout.addWidget(buttons)
+        if picker.exec() != QDialog.DialogCode.Accepted:
+            return []
+        return self.add_from_library([item.data(_ID_ROLE) for item in listing.selectedItems()])
+
+    def promote_current(self) -> str | None:
+        """WF7: saves the local character as a new library entry and links
+        this record to it."""
+        character = self._current
+        if character is None or character.library_id:
+            return None
+        library_id = self.library.save(character)
+        character.library_id = library_id
+        self._show_scope(character)
+        self._changed(write_through=False)
+        return library_id
+
+    def rename_in_library(self) -> bool:
+        character = self._current
+        if character is None or not character.library_id:
+            return False
+        entry = self.library.get(character.library_id)
+        if entry is None:
+            return False
+        entry.name = character.name
+        self.library.save(entry)
+        return True
 
     def remove_current(self) -> None:
         character = self._current
@@ -340,7 +506,14 @@ class CharactersDialog(QDialog):
         for i, track in enumerate(sorted(doc.tracks, key=lambda t: t.order_index)):
             track.order_index = i
         self.reload()
-        self._changed()
+        self._changed(write_through=False)
 
-    def _changed(self) -> None:
+    def _changed(self, write_through: bool = True) -> None:
+        """After an edit: a linked character's voice, FX, color or variants
+        go to its library entry (WF5), then the open document is
+        re-resolved so every record linked to that entry follows."""
+        character = self._current
+        if write_through and character is not None and character.library_id:
+            if library_ops.write_through(character, self.library):
+                self.app.resolve_library(refresh=False)
         self.app.on_characters_changed()
