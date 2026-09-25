@@ -66,7 +66,82 @@ def find_character_fx_spans(text: str) -> list:
     return spans
 
 
+def _epub_sections(fpath: str) -> list:
+    """One `(title, text)` per EPUB spine document with text, in reading
+    order; the title is the document's first `<h1>`/`<h2>`, else
+    "Chapter N"."""
+    book = kokoro_engine.epub.read_epub(fpath, options={'ignore_ncx': True})
+    documents = [item for item in book.get_items() if item.get_type() == kokoro_engine.ebooklib.ITEM_DOCUMENT]
+    spine = [entry[0] if isinstance(entry, (tuple, list)) else entry for entry in (getattr(book, "spine", None) or [])]
+    if spine:
+        by_id = {getattr(item, "id", None) or item.get_id(): item for item in documents}
+        ordered = [by_id[i] for i in spine if i in by_id]
+        ordered += [item for item in documents if item not in ordered]
+        documents = ordered
+    sections = []
+    for item in documents:
+        soup = BeautifulSoup(item.get_content(), 'html.parser')
+        heading = soup.find(["h1", "h2"])
+        text = soup.get_text(separator='\n\n').strip()
+        if not text:
+            continue
+        title = heading.get_text(" ", strip=True) if heading is not None else ""
+        sections.append((title or f"Chapter {len(sections) + 1}", text))
+    return sections
+
+
+def _pdf_sections(fpath: str) -> list:
+    """One `(title, text)` per top-level outline entry, from its page to the
+    next entry's; the whole document as one section when there's no
+    outline."""
+    reader = kokoro_engine.pypdf.PdfReader(fpath)
+    pages = [(page.extract_text() or "") for page in reader.pages]
+    starts = []
+    try:
+        outline = reader.outline or []
+    except Exception:
+        outline = []
+    for entry in outline:
+        if isinstance(entry, list):
+            continue  # nested entries belong to the chapter above
+        try:
+            starts.append((str(entry.title).strip(), reader.get_destination_page_number(entry)))
+        except Exception:
+            continue
+    starts = sorted(((t, p) for t, p in starts if 0 <= p < len(pages)), key=lambda item: item[1])
+    if not starts:
+        text = "\n\n".join(p for p in pages if p).strip()
+        return [(os.path.splitext(os.path.basename(fpath))[0], text)] if text else []
+    sections = []
+    for index, (title, first) in enumerate(starts):
+        last = starts[index + 1][1] if index + 1 < len(starts) else len(pages)
+        text = "\n\n".join(p for p in pages[first:max(last, first + 1)] if p).strip()
+        if text:
+            sections.append((title or f"Chapter {index + 1}", text))
+    return sections
+
+
+def extract_sections(fpath: str) -> list:
+    """`[(title, text), ...]`: a book split at its chapters (grill NP8, the
+    New-from-eBook path that makes one subproject each). EPUB: spine
+    documents, titled by their first heading. PDF: the outline's top-level
+    page ranges. Anything else, or a PDF without an outline: one section."""
+    if not os.path.exists(fpath):
+        raise FileNotFoundError("File does not exist.")
+    lower = fpath.lower()
+    if lower.endswith(".epub"):
+        return _epub_sections(fpath)
+    if lower.endswith(".pdf"):
+        return _pdf_sections(fpath)
+    with open(fpath, "r", encoding="utf-8") as f:
+        text = f.read().strip()
+    return [(os.path.splitext(os.path.basename(fpath))[0], text)] if text else []
+
+
 class TextExtractionMixin:
+    def extract_sections(self, fpath):
+        return extract_sections(fpath)
+
     def extract_text_from_file(self, fpath):
         if not os.path.exists(fpath):
             raise FileNotFoundError("File does not exist.")

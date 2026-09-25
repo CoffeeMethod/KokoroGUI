@@ -1010,6 +1010,50 @@ class SubprojectsMixin:
             return self.new_subproject(cursor.selectionStart(), cursor.selectionEnd())
         return self.new_subproject(cursor.block().position() + cursor.block().length() - 1)
 
+    def new_from_sections(self, sections) -> list:
+        """New from eBook, one subproject per chapter (NP8): a new project
+        whose text is one placeholder line per `(title, text)` section, a
+        blank line between them, each an embedded subproject holding that
+        chapter's text. Returns the children. Runs after the current
+        project is put away (the close prompt may cancel it: then [])."""
+        made = []
+
+        def _build():
+            document = self.root.document
+            for index, (title, text) in enumerate(sections):
+                if index:
+                    document.replace_text(len(document.text), 0, 2, document.text + "\n\n")
+                child = self.new_subproject(len(document.text), title=title)
+                if child is None:
+                    continue
+                child.document.set_plain_text(text)
+                self._autosave_one(child)
+                made.append(child)
+            if self.editor is not None:
+                self.editor.load_text(document.text)
+            self.refresh_timeline()
+            self.set_status(f"New project with {len(made)} subproject(s). Save As to name it.")
+
+        self.new_project(then=_build)
+        return made
+
+    def new_from_ebook(self, path: str, per_chapter: bool = True) -> list:
+        """The welcome dialog's New from text: an EPUB or a PDF with an
+        outline becomes one subproject per chapter when `per_chapter`,
+        anything else (or a book with one section) plain text as before."""
+        from kokoro_gui.engine.text_extraction import extract_sections
+
+        if per_chapter and path.lower().endswith((".epub", ".pdf")):
+            try:
+                sections = extract_sections(path)
+            except Exception as e:  # noqa: BLE001 - reported, never a crash
+                QMessageBox.critical(self, "Import failed", f"Read failed: {e}")
+                return []
+            if len(sections) > 1:
+                return self.new_from_sections(sections)
+        self.import_text(path, target="new")
+        return []
+
     # -- autosave, dirty, save ------------------------------------------------------
 
     def open_projects(self) -> list:

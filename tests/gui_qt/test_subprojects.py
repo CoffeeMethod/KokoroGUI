@@ -629,3 +629,153 @@ def test_the_root_dialog_has_no_promote_to_project(qt_app):
 
     dialog = CharactersDialog(qt_app)
     assert dialog.promote_project_btn.isHidden()
+
+
+# -- step 9: New from eBook, one subproject per chapter (NP8) ---------------------
+
+
+def test_new_from_ebook_makes_one_subproject_per_chapter(qt_app, tmp_path, monkeypatch):
+    from kokoro_gui.engine import text_extraction
+
+    book = tmp_path / "novel.epub"
+    book.write_bytes(b"fake")
+    monkeypatch.setattr(text_extraction, "extract_sections", lambda path: [
+        ("Arrival", "She came home."), ("The Storm", "Rain fell."), ("After", "Quiet.")])
+
+    children = qt_app.new_from_ebook(str(book))
+
+    root = qt_app.root.document
+    assert [c.title() for c in children] == ["Arrival", "The Storm", "After"]
+    assert root.text == "Arrival\n\nThe Storm\n\nAfter"
+    nested = root.nested_clips()
+    assert [root.clip_text(c) for c in nested] == ["Arrival", "The Storm", "After"]
+    assert children[1].document.text == "Rain fell."
+    assert qt_app.editor.toPlainText() == root.text
+    # Paragraph gaps apply between chapters: the placeholders are in text order.
+    starts = [root.clip_extent(c.id)[0] for c in nested]
+    assert starts == sorted(starts)
+
+
+def test_new_from_ebook_unticked_imports_plain_text(qt_app, tmp_path, monkeypatch):
+    from kokoro_gui.engine import text_extraction
+
+    book = tmp_path / "novel.epub"
+    book.write_bytes(b"fake")
+    monkeypatch.setattr(text_extraction, "extract_sections", lambda path: [("A", "a"), ("B", "b")])
+    qt_app.engine.extract_text_from_file.return_value = "a\n\nb"
+    assert qt_app.new_from_ebook(str(book), per_chapter=False) == []
+    assert qt_app.document.text == "a\n\nb"
+    assert qt_app.children == {}
+
+
+def test_welcome_dialog_offers_one_subproject_per_chapter(qt_app, tmp_path, monkeypatch):
+    from kokoro_gui.engine import text_extraction
+
+    book = tmp_path / "novel.epub"
+    book.write_bytes(b"fake")
+    monkeypatch.setattr(text_extraction, "extract_sections", lambda path: [("One", "1."), ("Two", "2.")])
+    dialog = qt_app.show_welcome()
+    assert dialog.per_chapter_check.isChecked()
+    dialog.new_from_text(str(book))
+    assert len(qt_app.children) == 2
+
+
+# -- step 10: GC and eviction -----------------------------------------------------
+
+
+def test_gc_deletes_a_stale_mixdown_and_keeps_a_current_one(qt_app):
+    _intro, _chapter, child = _book(qt_app)
+    _render(qt_app, child)
+    info = project_io.read_mixdown_info(child.project_dir)
+    project_io.gc_project_dir(child.project_dir, child.document)
+    assert project_io.read_mixdown_info(child.project_dir) is not None
+
+    child.document.settings["gap_s"] = 1.2
+    qt_app.save_settings()
+    removed = project_io.gc_project_dir(child.project_dir, child.document)
+    assert info["file"] in removed
+    assert project_io.read_mixdown_info(child.project_dir) is None
+
+
+def test_eviction_keeps_the_kept_roots_subproject_dirs(qt_app, tmp_path):
+    _intro, _chapter, child = _book(qt_app)
+    qt_app.save_project_as(str(tmp_path / "book"))
+    qt_app.wait_for_project_io()
+    _render(qt_app, child)
+    child_dir, root_dir = child.project_dir, qt_app.root.project_dir
+    qt_app._teardown_project(discard=False)
+    stray = os.path.join(project_io.projects_root(), "0123456789abcdef")
+    os.makedirs(stray)
+    project_io.write_session(stray, {"source_path": None, "dirty": False})
+
+    removed = project_io.evict_project_dirs(root_dir)
+
+    assert stray in removed
+    assert os.path.isdir(child_dir)
+    assert project_io.read_mixdown_info(child_dir) is not None
+
+
+def test_sweep_deletes_an_orphaned_child_dir(qt_app, tmp_path):
+    _intro, _chapter, child = _book(qt_app)
+    qt_app.save_project_as(str(tmp_path / "book"))
+    qt_app.wait_for_project_io()
+    child_dir = child.project_dir
+    path = qt_app.project_path
+    qt_app._teardown_project(discard=False)
+    os.remove(path)
+    assert child_dir in project_io.sweep_orphan_dirs()
+
+
+def test_a_closed_childs_current_mixdown_keeps_it_clean_after_relaunch(qt_app, tmp_path):
+    import kokoro_gui.qt.app as qt_app_module
+
+    _intro, _chapter, child = _book(qt_app)
+    qt_app.save_project_as(str(tmp_path / "book"))
+    qt_app.wait_for_project_io()
+    _render(qt_app, child)
+    clip_id, path = child.clip_id, qt_app.project_path
+    qt_app.close()  # keeps the last project's dir and its subprojects' (TB13)
+
+    second = qt_app_module.QtTTSApp()
+    try:
+        second.wait_for_project_io()
+        assert second.project_path == path
+        nested = second.document.get_clip(clip_id)
+        assert second.children == {}
+        assert second.nested_state(nested) == "ok"
+        assert second.clip_duration_s(nested) > 0
+    finally:
+        second.close()
+
+
+def test_project_summary_counts_subprojects_and_their_audio(qt_app, tmp_path):
+    _intro, _chapter, child = _book(qt_app)
+    qt_app.save_project_as(str(tmp_path / "book"))
+    qt_app.wait_for_project_io()
+    summary = project_io.project_summary(qt_app.project_path)
+    assert summary["subprojects"] == 1
+    # The intro's 0.1 s in the parent plus the chapter's 0.1 s inside the child.
+    assert abs(summary["duration_s"] - 0.2) < 1e-6
+    dialog = qt_app.show_welcome()
+    assert dialog.subprojects_label.text() == "1"
+
+
+def test_save_waits_while_a_subproject_is_generating(qt_app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    _intro, chapter, child = _book(qt_app)
+    qt_app.save_project_as(str(tmp_path / "book"))
+    qt_app.wait_for_project_io()
+    child.document.get_clip(chapter.id).segments = []
+    child.document.settings["gap_s"] = 0.4
+    qt_app.save_settings()
+    qt_app.timeline_dock.generate_dirty_clips_requested(child)  # in flight
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: warned.append(a[1])))
+    before = os.path.getmtime(qt_app.project_path)
+
+    qt_app.save_project()
+
+    assert warned == ["Busy"]
+    assert os.path.getmtime(qt_app.project_path) == before
+    assert child.dirty

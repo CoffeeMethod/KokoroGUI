@@ -2,11 +2,13 @@
 from text, Open, shown over the main window on launch.
 
 The window has already loaded the last project by the time this opens, so
-the engine warms up underneath, Escape is a free Resume, and New inherits
-the loaded project's characters (WF3) the same way File > New does. Every
+the engine warms up underneath, Escape is a free Resume, and New starts
+with the character library's characters the same way File > New does. New
+from text makes an EPUB (or a PDF with an outline) one subproject per
+chapter when "One subproject per chapter" is ticked (grill NP8). Every
 pick is a one-line call into `QtTTSApp` (`open_project`, `new_project`,
-`import_text(..., target="new")`, `open_project_dialog`); nothing here
-touches the document directly.
+`new_from_ebook`, `open_project_dialog`); nothing here touches the
+document directly.
 
 Opened with `open()` rather than `exec()`: window-modal but asynchronous,
 so the engine's init status still reaches the transport dock and pytest-qt
@@ -69,12 +71,14 @@ class WelcomeDialog(QDialog):
         self.modified_label = QLabel("-")
         self.characters_label = QLabel("-")
         self.clips_label = QLabel("-")
+        self.subprojects_label = QLabel("-")
         self.duration_label = QLabel("-")
         self.engines_label = QLabel("-")
         form.addRow("Path:", self.path_label)
         form.addRow("Modified:", self.modified_label)
         form.addRow("Characters:", self.characters_label)
         form.addRow("Clips:", self.clips_label)
+        form.addRow("Subprojects:", self.subprojects_label)
         form.addRow("Audio:", self.duration_label)
         form.addRow("Engines:", self.engines_label)
         right.addWidget(details)
@@ -86,10 +90,16 @@ class WelcomeDialog(QDialog):
         self.new_btn.clicked.connect(self.new_project)
         self.new_from_text_btn = QPushButton("New from text file...")
         self.new_from_text_btn.clicked.connect(self._new_from_text_dialog)
+        # NP8: an EPUB (or a PDF with an outline) becomes one subproject per
+        # chapter.
+        self.per_chapter_check = QCheckBox("One subproject per chapter")
+        self.per_chapter_check.setChecked(True)
+        self.per_chapter_check.setToolTip("For an EPUB, or a PDF with a table of contents.")
         self.open_other_btn = QPushButton("Open other...")
         self.open_other_btn.clicked.connect(self.open_other)
-        for btn in (self.open_btn, self.new_btn, self.new_from_text_btn, self.open_other_btn):
-            right.addWidget(btn)
+        for widget in (self.open_btn, self.new_btn, self.new_from_text_btn, self.per_chapter_check,
+                       self.open_other_btn):
+            right.addWidget(widget)
         right.addStretch(1)
         body.addLayout(right, 2)
 
@@ -140,13 +150,14 @@ class WelcomeDialog(QDialog):
         if summary is None:
             self.path_label.setText(path or "-")
             for label in (self.modified_label, self.characters_label, self.clips_label,
-                          self.duration_label, self.engines_label):
+                          self.subprojects_label, self.duration_label, self.engines_label):
                 label.setText("-")
         else:
             self.path_label.setText(summary["path"])
             self.modified_label.setText(summary["modified"].strftime("%Y-%m-%d %H:%M"))
             self.characters_label.setText(str(summary["characters"]))
             self.clips_label.setText(str(summary["clips"]))
+            self.subprojects_label.setText(str(summary.get("subprojects", 0)))
             duration = summary.get("duration_s")
             self.duration_label.setText(_format_duration(duration) if duration is not None else "-")
             engines = summary.get("engines") or []
@@ -203,7 +214,7 @@ class WelcomeDialog(QDialog):
 
     def new_from_text(self, path: str) -> None:
         self.accept()
-        self.app.import_text(path, target="new")
+        self.app.new_from_ebook(path, per_chapter=self.per_chapter_check.isChecked())
 
     def open_other(self) -> None:
         self.accept()

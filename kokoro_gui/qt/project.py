@@ -1224,14 +1224,34 @@ def referenced_audio_paths(document: Document) -> set:
 def gc_project_dir(project_dir: str, document: Document) -> list:
     """Deletes every file under `audio/generated/` that no segment
     references (regenerated-over takes, cancelled attempts, stale
-    reservation markers). Only at a clean close: the undo stack may still
-    point at any of them while the session lives (TB11). Returns what it
+    reservation markers), and a subproject's mixdown that no longer matches
+    its document (autosave's digest of the dir's `document.json` and
+    `project.json`). Only at a clean close: the undo stack may still point
+    at any of them while the session lives (TB11). Returns what it
     removed."""
+    removed = []
+    # A subproject's mixdown older than its document is dead weight: it
+    # re-renders from the document anyway (phase 4).
+    info = read_mixdown_info(project_dir)
+    if info is not None:
+        try:
+            with open(os.path.join(project_dir, DOCUMENT), "rb") as f:
+                document_bytes = f.read()
+            project_json = os.path.join(project_dir, PROJECT_JSON)
+            project_bytes = b"{}"
+            if os.path.isfile(project_json):
+                with open(project_json, "rb") as f:
+                    project_bytes = f.read()
+            current = document_digest(document_bytes, project_bytes)
+        except OSError:
+            current = None
+        if current is not None and info.get("digest") != current:
+            remove_mixdown(project_dir)
+            removed.append(info["file"])
     generated = os.path.join(project_dir, *AUDIO_GENERATED.split("/"))
     if not os.path.isdir(generated):
-        return []
+        return removed
     keep = referenced_audio_paths(document)
-    removed = []
     for name in os.listdir(generated):
         full = os.path.join(generated, name)
         if not os.path.isfile(full):
@@ -1248,17 +1268,26 @@ def gc_project_dir(project_dir: str, document: Document) -> list:
 
 def evict_project_dirs(keep_project_dir: str | None) -> list:
     """TB13: on a clean close every dir under `cache/projects/` except the
-    one to keep (the `last_project`'s) is deleted, unless it's locked by
-    another window or dirty (a crash's recovery data). Returns the removed
-    dirs."""
+    one to keep (the `last_project`'s) and its subprojects' is deleted,
+    unless it's locked by another window or dirty (a crash's recovery
+    data). Returns the removed dirs."""
     root = projects_root()
     if not os.path.isdir(root):
         return []
     keep = os.path.realpath(keep_project_dir) if keep_project_dir else None
+    # The kept project's subprojects stay with it (phase 4): their dirs
+    # carry their mixdowns, which aren't in any bundle.
+    keep_children = set()
+    keep_session = read_session(keep_project_dir) if keep_project_dir else None
+    keep_source = (keep_session or {}).get("source_path")
+    if isinstance(keep_source, str) and keep_source:
+        keep_children = {os.path.realpath(d) for d in child_dirs_of(keep_source)}
     removed = []
     for name in os.listdir(root):
         full = os.path.join(root, name)
         if not os.path.isdir(full) or (keep and os.path.realpath(full) == keep):
+            continue
+        if os.path.realpath(full) in keep_children:
             continue
         session = read_session(full)
         if session and session.get("dirty"):
@@ -1349,6 +1378,35 @@ def migrate_segments(document: Document, project_dir: str, generation_config_for
 # --- welcome dialog ------------------------------------------------------------------
 
 
+def _embedded_duration_s(path: str) -> float:
+    """The summed `stats.duration_s` of every embedded child (and theirs),
+    read from the manifests inside the bundle without extracting."""
+    try:
+        with zipfile.ZipFile(path) as zf:
+            return _embedded_duration_in(zf, 0)
+    except (OSError, zipfile.BadZipFile):
+        return 0.0
+
+
+def _embedded_duration_in(zf: zipfile.ZipFile, depth: int) -> float:
+    if depth > 8:
+        return 0.0
+    total = 0.0
+    for name in zf.namelist():
+        if not (name.startswith(PROJECTS_DIR + "/") and name.endswith(DEFAULT_EXTENSION)):
+            continue
+        try:
+            with zf.open(name) as inner_file, zipfile.ZipFile(inner_file) as inner:
+                manifest = json.loads(inner.read(MANIFEST).decode("utf-8"))
+                stats = manifest.get("stats") if isinstance(manifest, dict) else None
+                if isinstance(stats, dict):
+                    total += float(stats.get("duration_s", 0.0) or 0.0)
+                total += _embedded_duration_in(inner, depth + 1)
+        except (OSError, zipfile.BadZipFile, KeyError, ValueError, json.JSONDecodeError):
+            continue
+    return total
+
+
 def project_summary(path: str) -> dict | None:
     """What the welcome dialog's details pane shows for a row. A `.tbaw`
     answers from `manifest.json` alone (`ZipFile.read`, no extraction, no
@@ -1377,12 +1435,16 @@ def project_summary(path: str) -> dict | None:
                 modified = datetime.datetime.fromisoformat(stamp)
             except ValueError:
                 pass
+        duration = float(stats.get("duration_s", 0.0) or 0.0)
+        # Embedded subprojects' audio, from their own manifests (phase 4).
+        duration += _embedded_duration_s(path)
         return {
             "path": os.path.abspath(path),
             "modified": modified,
             "characters": int(stats.get("characters", 0) or 0),
             "clips": int(stats.get("clips", 0) or 0),
-            "duration_s": float(stats.get("duration_s", 0.0) or 0.0),
+            "subprojects": int(stats.get("subprojects", 0) or 0),
+            "duration_s": duration,
             "engines": sorted(engines.keys()),
         }
     try:

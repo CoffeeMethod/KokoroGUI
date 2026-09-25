@@ -1502,7 +1502,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     # -- new ------------------------------------------------------------------
 
-    def new_project(self) -> None:
+    def new_project(self, then=None) -> None:
+        """File > New. `then()` runs once the new project is in place."""
         def _start():
             document = project_io.new_document_from(self.character_library, self.settings)
             self.project_settings = {}
@@ -1510,6 +1511,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             self._switch_document(document, None)
             self._evict_other_project_dirs()
             self.set_status("New project with the library's characters. Save As to name it.")
+            if then is not None:
+                then()
 
         self._close_current_project(_start)
 
