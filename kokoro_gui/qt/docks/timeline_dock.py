@@ -28,12 +28,13 @@ from PySide6.QtWidgets import (
     QPushButton, QVBoxLayout, QWidget,
 )
 
-from kokoro_gui.daw import markers as marker_ops
+from kokoro_gui.daw import beds, markers as marker_ops
 from kokoro_gui.daw.arrangement import OVERLAP_EPSILON_S, plan_ripple
 from kokoro_gui.daw.dirty import build_segments_from_results, carry_segment_timing, take_from_results
 from kokoro_gui.daw.undo import (
-    AssignCharacterCommand, DeleteTakeCommand, MoveClipBeforeCommand, MoveClipCommand, ReassignTrackCommand,
-    RippleCommand, SetActiveTakeCommand, SetClipTimestampCommand, SetFieldCommand, TextEditCommand,
+    AssignCharacterCommand, CompositeCommand, DeleteTakeCommand, MoveClipBeforeCommand, MoveClipCommand,
+    ReassignTrackCommand, RippleCommand, SetActiveTakeCommand, SetClipTimestampCommand, SetFieldCommand,
+    TextEditCommand,
 )
 from kokoro_gui.qt.timeline_view import TimelineWidget
 
@@ -86,6 +87,8 @@ class TimelineDock(QDockWidget):
         self.timeline_view.loopRangeRequested.connect(self.on_loop_range_requested)
         self.timeline_view.loopClearRequested.connect(self.on_loop_clear_requested)
         self.timeline_view.automationChanged.connect(self.on_automation_changed)
+        self.timeline_view.bedActionRequested.connect(self.on_bed_action_requested)
+        self.timeline_view.bedEdgeDragged.connect(self.on_bed_edge_dragged)
         self.timeline_widget.header.trackFieldChanged.connect(self.on_track_field_changed)
 
         # Review filter (phase 2, A5): dims the blocks that don't match.
@@ -292,8 +295,88 @@ class TimelineDock(QDockWidget):
             self._push(SetFieldCommand("track", track_id, "automation", [list(p) for p in points]))
 
     def on_track_field_changed(self, track_id: str, field: str, value) -> None:
-        if self._doc.get_track(track_id) is not None and field in ("mute", "solo", "gain", "pan"):
+        if self._doc.get_track(track_id) is not None and field in ("mute", "solo", "gain", "pan", "duck"):
             self._push(SetFieldCommand("track", track_id, field, value))
+
+    # -- music beds (phase 5 P2) ------------------------------------------------
+
+    def on_bed_action_requested(self, clip_id: str, action: str) -> None:
+        """A bed block's menu: "loop" turns looping on or off (off also
+        drops the loop length), "reset_trim" plays the whole file again,
+        "remove" deletes its transcript line and with it the clip."""
+        document = self._doc
+        clip = document.get_clip(clip_id)
+        if clip is None or not clip.is_bed:
+            return
+        if action == "loop":
+            if beds.bed_loops(clip):
+                self._push(CompositeCommand([
+                    SetFieldCommand("clip", clip_id, "overrides", None, key="loop"),
+                    SetFieldCommand("clip", clip_id, "overrides", None, key="loop_length_s"),
+                ]))
+            else:
+                self._push(SetFieldCommand("clip", clip_id, "overrides", True, key="loop"))
+        elif action == "reset_trim":
+            if "trim" in clip.overrides:
+                self._push(SetFieldCommand("clip", clip_id, "overrides", None, key="trim"))
+        elif action == "remove":
+            extent = document.clip_extent(clip_id)
+            if extent is None:
+                return
+            start, end = extent
+            text = document.text
+            document.undo_stack.push(TextEditCommand(start, end - start, 0, text[:start] + text[end:]))
+            if self.app.editor is not None:
+                self.app.editor.load_text(document.text)
+            self.app.schedule_save()
+            self.app.refresh_timeline()
+
+    def on_bed_edge_dragged(self, clip_id: str, edge: str, delta_s: float) -> None:
+        """A bed block's edge dragged by `delta_s` seconds. The left edge
+        trims the file's start and moves the block's start with it, so the
+        audio stays where it was on the timeline. The right edge trims the
+        file's end, or on a looping bed sets how long the loop runs. One
+        undo step."""
+        document = self._doc
+        clip = document.get_clip(clip_id)
+        if clip is None or not clip.is_bed:
+            return
+        file_s = beds.audio_file_seconds(clip.original_audio_path)
+        if not file_s:
+            return
+        start, end = beds.bed_trim(clip, file_s)
+        length = beds.bed_length_s(clip, file_s)
+        looping = beds.bed_loops(clip)
+        commands = []
+        if edge == "left":
+            new_start = max(0.0, min(start + float(delta_s), end - beds.MIN_BED_S))
+            moved = new_start - start
+            if abs(moved) < 1e-4:
+                return
+            placed = self.app.build_arrangement().by_clip_id().get(clip_id)
+            begin = placed.start_s if placed is not None else float(clip.timeline_timestamp or 0.0)
+            commands.append(SetFieldCommand("clip", clip_id, "overrides", [round(new_start, 4), round(end, 4)],
+                                            key="trim"))
+            commands.append(SetClipTimestampCommand(clip_id, round(max(0.0, begin + moved), 4)))
+            if looping and "loop_length_s" in clip.overrides:
+                commands.append(SetFieldCommand("clip", clip_id, "overrides",
+                                                round(max(beds.MIN_BED_S, length - moved), 4), key="loop_length_s"))
+        elif edge == "right":
+            if looping:
+                new_length = max(beds.MIN_BED_S, length + float(delta_s))
+                if abs(new_length - length) < 1e-4:
+                    return
+                commands.append(SetFieldCommand("clip", clip_id, "overrides", round(new_length, 4),
+                                                key="loop_length_s"))
+            else:
+                new_end = max(start + beds.MIN_BED_S, min(file_s, end + float(delta_s)))
+                if abs(new_end - end) < 1e-4:
+                    return
+                commands.append(SetFieldCommand("clip", clip_id, "overrides", [round(start, 4), round(new_end, 4)],
+                                                key="trim"))
+        else:
+            return
+        self._push(commands[0] if len(commands) == 1 else CompositeCommand(commands))
 
     def on_clip_unpin_requested(self, clip_id: str) -> None:
         if self._doc.get_clip(clip_id) is None:
@@ -316,7 +399,7 @@ class TimelineDock(QDockWidget):
         # focus or the level moves while it runs (phase 4).
         project = project or self.app.project_of_clip_id(clip_id)
         clip = project.document.get_clip(clip_id) if project is not None else None
-        if clip is None or clip.is_nested:
+        if clip is None or clip.is_nested or clip.source == "imported":
             return
 
         text = project.document.clip_text(clip)
@@ -533,7 +616,7 @@ class TimelineDock(QDockWidget):
         unmodified. Cancel pushes nothing.
         """
         clip = self._doc.get_clip(clip_id)
-        if clip is None or clip.is_nested:
+        if clip is None or clip.has_placeholder:
             return
 
         document = self._doc

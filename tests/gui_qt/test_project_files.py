@@ -1367,6 +1367,41 @@ def test_a_bundle_with_parked_takes_round_trips_them_and_requires_takes(tmp_path
     assert take.duration == 2.0
 
 
+def test_a_bundle_with_a_music_bed_requires_imported_and_round_trips_it(tmp_path, isolated_dirs):
+    import numpy as np
+    import soundfile as sf
+
+    from kokoro_gui.daw.undo import ImportBedCommand
+
+    project_dir, project_id = project_io.create_project_dir()
+    src = str(tmp_path / "theme.wav")
+    sf.write(src, np.zeros(8000, dtype=np.float32), 8000)
+    doc = Document.from_plain_text("Hello.")
+    command = ImportBedCommand(project_io.import_audio_file(src, project_dir), "theme", at_s=1.0)
+    doc.undo_stack.push(command)
+    doc.tracks[0].duck = True
+    assert project_io.required_features(doc) == ["imported"]
+    path = str(tmp_path / "bed.tbaw")
+
+    project_io.save_project(doc, path, {}, project_dir, project_id, fx_presets_dir=str(tmp_path / "none"))
+
+    with zipfile.ZipFile(path) as zf:
+        assert json.loads(zf.read("manifest.json"))["requires"] == ["imported"]
+    info = project_io.inspect_bundle(path)  # "imported" is supported, so this opens
+    other_dir = str(tmp_path / "other")
+    project_io.extract_small(info, other_dir)
+    project_io.extract_audio(info, other_dir)
+    loaded = project_io.finish_open(info, other_dir)
+    bed = loaded.document.get_clip(command.clip_id)
+    assert bed.is_bed and bed.pinned and bed.timeline_timestamp == 1.0
+    assert os.path.isfile(bed.original_audio_path)
+    assert bed.original_audio_path.startswith(os.path.join(other_dir, "audio", "imported"))
+    assert [r.kind for r in loaded.document.runs if r.clip_id == bed.id] == ["placeholder"]
+    track = loaded.document.get_track(bed.track_id)
+    assert (track.role, track.duck) == ("music", True)
+    assert loaded.document.dirty_clips() == []
+
+
 def test_a_bundle_without_takes_requires_nothing(tmp_path, isolated_dirs):
     project_dir, project_id = project_io.create_project_dir()
     doc, _seg = _document_with_audio(project_dir)

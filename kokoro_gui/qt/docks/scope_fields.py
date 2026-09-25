@@ -7,9 +7,10 @@ kokoro_gui/daw/arrangement.py), auto-crossfade (`["auto_crossfade"]`,
 kokoro_gui/daw/mixplan.py), ripple on regenerate (`["ripple"]`, on by
 default, kokoro_gui/daw/arrangement.py), onset alignment of locked clips
 (`["align_onset"]`, derived from the pinned clips while unset,
-`arrangement.align_onset_enabled`), the track layout (`["track_layout"]`,
-kokoro_gui/daw/lanes.py), and timecode (`["timecode"]`,
-kokoro_gui/daw/timecode.py).
+`arrangement.align_onset_enabled`), how far ducked tracks go down under
+speech (`["duck_db"]`, kokoro_gui/audio/mixer.py), the track layout
+(`["track_layout"]`, kokoro_gui/daw/lanes.py), and timecode
+(`["timecode"]`, kokoro_gui/daw/timecode.py).
 
 Clip: its gap override (blank inherits), take, review status, note, and
 source text with a syllable comparison against the clip's text.
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSpinBox, QWidget,
 )
 
+from kokoro_gui.audio.mixer import DEFAULT_DUCK_DB
 from kokoro_gui.daw.arrangement import DEFAULT_GAP_S, DEFAULT_PARAGRAPH_GAP_S, align_onset_enabled
 from kokoro_gui.daw.models import CLIP_STATUSES
 from kokoro_gui.daw.timecode import FRAME_RATES, tc_to_frames, timecode_settings
@@ -114,6 +116,17 @@ class ScopeFields(QWidget):
         align.toggled.connect(lambda on: self._set_setting("align_onset", bool(on)))
         self.form.addRow("", align)
 
+        try:
+            duck_db = float(settings.get("duck_db", DEFAULT_DUCK_DB))
+        except (TypeError, ValueError):
+            duck_db = DEFAULT_DUCK_DB
+        duck = _spin(-40.0, 0.0, 1.0, max(-40.0, min(0.0, duck_db)))
+        duck.setDecimals(1)
+        duck.setSuffix(" dB")
+        duck.setToolTip("How far a track with D (duck) on goes down while other clips play.")
+        duck.editingFinished.connect(lambda: self._set_setting("duck_db", round(duck.value(), 1)))
+        self.form.addRow("Ducking:", duck)
+
         layout = self.app.document.track_layout()
         layout_combo = QComboBox()
         layout_combo.addItem("One per character", "character")
@@ -160,7 +173,7 @@ class ScopeFields(QWidget):
             signal.connect(lambda *_: self._commit_timecode())
         start.editingFinished.connect(self._commit_timecode)
         self.widgets = {"title": title, "gap_s": gap, "paragraph_gap_s": para, "auto_crossfade": crossfade,
-                        "ripple": ripple, "align_onset": align, "track_layout": layout_combo, "track_lanes": lanes, "tc_enabled": enabled, "tc_fps": fps, "tc_start": start, "tc_drop": drop}
+                        "ripple": ripple, "align_onset": align, "duck_db": duck, "track_layout": layout_combo, "track_lanes": lanes, "tc_enabled": enabled, "tc_fps": fps, "tc_start": start, "tc_drop": drop}
 
     def build_clip(self, clip) -> None:
         self.clear()

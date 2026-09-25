@@ -22,8 +22,8 @@ def test_file_menu_actions(qt_app):
     texts = _action_texts(qt_app.file_menu)
     assert texts == ["New", "New Subproject", "Add Subproject...", "Open...", "Recent", "Welcome...", "Save", "Save As...", "Import Text...",
                      "Import Subtitles...", "Import Audio...", "Load Video...", "Export...", "Quit"]
-    assert qt_app.import_audio_action.isEnabled() is False
-    assert "ASR" in qt_app.import_audio_action.toolTip()
+    assert qt_app.import_audio_action.isEnabled() is True
+    assert "music bed" in qt_app.import_audio_action.toolTip()
 
 
 def test_edit_menu_actions(qt_app):
