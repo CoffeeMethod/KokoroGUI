@@ -155,6 +155,8 @@
           <tbody>
             <tr><td>Gap / Paragraph gap</td><td>Project</td><td>Seconds of silence between clips placed one after another (default 0.35), and between clips with a blank line between them (default 0.9). 0 gives the old back-to-back placement. Clips you've dragged to a fixed time ignore both.</td></tr>
             <tr><td>Auto-crossfade overlapping clips</td><td>Project</td><td>Off by default. On, a clip that starts or ends inside another gets at least a 10 ms fade at that edge. The clip's own fades aren't changed.</td></tr>
+            <tr><td>Ripple on regenerate</td><td>Project</td><td>On by default. When a regenerated clip comes back longer or shorter, the clips you dragged to a fixed time after it move by the difference. A clip marked Lock in time (its right-click menu) stays put.</td></tr>
+            <tr><td>Track layout</td><td>Project</td><td>One per character (default): a character gets a track the first time it's used. Unified, N lanes (3 by default): clips go on N shared lanes in text order, moving to the next lane whenever the speaker changes. Mute, solo, fader and pan then act per lane.</td></tr>
             <tr><td>Timecode / Frame rate / Start / Drop-frame</td><td>Project</td><td>Shows the ruler and the transport clock as <code>HH:MM:SS:FF</code>. Start is the timecode of the project's first frame (broadcast material often starts at <code>01:00:00:00</code>). Drop-frame applies at 29.97 and 59.94. Times inside the project stay in seconds.</td></tr>
             <tr><td>Gap before</td><td>Clip</td><td>This clip's own gap, over the project's. Blank uses the project's. A <code>[pause:x]</code> marker sets it when Auto-split creates the clip.</td></tr>
             <tr><td>Take</td><td>Clip</td><td>Switch between the clip's takes, like the timeline's Take menu.</td></tr>
@@ -189,7 +191,7 @@
   <section class="doc-section" id="timeline">
     <div class="wrap">
       <h2><span class="idx">Timeline dock</span>Timeline</h2>
-      <p class="dek">One track per character on a real seconds axis, bottom-left of the window. Clips sit in text order across all tracks, 0.35 s apart (0.9 s across a blank line; both are Gap and Paragraph gap in the Settings tab with nothing selected, and a clip's Gap before overrides them): at their real duration once generated (with a waveform), at an estimated one before (dashed outline, no waveform; the estimate learns from <code>generation_stats.json</code>). A ruler runs across the top, a fixed header column names the tracks, and Ctrl+wheel zooms between 20 and 400 pixels per second.</p>
+      <p class="dek">One track per character in use (or a few shared lanes, see Track layout) on a real seconds axis, bottom-left of the window. Clips sit in text order across all tracks, 0.35 s apart (0.9 s across a blank line; both are Gap and Paragraph gap in the Settings tab with nothing selected, and a clip's Gap before overrides them): at their real duration once generated (with a waveform), at an estimated one before (dashed outline, no waveform; the estimate learns from <code>generation_stats.json</code>). A ruler runs across the top, a fixed header column names the tracks, and Ctrl+wheel zooms between 20 and 400 pixels per second.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Timeline</caption>
@@ -205,6 +207,7 @@
             <tr><td>Right-click the ruler</td><td>Add marker here. On a marker's flag: Rename (with a note, for a listen-through flag), Delete, and Loop to next marker. Drag a flag to move it.</td></tr>
             <tr><td>Shift+drag on the ruler</td><td>Loops playback between the two points. Right-click the ruler &gt; Clear loop to stop.</td></tr>
             <tr><td>Drag a clip's top corner</td><td>The small squares on a generated clip's top-left and top-right corners set its fade-in and fade-out. Settings with nothing selected &gt; Auto-crossfade adds a 10 ms fade wherever clips overlap.</td></tr>
+            <tr><td>Overlap warning</td><td>Two clips that overlap on the same track get a red border.</td></tr>
             <tr><td>Right-click a clip &gt; Take</td><td>Every take the clip has, the active one ticked, with its length. Regenerating keeps the old take. A take made from text you've since changed says "old text"; picking it marks the clip stale. Delete take drops one.</td></tr>
             <tr><td>Right-click a clip &gt; Status</td><td>To do, Generated, Approved or Needs rewrite. Generating sets Generated. The Show box above the timeline dims clips that don't match (All, Not approved, Needs rewrite).</td></tr>
             <tr><td>Right-click a clip &gt; Align words</td><td>Runs Whisper over the clip's audio to work out when each word is spoken. This runs by itself after generating with Audio8, or with Kokoro outside English.</td></tr>

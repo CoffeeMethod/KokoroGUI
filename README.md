@@ -15,6 +15,33 @@ by default, with a zero-shot voice-cloning backend also built in.
 
 https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
+## Unreleased
+
+-   **A character library shared by every project.** Characters can live in a library
+    (`characters/`, one file per character) as well as in a project. A project's character linked
+    to the library follows it: change its voice, FX or color in Edit > Characters and every
+    project using it picks that up the next time it opens, or at once if it's open in another
+    window. Each project keeps its own name for the character; "Rename in library" copies it
+    over. Characters made in a project stay local to it until you press "Promote to Library".
+    Add > From library... brings library characters into a project. A project still carries
+    its own copy of every character, so it opens and plays on a machine whose library doesn't
+    have one; the dialog then says "Library (not found here)".
+-   **New starts from the library.** File > New gets every library character instead of a copy of
+    the last project's. With an empty library you get one "Default" character. The first launch
+    of this version copies your `presets/*.json` files into the library (the files stay), and
+    characters in the project it opens that match a preset exactly are linked to it.
+-   **Tracks appear when a character is used.** A character gets a timeline track the first time
+    you assign it text, and a track with no clips isn't drawn, so a big library doesn't open as
+    dozens of empty lanes. An unused track keeps its mute, fader and pan for when it comes back.
+-   **Unified track layout.** Settings > Project > Track layout > Unified puts every clip on a
+    few lanes (3 by default) and moves to the next lane each time the speaker changes, so a
+    conversation alternates lanes. Mute, solo, fader and pan then act per lane. Switching back
+    puts each clip on its character's track. Either switch is one undo step.
+-   **Ripple on regenerate.** When a regenerated clip comes back longer or shorter, clips you
+    placed by dragging that sit after it move by the same amount. Right-click a clip > Lock in
+    time to keep it where it is, or turn ripple off in Settings > Project. Clips that overlap on
+    one track get a red border.
+
 ## New in 4.0.0-beta.3
 
 -   **Pauses between clips.** Clips placed one after another now have 0.35 s of silence between
@@ -230,7 +257,7 @@ real backend, and projects that live in one file.
 -   **Document-based editing:**
     -   The transcript is the source of truth. Generated audio is a render of the document's
         current state, tracked per clip with cache-hash-based dirty detection.
-    -   Multi-track timeline: one lane per character, drag clips to reassign or move them, carve
+    -   Multi-track timeline: one lane per character in use (or a few shared lanes), drag clips to reassign or move them, carve
         out and replace a sub-range with fresh TTS.
     -   Undo/redo for text edits and character reassignments.
     -   Auto-split a `[Speaker:FX]`-tagged script into clips and generate them in one action.
@@ -269,7 +296,7 @@ real backend, and projects that live in one file.
     -   Custom output filenames and directories.
 -   **Presets and characters:**
     -   Characters wrap the existing `presets/*.json` shape: name, voice, settings, and a highlight
-        color, reusable across clips.
+        color, reusable across clips. A global character library shares them between projects.
     -   Save and load FX presets separately from generation presets.
     -   Pronunciation lexicon: case-insensitive literal find-and-replace overrides, applied before
         synthesis on every path. Editing it marks the clips it affects as stale.
