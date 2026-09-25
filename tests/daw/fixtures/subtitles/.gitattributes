@@ -1,0 +1,3 @@
+# Byte-exact fixtures: dialogue.srt keeps its CRLF line endings and bom.srt
+# its BOM, which the parser tests are about.
+* -text

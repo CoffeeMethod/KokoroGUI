@@ -579,6 +579,87 @@ class ReplaceWithNestedCommand(Command):
         document.tracks = copy.deepcopy(tracks)
 
 
+class ImportCuesCommand(Command):
+    """Subtitle import (phase 5 D2): each cue becomes a paragraph appended
+    to the end of the text (a blank line before it) and a clip over it,
+    locked in time at the cue's start (`timeline_timestamp`, `pinned`),
+    with the cue's text as `source_text` and its length as
+    `overrides["target_duration_s"]`. The transcript line is the cue's text
+    on one line (a subtitle's line breaks are layout); `source_text` keeps
+    them.
+
+    `cues` are `kokoro_gui.daw.subtitles.Cue`s, `character_ids` the
+    character for each, and `new_characters` the `Character`s the speaker
+    mapping made, added to the document in the same step. Clip ids are
+    fixed here, so a redo recreates the same clips. Undo restores the runs
+    and clips and removes the characters and tracks `do` added."""
+
+    def __init__(self, cues, character_ids, new_characters=()):
+        import uuid
+
+        cues = list(cues)
+        character_ids = list(character_ids)
+        if len(cues) != len(character_ids):
+            raise ValueError("ImportCuesCommand needs one character id per cue")
+        self.rows = [
+            (" ".join(cue.text.split()), cue.text, float(cue.start_s), float(cue.end_s), character_id,
+             uuid.uuid4().hex)
+            for cue, character_id in zip(cues, character_ids)
+        ]
+        self.new_characters = [copy.deepcopy(c) for c in new_characters]
+        self._pre = None
+        self._created_track_ids: list = []
+        self._added_character_ids: list = []
+
+    @property
+    def clip_ids(self) -> list:
+        return [row[-1] for row in self.rows]
+
+    def do(self, document) -> None:
+        from kokoro_gui.daw.models import Clip, Run
+
+        self._pre = (copy.deepcopy(document.runs), copy.deepcopy(document.clips))
+        track_ids = {t.id for t in document.tracks}
+        known = {c.id for c in document.characters}
+        self._added_character_ids = []
+        for character in self.new_characters:
+            if character.id not in known:
+                document.characters.append(copy.deepcopy(character))
+                self._added_character_ids.append(character.id)
+
+        tail = document.text[-2:]
+        for line, source_text, start_s, end_s, character_id, clip_id in self.rows:
+            if not tail or tail == "\n\n":
+                separator = ""
+            elif tail.endswith("\n"):
+                separator = "\n"
+            else:
+                separator = "\n\n"
+            if separator:
+                document.runs.append(Run(text=separator))
+            clip = Clip(
+                character_id=character_id, track_id=document.track_for_character(character_id, create=True),
+                timeline_timestamp=start_s, pinned=True, source_text=source_text,
+                overrides={"target_duration_s": max(0.0, end_s - start_s)}, id=clip_id,
+            )
+            document.clips.append(clip)
+            document.runs.append(Run(text=line, clip_id=clip.id, kind=clip.run_kind))
+            tail = line[-2:]
+        document._normalize_runs()
+        self._created_track_ids = [t.id for t in document.tracks if t.id not in track_ids]
+
+    def undo(self, document) -> None:
+        runs, clips = self._pre
+        document.runs = copy.deepcopy(runs)
+        document.clips = copy.deepcopy(clips)
+        created = set(self._created_track_ids)
+        if created:
+            document.tracks = [t for t in document.tracks if t.id not in created]
+        added = set(self._added_character_ids)
+        if added:
+            document.characters = [c for c in document.characters if c.id not in added]
+
+
 class RelaneCommand(Command):
     """Puts every clip on the track the document's track layout says
     (kokoro_gui/daw/lanes.py): the unified layout's lane rule, or each
