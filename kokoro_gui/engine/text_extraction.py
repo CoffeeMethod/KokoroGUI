@@ -19,6 +19,10 @@ import kokoro_engine
 # method, so `find_character_fx_spans` below can never accidentally change
 # what conversion.py/jit.py (parse_multispeaker_text's only callers) see.
 _SPEAKER_FX_TAG_PATTERN = r"\[([^\]\n]{1,100})\]:\s*"
+# `[pause:1.5]`: silence before the next clip. Auto-split leaves the marker
+# untagged and gives the next clip `gap_before_s`; the whole-document path
+# strips it so it's never spoken. Not a speaker tag (no trailing colon).
+PAUSE_MARKER_PATTERN = r"\[pause:(\d+(?:\.\d+)?)\]"
 
 
 class InlineTagSpan(NamedTuple):
@@ -97,6 +101,9 @@ class TextExtractionMixin:
         """
         # Regex to find [Name]: or [Name:FX]:
 
+        # A `[pause:x]` marker has no clip to carry a gap on this path;
+        # drop it so it's never read aloud.
+        text = re.sub(PAUSE_MARKER_PATTERN, " ", text)
         pattern = r"\[([^\]\n]{1,100})\]:\s*"
         matches = list(re.finditer(pattern, text))
 

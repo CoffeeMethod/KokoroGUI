@@ -23,6 +23,7 @@ import torch
 
 import kokoro_engine
 from kokoro_engine import KokoroEngine
+from kokoro_gui.engine.wordtiming import TimedResult, even_tokens
 
 # One shared timestamp per pytest invocation, mirroring the Qt frontend's
 # "%Y%m%d%H%M%S" timecode convention (kokoro_gui/qt/app.py).
@@ -84,7 +85,8 @@ class FakePipeline:
 
     def __call__(self, text, voice=None, speed=1.0, split_pattern=r"\n+"):
         try:
-            parts = [t.strip() for t in re.split(split_pattern, text) if t.strip()]
+            pieces = re.split(split_pattern, text) if split_pattern else [text]
+            parts = [t.strip() for t in pieces if t.strip()]
         except re.error:
             parts = []
         if not parts:
@@ -92,7 +94,8 @@ class FakePipeline:
         n = max(1, int(self._sr * self._dur))
         for p in parts:
             audio = (0.1 * np.sin(2 * np.pi * 220 * np.arange(n) / self._sr)).astype(np.float32)
-            yield p, "", audio
+            # Unpacks as the triple and carries `tokens`, like KPipeline's Result.
+            yield TimedResult(p, "", audio, even_tokens(p, n / self._sr))
 
     def load_voice(self, name):
         return torch.zeros(510, 1, 256)
@@ -126,7 +129,7 @@ def make_config(isolated_dirs):
             "voice": "af_heart",
             "speed": 1.0,
             "lang_code": "a",
-            "split_pattern": r"\n+",
+            "segment_target_words": 40,
             "out_dir": str(isolated_dirs.out_dir),
             "filename": "output",
             "time_id": "0",

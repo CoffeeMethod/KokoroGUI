@@ -85,9 +85,9 @@ def test_generate_clip_audio_cache_hits_like_batch_path(engine, isolated_dirs, m
     assert os.path.exists(results[0]["path"])
 
 
-def test_cache_key_ignores_split_pattern(engine, fake_pipeline, make_config, monkeypatch):
+def test_cache_key_ignores_segmentation_settings(engine, fake_pipeline, make_config, monkeypatch):
     text = "Hello world."
-    config1 = make_config(caching=True, split_pattern=r"\n+")
+    config1 = make_config(caching=True, segment_target_words=40)
     engine.process_chunk_task((0, text, config1), None)
 
     def _boom(lang_code="a"):
@@ -95,18 +95,17 @@ def test_cache_key_ignores_split_pattern(engine, fake_pipeline, make_config, mon
 
     monkeypatch.setattr(kokoro_engine, "get_thread_pipeline", _boom)
 
-    # Known limitation (kokoro_engine.py:618-621): split_pattern is not part
-    # of the cache key, so a different split_pattern that yields the same
-    # predicted segment count still counts as a cache hit.
-    config2 = make_config(caching=True, split_pattern=r"\n\n+")
+    # The segmentation settings decide which text a piece is, not what that
+    # text sounds like, so settings that yield the same pieces hit.
+    config2 = make_config(caching=True, segment_target_words=10, segment_at_pauses=False)
     results = engine.process_chunk_task((0, text, config2), None)
 
     assert len(results) == 1
 
 
 def test_cache_partial_files_missing_forces_regeneration(engine, fake_pipeline, isolated_dirs, make_config):
-    text = "Seg one.\n\nSeg two."
-    config = make_config(caching=True)
+    text = "Seg one is right here. Seg two is right here."
+    config = make_config(caching=True, segment_target_words=5)
     h = _hash(text, config)
 
     # Only the first of the two expected segments is cached.
@@ -308,7 +307,7 @@ def test_audio8_process_chunk_task_caching_keys_on_transcript(isolated_dirs, tmp
 
         voice_path = engine.resolve_voice_path("Eve")
         config = {
-            "lang_code": "English", "voice": voice_path, "speed": 1.0, "split_pattern": r"\n+",
+            "lang_code": "English", "voice": voice_path, "speed": 1.0,
             "filename": "out", "time_id": "1", "out_dir": str(isolated_dirs.out_dir),
             "format": "wav", "caching": True, "apply_fx": False,
         }
@@ -350,7 +349,7 @@ def test_audio8_process_chunk_task_caching_keys_on_sampling_knobs(isolated_dirs,
 
         voice_path = engine.resolve_voice_path("Faye")
         config = {
-            "lang_code": "English", "voice": voice_path, "speed": 1.0, "split_pattern": r"\n+",
+            "lang_code": "English", "voice": voice_path, "speed": 1.0,
             "filename": "out", "time_id": "1", "out_dir": str(isolated_dirs.out_dir),
             "format": "wav", "caching": True, "apply_fx": False, "temperature": 0.8,
         }
@@ -369,8 +368,8 @@ def test_audio8_process_chunk_task_caching_keys_on_sampling_knobs(isolated_dirs,
 
 
 def test_audio8_process_chunk_task_caches_every_segment_in_a_multi_segment_chunk(isolated_dirs, tmp_path, monkeypatch):
-    """A chunk that splits into more than one segment (split_pattern
-    matching within one chunk's text, e.g. two newline-separated lines) must
+    """A chunk that splits into more than one segment (two sentences over
+    a five-word target) must
     cache/read *every* segment - not just the first - on both the write and
     the cache-hit path."""
     import numpy as np
@@ -391,11 +390,11 @@ def test_audio8_process_chunk_task_caches_every_segment_in_a_multi_segment_chunk
 
         voice_path = engine.resolve_voice_path("Zoe")
         config = {
-            "lang_code": "English", "voice": voice_path, "speed": 1.0, "split_pattern": r"\n+",
+            "lang_code": "English", "voice": voice_path, "speed": 1.0, "segment_target_words": 5,
             "filename": "out", "time_id": "1", "out_dir": str(isolated_dirs.out_dir),
             "format": "wav", "caching": True, "apply_fx": False,
         }
-        text = "Segment one.\nSegment two."
+        text = "Segment one is right here. Segment two is right here."
 
         files = engine.process_chunk_task((0, text, config), None)
         assert len(files) == 2
@@ -541,7 +540,7 @@ def test_audio8_cache_key_naming_names_files_by_the_shared_key(isolated_dirs, tm
         monkeypatch.setattr(engine, "generate_segment",
                             lambda *a, **k: (0.1 * np.sin(np.arange(2200) / 10)).astype(np.float32))
         config = {
-            "lang_code": "English", "voice": "Eve", "speed": 1.0, "split_pattern": r"\n+",
+            "lang_code": "English", "voice": "Eve", "speed": 1.0,
             "out_dir": str(project), "format": "wav", "segment_naming": "cache_key", "engine_id": "audio8",
         }
         results = engine.process_chunk_task((0, "Hello there.", {**config, "voice": engine.resolve_voice_path("Eve")}), None)
@@ -553,3 +552,85 @@ def test_audio8_cache_key_naming_names_files_by_the_shared_key(isolated_dirs, tm
         assert segment_key("Hello there.", config, engine) != key
     finally:
         engine.worker.stop()
+
+
+
+# ---------------------------------------------------------------------------
+# one file per piece (pieces from kokoro_gui/engine/segmenting.py)
+# ---------------------------------------------------------------------------
+
+def test_process_chunk_task_writes_one_file_per_piece_even_when_the_pipeline_splits_one(
+        engine, isolated_dirs, make_config, monkeypatch):
+    """KPipeline can yield two results for one long piece; they are joined
+    so the file count is the predicted count."""
+    calls = []
+
+    class SplittingPipeline:
+        def __call__(self, text, voice=None, speed=1.0, split_pattern=r"\n+"):
+            calls.append((text, split_pattern))
+            halves = 2 if text.startswith("Long") else 1
+            for _ in range(halves):
+                yield text, "", np.full(1200, 0.1, dtype=np.float32)
+
+    monkeypatch.setattr(kokoro_engine, "get_thread_pipeline", lambda lang_code="a": SplittingPipeline())
+    config = make_config(segment_target_words=5)
+    text = "Short one is here now. Long one is here now. Short two is here now."
+    results = engine.process_chunk_task((0, text, config), None)
+
+    assert [r["text"] for r in results] == [
+        "Short one is here now.", "Long one is here now.", "Short two is here now.",
+    ]
+    assert [split for _t, split in calls] == [None, None, None]
+    assert sf.info(results[1]["path"]).frames == 2400
+    assert sf.info(results[0]["path"]).frames == 1200
+
+
+# ---------------------------------------------------------------------------
+# word timings, onset and tail (phase 2, C1)
+# ---------------------------------------------------------------------------
+
+def test_process_chunk_task_offsets_token_times_of_later_results_in_a_piece(
+        engine, isolated_dirs, make_config, monkeypatch):
+    from kokoro_gui.engine.wordtiming import TimedResult, TimedToken
+
+    class TokenPipeline:
+        def __call__(self, text, voice=None, speed=1.0, split_pattern=r"\n+"):
+            # Two results for one piece: 0.05s each at 24 kHz.
+            yield TimedResult(text, "", np.full(1200, 0.1, dtype=np.float32),
+                              [TimedToken("first", 0.0, 0.02), TimedToken(",", 0.02, 0.03)])
+            yield TimedResult(text, "", np.full(1200, 0.1, dtype=np.float32),
+                              [TimedToken("second", 0.01, 0.04), TimedToken("gap", None, None)])
+
+    monkeypatch.setattr(kokoro_engine, "get_thread_pipeline", lambda lang_code="a": TokenPipeline())
+    results = engine.process_chunk_task((0, "First, second.", make_config()), None)
+
+    assert results[0]["words"] == [["first", 0.0, 0.02], ["second", 0.06, 0.09]]
+
+
+def test_process_chunk_task_measures_onset_and_tail_from_the_raw_audio(
+        engine, isolated_dirs, make_config, monkeypatch):
+    audio = np.zeros(2400, dtype=np.float32)
+    audio[240:2160] = 0.5  # 0.01s of silence each side at 24 kHz
+
+    class PaddedPipeline:
+        def __call__(self, text, voice=None, speed=1.0, split_pattern=r"\n+"):
+            yield text, "", audio
+
+    monkeypatch.setattr(kokoro_engine, "get_thread_pipeline", lambda lang_code="a": PaddedPipeline())
+    result = engine.process_chunk_task((0, "Padded.", make_config(trim_silence=True)), None)[0]
+
+    assert result["onset_s"] == pytest.approx(0.01)
+    assert result["tail_s"] == pytest.approx(0.01)
+    assert result["words"] == []
+
+
+def test_cache_key_hit_measures_onset_and_tail_from_the_file(engine, isolated_dirs, make_config, fake_pipeline,
+                                                             tmp_path):
+    config = make_config(segment_naming="cache_key", out_dir=str(tmp_path / "gen"))
+    os.makedirs(config["out_dir"], exist_ok=True)
+    first = engine.process_chunk_task((0, "Hello again.", config), None)[0]
+    hit = engine.process_chunk_task((0, "Hello again.", config), None)[0]
+
+    assert hit["path"] == first["path"]
+    assert hit["onset_s"] == pytest.approx(first["onset_s"], abs=1e-4)
+    assert hit["tail_s"] == pytest.approx(first["tail_s"], abs=1e-4)

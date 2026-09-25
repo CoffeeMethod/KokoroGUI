@@ -15,6 +15,8 @@ def _doc(text, tagged, **kwargs):
         cursor = end
     if cursor < len(text):
         runs.append(Run(text=text[cursor:]))
+    # These tests are about order and length; gaps have their own tests.
+    kwargs.setdefault("settings", {"gap_s": 0.0, "paragraph_gap_s": 0.0})
     return Document(runs=runs, clips=[c for _s, _e, c in tagged], **kwargs)
 
 
@@ -123,3 +125,55 @@ def test_clip_duration_callable_replaces_segment_durations():
 
     placed = compute_arrangement(doc, chars_per_second=10.0, clip_duration=lambda c: None).placed[0]
     assert placed.estimated
+
+
+# ---------------------------------------------------------------------------
+# Gaps (phase 2, A1)
+# ---------------------------------------------------------------------------
+
+
+def _two_clips(text, split, **settings):
+    alice = Character.from_preset_dict("Alice", {})
+    track = Track(name="A", character_id=alice.id)
+    first = Clip(character_id=alice.id, track_id=track.id)
+    second = Clip(character_id=alice.id, track_id=track.id)
+    doc = _doc(text, [(0, split[0], first), (split[1], len(text), second)],
+               characters=[alice], tracks=[track], settings=dict(settings))
+    return doc, first, second
+
+
+def test_default_gap_between_clips():
+    from kokoro_gui.daw.arrangement import DEFAULT_GAP_S
+
+    doc, first, second = _two_clips("x" * 10 + " " + "y" * 10, (10, 11))
+    arr = compute_arrangement(doc, chars_per_second=10.0)
+    assert arr.placed[0].start_s == 0.0
+    assert arr.placed[1].start_s == 1.0 + DEFAULT_GAP_S
+
+
+def test_paragraph_gap_across_a_blank_line():
+    doc, _first, _second = _two_clips("x" * 10 + "\n  \n" + "y" * 10, (10, 14), gap_s=0.1, paragraph_gap_s=2.0)
+    arr = compute_arrangement(doc, chars_per_second=10.0)
+    assert arr.placed[1].start_s == 3.0
+
+
+def test_clip_override_wins_over_the_setting():
+    doc, _first, second = _two_clips("x" * 10 + "\n\n" + "y" * 10, (10, 12), gap_s=0.1, paragraph_gap_s=2.0)
+    second.gap_before_s = 0.5
+    arr = compute_arrangement(doc, chars_per_second=10.0)
+    assert arr.placed[1].start_s == 1.5
+
+
+def test_pinned_clip_ignores_gaps():
+    doc, _first, second = _two_clips("x" * 10 + " " + "y" * 10, (10, 11), gap_s=5.0)
+    second.gap_before_s = 3.0
+    second.timeline_timestamp = 1.0
+    arr = compute_arrangement(doc, chars_per_second=10.0)
+    assert arr.placed[1].start_s == 1.0
+
+
+def test_first_clip_gets_only_its_own_override():
+    doc, first, _second = _two_clips("x" * 10 + " " + "y" * 10, (10, 11), gap_s=0.0)
+    assert compute_arrangement(doc, chars_per_second=10.0).placed[0].start_s == 0.0
+    first.gap_before_s = 0.75
+    assert compute_arrangement(doc, chars_per_second=10.0).placed[0].start_s == 0.75

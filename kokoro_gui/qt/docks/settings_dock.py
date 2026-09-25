@@ -1,6 +1,6 @@
 """Settings dock: item 2 ("Settings panel rescoping") of the DAW-for-text
 redesign's remaining-work roadmap. Renders the schema-driven config fields
-(voice/speed/lang_code/split_pattern/format/num_threads/caching, plus any
+(voice/speed/lang_code/segmentation/format/num_threads/caching, plus any
 backend-specific groups) and the hand-built Audio Control widgets
 (volume/pitch/FX-preset-combo/apply_fx/normalize/trim) that used to live in
 `GenerationDock` - now scoped to whatever `self.app.selection` currently
@@ -25,13 +25,18 @@ Three states, keyed off `SelectionModel.kind`:
   live the next time `effective_config_for_clip` is read.
 
 Only `ALLOWED_PRESET_KEYS` (kokoro_gui/engine/presets.py) can vary per clip/
-character - that's exactly voice/speed/volume/pitch/split_pattern/normalize/
+character - that's exactly voice/speed/volume/pitch/normalize/
 trim/format/apply_fx/fx_preset. Every other schema field (lang_code,
 num_threads, caching, a backend's own non-preset fields) is rendered
 disabled (not hidden) in clip/character mode, via `SchemaFormWidget.widget_for`
 - its value there is still sourced from `app.settings`, since that's what
   `_assemble_clip_config` actually uses for those keys regardless of which
   clip is selected.
+
+Below Audio Control, `ScopeFields` (kokoro_gui/qt/docks/scope_fields.py)
+shows the project's pacing, crossfade and timecode fields in "none" mode
+and the clip's gap, take, status, note and source text in "clip" mode;
+it's hidden in "character" mode.
 
 `get_state()` deliberately does NOT reflect whatever mode is currently
 rendered: `app.py`'s `_assemble_config`/`_assemble_clip_config` need the
@@ -54,6 +59,7 @@ from PySide6.QtWidgets import (
 import kokoro_gui.qt.app as qt_app_module
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS
 from kokoro_gui.qt import spec
+from kokoro_gui.qt.docks.scope_fields import ScopeFields
 from kokoro_gui.qt.schema_form import SchemaFormWidget
 
 # Keys tracked in the internal "none"-state cache/live-widget snapshot that
@@ -130,6 +136,15 @@ class SettingsDock(QDockWidget):
         audio_form.addRow("", toggles_row)
         layout.addWidget(audio_group)
 
+        # Project or clip fields for the current scope (phase 2): pacing,
+        # crossfade and timecode; or the clip's gap, take, status, note and
+        # source text. Hidden in character scope.
+        self.scope_group = QGroupBox("Project")
+        scope_layout = QVBoxLayout(self.scope_group)
+        self.scope_fields = ScopeFields(self.app)
+        scope_layout.addWidget(self.scope_fields)
+        layout.addWidget(self.scope_group)
+
         layout.addStretch(1)
         self.setWidget(content)
 
@@ -179,6 +194,22 @@ class SettingsDock(QDockWidget):
         self._mode, self._target = self._resolve_mode()
         self._build_schema_form()
         self._refresh_hand_built_display()
+        self.refresh_scope_fields()
+
+    def refresh_scope_fields(self) -> None:
+        """Rebuilds the scope group for the current mode. Also called after
+        an undo or a generate, which change what the clip fields show."""
+        if self._mode == "clip":
+            self.scope_group.setTitle("Clip")
+            self.scope_fields.build_clip(self._target)
+            self.scope_group.show()
+        elif self._mode == "none":
+            self.scope_group.setTitle("Project")
+            self.scope_fields.build_project()
+            self.scope_group.show()
+        else:
+            self.scope_fields.clear()
+            self.scope_group.hide()
 
     # --- schema form (rebuilt on selection change AND on engine switch) ---
 
@@ -209,7 +240,7 @@ class SettingsDock(QDockWidget):
             "lang_code": self.app.settings.get("lang_code", "a"),
             "voice": self.app.settings.get("voice", "af_heart"),
             "speed": self.app.settings.get("speed", 1.0),
-            "split_pattern": self.app.settings.get("split_pattern", r"\n+"),
+            **{key: self.app.settings.get(key, spec.SETTINGS_DEFAULTS[key]) for key in spec.SEGMENTATION_KEYS},
             "format": self.app.settings.get("format", "wav"),
             "num_threads": self.app.settings.get("num_threads", 1),
             "caching": self.app.settings.get("caching", True),
@@ -286,6 +317,9 @@ class SettingsDock(QDockWidget):
             self.refresh_voice_choices()
         if self._mode == "none":
             self.app.schedule_save()
+            if key in spec.SEGMENTATION_KEYS and self.app.editor is not None:
+                # New pieces can stale clips; show it now, not on the next edit.
+                self.app.editor.rehighlight()
             return
         if key not in ALLOWED_PRESET_KEYS:
             return  # defense in depth - the field is disabled, unreachable via the UI

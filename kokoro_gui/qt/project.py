@@ -54,7 +54,7 @@ FORMAT = "tbaw"
 SUPPORTED_VERSION = 1
 # Content features this reader implements; a bundle whose `requires` names
 # one that isn't here is refused by name (section 8 of the plan).
-SUPPORTED_FEATURES: frozenset = frozenset()
+SUPPORTED_FEATURES: frozenset = frozenset({"takes"})
 
 MANIFEST = "manifest.json"
 DOCUMENT = "document.json"
@@ -678,12 +678,16 @@ def _sha256_file(path: str) -> str:
 
 def used_voice_names(document: Document) -> dict:
     """`{backend_id: {voice name, ...}}` from every character's preset and
-    every clip override, grouped by the clip's character's backend."""
+    every clip override, grouped by the clip's character's backend. A
+    character's variants count too, so every reference they name is bundled."""
     names: dict = {}
     for character in document.characters:
         voice = (character.preset_data or {}).get("voice")
         if voice:
             names.setdefault(character.backend_id or "kokoro", set()).add(str(voice))
+        for variant_voice in (character.variants or {}).values():
+            if variant_voice:
+                names.setdefault(character.backend_id or "kokoro", set()).add(str(variant_voice))
     for clip in document.clips:
         voice = (clip.overrides or {}).get("voice")
         if voice:
@@ -755,6 +759,13 @@ def bundle_options(project_settings: dict) -> dict:
     return options
 
 
+def required_features(document: Document) -> list:
+    """`manifest.requires`: the content features a v1 reader would lose or
+    misplay (section 8 of the bundle plan). Parked takes are the only one: an
+    older reader would drop them on its next Save and GC their files."""
+    return ["takes"] if any(clip.takes for clip in document.clips) else []
+
+
 def project_stats(document: Document) -> dict:
     """Cosmetic, for the welcome dialog: list lengths and the sum of
     `Segment.duration`. Nothing here reads audio."""
@@ -824,7 +835,7 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
     manifest = {
         "format": FORMAT,
         "version": SUPPORTED_VERSION,
-        "requires": [],
+        "requires": required_features(document),
         "project_id": project_id,
         "created_by": f"KokoroGUI {APP_VERSION}",
         "created": created,
@@ -997,13 +1008,16 @@ def save_project(document: Document, path: str, project_settings: dict | None = 
 
 
 def referenced_audio_paths(document: Document) -> set:
+    """Every file a clip points at: its original audio, its active take's
+    segments and every parked take's, so close-time GC keeps them all."""
     paths = set()
     for clip in document.clips:
         if clip.original_audio_path:
             paths.add(os.path.realpath(clip.original_audio_path))
-        for segment in clip.segments:
-            if segment.audio_path:
-                paths.add(os.path.realpath(segment.audio_path))
+        for segments in (clip.segments, *clip.takes.values()):
+            for segment in segments:
+                if segment.audio_path:
+                    paths.add(os.path.realpath(segment.audio_path))
     return paths
 
 

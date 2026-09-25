@@ -24,8 +24,7 @@ import kokoro_engine
 from kokoro_gui.engine.voices import project_voice_dir
 from kokoro_gui.engines.base import (
     BackendHooksMixin, ConfigField, ConfigFieldType, EngineCapabilities, VoiceInfo,
-    COMMON_SPLIT_PATTERN_CHOICES as SPLIT_PATTERN_CHOICES,
-    COMMON_OUTPUT_FORMAT_CHOICES as OUTPUT_FORMAT_CHOICES, bundle_asset_for,
+    COMMON_OUTPUT_FORMAT_CHOICES as OUTPUT_FORMAT_CHOICES, bundle_asset_for, segmentation_fields,
 )
 from kokoro_gui.engines.registry import register_engine
 
@@ -39,6 +38,7 @@ class KokoroBackendAdapter(BackendHooksMixin):
         supports_multi_speaker_script=True,
         is_local_model=True,
         supports_jit_streaming=True,
+        supports_word_timing=True,
     )
 
     def __init__(self, engine=None):
@@ -80,8 +80,7 @@ class KokoroBackendAdapter(BackendHooksMixin):
                         default=1.0, min=0.5, max=2.0, step=0.1, group="Generation"),
             ConfigField("pitch", "Pitch", ConfigFieldType.SLIDER,
                         default=0.0, min=-12, max=12, step=1, group="Audio"),
-            ConfigField("split_pattern", "Split By", ConfigFieldType.CHOICE,
-                        default=r"\n+", choices=list(SPLIT_PATTERN_CHOICES), group="Generation"),
+            *segmentation_fields(),
             ConfigField("format", "Output Format", ConfigFieldType.CHOICE,
                         default="wav", choices=list(OUTPUT_FORMAT_CHOICES), group="Generation"),
             ConfigField("num_threads", "Parallel Threads", ConfigFieldType.INT,

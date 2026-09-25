@@ -21,14 +21,11 @@ def _config(**overrides):
 # predict_segment_texts
 # ---------------------------------------------------------------------------
 
-def test_predict_segment_texts_splits_on_default_pattern_and_strips_blank_lines():
-    text = "First line.\n\nSecond line.\n   \nThird."
-    assert predict_segment_texts(text, _config()) == ["First line.", "Second line.", "Third."]
-
-
-def test_predict_segment_texts_honors_custom_split_pattern():
-    text = "a|b|c"
-    assert predict_segment_texts(text, _config(split_pattern=r"\|")) == ["a", "b", "c"]
+def test_predict_segment_texts_is_split_segments():
+    text = "One two three four five. Six seven eight nine ten."
+    assert predict_segment_texts(text, _config(segment_target_words=5)) == [
+        "One two three four five.", "Six seven eight nine ten.",
+    ]
 
 
 def test_predict_segment_texts_empty_text_is_empty_list():
@@ -241,3 +238,113 @@ def test_build_segments_from_results_stamps_key_take_and_version_from_the_engine
     assert [s.engine_version for s in segments] == ["v", "v"]
     assert take_from_results(results) == 2
     assert build_segments_from_results("fallback", [{"path": "a.wav", "text": "x", "duration": 1.0}])[0].cache_key == "fallback"
+
+
+# ---------------------------------------------------------------------------
+# lexicon (applied before hashing, on every generation path)
+# ---------------------------------------------------------------------------
+
+def _generated_under_lexicon(text, config):
+    from kokoro_gui.daw.dirty import spoken_text
+
+    spoken = spoken_text(text, config)
+    cache_hash = compute_expected_cache_hash(text, config)
+    return Clip(segments=[
+        Segment(order_index=i, text=seg_text, cache_key=cache_hash)
+        for i, seg_text in enumerate(predict_segment_texts(spoken, config))
+    ])
+
+
+def test_clip_generated_under_a_lexicon_is_clean_under_it():
+    config = _config(lexicon={"Nguyen": "Win"})
+    clip = _generated_under_lexicon("Mr Nguyen arrived.", config)
+    assert not is_clip_dirty(clip, "Mr Nguyen arrived.", config)
+
+
+def test_lexicon_rule_that_rewrites_the_clip_dirties_it():
+    clip = _generated_under_lexicon("Mr Nguyen arrived.", _config(lexicon={}))
+    assert is_clip_dirty(clip, "Mr Nguyen arrived.", _config(lexicon={"nguyen": "Win"}))
+
+
+def test_lexicon_rule_for_words_the_clip_lacks_leaves_it_clean():
+    clip = _generated_under_lexicon("Mr Nguyen arrived.", _config(lexicon={"Nguyen": "Win"}))
+    changed = _config(lexicon={"Nguyen": "Win", "Siobhan": "Shiv-awn"})
+    assert not is_clip_dirty(clip, "Mr Nguyen arrived.", changed)
+
+
+def test_lexicon_is_applied_once_not_per_segment_version():
+    # "a" -> "aa" isn't idempotent: applying it twice would give a key
+    # generation never produces.
+    config = _config(lexicon={"a": "aa"})
+    clip = _generated_under_lexicon("a cat", config)
+    assert not is_clip_dirty(clip, "a cat", config)
+
+
+# ---------------------------------------------------------------------------
+# segment texts: a moved boundary with the same count is dirty
+# ---------------------------------------------------------------------------
+
+def test_moved_segment_boundary_with_the_same_count_is_dirty():
+    text = "One two three four five. Six seven eight nine ten."
+    config = _config(segment_target_words=5)
+    clip = _generated_clip(text, config)
+    assert not is_clip_dirty(clip, text, config)
+    # Same text, two pieces either way, but the boundary is elsewhere.
+    clip.segments[0].text = "One two three four"
+    clip.segments[1].text = "five. Six seven eight nine ten."
+    assert is_clip_dirty(clip, text, config)
+
+
+def test_segment_text_differing_only_in_whitespace_stays_clean():
+    config = _config()
+    clip = _generated_clip("Hello  there,\tfriend.", config)
+    clip.segments[0].text = "Hello there, friend."  # KPipeline's rebuilt graphemes
+    assert not is_clip_dirty(clip, "Hello  there,\tfriend.", config)
+
+
+def test_target_change_that_moves_a_boundary_dirties_the_clip():
+    # Sentences end after words 4 and 6 of 10: a target of 5 cuts after 4,
+    # a target of 6 after 6. Two pieces either way.
+    text = "w1 w2 w3 w4. w5 w6. w7 w8 w9 w10."
+    five = _config(segment_target_words=5)
+    six = _config(segment_target_words=6)
+    assert predict_segment_texts(text, five) == ["w1 w2 w3 w4.", "w5 w6. w7 w8 w9 w10."]
+    assert predict_segment_texts(text, six) == ["w1 w2 w3 w4. w5 w6.", "w7 w8 w9 w10."]
+    clip = _generated_clip(text, five)
+    assert not is_clip_dirty(clip, text, five)
+    assert is_clip_dirty(clip, text, six)
+
+
+def test_turning_a_boundary_toggle_off_dirties_the_clips_it_moves():
+    text = "One two, three four five six seven eight nine ten eleven twelve."
+    on = _config(segment_target_words=5)
+    off = _config(segment_target_words=5, segment_at_pauses=False)
+    assert predict_segment_texts(text, on)[0] == "One two,"
+    clip = _generated_clip(text, on)
+    assert is_clip_dirty(clip, text, off)
+
+
+def test_build_segments_stamps_words_onset_and_tail():
+    from kokoro_gui.daw.dirty import build_segments_from_results
+
+    results = [{"text": "Hi there.", "path": "k_0.wav", "duration": 1.0, "cache_key": "k",
+                "words": [["Hi", 0.0, 0.3], ["there.", 0.4, 0.9]], "onset_s": 0.02, "tail_s": 0.05}]
+    segment = build_segments_from_results(None, results)[0]
+    assert segment.words == [["Hi", 0.0, 0.3], ["there.", 0.4, 0.9]]
+    assert (segment.onset_s, segment.tail_s) == (0.02, 0.05)
+
+    bare = build_segments_from_results("k", [{"text": "x", "path": "p", "duration": 1.0}])[0]
+    assert bare.words == [] and bare.onset_s is None and bare.tail_s is None
+
+
+def test_carry_segment_timing_fills_a_cache_hit_from_the_old_segment():
+    from kokoro_gui.daw.dirty import carry_segment_timing
+    from kokoro_gui.daw.models import Segment
+
+    old = Segment(order_index=0, cache_key="k", audio_path="k_0.wav", words=[["a", 0.0, 0.1]],
+                  onset_s=0.01, tail_s=0.02)
+    other = Segment(order_index=0, cache_key="other", audio_path="o_0.wav", words=[["b", 0.0, 0.1]])
+    new = [Segment(order_index=0, cache_key="k", audio_path="k_0.wav")]
+    carry_segment_timing(new, [[other], [old]])
+    assert new[0].words == [["a", 0.0, 0.1]]
+    assert (new[0].onset_s, new[0].tail_s) == (0.01, 0.02)

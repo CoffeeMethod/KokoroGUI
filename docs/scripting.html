@@ -112,7 +112,7 @@
         <li><p><strong>A <code>[Preset]:</code> tag</strong> loads that preset and overlays it on top of the base settings for everything until the next tag.</p></li>
         <li><p><strong>A <code>[:FXPreset]:</code> tag</strong> keeps the base voice and settings, and only overlays the FX preset.</p></li>
         <li><p><strong>An empty segment</strong>, one tag immediately followed by another with no text between them, is dropped rather than generating a silent clip.</p></li>
-        <li><p><strong>Each segment</strong> is independently split into smaller chunks afterward using your Split By setting, so one <code>[Preset]:</code> block can still turn into several audio chunks under the hood. The tags layer on top of smart splitting, they don't replace it.</p></li>
+        <li><p><strong>Each segment</strong> is independently split into smaller pieces afterward by the Target Words per Segment setting, so one <code>[Preset]:</code> block can still turn into several audio chunks under the hood. The tags layer on top of smart splitting, they don't replace it.</p></li>
       </ol>
     </div>
   </section>
@@ -176,10 +176,24 @@
     </div>
   </section>
 
+  <section class="doc-section" id="pause">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">07 · Pauses</span><code>[pause:1.5]</code> adds silence before the next clip</h2>
+        <p>Put <code>[pause:1.5]</code> on its own line or inside a line, with the seconds you want. When Auto-split runs, the marker stays in the transcript as plain, untagged text, so it's never read aloud, and the next clip it creates starts that many seconds after the one before it. A marker in the middle of a tagged block splits the block into two clips at that point.</p>
+        <pre><code>[Narrator]: The door creaked open.
+[pause:1.5]
+[Marta]: Who's there?</code></pre>
+        <p>Without a marker, clips placed one after another still get a gap: 0.35 s by default, 0.9 s across a blank line. Both live in Settings with nothing selected (Gap, Paragraph gap), and a selected clip's own Gap before overrides them. A clip you've dragged to a fixed time ignores gaps.</p>
+        <p>Whole-document generation (a project with no clips yet) drops the marker and doesn't add silence.</p>
+      </div>
+    </div>
+  </section>
+
   <section class="doc-section" id="plays-well">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">07 · Plays well with</span>Lexicon, generation modes, and both engines</h2>
+        <h2><span class="idx">08 · Plays well with</span>Lexicon, generation modes, and both engines</h2>
         <p>The Lexicon dock's pronunciation overrides apply to every segment's text before synthesis, regardless of which preset or FX preset is active. Lexicon rules are global, not per-speaker.</p>
         <p>This syntax works the same way in Standard and JIT generation, both call the same parser before splitting text into chunks.</p>
         <p>Both Kokoro and Audio8 support it today. Since the tags reference saved <a href="settings.html#presets" class="link">presets</a>, not built-in engine voices, switching the active engine doesn't break an existing script as long as the preset names still resolve to something valid for the new engine.</p>

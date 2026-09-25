@@ -112,10 +112,17 @@ Whenever the README's "New in X.Y.Z" section grows, do a pass over `docs/index.h
 comparison, bento grid, and changelog are the sections most likely to go stale first, since they
 enumerate specific capabilities.
 
-Nothing pending from the README's 4.0.0 entry: the welcome dialog and `show_welcome`
-are on `settings.html`, `index.html` pitches `.tbaw` in the bento grid, the Projects section and
-the changelog, and `format.html` documents the bundle. The next "New in" section reopens this
-list.
+Nothing pending from the README's 4.0.0-beta.2 entry: the changelog has it, `settings.html`
+documents Target words per segment and the three split toggles, the Lexicon's stale marking and the Whisper prompt, and
+`index.html`'s engine table and install notes name Whisper. The next "New in" section reopens
+this list.
+
+From the README's 4.0.0-beta.3 entry: `scripting.html` has the `[pause:x]` section (07),
+`index.html`'s changelog has the entry, and `settings.html` has the Project and clip fields
+table, the ruler, fade, take, status, align and track-header rows in the Timeline table, the
+timecode and word-highlight rows in Transport, and the export's Channels, Range, word SRT and
+cue sheet. Still to do: new shell screenshots (`scripts/render_screenshot.py`), since the
+header column is wider and the Settings tab grew,.
 
 Preview with `python -m http.server 8765 --directory docs` and open `http://localhost:8765/`;
 opening `docs/index.html` straight from the filesystem works too, but a browser pane that

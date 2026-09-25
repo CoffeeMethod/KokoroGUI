@@ -8,7 +8,7 @@ import pytest
 from kokoro_gui.engines import registry
 from kokoro_gui.engines.base import ConfigField, EngineCapabilities, VoiceInfo
 from kokoro_gui.engines.dummy import DummyBackendAdapter, DummyEngine
-from kokoro_gui.engines.kokoro import KokoroBackendAdapter, OUTPUT_FORMAT_CHOICES, SPLIT_PATTERN_CHOICES
+from kokoro_gui.engines.kokoro import KokoroBackendAdapter, OUTPUT_FORMAT_CHOICES
 
 
 def test_kokoro_registered_by_default():
@@ -42,16 +42,18 @@ def test_config_schema_covers_todays_actual_fields(engine):
 
     keys = {f.key for f in schema}
     assert keys == {
-        "lang_code", "voice", "speed", "pitch", "split_pattern",
+        "lang_code", "voice", "speed", "pitch", "segment_target_words", "segment_at_paragraphs", "segment_at_sentences", "segment_at_pauses",
         "format", "num_threads", "caching", "lexicon",
     }
 
 
-def test_config_schema_split_pattern_and_format_choices(engine):
+def test_config_schema_segmentation_and_format_fields(engine):
     backend = registry.get_engine("kokoro", engine=engine)
     by_key = {f.key: f for f in backend.get_config_schema()}
 
-    assert by_key["split_pattern"].choices == SPLIT_PATTERN_CHOICES
+    assert by_key["segment_target_words"].default == 40
+    assert all(by_key[k].default is True for k in ("segment_at_paragraphs", "segment_at_sentences",
+                                                    "segment_at_pauses"))
     assert by_key["format"].choices == OUTPUT_FORMAT_CHOICES
     # voice/lang_code are GUI-resolved (dynamic), not schema-fixed.
     assert by_key["voice"].choices is None
@@ -101,7 +103,7 @@ def test_dummy_registered_and_shaped_like_a_real_backend():
     backend = registry.get_engine("dummy")
     keys = {f.key for f in backend.get_config_schema()}
     assert keys == {
-        "lang_code", "voice", "speed", "pitch", "split_pattern",
+        "lang_code", "voice", "speed", "pitch", "segment_target_words", "segment_at_paragraphs", "segment_at_sentences", "segment_at_pauses",
         "format", "num_threads", "caching",
     }
     assert backend.get_voices() == [VoiceInfo(id="dummy", display_name="Dummy Tone", lang_code=None, is_custom=False)]
@@ -117,7 +119,7 @@ def test_dummy_engine_produces_real_nonsilent_audio(tmp_path):
     engine = DummyEngine()
     try:
         config = {
-            "lang_code": "a", "voice": "dummy", "speed": 1.0, "split_pattern": r"\n+",
+            "lang_code": "a", "voice": "dummy", "speed": 1.0,
             "filename": "out", "time_id": "1", "out_dir": str(tmp_path), "format": "wav",
             "apply_fx": False,
         }

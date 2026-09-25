@@ -201,3 +201,48 @@ def test_whitespace_only_gap_is_skipped():
     assert unmatched == []
     spans = find_character_fx_spans(text)
     assert triples == [(spans[0].start, spans[0].end, alice.id)]
+
+
+# ---------------------------------------------------------------------------
+# [pause:x] markers (phase 2, A1)
+# ---------------------------------------------------------------------------
+
+
+def test_pause_marker_before_a_tag_is_left_untagged_and_gaps_the_next_clip():
+    from kokoro_gui.daw.auto_split import plan_pause_gaps
+
+    alice = Character.from_preset_dict("Alice", {})
+    bob = Character.from_preset_dict("Bob", {})
+    text = "[Alice]: Hello there.\n[pause:1.5]\n[Bob]: Hi."
+    doc = Document.from_plain_text(text, characters=[alice, bob])
+
+    triples, _ = plan_auto_split_clips(doc, split_by_paragraph=False)
+
+    assert all("[pause" not in text[s:e] for s, e, _c in triples)
+    bob_start = text.index("[Bob]")
+    assert triples[-1][0] == bob_start
+    assert plan_pause_gaps(doc, triples) == {bob_start: 1.5}
+
+
+def test_inline_pause_marker_splits_the_range():
+    from kokoro_gui.daw.auto_split import plan_pause_gaps
+
+    alice = Character.from_preset_dict("Alice", {})
+    text = "One sentence. [pause:0.5] Another one."
+    doc = Document.from_plain_text(text, characters=[alice])
+
+    triples, _ = plan_auto_split_clips(doc, split_by_paragraph=False)
+
+    assert [text[s:e].strip() for s, e, _c in triples] == ["One sentence.", "Another one."]
+    second_start = triples[1][0]
+    assert plan_pause_gaps(doc, triples) == {second_start: 0.5}
+
+
+def test_text_without_pause_markers_plans_as_before():
+    from kokoro_gui.daw.auto_split import plan_pause_gaps
+
+    alice = Character.from_preset_dict("Alice", {})
+    doc = Document.from_plain_text("Plain narration.", characters=[alice])
+    triples, _ = plan_auto_split_clips(doc, split_by_paragraph=False)
+    assert triples == [(0, len("Plain narration."), alice.id)]
+    assert plan_pause_gaps(doc, triples) == {}

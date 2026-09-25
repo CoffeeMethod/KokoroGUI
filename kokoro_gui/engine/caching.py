@@ -42,12 +42,15 @@ import importlib.metadata
 import os
 import re
 
+import numpy as np
 import soundfile as sf
 import torch
 from pedalboard.io import AudioFile
 
 import kokoro_engine
 from kokoro_gui.engine.audio_fx import clamp_pitch_semitones
+from kokoro_gui.engine import segmenting
+from kokoro_gui.engine.wordtiming import silence_bounds, words_from_tokens
 
 # Bump whenever compute_cache_key's composition or logic changes. Old cache
 # entries simply stop matching (new hash algorithm -> new filenames) and
@@ -137,9 +140,9 @@ def compute_cache_key(text, voice, eff_speed, lang_code, engine_id="kokoro", eng
     also carries `out_dir`/`filename`/`format`/`normalize`/`trim_silence`/the
     FX chain/`num_threads`/etc., none of which affect what gets cached (they
     apply after cache read/generation, to the same raw segment - that's the
-    whole point of caching pre-FX audio). `split_pattern` is excluded for
-    the same reason: only the text used to generate a segment determines
-    its content.
+    whole point of caching pre-FX audio). The segmentation settings are
+    excluded for the same reason: they decide which text a segment is,
+    and only that text determines its content.
 
     `extra` exists for a backend whose "voice" isn't fully described by a
     name + fingerprint - Audio8's zero-shot cloning also takes a reference
@@ -185,17 +188,14 @@ def effective_speed(config):
     return eff_speed
 
 
-def predict_segment_texts(text, split_pattern=r"\n+"):
-    """The sub-segment texts a pipeline call over `text` is expected to
-    yield: split on `split_pattern`, stripped, blanks dropped. Mimics
-    `KPipeline`'s own splitting closely enough that the file count matches;
-    the cache check and the dirty check both read this one prediction. A
-    pattern that doesn't compile predicts nothing, which reads as "not
-    cached"."""
-    try:
-        return [t.strip() for t in re.split(split_pattern, text) if t.strip()]
-    except re.error:
-        return []
+def split_segments(text, config):
+    """The pieces `text` is generated as: one pipeline call and one file
+    each, on every path (clips, whole document, JIT). `process_chunk_task`
+    calls the engine once per piece with the pipeline's own splitting off,
+    and the dirty check compares stored segment texts against this list,
+    so the two can't disagree. The rule (a word target, ranked boundary
+    toggles, a hard limit at 2x) is in kokoro_gui/engine/segmenting.py."""
+    return segmenting.split_text(text, config)
 
 
 def normalize_voice(voice, backend, project_dir=None):
@@ -322,7 +322,7 @@ class CachingMixin:
         # the file it writes is the cache entry.
         raw_output = key_naming or bool(config.get("raw_output", False))
         fmt = _output_format(config)
-        predicted_texts = predict_segment_texts(text, config.get("split_pattern", r"\n+"))
+        predicted_texts = split_segments(text, config)
         take = int(config.get("take", 0) or 0)
         engine_version = self.engine_version()
 
@@ -381,10 +381,20 @@ class CachingMixin:
                 print(f"Cache check error: {e}")
                 cached_segments = []
 
-        def result(path, graphemes, duration):
+        def result(path, graphemes, duration, raw_audio=None, words=None):
+            # Onset/tail come from the raw model output (what the post stage
+            # trims); a cache hit re-reads the file for them. `words` are
+            # relative to this segment's start.
+            if raw_audio is None:
+                try:
+                    raw_audio, _sr = sf.read(path, dtype="float32")
+                except Exception:
+                    raw_audio = None
+            onset_s, tail_s = silence_bounds(raw_audio, sample_rate) if raw_audio is not None else (None, None)
             return {
                 "path": path, "text": graphemes, "duration": duration, "seg_idx": index,
                 "raw": raw_output, "take": take, "cache_key": cache_hash, "engine_version": engine_version,
+                "words": words or [], "onset_s": onset_s, "tail_s": tail_s,
             }
 
         if hit_paths is not None:
@@ -402,7 +412,7 @@ class CachingMixin:
         sub_idx = 0
         base_name = f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_part{index}"
 
-        def process_and_save(graphemes, raw_audio):
+        def process_and_save(graphemes, raw_audio, words=None):
             nonlocal sub_idx
             if key_naming:
                 path = os.path.join(cache_dir, f"{cache_hash}_{sub_idx}.{cache_ext}")
@@ -411,7 +421,8 @@ class CachingMixin:
                 path = os.path.join(config["out_dir"], f"{base_name}_{sub_idx}.{fmt}")
                 processed_audio = raw_audio if raw_output else self.process_audio(raw_audio, sample_rate, config)
             _write_audio(path, processed_audio, sample_rate, type(self).__name__)
-            return result(path, graphemes, len(processed_audio) / float(sample_rate))
+            return result(path, graphemes, len(processed_audio) / float(sample_rate), raw_audio=raw_audio,
+                          words=words)
 
         try:
             if cached_segments:
@@ -427,16 +438,41 @@ class CachingMixin:
                 if not pipeline:
                     raise RuntimeError(f"Failed to initialize pipeline ({lang_code}) in thread.")
 
-                generator = pipeline(text, voice=config["voice"], speed=eff_speed,
-                                     split_pattern=config.get("split_pattern", r"\n+"))
-
-                for graphemes, phonemes, audio in generator:
+                for piece in predicted_texts:
                     if self.cancel_event.is_set():
                         break
+                    # One call per piece with the pipeline's own splitting
+                    # off. A pipeline that still yields several results for
+                    # one piece (KPipeline cuts at ~510 phoneme tokens) gets
+                    # them concatenated, so the file count is always the
+                    # predicted count. The result's text is the piece, not
+                    # the pipeline's graphemes, which KPipeline rebuilds
+                    # from its tokens.
+                    # KPipeline's `Result` unpacks as the triple and carries
+                    # `tokens` with times; a result after the first starts
+                    # where the audio so far ends.
+                    arrays = []
+                    words = []
+                    piece_frames = 0
+                    for item in pipeline(piece, voice=config["voice"], speed=eff_speed, split_pattern=None):
+                        if self.cancel_event.is_set():
+                            break
+                        _graphemes, _phonemes, audio = item
+                        if audio is None:
+                            continue
+                        if isinstance(audio, torch.Tensor):
+                            audio = audio.cpu().numpy()
+                        audio = np.asarray(audio, dtype=np.float32).reshape(-1)
+                        words.extend(words_from_tokens(getattr(item, "tokens", None),
+                                                       piece_frames / float(sample_rate)))
+                        arrays.append(audio)
+                        piece_frames += len(audio)
+                    if self.cancel_event.is_set() or not arrays:
+                        break
+                    audio = arrays[0] if len(arrays) == 1 else np.concatenate(arrays)
+                    graphemes = piece
                     if progress_callback:
                         progress_callback(len(graphemes), graphemes)
-                    if isinstance(audio, torch.Tensor):
-                        audio = audio.cpu().numpy()
 
                     if use_cache and cache_hash and not key_naming:
                         try:
@@ -444,7 +480,7 @@ class CachingMixin:
                         except Exception as e:
                             print(f"Cache write error: {e}")
 
-                    chunk_files.append(process_and_save(graphemes, audio))
+                    chunk_files.append(process_and_save(graphemes, audio, words))
                     sub_idx += 1
         finally:
             if key_naming and cache_hash:

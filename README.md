@@ -15,6 +15,63 @@ by default, with a zero-shot voice-cloning backend also built in.
 
 https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
+## New in 4.0.0-beta.3
+
+-   **Pauses between clips.** Clips placed one after another now have 0.35 s of silence between
+    them, and 0.9 s across a blank line. Both are in Settings > Project (Gap, Paragraph gap);
+    set them to 0 for the old back-to-back placement. Every existing project that isn't
+    hand-timed gets longer the first time you open it. A clip can override its own gap, and
+    `[pause:1.5]` in a script gives the next clip Auto-split creates a 1.5 s gap. The marker
+    stays in the text and is never read aloud.
+-   **Takes.** Regenerating a clip keeps the old version. Right-click a clip > Take to switch
+    back, or Delete take to drop one. A take recorded from text you've since edited says "old
+    text". Old takes are saved in the project and their audio is kept. A project with takes
+    needs this version or newer to open.
+-   **Mixer.** Each track has mute, solo, a fader, a pan slider and a volume automation lane
+    (the `A` button: double-click adds a point, drag moves it, right-click deletes it,
+    Alt-drag moves a segment). Clips have fade-in and fade-out handles on their top corners.
+    Settings > Project > Auto-crossfade adds a 10 ms fade where clips overlap. Playback and
+    export are stereo, and export follows mute, solo, pan, fades and automation.
+-   **Markers and loops.** Right-click the ruler to add a marker, and drag a flag to move it.
+    Shift-drag on the ruler, or use "Loop to next marker", to loop a region. Export can render
+    just the stretch between two markers.
+-   **Timecode.** Settings > Project > Timecode shows the ruler and the transport clock as
+    `HH:MM:SS:FF` at a frame rate you pick, drop-frame included, from any start time.
+-   **Review.** Each clip has a status (to do, generated, approved, needs rewrite) and a note,
+    set from the clip's right-click menu or Settings. The timeline's Show filter dims the rest.
+    Export can write a cue sheet (`.csv`): times, character, source text, text, status, note.
+-   **Source text for dubbing.** A clip can carry the original line it's dubbing. It shows in
+    the transcript gutter's tooltip and next to a rough syllable count of both lines.
+-   **Word timing.** Generated clips remember when each word is spoken: from Kokoro's own
+    timings in English, and from a Whisper pass afterwards for Audio8 and Kokoro's other
+    languages. During playback the transcript highlights the current word. Ctrl+click a word to
+    jump there. Export can write one subtitle per word.
+-   **Voice variants (Audio8).** A character can have named variants ("angry", "whisper"), each
+    its own reference recording, set up in Edit > Characters. The transcript's Variant box picks
+    one per clip.
+
+## New in 4.0.0-beta.2
+
+-   **The Lexicon applies to timeline clips.** Before, only whole-document and JIT generation
+    used it. Adding or removing a rule now marks the clips whose text it rewrites as stale, and no
+    others.
+-   **Text splits at natural pauses, toward a word count.** Settings > Target Words per Segment
+    (default 40) replaces Split By. Each piece ends at the strongest boundary near the target:
+    a paragraph, then a sentence end, then a pause (comma, semicolon, colon, dash, line break),
+    each with its own on/off switch. A sentence is only cut when it runs past twice the target,
+    and a word never is. Each piece is one file and one subtitle cue, so a long paragraph no longer
+    leaves a clip stale forever. Clips whose pieces come out different are marked stale; a
+    `split_pattern` saved in a character preset is ignored.
+-   **Whisper is the default auto-transcription engine.** The Voice Reference dock's
+    Auto-Transcribe runs Whisper large-v3-turbo locally through faster-whisper (MIT). It asks
+    before the first-use download (about 1.6 GB) and offers another engine instead. Set
+    `WHISPER_MODEL` in `.env` to pick a smaller model. `python -m kokoro_gui.engine.asr ref.wav
+    whisper --words` prints timed words. If you picked Audio8 in the dock before, that choice
+    stays until you change it.
+-   **Security.** On Linux and macOS, `cache/`, `custom_voices/` and the Audio8 reference folders
+    are created (or tightened to) owner-only, 0700. A `cache/` that belongs to another user is
+    left alone and a per-user one under `~/.cache/kokorogui/` is used instead.
+
 ## New in Beta 4.0.0
 
 The rebuild. 3.2.0 was a CustomTkinter form over one `kokoro_engine.py`; 4.0.0 is a PySide6
@@ -202,8 +259,9 @@ real backend, and projects that live in one file.
         project's FX.
     -   **Traditional controls:** Speed (0.5x-2.0x), Volume, Pitch.
     -   **Cleanup:** Normalize and trim silence.
--   **Smart splitting:** split text by newlines, paragraphs, or sentences for better prosody at the
-    seams.
+-   **Smart splitting:** text is generated in pieces of about 40 words (adjustable), cut at
+    paragraphs, sentence ends or pauses (each switchable), never mid-word and mid-sentence only
+    when a sentence runs past twice the target.
 -   **Flexible output:**
     -   Combine all segments into one final `.wav` (or `.flac`/`.mp3`/`.ogg`), or keep the individual
         segment files.
@@ -214,7 +272,7 @@ real backend, and projects that live in one file.
         color, reusable across clips.
     -   Save and load FX presets separately from generation presets.
     -   Pronunciation lexicon: case-insensitive literal find-and-replace overrides, applied before
-        synthesis.
+        synthesis on every path. Editing it marks the clips it affects as stale.
 -   **UI:** dark or light theme, persistent dock layouts (Workspace menu).
 
 ## Prerequisites
@@ -273,9 +331,13 @@ for a 3.2.0 install other than cloning 4.0.0 alongside it; there is nothing to m
     *Note: If you have issues with `torch`, visit [pytorch.org](https://pytorch.org/get-started/locally/)
     for specific installation instructions tailored to your OS and hardware.*
 
-4.  **(Optional) Configure offline ASR:** copy `.env.example` to `.env` and set `VOSK_MODEL_PATH` if
-    you plan to use the Vosk auto-transcription engine for the Voice Reference dock instead of the
-    default (online, non-commercial) Audio8 ASR model.
+4.  **(Optional) Configure auto-transcription:** the Voice Reference dock's default engine is
+    Whisper large-v3-turbo. Its model downloads from Hugging Face the first time you use it,
+    about 1.6 GB, and the app asks before it starts. To use less, copy `.env.example` to `.env`
+    and set `WHISPER_MODEL` to `small` (484 MB), `base` (145 MB) or `tiny` (75 MB). Set
+    `VOSK_MODEL_PATH` there too if you want the fully offline Vosk engine. Whisper uses an NVIDIA
+    GPU only when the CUDA 12 cuBLAS and cuDNN libraries are installed; without them it runs on
+    the CPU (it tries the GPU once, then stays on the CPU).
 
 ## Usage
 

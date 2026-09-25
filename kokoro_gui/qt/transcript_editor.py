@@ -41,7 +41,12 @@ UI-shell pass (Claude/PLAN_ui_shell_redesign.md section 2):
   existing clip boundary, painted over the viewport after `super()`.
   Recomputed 150ms after the last edit.
 - The clip being played back (`SelectionModel.playing_clip_id`) is shown as
-  a translucent `ExtraSelection` and scrolled into view (UI4).
+  a translucent `ExtraSelection` and scrolled into view (UI4). The word
+  under the playhead gets a second, stronger one (`set_playing_word`, fed by
+  `QtTTSApp.word_at` from the segments' stored word times).
+- Ctrl+click seeks the transport to the word under the pointer
+  (`QtTTSApp.seek_to_offset`).
+- A clip with `source_text` shows it as the gutter label's tooltip.
 - Colors come from `kokoro_gui.qt.theme.current()` (UI10).
 
 Note: `self.document()` (Qt's `QTextDocument`) and `self.app.document` (the
@@ -53,13 +58,13 @@ from __future__ import annotations
 import re
 from typing import Callable, Optional
 
-from PySide6.QtCore import QMimeData, QRect, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QMimeData, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QColor, QFont, QKeySequence, QPainter, QPen, QPolygon, QSyntaxHighlighter, QTextCharFormat,
     QTextCursor,
 )
 from PySide6.QtCore import QPoint
-from PySide6.QtWidgets import QMenu, QTextEdit, QWidget
+from PySide6.QtWidgets import QMenu, QTextEdit, QToolTip, QWidget
 
 from kokoro_gui.daw.auto_split import plan_auto_split_clips
 from kokoro_gui.daw.undo import AssignCharacterCommand
@@ -296,6 +301,23 @@ class TranscriptGutter(QWidget):
     def button_rects(self) -> list:
         return list(self._button_rects)
 
+    def tooltip_at(self, pos) -> Optional[str]:
+        """The source text of the clip whose label is at `pos`, if any."""
+        for rect, line_start, _line_end in self._label_rects:
+            if rect.contains(pos):
+                clip = self.editor.app.document.clip_covering(line_start)
+                if clip is not None and clip.source_text:
+                    return f"Source: {clip.source_text}"
+        return None
+
+    def event(self, event) -> bool:  # noqa: N802 (Qt override)
+        if event.type() == QEvent.Type.ToolTip:
+            text = self.tooltip_at(event.pos())
+            if text:
+                QToolTip.showText(event.globalPos(), text, self)
+                return True
+        return super().event(event)
+
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         pos = event.position().toPoint()
         for rect, clip_id in self._button_rects:
@@ -378,6 +400,8 @@ class TranscriptEditor(QTextEdit):
         self._split_timer.timeout.connect(self.refresh_split_rules)
 
         self._playing_clip_id: Optional[str] = None
+        self._playing_clip_selections: list = []
+        self._playing_word: Optional[tuple] = None
 
         self.document().contentsChange.connect(self._on_contents_change)
         self.cursorPositionChanged.connect(self._on_cursor_position_changed)
@@ -554,7 +578,45 @@ class TranscriptEditor(QTextEdit):
                 sel.format.setBackground(color)
                 selections.append(sel)
                 self._scroll_offset_into_view(extent[0])
+        self._playing_clip_selections = selections
+        self._playing_word = None
+        self._apply_extra_selections()
+
+    def set_playing_word(self, span: Optional[tuple]) -> None:
+        """Highlights document offsets `[start, end)` as the word being
+        played, or clears it with None."""
+        span = tuple(span) if span else None
+        if span == self._playing_word:
+            return
+        self._playing_word = span
+        self._apply_extra_selections()
+
+    def playing_word(self) -> Optional[tuple]:
+        return self._playing_word
+
+    def _apply_extra_selections(self) -> None:
+        selections = list(self._playing_clip_selections)
+        if self._playing_word is not None:
+            text_len = len(self.toPlainText())
+            start, end = (max(0, min(v, text_len)) for v in self._playing_word)
+            if end > start:
+                color = QColor(theme.current().playing_highlight)
+                color.setAlpha(220)
+                sel = QTextEdit.ExtraSelection()
+                sel.cursor = QTextCursor(self.document())
+                sel.cursor.setPosition(start)
+                sel.cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+                sel.format.setBackground(color)
+                sel.format.setFontUnderline(True)
+                selections.append(sel)
         self.setExtraSelections(selections)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().mousePressEvent(event)
+        if (event.button() == Qt.MouseButton.LeftButton
+                and event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            offset = self.cursorForPosition(event.position().toPoint()).position()
+            self.app.seek_to_offset(offset)
 
     def _scroll_offset_into_view(self, offset: int) -> None:
         cursor = QTextCursor(self.document())

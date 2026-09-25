@@ -3,9 +3,16 @@ Reference dock (kokoro_gui/qt/docks/voice_clone_dock.py) to pre-fill an
 editable transcript for a WAV a user is about to use as an Audio8-TTS voice
 reference.
 
-Two engines are registered in `ASR_ENGINES`, selectable from the dock's
+Three engines are registered in `ASR_ENGINES`, selectable from the dock's
 engine picker:
 
+- `"whisper"` (the default) - faster-whisper (CTranslate2) running
+  `large-v3-turbo`, int8 on CPU, float16 on CUDA. MIT. The weights (about
+  1.6 GB) download from Hugging Face on first use; `whisper_model_cached()`
+  tells a caller whether that's about to happen so it can ask first. The
+  model is `WHISPER_MODEL` in `.env` (default `large-v3-turbo`), so a weak
+  machine can pick a smaller one. The only engine with reliable word
+  timestamps.
 - `"audio8"` - https://huggingface.co/Audio8/Audio8-ASR-0.1B. Higher quality,
   needs `transformers`/`torch`, downloads multi-GB weights from Hugging Face
   on first use, and is CC-BY-NC-4.0 (non-commercial).
@@ -30,7 +37,12 @@ not just the audio itself - getting that by hand is tedious, so either engine
 here is a starting point the user reviews/corrects, not a ground-truth
 oracle.
 
-Both engines are lazy-imported (only inside their `_get_*_model()` helpers,
+`transcribe_wav` returns text. `transcribe_wav_words` returns
+`[(word, start_s, end_s), ...]` and is the entry point for anything that
+needs timing (Whisper's are tight, Vosk's loose, Audio8 has none and
+raises `NotImplementedError`).
+
+Every engine is lazy-imported (only inside its `_get_*_model()` helper,
 not at this module's top level) so importing this module - which happens
 whenever the Voice Reference dock is built - never triggers a model
 load/download by itself; only calling `transcribe_wav` does. Note
@@ -63,6 +75,31 @@ AUDIO8_MODEL_ID = "Audio8/Audio8-ASR-0.1B"
 ASR_MODEL_ID = AUDIO8_MODEL_ID
 
 VOSK_MODEL_PATH_ENV_KEY = "VOSK_MODEL_PATH"
+
+WHISPER_MODEL_ENV_KEY = "WHISPER_MODEL"
+DEFAULT_WHISPER_MODEL = "large-v3-turbo"
+# Download size per faster-whisper model name, for the "downloads about X
+# the first time" prompt. A name missing here shows no size.
+WHISPER_MODEL_SIZES = {
+    "tiny": "75 MB",
+    "tiny.en": "75 MB",
+    "base": "145 MB",
+    "base.en": "145 MB",
+    "small": "484 MB",
+    "small.en": "484 MB",
+    "distil-small.en": "336 MB",
+    "medium": "1.5 GB",
+    "medium.en": "1.5 GB",
+    "distil-medium.en": "789 MB",
+    "large-v1": "3.1 GB",
+    "large-v2": "3.1 GB",
+    "large-v3": "3.1 GB",
+    "large": "3.1 GB",
+    "distil-large-v2": "1.5 GB",
+    "distil-large-v3": "1.5 GB",
+    "large-v3-turbo": "1.6 GB",
+    "turbo": "1.6 GB",
+}
 
 
 def _dotenv_path() -> str:
@@ -125,6 +162,13 @@ class AsrEngineInfo:
 
 
 ASR_ENGINES = [
+    AsrEngineInfo(
+        "whisper",
+        "Whisper large-v3-turbo (local, word timestamps)",
+        "faster-whisper, runs locally (int8 on CPU, float16 on CUDA). Downloads the "
+        f"model from Hugging Face on first use, about {WHISPER_MODEL_SIZES[DEFAULT_WHISPER_MODEL]}; "
+        f"set {WHISPER_MODEL_ENV_KEY} in .env for a smaller one. MIT.",
+    ),
     AsrEngineInfo(
         "audio8",
         "Audio8-ASR-0.1B (online, higher quality)",
@@ -216,6 +260,134 @@ def _transcribe_wav_audio8(wav_path: str, max_new_tokens: int = 128) -> str:
         return text.strip()
     except Exception as e:
         raise RuntimeError(f"Transcription failed: {e}") from e
+
+
+# --- Whisper (faster-whisper) --------------------------------------------
+
+_whisper_lock = threading.Lock()
+_whisper_models: dict[tuple[str, str], object] = {}  # (model name, device) -> loaded WhisperModel
+# Set once a CUDA run fails (e.g. `cublas64_12.dll` missing: CTranslate2 sees
+# the GPU through the driver but the CUDA 12 runtime libraries aren't
+# installed). Every later load goes to the CPU for the rest of the process.
+_whisper_cuda_failed = False
+
+
+def get_whisper_model_name() -> str:
+    """`WHISPER_MODEL` from the environment / `.env`, default
+    `large-v3-turbo`."""
+    return os.environ.get(WHISPER_MODEL_ENV_KEY, "").strip() or DEFAULT_WHISPER_MODEL
+
+
+def whisper_model_size(name: str | None = None) -> str | None:
+    """The download size string for `name` (default: the configured
+    model), or None when `WHISPER_MODEL_SIZES` doesn't know it."""
+    return WHISPER_MODEL_SIZES.get(name or get_whisper_model_name())
+
+
+def whisper_model_cached(name: str | None = None) -> bool:
+    """True when the model's weights are already on disk, so loading it
+    won't download. A `local_files_only` probe of the Hugging Face cache;
+    a path to a local model folder counts as cached when it exists. False
+    when faster-whisper isn't installed (loading would fail anyway, and the
+    caller's prompt is harmless)."""
+    name = name or get_whisper_model_name()
+    if os.path.isdir(name):
+        return True
+    try:
+        from faster_whisper.utils import download_model
+    except ImportError:
+        return False
+    try:
+        download_model(name, local_files_only=True)
+        return True
+    except Exception:
+        return False
+
+
+def _whisper_device_and_compute_type() -> tuple[str, str]:
+    if _whisper_cuda_failed:
+        return "cpu", "int8"
+    try:
+        import ctranslate2
+
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "cuda", "float16"
+    except Exception:
+        pass
+    return "cpu", "int8"
+
+
+def _get_whisper_model(name: str | None = None):
+    """Lazily loads and caches a faster-whisper model by name, behind a
+    lock (like `_get_model`), so two callers don't both start the download.
+    The first call for a model not yet in the Hugging Face cache downloads
+    it; callers that can be first ask the user before that
+    (`whisper_model_cached`)."""
+    name = name or get_whisper_model_name()
+    with _whisper_lock:
+        device, compute_type = _whisper_device_and_compute_type()
+        model = _whisper_models.get((name, device))
+        if model is not None:
+            return model
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError as e:
+            raise RuntimeError(
+                "Whisper transcription needs the 'faster-whisper' package (pip install -r requirements.txt)."
+            ) from e
+        try:
+            model = WhisperModel(name, device=device, compute_type=compute_type)
+        except Exception as e:
+            if device != "cuda":
+                raise RuntimeError(f"Failed to load Whisper model '{name}': {e}") from e
+            _mark_whisper_cuda_failed(e)
+            try:
+                model = WhisperModel(name, device="cpu", compute_type="int8")
+            except Exception as e2:
+                raise RuntimeError(f"Failed to load Whisper model '{name}': {e2}") from e2
+            device = "cpu"
+        model.kokoro_device = device  # which device this instance runs on
+        _whisper_models[(name, device)] = model
+        return model
+
+
+def _mark_whisper_cuda_failed(error) -> None:
+    global _whisper_cuda_failed
+    if not _whisper_cuda_failed:
+        print(f"Whisper on CUDA failed ({error}); using the CPU from now on.")
+    _whisper_cuda_failed = True
+
+
+def _transcribe_wav_whisper(wav_path: str) -> tuple[str, list[tuple[str, float, float]]]:
+    """`(text, [(word, start_s, end_s), ...])` for `wav_path`, with word
+    timestamps and the VAD filter on. faster-whisper decodes and resamples
+    the file itself. CTranslate2 loads the CUDA libraries lazily, so a
+    missing one only shows up here: a run that fails on CUDA is retried
+    once on the CPU, which every later load then uses."""
+    model = _get_whisper_model()
+    try:
+        return _run_whisper(model, wav_path)
+    except Exception as e:
+        if getattr(model, "kokoro_device", "cpu") != "cuda":
+            raise RuntimeError(f"Transcription failed: {e}") from e
+        _mark_whisper_cuda_failed(e)
+    try:
+        return _run_whisper(_get_whisper_model(), wav_path)
+    except Exception as e:
+        raise RuntimeError(f"Transcription failed: {e}") from e
+
+
+def _run_whisper(model, wav_path: str) -> tuple[str, list[tuple[str, float, float]]]:
+    segments, _info = model.transcribe(wav_path, word_timestamps=True, vad_filter=True)
+    texts = []
+    words = []
+    for segment in segments:  # a generator: decoding happens here
+        texts.append(segment.text.strip())
+        for word in segment.words or ():
+            token = word.word.strip()
+            if token:
+                words.append((token, float(word.start), float(word.end)))
+    return " ".join(t for t in texts if t).strip(), words
 
 
 # --- Vosk ---------------------------------------------------------------
@@ -318,14 +490,29 @@ def _transcribe_wav_vosk(wav_path: str, model_path: str) -> str:
     """Transcribes `wav_path` via Vosk's offline recognizer, first converting
     it to the 16-bit mono PCM WAV Vosk requires (see `_ensure_pcm16_mono`) -
     unlike Audio8-ASR, Vosk itself doesn't resample or downmix its input."""
+    return _run_vosk(wav_path, model_path, with_words=False)[0]
+
+
+def _run_vosk(wav_path: str, model_path: str, with_words: bool) -> tuple[str, list[tuple[str, float, float]]]:
+    """`(text, words)` from Vosk. `words` is filled only `with_words`, from
+    the recognizer's per-word `result` entries (loose timings)."""
     model = _get_vosk_model(model_path)
     import vosk
+
+    words: list[tuple[str, float, float]] = []
+
+    def _take(raw):
+        result = json.loads(raw)
+        if with_words:
+            for item in result.get("result", ()):
+                words.append((str(item.get("word", "")), float(item.get("start", 0.0)), float(item.get("end", 0.0))))
+        return result.get("text", "")
 
     converted_path, temp_path = _ensure_pcm16_mono(wav_path)
     try:
         with wave.open(converted_path, "rb") as wf:
             recognizer = vosk.KaldiRecognizer(model, wf.getframerate())
-            recognizer.SetWords(False)
+            recognizer.SetWords(with_words)
 
             pieces = []
             while True:
@@ -333,8 +520,8 @@ def _transcribe_wav_vosk(wav_path: str, model_path: str) -> str:
                 if not data:
                     break
                 if recognizer.AcceptWaveform(data):
-                    pieces.append(json.loads(recognizer.Result()).get("text", ""))
-            pieces.append(json.loads(recognizer.FinalResult()).get("text", ""))
+                    pieces.append(_take(recognizer.Result()))
+            pieces.append(_take(recognizer.FinalResult()))
     except Exception as e:
         raise RuntimeError(f"Transcription failed: {e}") from e
     finally:
@@ -344,7 +531,7 @@ def _transcribe_wav_vosk(wav_path: str, model_path: str) -> str:
             except OSError:
                 pass
 
-    return " ".join(p for p in pieces if p).strip()
+    return " ".join(p for p in pieces if p).strip(), words
 
 
 # --- dispatch -------------------------------------------------------------
@@ -355,7 +542,8 @@ def transcribe_wav(
     max_new_tokens: int = 128,
     model_path: str | None = None,
 ) -> str:
-    """Transcribes `wav_path` via the named engine ("audio8" or "vosk").
+    """Transcribes `wav_path` via the named engine ("whisper", "audio8" or
+    "vosk").
     Blocking/CPU-or-GPU-bound - callers from the GUI should run this off the
     main thread (see `VoiceCloneDock._on_transcribe_clicked`, which schedules
     it via `asyncio.to_thread` on the active engine's worker).
@@ -365,7 +553,9 @@ def transcribe_wav(
     `VOSK_MODEL_PATH` env var) rather than requiring every caller to read
     that themselves. Passing a path explicitly - the standalone CLI does -
     overrides the environment for that one call."""
-    if engine == "audio8":
+    if engine == "whisper":
+        return _transcribe_wav_whisper(wav_path)[0]
+    elif engine == "audio8":
         return _transcribe_wav_audio8(wav_path, max_new_tokens=max_new_tokens)
     elif engine == "vosk":
         return _transcribe_wav_vosk(wav_path, model_path if model_path is not None else get_vosk_model_path())
@@ -373,15 +563,48 @@ def transcribe_wav(
         raise ValueError(f"Unknown ASR engine '{engine}'")
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
+def transcribe_wav_words(
+    wav_path: str,
+    engine: str = DEFAULT_ASR_ENGINE,
+    model_path: str | None = None,
+) -> list[tuple[str, float, float]]:
+    """`[(word, start_s, end_s), ...]` for `wav_path`, in order. The one
+    entry point for anything that needs word timing; nothing calls the
+    engine functions directly. Whisper's timings are tight; Vosk's are
+    loose; Audio8 has none and raises `NotImplementedError`. Blocking, like
+    `transcribe_wav`."""
+    if engine == "whisper":
+        return _transcribe_wav_whisper(wav_path)[1]
+    elif engine == "vosk":
+        return _run_vosk(wav_path, model_path if model_path is not None else get_vosk_model_path(),
+                         with_words=True)[1]
+    elif engine == "audio8":
+        raise NotImplementedError("Audio8-ASR has no word timestamps")
+    else:
+        raise ValueError(f"Unknown ASR engine '{engine}'")
+
+
+def _main(argv) -> int:
+    words = "--words" in argv
+    args = [a for a in argv if a != "--words"]
+    if not args:
         print(
             "Usage: python -m kokoro_gui.engine.asr <path/to/reference.wav> "
-            "[engine=audio8|vosk] [vosk_model_path]\n"
-            f"(vosk_model_path defaults to the {VOSK_MODEL_PATH_ENV_KEY} env var / .env entry if omitted)"
+            "[engine=whisper|audio8|vosk] [vosk_model_path] [--words]\n"
+            f"(vosk_model_path defaults to the {VOSK_MODEL_PATH_ENV_KEY} env var / .env entry if omitted;\n"
+            " --words prints one timed word per line: start end word)"
         )
-        raise SystemExit(1)
-    _wav_path = sys.argv[1]
-    _engine = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_ASR_ENGINE
-    _model_path = sys.argv[3] if len(sys.argv) > 3 else None
-    print(transcribe_wav(_wav_path, engine=_engine, model_path=_model_path))
+        return 1
+    wav_path = args[0]
+    engine = args[1] if len(args) > 1 else DEFAULT_ASR_ENGINE
+    model_path = args[2] if len(args) > 2 else None
+    if words:
+        for word, start, end in transcribe_wav_words(wav_path, engine=engine, model_path=model_path):
+            print(f"{start:8.2f} {end:8.2f}  {word}")
+    else:
+        print(transcribe_wav(wav_path, engine=engine, model_path=model_path))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main(sys.argv[1:]))

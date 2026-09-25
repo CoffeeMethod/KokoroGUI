@@ -18,14 +18,15 @@ import threading
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDockWidget, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit,
-    QPushButton, QVBoxLayout,
+    QComboBox, QDialog, QDockWidget, QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPlainTextEdit,
+    QPushButton, QVBoxLayout, QWidget,
 )
 
-from kokoro_gui.daw.dirty import build_segments_from_results, take_from_results
+from kokoro_gui.daw import markers as marker_ops
+from kokoro_gui.daw.dirty import build_segments_from_results, carry_segment_timing, take_from_results
 from kokoro_gui.daw.undo import (
-    AssignCharacterCommand, MoveClipBeforeCommand, MoveClipCommand, ReassignTrackCommand,
-    SetClipTimestampCommand, TextEditCommand,
+    AssignCharacterCommand, DeleteTakeCommand, MoveClipBeforeCommand, MoveClipCommand, ReassignTrackCommand,
+    SetActiveTakeCommand, SetClipTimestampCommand, SetFieldCommand, TextEditCommand,
 )
 from kokoro_gui.qt.timeline_view import TimelineWidget
 
@@ -64,7 +65,39 @@ class TimelineDock(QDockWidget):
         self.timeline_view.clipMoved.connect(self.on_clip_moved)
         self.timeline_view.unpinRequested.connect(self.on_clip_unpin_requested)
         self.timeline_view.playClipRequested.connect(self.on_play_clip_requested)
-        self.setWidget(self.timeline_widget)
+        self.timeline_view.fadeChanged.connect(self.on_fade_changed)
+        self.timeline_view.takeSelected.connect(self.on_take_selected)
+        self.timeline_view.takeDeleteRequested.connect(self.on_take_delete_requested)
+        self.timeline_view.statusChangeRequested.connect(self.on_status_change_requested)
+        self.timeline_view.alignWordsRequested.connect(self.on_align_words_requested)
+        self.timeline_view.markerAddRequested.connect(self.on_marker_add_requested)
+        self.timeline_view.markerMoved.connect(self.on_marker_moved)
+        self.timeline_view.markerRenameRequested.connect(self.on_marker_rename_requested)
+        self.timeline_view.markerDeleteRequested.connect(self.on_marker_delete_requested)
+        self.timeline_view.loopRangeRequested.connect(self.on_loop_range_requested)
+        self.timeline_view.loopClearRequested.connect(self.on_loop_clear_requested)
+        self.timeline_view.automationChanged.connect(self.on_automation_changed)
+        self.timeline_widget.header.trackFieldChanged.connect(self.on_track_field_changed)
+
+        # Review filter (phase 2, A5): dims the blocks that don't match.
+        self.status_filter_combo = QComboBox()
+        for label, key in (("All clips", "all"), ("Not approved", "not_approved"),
+                           ("Needs rewrite", "needs_rewrite")):
+            self.status_filter_combo.addItem(label, key)
+        self.status_filter_combo.currentIndexChanged.connect(
+            lambda _i: self.timeline_view.set_status_filter(self.status_filter_combo.currentData()))
+        content = QWidget()
+        column = QVBoxLayout(content)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(2)
+        filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(4, 2, 4, 0)
+        filter_row.addWidget(QLabel("Show:"))
+        filter_row.addWidget(self.status_filter_combo)
+        filter_row.addStretch(1)
+        column.addLayout(filter_row)
+        column.addWidget(self.timeline_widget, 1)
+        self.setWidget(content)
         if hasattr(self.app, "themeChanged"):
             self.app.themeChanged.connect(self.refresh)
 
@@ -129,6 +162,80 @@ class TimelineDock(QDockWidget):
         self.app.transport.seek(placed.start_s)
         self.app.transport.play()
 
+    # -- phase 2 edits: fades, takes, status, markers, loop, track controls ------
+
+    def _push(self, command, rehighlight: bool = False) -> None:
+        self.app.document.undo_stack.push(command)
+        if rehighlight and self.app.editor is not None:
+            self.app.editor.rehighlight()
+        self.app.schedule_save()
+        self.app.refresh_timeline()
+
+    def on_fade_changed(self, clip_id: str, field: str, seconds: float) -> None:
+        if self.app.document.get_clip(clip_id) is not None and field in ("fade_in_s", "fade_out_s"):
+            self._push(SetFieldCommand("clip", clip_id, field, float(seconds)))
+
+    def on_take_selected(self, clip_id: str, index: int) -> None:
+        if self.app.document.get_clip(clip_id) is not None:
+            self._push(SetActiveTakeCommand(clip_id, index), rehighlight=True)
+
+    def on_take_delete_requested(self, clip_id: str, index: int) -> None:
+        if self.app.document.get_clip(clip_id) is not None:
+            self._push(DeleteTakeCommand(clip_id, index))
+
+    def on_status_change_requested(self, clip_id: str, status: str) -> None:
+        if self.app.document.get_clip(clip_id) is not None:
+            self._push(SetFieldCommand("clip", clip_id, "status", status))
+
+    def on_align_words_requested(self, clip_id: str) -> None:
+        self.app.schedule_word_alignment([clip_id], force=True)
+
+    def _set_markers(self, new_list: list) -> None:
+        self._push(SetFieldCommand("document", None, "settings", new_list, key=marker_ops.MARKERS_KEY))
+
+    def on_marker_add_requested(self, seconds: float) -> None:
+        new_list, _marker = marker_ops.add_marker(self.app.document.settings, seconds)
+        self._set_markers(new_list)
+
+    def on_marker_moved(self, marker_id: str, seconds: float) -> None:
+        self._set_markers(marker_ops.move_marker(self.app.document.settings, marker_id, seconds))
+
+    def _ask_marker_text(self, marker: dict):
+        """`(name, note)` from two input boxes, or None on cancel. Its own
+        method so tests answer it without a modal."""
+        name, ok = QInputDialog.getText(self, "Rename marker", "Name:", text=marker["name"])
+        if not ok:
+            return None
+        note, ok = QInputDialog.getText(self, "Marker note", "Note (a listen-through flag):", text=marker["note"])
+        return (name, note) if ok else None
+
+    def on_marker_rename_requested(self, marker_id: str) -> None:
+        marker = marker_ops.get_marker(self.app.document.settings, marker_id)
+        if marker is None:
+            return
+        answer = self._ask_marker_text(marker)
+        if answer is not None:
+            self._set_markers(marker_ops.rename_marker(self.app.document.settings, marker_id, *answer))
+
+    def on_marker_delete_requested(self, marker_id: str) -> None:
+        self._set_markers(marker_ops.delete_marker(self.app.document.settings, marker_id))
+
+    def on_loop_range_requested(self, start_s: float, end_s: float) -> None:
+        """Runtime only: the transport loops there and the ruler shades it;
+        the project dir's session.json remembers it for this machine."""
+        self.app.set_loop_range(start_s, end_s)
+
+    def on_loop_clear_requested(self) -> None:
+        self.app.set_loop_range(None, None)
+
+    def on_automation_changed(self, track_id: str, points) -> None:
+        if self.app.document.get_track(track_id) is not None:
+            self._push(SetFieldCommand("track", track_id, "automation", [list(p) for p in points]))
+
+    def on_track_field_changed(self, track_id: str, field: str, value) -> None:
+        if self.app.document.get_track(track_id) is not None and field in ("mute", "solo", "gain", "pan"):
+            self._push(SetFieldCommand("track", track_id, field, value))
+
     def on_clip_unpin_requested(self, clip_id: str) -> None:
         if self.app.document.get_clip(clip_id) is None:
             return
@@ -182,6 +289,7 @@ class TimelineDock(QDockWidget):
             self.app.editor.rehighlight()
             self.app.schedule_save()
             self.app.refresh_timeline()
+            self.app.schedule_word_alignment([clip_id])
         elif not success:
             self._pending_results.pop(clip_id, None)
             self.app.set_status(f"Clip generation failed: {error}", "error")
@@ -192,20 +300,27 @@ class TimelineDock(QDockWidget):
         in tests) falls back to the key the app would compute now."""
         fallback = None
         if any(not r.get("cache_key") for r in results):
-            key_fn = self.app.document.segment_key_fn
-            text = self.app.document.clip_text(clip)
-            if key_fn is not None:
-                fallback = key_fn(text, clip)
-            else:
-                from kokoro_gui.daw.dirty import compute_expected_cache_hash
+            from kokoro_gui.daw.dirty import compute_expected_cache_hash
 
-                fallback = compute_expected_cache_hash(text, self.app._assemble_clip_config(clip))
-        clip.segments = build_segments_from_results(fallback, results)
-        take = take_from_results(results, default=int(clip.overrides.get("take", 0) or 0))
+            fallback = compute_expected_cache_hash(
+                self.app.document.clip_text(clip), self.app._assemble_clip_config(clip),
+                key_fn=self.app.document.segment_key_fn, clip=clip,
+            )
+        current_take = int(clip.overrides.get("take", 0) or 0)
+        take = take_from_results(results, default=current_take)
+        new_segments = build_segments_from_results(fallback, results)
+        carry_segment_timing(new_segments, [clip.segments, *clip.takes.values()])
+        # A new take parks the one it replaces; re-rendering a parked take
+        # takes it out of the parked list.
+        if take != current_take and clip.segments:
+            clip.takes[current_take] = clip.segments
+        clip.takes.pop(take, None)
+        clip.segments = new_segments
         if take:
             clip.overrides["take"] = take
         else:
             clip.overrides.pop("take", None)
+        clip.status = "generated"
 
     # -- per-clip FX preset menu (item 5, "Per-clip FX button") --------------
 
@@ -437,5 +552,6 @@ class TimelineDock(QDockWidget):
             self.app.editor.rehighlight()
             self.app.schedule_save()
             self.app.refresh_timeline()
+            self.app.schedule_word_alignment(succeeded_ids)
 
         self.batchGenerationFinished.emit(len(succeeded_ids), len(failed_ids), failed_ids)

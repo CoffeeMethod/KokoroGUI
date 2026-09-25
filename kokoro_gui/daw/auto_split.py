@@ -36,7 +36,62 @@ not re-derived here):
 """
 from __future__ import annotations
 
-from kokoro_gui.engine.text_extraction import find_character_fx_spans
+import re
+
+from kokoro_gui.engine.text_extraction import PAUSE_MARKER_PATTERN, find_character_fx_spans
+
+_PAUSE_MARKER = re.compile(PAUSE_MARKER_PATTERN)
+
+
+def find_pause_markers(text: str) -> list:
+    """`[(start, end, seconds)]` for every `[pause:x]` in `text`."""
+    return [(m.start(), m.end(), float(m.group(1))) for m in _PAUSE_MARKER.finditer(text)]
+
+
+def _carve_pauses(text: str, triples: list) -> tuple:
+    """Cuts every `[pause:x]` marker out of the planned ranges, so a marker
+    stays in the transcript as untagged text and is never spoken. A marker
+    inside a range splits it in two. Returns `(triples, gaps)`: `gaps` maps
+    a resulting range's start to the pause that precedes it, which becomes
+    that clip's `gap_before_s`."""
+    markers = find_pause_markers(text)
+    if not markers:
+        return triples, {}
+    out = []
+    gaps = {}
+    pending = None
+    index = 0
+
+    def emit(start, end, character_id):
+        nonlocal pending
+        if not text[start:end].strip():
+            return
+        out.append((start, end, character_id))
+        if pending is not None:
+            gaps[start] = pending
+            pending = None
+
+    for start, end, character_id in sorted(triples, key=lambda t: t[0]):
+        while index < len(markers) and markers[index][0] < start:
+            pending = markers[index][2]
+            index += 1
+        cursor = start
+        while index < len(markers) and markers[index][1] <= end:
+            m_start, m_end, seconds = markers[index]
+            emit(cursor, m_start, character_id)
+            pending = seconds
+            cursor = m_end
+            index += 1
+        emit(cursor, end, character_id)
+    return out, gaps
+
+
+def plan_pause_gaps(document, triples: list) -> dict:
+    """`{start: seconds}` for the planned ranges a `[pause:x]` precedes,
+    from `plan_auto_split_clips`'s triples (which have the markers carved
+    out already). The caller hands each as `gap_before_s` to the
+    `AssignCharacterCommand` that creates that clip."""
+    return _carve_pauses(document.text, triples)[1]
 
 
 def _paragraph_ranges(text: str, base_offset: int) -> list:
@@ -112,4 +167,5 @@ def plan_auto_split_clips(document, split_by_paragraph: bool):
                 triples.append((gap_start, gap_end, only_character.id))
 
     triples.sort(key=lambda t: t[0])
+    triples, _gaps = _carve_pauses(text, triples)
     return triples, unmatched

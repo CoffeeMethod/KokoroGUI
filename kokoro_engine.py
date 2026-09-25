@@ -9,10 +9,18 @@ import warnings
 import playback
 from kokoro import KPipeline
 
-from kokoro_gui.engine import (
-    AudioFXMixin, CachingMixin, ConversionMixin, JITMixin, LexiconMixin,
-    PresetsMixin, SrtMixin, TextExtractionMixin, VoiceMixingMixin,
-)
+# From the submodules, not the package: kokoro_gui/engine/__init__.py imports
+# this module first, so the package namespace is still empty at this point.
+from kokoro_gui.engine.audio_fx import AudioFXMixin
+from kokoro_gui.engine.caching import CachingMixin
+from kokoro_gui.engine.conversion import ConversionMixin
+from kokoro_gui.engine.jit import JITMixin
+from kokoro_gui.engine.lexicon import LexiconMixin
+from kokoro_gui.engine.presets import PresetsMixin
+from kokoro_gui.engine.srt import SrtMixin
+from kokoro_gui.engine.text_extraction import TextExtractionMixin
+from kokoro_gui.engine.voices import VoiceMixingMixin
+from kokoro_gui.engine.paths import ensure_private_dir
 
 # Suppress ebooklib warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='ebooklib')
@@ -73,11 +81,14 @@ class KokoroEngine(
         self.cancel_event = threading.Event()
         self.pipeline = None # Main pipeline for single thread check or init
 
-        if not os.path.exists(CUSTOM_VOICES_DIR):
-            os.makedirs(CUSTOM_VOICES_DIR)
-
-        if not os.path.exists(CACHE_DIR):
-            os.makedirs(CACHE_DIR)
+        # Private (0o700) on POSIX; see kokoro_gui/engine/paths.py. A cache
+        # dir owned by another user is swapped for a per-user one, and
+        # everything under it (project dirs included) follows, since every
+        # reader looks `CACHE_DIR` up here at call time. The voices dir
+        # stays put: moving a user's voices would lose them.
+        global CACHE_DIR
+        ensure_private_dir(CUSTOM_VOICES_DIR, fallback=False)
+        CACHE_DIR = ensure_private_dir(CACHE_DIR)
 
         # Callbacks
         self.on_progress = None # func(percentage, time_elapsed, eta, detail_text)

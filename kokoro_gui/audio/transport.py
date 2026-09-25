@@ -7,7 +7,11 @@ Claude/PLAN_ui_shell_redesign.md, section 5).
 (estimated clips are skipped - they're silence), opens one
 `sounddevice.OutputStream` at the project sample rate and fills each block
 in the PortAudio callback by summing every clip overlapping it
-(`kokoro_gui.audio.mixer.mix_block`).
+(`kokoro_gui.audio.mixer.mix_block`), in stereo: each `ScheduledClip`
+carries its track's gain, pan and automation and its own fades.
+
+`loop_range` (frames, runtime only) wraps playback inside a region once the
+playhead crosses its end; without one, `loop` wraps the whole arrangement.
 
 Position is the callback's frame counter, sample accurate, published to
 the GUI thread by a 30Hz `QTimer` as `positionChanged(float)`. `play()`,
@@ -44,6 +48,29 @@ class ScheduledClip:
     # Read-time post-processing (kokoro_gui/audio/post.py) applied to
     # `path` on load; None plays the file as is.
     post_config: Optional[dict] = None
+    pan: float = 0.0
+    fade_in_s: float = 0.0
+    fade_out_s: float = 0.0
+    # The track's `[seconds, gain]` breakpoints, absolute on the timeline.
+    automation: tuple = ()
+
+
+def loaded_clip_for(item, samples: np.ndarray, sample_rate: int) -> "mixer.LoadedClip":
+    """A `ScheduledClip`'s mixer entry at `sample_rate`: frames for the
+    start and the fades, left/right gains from the pan, the automation as
+    frame arrays. Shared with the exporter."""
+    gain_l, gain_r = mixer.pan_gains(item.pan)
+    return mixer.LoadedClip(
+        clip_id=item.clip_id,
+        start_frame=int(round(item.start_s * sample_rate)),
+        samples=samples,
+        gain=item.gain,
+        gain_l=gain_l,
+        gain_r=gain_r,
+        fade_in_frames=int(round(max(0.0, item.fade_in_s) * sample_rate)),
+        fade_out_frames=int(round(max(0.0, item.fade_out_s) * sample_rate)),
+        automation=mixer.automation_arrays(item.automation, sample_rate),
+    )
 
 
 class _NullStream:
@@ -65,7 +92,8 @@ class _NullStream:
 def default_stream_factory(sample_rate: int, callback: Callable):
     if not playback.AVAILABLE or playback.sd is None:
         return _NullStream()
-    return playback.sd.OutputStream(samplerate=sample_rate, channels=1, dtype="float32", callback=callback)
+    return playback.sd.OutputStream(samplerate=sample_rate, channels=mixer.CHANNELS, dtype="float32",
+                                    callback=callback)
 
 
 class Transport(QObject):
@@ -86,6 +114,8 @@ class Transport(QObject):
         self._stream = None
         self._state = "stopped"
         self.loop = False
+        # `(start_frame, end_frame)` or None; see the module docstring.
+        self.loop_range: Optional[tuple] = None
         self._timer = QTimer(self)
         self._timer.setInterval(POSITION_TIMER_MS)
         self._timer.timeout.connect(self._on_tick)
@@ -135,12 +165,7 @@ class Transport(QObject):
                 samples = mixer.load_clip_samples(item.path, new_rate, item.post_config)
             except Exception:
                 continue
-            clips.append(mixer.LoadedClip(
-                clip_id=item.clip_id,
-                start_frame=int(round(item.start_s * new_rate)),
-                samples=samples,
-                gain=item.gain,
-            ))
+            clips.append(loaded_clip_for(item, samples, new_rate))
         total = mixer.total_frames(clips)
         if total_duration_s is not None:
             total = max(total, int(round(total_duration_s * new_rate)))
@@ -149,6 +174,9 @@ class Transport(QObject):
         with self._lock:
             if rate_changed:
                 self._frame = int(round(self._frame * new_rate / float(self._sample_rate)))
+                if self.loop_range is not None:
+                    ratio = new_rate / float(self._sample_rate)
+                    self.loop_range = tuple(int(round(f * ratio)) for f in self.loop_range)
             self._sample_rate = new_rate
             self._clips = clips
             self._total_frames = total
@@ -203,6 +231,15 @@ class Transport(QObject):
         else:
             self.play()
 
+    def set_loop_range_s(self, start_s: Optional[float], end_s: Optional[float] = None) -> None:
+        """Loop between two times in seconds; `None` clears the region."""
+        if start_s is None or end_s is None:
+            self.loop_range = None
+            return
+        lo, hi = sorted((max(0.0, float(start_s)), max(0.0, float(end_s))))
+        start, end = int(round(lo * self._sample_rate)), int(round(hi * self._sample_rate))
+        self.loop_range = (start, end) if end > start else None
+
     def seek(self, seconds: float) -> None:
         frame = int(round(max(0.0, seconds) * self._sample_rate))
         with self._lock:
@@ -245,16 +282,25 @@ class Transport(QObject):
             clips = self._clips
             total = self._total_frames
             loop = self.loop
-        block = mixer.mix_block(clips, frame, frames)
-        if outdata.ndim == 2:
-            outdata[:, 0] = block
-            if outdata.shape[1] > 1:
-                outdata[:, 1:] = block[:, None]
-        else:
-            outdata[:] = block
+            loop_range = self.loop_range
         new_frame = frame + frames
+        if loop_range is not None and frame < loop_range[1] <= new_frame:
+            # The block crosses the region's end: play up to it, then carry
+            # on from the region's start.
+            start, end = loop_range
+            head = end - frame
+            block = np.zeros((frames, mixer.CHANNELS), dtype=np.float32)
+            block[:head] = mixer.mix_block(clips, frame, head)
+            if frames > head:
+                block[head:] = mixer.mix_block(clips, start, frames - head)
+            new_frame = start + (frames - head)
+        else:
+            block = mixer.mix_block(clips, frame, frames)
+        self._write_block(outdata, block)
         ended = False
-        if new_frame >= total:
+        # Short of a loop region's end, playback runs on through silence.
+        looping_region = loop_range is not None and new_frame < loop_range[1]
+        if new_frame >= total and not looping_region:
             if loop and total > 0:
                 new_frame = new_frame % total
             else:
@@ -264,6 +310,19 @@ class Transport(QObject):
             self._frame = new_frame
             if ended:
                 self._ended = True
+
+    @staticmethod
+    def _write_block(outdata, block: np.ndarray) -> None:
+        """A stereo block into whatever the device opened: both columns of a
+        stereo buffer, the average on a mono one, silence on any extra."""
+        if outdata.ndim == 2 and outdata.shape[1] >= 2:
+            outdata[:, :2] = block
+            if outdata.shape[1] > 2:
+                outdata[:, 2:] = 0.0
+        elif outdata.ndim == 2:
+            outdata[:, 0] = block.mean(axis=1)
+        else:
+            outdata[:] = block.mean(axis=1)
 
     def _on_tick(self) -> None:
         with self._lock:
@@ -283,7 +342,8 @@ class Transport(QObject):
 
 
 def render_block_for_test(transport: Transport, frames: int) -> np.ndarray:
-    """Drives one callback synchronously and returns the mixed block."""
-    out = np.zeros((frames, 1), dtype=np.float32)
+    """Drives one callback synchronously and returns the mixed `(frames, 2)`
+    block."""
+    out = np.zeros((frames, mixer.CHANNELS), dtype=np.float32)
     transport._callback(out, frames)
-    return out[:, 0]
+    return out

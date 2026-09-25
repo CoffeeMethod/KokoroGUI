@@ -123,7 +123,8 @@
             <tr><td>Language</td><td>For Kokoro, picks which phonemization pipeline runs; each language uses its own <code>KPipeline</code> and voice list. For Audio8 it's one of eleven labels from the model card. See the callout below: it currently isn't sent to the model at all.</td></tr>
             <tr><td>Voice</td><td>Kokoro: a named base voice (<code>af_heart</code>, <code>bm_daniel</code>, ...) or a saved custom mix from the Mixing dock. Audio8: a saved Voice Reference (WAV + transcript pair) from the Voice Reference dock.</td></tr>
             <tr><td>Speed</td><td>Kokoro: 0.5x-2.0x, passed straight to the pipeline as a native generation parameter. Audio8: shown in the same range, but see the callout below, it's currently not forwarded to the model either.</td></tr>
-            <tr><td>Split by</td><td>Natural (newlines), Paragraphs (double newline), or Sentences (splits on <code>.</code>/<code>!</code>/<code>?</code>, with a regex guard against splitting mid-abbreviation). Controls where a long input gets cut into chunks before generation.</td></tr>
+            <tr><td>Target words per segment</td><td>5-200, default 40. Text is generated in pieces of about this many words, one file and one subtitle cue each. A piece ends at the strongest enabled boundary between half and one and a half times the target; if there's none, it may run to twice the target to reach one. Only past that is a sentence cut, and never inside a word. Changing it marks the clips whose pieces move as stale.</td></tr>
+            <tr><td>Split at paragraphs / sentences / pauses</td><td>Which boundaries a piece may end at, strongest first: a blank line; a sentence end (<code>.</code> <code>!</code> <code>?</code> <code>...</code>, not after <code>Mr.</code>, <code>Dr.</code> or an initial); a pause (comma, semicolon, colon, dash, or a single line break). All on by default. Turning one off demotes its boundaries to the next level on, so with sentences off a full stop still counts as a pause.</td></tr>
             <tr><td>Output format</td><td><code>wav</code>, <code>flac</code>, <code>mp3</code>, or <code>ogg</code>. Same four choices on both engines.</td></tr>
             <tr><td>Parallel threads</td><td>Kokoro: 1-32, each worker thread gets its own <code>KPipeline</code>, so raising this genuinely parallelizes generation. Audio8: capped at 1-4 in the schema, and since every segment is serialized through one shared, locked model, raising it doesn't parallelize the model calls themselves.</td></tr>
             <tr><td>Enable segment cache</td><td>Caches each generated segment as a <code>.wav</code> under <code>cache/</code>, keyed by a hash of the settings that affect what gets generated. Re-running with unchanged settings skips regenerating that segment.</td></tr>
@@ -139,6 +140,28 @@
         <div>
           <p><strong>Language and Speed do nothing on Audio8, currently.</strong> The model's own processor doesn't accept a <code>language</code> or <code>speed</code> argument at all; passing either raises a hard error. So <code>audio8_tts.py</code> keeps both in its internal function signature only to match the shape shared with the other engines, and never forwards them to the model. Audio8 infers the spoken language from the reference clip and text, and always generates at its own pace. The two fields still show up in the dock because the schema doesn't currently distinguish "displayed" from "functional." Worth knowing before you spend time chasing a Speed slider that isn't moving anything.</p>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="project-clip">
+    <div class="wrap">
+      <h2><span class="idx">Settings tab</span>Project and clip fields</h2>
+      <p class="dek">Under Audio control, a group that changes with the selection: Project with nothing selected, Clip with a clip selected, hidden for a character. Every edit here is one undo step.</p>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>Project and clip fields</caption>
+          <thead><tr><th>Field</th><th>Scope</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Gap / Paragraph gap</td><td>Project</td><td>Seconds of silence between clips placed one after another (default 0.35), and between clips with a blank line between them (default 0.9). 0 gives the old back-to-back placement. Clips you've dragged to a fixed time ignore both.</td></tr>
+            <tr><td>Auto-crossfade overlapping clips</td><td>Project</td><td>Off by default. On, a clip that starts or ends inside another gets at least a 10 ms fade at that edge. The clip's own fades aren't changed.</td></tr>
+            <tr><td>Timecode / Frame rate / Start / Drop-frame</td><td>Project</td><td>Shows the ruler and the transport clock as <code>HH:MM:SS:FF</code>. Start is the timecode of the project's first frame (broadcast material often starts at <code>01:00:00:00</code>). Drop-frame applies at 29.97 and 59.94. Times inside the project stay in seconds.</td></tr>
+            <tr><td>Gap before</td><td>Clip</td><td>This clip's own gap, over the project's. Blank uses the project's. A <code>[pause:x]</code> marker sets it when Auto-split creates the clip.</td></tr>
+            <tr><td>Take</td><td>Clip</td><td>Switch between the clip's takes, like the timeline's Take menu.</td></tr>
+            <tr><td>Status / Note</td><td>Clip</td><td>Review state and a note, for the timeline filter and the cue sheet.</td></tr>
+            <tr><td>Source text</td><td>Clip</td><td>The original line a dub is written against. Press Edit to change it and Save to store it. It shows as the transcript gutter's tooltip, and a rough syllable count of both lines sits underneath (vowel groups per word: a length check, not a real syllable count).</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </section>
@@ -166,7 +189,7 @@
   <section class="doc-section" id="timeline">
     <div class="wrap">
       <h2><span class="idx">Timeline dock</span>Timeline</h2>
-      <p class="dek">One track per character on a real seconds axis, bottom-left of the window. Clips sit end to end in text order across all tracks: at their real duration once generated (with a waveform), at an estimated one before (dashed outline, no waveform; the estimate learns from <code>generation_stats.json</code>). A ruler runs across the top, a fixed header column names the tracks, and Ctrl+wheel zooms between 20 and 400 pixels per second.</p>
+      <p class="dek">One track per character on a real seconds axis, bottom-left of the window. Clips sit in text order across all tracks, 0.35 s apart (0.9 s across a blank line; both are Gap and Paragraph gap in the Settings tab with nothing selected, and a clip's Gap before overrides them): at their real duration once generated (with a waveform), at an estimated one before (dashed outline, no waveform; the estimate learns from <code>generation_stats.json</code>). A ruler runs across the top, a fixed header column names the tracks, and Ctrl+wheel zooms between 20 and 400 pixels per second.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Timeline</caption>
@@ -179,6 +202,13 @@
             <tr><td>Drag a clip onto another track</td><td>Reassigns the clip to that track's character (with a confirmation prompt when the characters actually differ) or just moves it to that lane.</td></tr>
             <tr><td>Shift+drag inside a clip</td><td>Carves out the selected sub-range and opens an editable transcript for it. Confirming replaces just that sub-range with fresh TTS, under any character, not necessarily the clip's own.</td></tr>
             <tr><td>Click the ruler</td><td>Seeks the transport to that time.</td></tr>
+            <tr><td>Right-click the ruler</td><td>Add marker here. On a marker's flag: Rename (with a note, for a listen-through flag), Delete, and Loop to next marker. Drag a flag to move it.</td></tr>
+            <tr><td>Shift+drag on the ruler</td><td>Loops playback between the two points. Right-click the ruler &gt; Clear loop to stop.</td></tr>
+            <tr><td>Drag a clip's top corner</td><td>The small squares on a generated clip's top-left and top-right corners set its fade-in and fade-out. Settings with nothing selected &gt; Auto-crossfade adds a 10 ms fade wherever clips overlap.</td></tr>
+            <tr><td>Right-click a clip &gt; Take</td><td>Every take the clip has, the active one ticked, with its length. Regenerating keeps the old take. A take made from text you've since changed says "old text"; picking it marks the clip stale. Delete take drops one.</td></tr>
+            <tr><td>Right-click a clip &gt; Status</td><td>To do, Generated, Approved or Needs rewrite. Generating sets Generated. The Show box above the timeline dims clips that don't match (All, Not approved, Needs rewrite).</td></tr>
+            <tr><td>Right-click a clip &gt; Align words</td><td>Runs Whisper over the clip's audio to work out when each word is spoken. This runs by itself after generating with Audio8, or with Kokoro outside English.</td></tr>
+            <tr><td>Track header: M, S, A, fader, pan</td><td>Mute, solo (any soloed track silences the others), and show the volume automation lane; below them a fader (0-200%) and pan (snaps to centre). In the automation lane, double-click adds a point, drag moves it, right-click deletes it and Alt+drag moves a segment. Playback and export both follow these.</td></tr>
             <tr><td>Generate (Transport dock)</td><td>Once the document has clips, this regenerates every dirty clip in one pass instead of the whole document, with bounded concurrency and cancel-safe queuing. A document with no clips yet still falls back to the original whole-document pipeline. Its menu holds Auto-split then generate and the Split by paragraph toggle.</td></tr>
           </tbody>
         </table>
@@ -195,9 +225,11 @@
           <caption>Transport</caption>
           <thead><tr><th>Control</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Play / Pause / Stop</td><td>Plays the whole arrangement through one <code>sounddevice</code> output stream that mixes every clip at its timeline position (overlaps are a plain sum, clipped to full scale). Position comes from the audio callback's frame counter, so the playhead is sample accurate. Space toggles playback anywhere except inside the text editor; Ctrl+Space toggles everywhere.</td></tr>
+            <tr><td>Play / Pause / Stop</td><td>Plays the whole arrangement through one stereo <code>sounddevice</code> output stream that mixes every clip at its timeline position with its track's fader, pan and automation and its own fades (overlaps are a plain sum, clipped to full scale). Position comes from the audio callback's frame counter, so the playhead is sample accurate. Space toggles playback anywhere except inside the text editor; Ctrl+Space toggles everywhere.</td></tr>
             <tr><td>Playhead</td><td>A line across every lane plus a marker on the ruler. The transcript highlights the clip being played and scrolls to it without moving your caret. A clip that finishes generating mid-playback becomes audible without stopping.</td></tr>
-            <tr><td>Loop</td><td>Wraps to the start instead of stopping at the end of the arrangement.</td></tr>
+            <tr><td>Loop</td><td>Wraps to the start instead of stopping at the end of the arrangement. A loop region set on the ruler wraps inside that region instead.</td></tr>
+            <tr><td>Position readout</td><td>mm:ss.t, or <code>HH:MM:SS:FF</code> timecode when Settings (nothing selected) &gt; Timecode is on, at the frame rate and start time set there. 29.97 and 59.94 can be drop-frame.</td></tr>
+            <tr><td>Word highlight</td><td>While playing, the transcript underlines the word being spoken. Ctrl+click a word to jump there.</td></tr>
             <tr><td>Preview</td><td>Speaks the selected text (or the first 1000 characters of the document) with the project-scope settings, through the fire-and-forget preview player.</td></tr>
           </tbody>
         </table>
@@ -209,7 +241,7 @@
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">Edit menu</span>Undo &amp; redo</h2>
-        <p>Text edits ride the editor's native undo; character/FX reassignments, clip moves and FX overrides push onto a plain-Python undo stack tied to the document. Edit &gt; Undo/Redo (or the OS shortcuts) pops whichever happened most recently. <strong>Edit &gt; Characters...</strong> edits each character's name, color, voice and FX preset; a character still used by clips can't be removed.</p>
+        <p>Text edits ride the editor's native undo; character/FX reassignments, clip moves and FX overrides push onto a plain-Python undo stack tied to the document. Edit &gt; Undo/Redo (or the OS shortcuts) pops whichever happened most recently. <strong>Edit &gt; Characters...</strong> edits each character's name, color, voice and FX preset, and, for an Audio8 character, a table of variants (a name such as "angry" and the voice reference it uses; the transcript's Variant box picks one per clip); a character still used by clips can't be removed. Track controls, fades, takes, statuses, markers and the Settings tab's Project and Clip fields are undoable too.</p>
       </div>
     </div>
   </section>
@@ -248,7 +280,10 @@
             <tr><td>Output folder / Base filename</td><td>Where the mixdown is written and what it's called. Remembered per project.</td></tr>
             <tr><td>Project: bundle generated audio / Bundle audio format</td><td>Whether Save puts generated segments into the <code>.tbaw</code> (off gives a small file whose clips regenerate on open) and whether new segments are written as wav or flac. Remembered per project.</td></tr>
             <tr><td>Format</td><td>wav, mp3, flac or ogg.</td></tr>
-            <tr><td>Also write .srt</td><td>Subtitles timed from each clip's timeline start and duration, one row per generated clip.</td></tr>
+            <tr><td>Channels</td><td>Stereo, or mono (the average of the two channels). Muted and soloed-out tracks are left out either way.</td></tr>
+            <tr><td>Range</td><td>The whole project, the stretch between any two neighbouring markers, or the loop region.</td></tr>
+            <tr><td>Also write .srt</td><td>Subtitles timed from each clip's timeline start and duration, one row per generated clip. "One subtitle per word" writes a row per spoken word instead, from the stored word timings.</td></tr>
+            <tr><td>Also write a cue sheet (.csv)</td><td>One row per clip: start, end (timecode when it's on), character, source text, text, status and note.</td></tr>
             <tr><td>Keep per-clip files</td><td>Writes each clip next to the mixdown as <code>&lt;base&gt;_001_&lt;Character&gt;.&lt;ext&gt;</code>, numbered in timeline order.</td></tr>
           </tbody>
         </table>
@@ -336,7 +371,7 @@
           <caption>Lexicon</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Original text / Replacement</td><td>A list of literal find-and-replace rules, applied case-insensitively to every segment's text before synthesis. Useful for acronyms, names, or jargon a voice mispronounces.</td></tr>
+            <tr><td>Original text / Replacement</td><td>A list of literal find-and-replace rules, applied case-insensitively to every segment's text before synthesis, on every path: clips, whole document, JIT and Preview. Adding or removing a rule marks the clips whose text it changes as stale, and no others. Useful for acronyms, names, or jargon a voice mispronounces.</td></tr>
           </tbody>
         </table>
       </div>
@@ -373,7 +408,7 @@
           <tbody>
             <tr><td>Reference audio</td><td>Browse to a WAV file of the voice to clone.</td></tr>
             <tr><td>Transcript</td><td>What's actually said in that WAV, word for word. The cloning model uses this alongside the audio itself.</td></tr>
-            <tr><td>Auto-transcribe</td><td>Runs the reference clip through the bundled ASR model to pre-fill the transcript, off the Qt main thread so the UI doesn't freeze. Always worth proofreading the result before saving.</td></tr>
+            <tr><td>Auto-transcribe</td><td>Runs the reference clip through the chosen ASR engine to pre-fill the transcript, off the Qt main thread so the UI doesn't freeze. Whisper (the default, local, MIT) asks before its first download, about 1.6 GB, and offers another engine instead; <code>WHISPER_MODEL</code> in <code>.env</code> picks a smaller model. Audio8-ASR-0.1B is non-commercial; Vosk is offline and needs a model folder. Always worth proofreading the result before saving.</td></tr>
             <tr><td>Save as / Saved references</td><td>Saves the WAV and transcript as a named pair, which then shows up in the Voice dropdown like any other voice.</td></tr>
           </tbody>
         </table>

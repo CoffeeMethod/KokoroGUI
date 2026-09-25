@@ -358,7 +358,7 @@ audiobook_001_Narrator.wav …</div>
             <tr><td>Parallelism</td><td>One pipeline per worker thread, so chunks render in parallel</td><td>One shared model behind a lock; threads don't help</td></tr>
             <tr><td>JIT streaming</td><td><span class="pillrow tag-ok">● Supported</span></td><td><span class="pillrow tag-no">○ Falls back to batch</span></td></tr>
             <tr><td>Voices tab</td><td>Mixing</td><td>Voice Reference, with Auto-transcribe</td></tr>
-            <tr><td>Licensing note</td><td>Apache-2.0 model</td><td>The default ASR model for Auto-transcribe (Audio8-ASR-0.1B) is CC-BY-NC-4.0; Vosk is the Apache-2.0, offline alternative</td></tr>
+            <tr><td>Licensing note</td><td>Apache-2.0 model</td><td>Auto-transcribe defaults to Whisper (MIT, runs locally). The Audio8-ASR-0.1B option is CC-BY-NC-4.0; Vosk is the Apache-2.0, offline alternative</td></tr>
           </tbody>
         </table>
       </div>
@@ -431,13 +431,31 @@ audiobook_001_Narrator.wav …</div>
       </div>
       <div class="log reveal">
         <div class="log-item">
-          <div class="v">4.0.0 <span class="badge">LATEST</span></div>
+          <div class="v">4.0.0-beta.3 <span class="badge">LATEST</span></div>
+          <div>
+            <h3>Pauses, takes and a real mixer</h3>
+            <p>Clips placed one after another get 0.35 s of silence between them and 0.9 s across a blank line, both adjustable, and <code>[pause:1.5]</code> in a script gives the next clip its own gap. Existing projects that aren't hand-timed get longer on first open; set both gaps to 0 for the old placement.</p>
+            <p>Regenerating keeps the old take, and the clip's menu switches between takes. Each track has mute, solo, a fader, pan and a volume automation lane; clips have fade handles, overlaps can crossfade, and playback and export are stereo. Markers on the ruler name points, loop a region and bound an export. The ruler and clock can show SMPTE timecode, drop-frame included.</p>
+            <p>For review and dubbing: a status and note per clip, a filter that dims what's done, a cue sheet CSV on export, and the source line a dub is written against. Generated clips remember word timings (Kokoro's own in English, Whisper otherwise), so the transcript highlights the spoken word, Ctrl+click seeks to a word, and export can write one subtitle per word. Audio8 characters can have named voice variants.</p>
+          </div>
+        </div>
+        <div class="log-item">
+          <div class="v">4.0.0-beta.2</div>
+          <div>
+            <h3>Lexicon on clips, sentence-sized pieces, Whisper</h3>
+            <p>The Lexicon now applies to timeline clips, not just whole-document generation, and adding or removing a rule marks only the clips it rewrites as stale.</p>
+            <p>Text is generated in pieces of about 40 words (adjustable), ending at a paragraph, a sentence end or a pause, each switchable. A sentence is only cut past twice the target, a word never. One piece is one file, so a long paragraph no longer leaves a clip stale forever and subtitle cues end where sentences do.</p>
+            <p>Auto-transcribe defaults to Whisper large-v3-turbo, run locally. It asks before the first download (about 1.6 GB) and can print timed words from the command line. On Linux and macOS the cache and voice folders are now private to your user.</p>
+          </div>
+        </div>
+        <div class="log-item">
+          <div class="v">4.0.0</div>
           <div>
             <h3>A document, not a text box</h3>
             <p>The rebuild. 3.2.0 was a CustomTkinter form; 4.0.0 is a PySide6 shell over a document with clips, tracks and characters layered on top, per-clip dirty tracking, undo and redo, and a settings panel scoped to the selection. Transcript | Settings, Audio FX, Lexicon and Voices tabs on top; Timeline | Transport underneath, with saved Advanced and Simple workspaces. Light and dark themes.</p>
             <p>Clips sit on a real seconds axis with waveforms, a ruler and a playhead. Play, pause, stop and seek through one <code>sounddevice</code> stream that mixes the arrangement in the callback. File &gt; Export mixes the timeline down to one file with optional <code>.srt</code> and per-clip files. Audio FX are non-destructive: clips are raw model output and the FX chain, volume, pitch, normalize and trim are applied when the transport, the export or the timeline reads them, so moving a slider never marks a clip out of date.</p>
             <p>A project is one <code>.tbaw</code> file that carries the text, the clips, every generated segment and every named voice mix, reference and FX preset it uses. Save runs in the background and never leaves a half-written file; a crash offers to recover the unsaved session. A clip's audio lands in the project's working copy under a name derived from what produced it, and regenerating a clean clip makes a fresh take. Launch reopens the last project under a welcome dialog with recents, New, New from text file and a details pane.</p>
-            <p>Engines are pluggable: Audio8 voice cloning joined Kokoro as a second real backend, with two ASR choices for auto-transcribing a reference.</p>
+            <p>Engines are pluggable: Audio8 voice cloning joined Kokoro as a second real backend, with ASR choices for auto-transcribing a reference.</p>
           </div>
         </div>
     </div>
@@ -494,8 +512,8 @@ sudo dnf install espeak-ng</pre>
           <div><h4>Python 3.11+</h4><p>The only hard language-version requirement.</p></div>
           <div><h4>eSpeak NG</h4><p>Kokoro's phonemization step needs it at runtime. Install it before the first run.</p></div>
           <div><h4>A GPU is optional</h4><p>Both models run on CPU. Options &gt; Device picks CUDA when PyTorch reports one.</p></div>
-          <div><h4>First run downloads weights</h4><p>Kokoro and Audio8 pull from Hugging Face on first use. Audio8 loads with <code>trust_remote_code=True</code>.</p></div>
-          <div><h4>Offline transcription</h4><p>Copy <code>.env.example</code> to <code>.env</code> and set <code>VOSK_MODEL_PATH</code> to use Vosk instead of the default Audio8 ASR model.</p></div>
+          <div><h4>First run downloads weights</h4><p>Kokoro and Audio8 pull from Hugging Face on first use. Audio8 loads with <code>trust_remote_code=True</code>. Whisper (about 1.6 GB) asks before it downloads.</p></div>
+          <div><h4>Smaller or offline transcription</h4><p>Copy <code>.env.example</code> to <code>.env</code>. Set <code>WHISPER_MODEL</code> to <code>small</code>, <code>base</code> or <code>tiny</code> for a lighter Whisper, or <code>VOSK_MODEL_PATH</code> to use Vosk.</p></div>
           <div><h4>Trouble with torch?</h4><p>Follow the platform-specific install at <a class="link" href="https://pytorch.org/get-started/locally/" target="_blank" rel="noopener">pytorch.org</a> before <code>pip install -r requirements.txt</code>.</p></div>
         </div>
       </div>

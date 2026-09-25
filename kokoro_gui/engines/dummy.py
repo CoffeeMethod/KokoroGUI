@@ -29,9 +29,10 @@ from kokoro_gui.engine import (
     AudioFXMixin, CachingMixin, ConversionMixin, JITMixin, LexiconMixin, PresetsMixin,
     SrtMixin, TextExtractionMixin,
 )
+from kokoro_gui.engine.wordtiming import TimedResult, even_tokens
 from kokoro_gui.engines.base import (
     BackendHooksMixin, ConfigField, ConfigFieldType, EngineCapabilities, VoiceInfo,
-    COMMON_SPLIT_PATTERN_CHOICES, COMMON_OUTPUT_FORMAT_CHOICES,
+    COMMON_OUTPUT_FORMAT_CHOICES, segmentation_fields,
 )
 from kokoro_gui.engines.registry import register_engine
 
@@ -41,7 +42,8 @@ SAMPLE_RATE = 24000
 class DummyPipeline:
     """Fakes `kokoro.KPipeline`'s callable-generator surface closely enough
     for the generic mixins to drive it: `pipeline(text, voice=, speed=,
-    split_pattern=)` yields `(graphemes, phonemes, audio)` triples, `audio`
+    split_pattern=)` yields `(graphemes, phonemes, audio)` triples (with
+    `tokens`, like KPipeline's `Result`), `audio`
     a mono float32 ndarray at `SAMPLE_RATE`. No model, no weights, no
     eSpeak - a short sine tone stands in for speech, its pitch derived from
     the voice name so different "voices" are at least audibly different."""
@@ -50,11 +52,16 @@ class DummyPipeline:
         self.lang_code = lang_code
 
     def __call__(self, text, voice="dummy", speed=1.0, split_pattern=r"\n+"):
-        segments = [s.strip() for s in re.split(split_pattern, text) if s.strip()]
+        # `split_pattern=None` means "don't split", as in KPipeline.
+        parts = re.split(split_pattern, text) if split_pattern else [text]
+        segments = [s.strip() for s in parts if s.strip()]
         if not segments and text.strip():
             segments = [text.strip()]
         for seg in segments:
-            yield seg, "", _tone_for(seg, speed, voice)
+            tone = _tone_for(seg, speed, voice)
+            # Evenly spaced words over the tone, so word timing has data to
+            # show without a model.
+            yield TimedResult(seg, "", tone, even_tokens(seg, len(tone) / SAMPLE_RATE))
 
 
 def _tone_for(text, speed, voice):
@@ -123,6 +130,7 @@ class DummyBackendAdapter(BackendHooksMixin):
         supports_multi_speaker_script=True,
         is_local_model=True,
         supports_jit_streaming=True,
+        supports_word_timing=True,
     )
 
     def __init__(self, engine=None):
@@ -145,8 +153,7 @@ class DummyBackendAdapter(BackendHooksMixin):
                         default=1.0, min=0.5, max=2.0, step=0.1, group="Generation"),
             ConfigField("pitch", "Pitch", ConfigFieldType.SLIDER,
                         default=0.0, min=-12, max=12, step=1, group="Audio"),
-            ConfigField("split_pattern", "Split By", ConfigFieldType.CHOICE,
-                        default=r"\n+", choices=list(COMMON_SPLIT_PATTERN_CHOICES), group="Generation"),
+            *segmentation_fields(),
             ConfigField("format", "Output Format", ConfigFieldType.CHOICE,
                         default="wav", choices=list(COMMON_OUTPUT_FORMAT_CHOICES), group="Generation"),
             ConfigField("num_threads", "Parallel Threads", ConfigFieldType.INT,

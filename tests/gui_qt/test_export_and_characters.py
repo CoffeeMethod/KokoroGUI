@@ -56,7 +56,8 @@ def test_export_dialog_reads_back_sanitized_values(qt_app):
 
     values = dialog.values()
 
-    assert values == {"out_dir": "out", "filename": "evil", "format": "flac", "srt": True, "keep_clip_files": True}
+    assert values == {"out_dir": "out", "filename": "evil", "format": "flac", "srt": True, "keep_clip_files": True,
+                      "channels": 2, "srt_words": False, "cue_sheet": False}
 
 
 def test_run_export_refuses_without_clips(qt_app, monkeypatch):
@@ -81,6 +82,7 @@ def test_run_export_with_dirty_clips_offers_generate_first(qt_app, monkeypatch):
 
 
 def test_run_export_schedules_mixdown_on_the_worker_and_writes_the_file(qt_app, tmp_path):
+    qt_app.document.settings["gap_s"] = 0.0  # about the export path, not gaps
     _type(qt_app.editor, "hello world")
     _generated_clip(qt_app, tmp_path, 0, 5, seconds=1.0, name="a")
     _generated_clip(qt_app, tmp_path, 6, 11, seconds=0.5, name="b")
@@ -162,6 +164,7 @@ def test_characters_dialog_refuses_to_remove_a_character_in_use(qt_app, monkeypa
 
 
 def test_transport_position_drives_playhead_readout_and_playing_clip(qt_app, tmp_path):
+    qt_app.document.settings["gap_s"] = 0.0  # about the readout, not gaps
     _type(qt_app.editor, "hello world")
     first = _generated_clip(qt_app, tmp_path, 0, 5, seconds=1.0, name="a")
     second = _generated_clip(qt_app, tmp_path, 6, 11, seconds=1.0, name="b")
@@ -208,3 +211,60 @@ def test_characters_changed_refreshes_header_and_timeline(qt_app):
     labels = [item.text() for item in qt_app.timeline_dock.timeline_widget.header._scene.items()
               if hasattr(item, "text")]
     assert added.name in labels
+
+
+
+def test_export_dialog_offers_channels_ranges_cue_sheet_and_word_srt(qt_app):
+    from kokoro_gui.daw import markers
+    from kokoro_gui.qt.docks.export_dialog import ExportDialog
+
+    qt_app.document.settings["markers"], _a = markers.add_marker(qt_app.document.settings, 1.0, name="A")
+    qt_app.document.settings["markers"], _b = markers.add_marker(qt_app.document.settings, 3.0, name="B")
+    dialog = ExportDialog(qt_app)
+    dialog.channels_combo.setCurrentIndex(dialog.channels_combo.findData(1))
+    dialog.cue_sheet_check.setChecked(True)
+    dialog.srt_words_check.setChecked(True)
+    dialog.range_combo.setCurrentIndex(1)
+
+    values = dialog.values()
+    assert (values["channels"], values["cue_sheet"], values["srt_words"]) == (1, True, True)
+    assert dialog.range_s() == (1.0, 3.0)
+    assert dialog.range_combo.itemText(1) == "A to B"
+
+
+def test_characters_dialog_variants_table_edits_the_character(qt_app, monkeypatch):
+    import dataclasses
+
+    from kokoro_gui.qt.characters_dialog import CharactersDialog
+
+    cloning = dataclasses.replace(qt_app.backend.capabilities, supports_voice_cloning=True)
+    monkeypatch.setattr(qt_app.backend, "capabilities", cloning)
+    character = qt_app.document.characters[0]
+    character.backend_id = qt_app.backend.id
+    dialog = CharactersDialog(qt_app)
+    assert not dialog.variants_box.isHidden()
+
+    dialog.add_variant()
+    dialog.variants_table.item(0, 0).setText("angry")
+    dialog.variants_table.cellWidget(0, 1).setCurrentText("angry_ref")
+
+    assert character.variants == {"angry": "angry_ref"}
+    dialog.remove_variant()
+    assert character.variants == {}
+
+
+def test_transcript_variant_combo_sets_the_override_undoably(qt_app):
+    character = qt_app.document.characters[0]
+    character.variants = {"angry": "angry_ref"}
+    qt_app.document.text = "hello"
+    clip = qt_app.document.assign_character_to_range(0, 5, character.id)
+    qt_app.editor.load_text(qt_app.document.text)
+    qt_app.selection.select_clip(clip.id)
+    dock = qt_app.transcript_dock
+    dock.sync_header()
+    assert not dock.variant_combo.isHidden()
+
+    dock.set_clip_variant(clip.id, "angry")
+    assert clip.overrides["variant"] == "angry"
+    qt_app.document.undo_stack.undo()
+    assert "variant" not in clip.overrides

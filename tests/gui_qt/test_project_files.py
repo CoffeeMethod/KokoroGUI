@@ -962,3 +962,61 @@ def test_replace_retries_on_permission_error(tmp_path, monkeypatch):
     src.write_bytes(b"x")
     project_io._replace_with_retries(str(src), str(tmp_path / "a"))
     assert len(calls) == 3 and (tmp_path / "a").exists()
+
+
+# --- phase 2: parked takes and variants in the bundle ---------------------------
+
+
+def test_a_bundle_with_parked_takes_round_trips_them_and_requires_takes(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _seg = _document_with_audio(project_dir)
+    parked = os.path.join(project_dir, "audio", "generated", "old_0.wav")
+    with open(parked, "wb") as f:
+        f.write(b"RIFF" + b"\0" * 60)
+    doc.clips[0].takes = {0: [Segment(0, "hello", "old", parked, 2.0)]}
+    doc.clips[0].overrides["take"] = 1
+    path = str(tmp_path / "takes.tbaw")
+
+    project_io.save_project(doc, path, {}, project_dir, project_id, fx_presets_dir=str(tmp_path / "none"))
+
+    with zipfile.ZipFile(path) as zf:
+        names = set(zf.namelist())
+        manifest = json.loads(zf.read("manifest.json"))
+    assert "audio/generated/old_0.wav" in names
+    assert manifest["requires"] == ["takes"]
+
+    info = project_io.inspect_bundle(path)
+    other_dir = str(tmp_path / "other")
+    project_io.extract_small(info, other_dir)
+    project_io.extract_audio(info, other_dir)
+    loaded = project_io.finish_open(info, other_dir)
+    take = loaded.document.clips[0].takes[0][0]
+    assert take.audio_path == os.path.join(other_dir, "audio", "generated", "old_0.wav")
+    assert take.duration == 2.0
+
+
+def test_a_bundle_without_takes_requires_nothing(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _seg = _document_with_audio(project_dir)
+    path = str(tmp_path / "plain.tbaw")
+    project_io.save_project(doc, path, {}, project_dir, project_id, fx_presets_dir=str(tmp_path / "none"))
+    with zipfile.ZipFile(path) as zf:
+        assert json.loads(zf.read("manifest.json"))["requires"] == []
+
+
+def test_close_time_gc_keeps_a_parked_takes_files(tmp_path, isolated_dirs):
+    project_dir, _project_id = project_io.create_project_dir()
+    doc, seg = _document_with_audio(project_dir)
+    parked = os.path.join(os.path.dirname(seg), "old_0.wav")
+    open(parked, "wb").write(b"RIFF")
+    doc.clips[0].takes = {0: [Segment(0, "hello", "old", parked, 1.0)]}
+
+    assert project_io.gc_project_dir(project_dir, doc) == []
+    assert os.path.isfile(parked)
+
+
+def test_used_voice_names_include_every_variant_reference():
+    character = Character.from_preset_dict("A", {"voice": "calm_ref"}, backend_id="audio8")
+    character.variants = {"angry": "angry_ref", "whisper": "soft_ref"}
+    doc = Document(characters=[character])
+    assert project_io.used_voice_names(doc) == {"audio8": {"calm_ref", "angry_ref", "soft_ref"}}

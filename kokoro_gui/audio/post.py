@@ -75,11 +75,7 @@ def render(path: str, post_config: Optional[dict], target_rate: int) -> np.ndarr
     raises for an unreadable file. `post_config=None` means no processing."""
     from kokoro_gui.audio.mixer import resample
 
-    try:
-        mtime = os.path.getmtime(path)
-    except OSError:
-        mtime = None
-    key = (os.path.abspath(path), mtime, post_key(post_config or {}), int(target_rate))
+    key = _cache_key(path, post_config, target_rate)
     cached = _RENDER_CACHE.get(key)
     if cached is not None:
         return cached
@@ -94,7 +90,46 @@ def render(path: str, post_config: Optional[dict], target_rate: int) -> np.ndarr
     return out
 
 
-def rendered_duration_s(path: str, post_config: Optional[dict], target_rate: int) -> float:
+def _cache_key(path: str, post_config: Optional[dict], target_rate: int) -> tuple:
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = None
+    return (os.path.abspath(path), mtime, post_key(post_config or {}), int(target_rate))
+
+
+def duration_hint(segment, post_config: Optional[dict]) -> Optional[float]:
+    """The segment's rendered length computed from what generation stored
+    (`duration`, `onset_s`, `tail_s`) without reading audio, or None for a
+    segment that predates those fields. Trim removes the onset and tail;
+    pitch resamples by `2 ** (semitones / 12)`; nothing else in
+    `process_audio` changes the length."""
+    duration = getattr(segment, "duration", None)
+    onset, tail = getattr(segment, "onset_s", None), getattr(segment, "tail_s", None)
+    if duration is None or onset is None or tail is None:
+        return None
+    config = post_config or {}
+    length = float(duration)
+    if config.get("trim_silence", False):
+        length = max(0.0, length - float(onset) - float(tail))
+    from kokoro_gui.engine.audio_fx import clamp_pitch_semitones
+
+    semitones = clamp_pitch_semitones(config.get("pitch", 0.0))
+    if semitones:
+        length /= 2 ** (semitones / 12.0)
+    return length
+
+
+def rendered_duration_s(path: str, post_config: Optional[dict], target_rate: int,
+                        hint: Optional[float] = None) -> float:
+    """The rendered length in seconds. A render already in the memo answers
+    exactly; otherwise `hint` (from `duration_hint`) answers without reading
+    the file, which is what lets a long project place every clip at open."""
+    cached = _RENDER_CACHE.get(_cache_key(path, post_config, target_rate))
+    if cached is not None:
+        return len(cached) / float(target_rate)
+    if hint is not None:
+        return float(hint)
     return len(render(path, post_config, target_rate)) / float(target_rate)
 
 

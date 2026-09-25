@@ -6,10 +6,11 @@ kokoro_gui/engines/audio8_tts.py). Shown only for such a backend - see
 app.py's `_sync_voice_clone_dock`, the same show/hide-on-engine-switch
 pattern `_sync_mixing_dock` uses for the Mixing dock.
 
-The auto-transcribe step itself can run on either of `kokoro_gui.engine.asr`'s
-two registered engines (`ASR_ENGINES`) - the default "Audio8-ASR-0.1B"
-(online, higher quality) or "Vosk" (fully offline, needs a model folder
-downloaded by hand). The engine choice is persisted in `app.settings`
+The auto-transcribe step itself can run on any of `kokoro_gui.engine.asr`'s
+registered engines (`ASR_ENGINES`): the default "Whisper" (local, downloads
+its model on first use after asking, see `kokoro_gui/qt/asr_prompt.py`),
+"Audio8-ASR-0.1B" or "Vosk" (fully offline, needs a model folder downloaded
+by hand). The engine choice is persisted in `app.settings`
 (`asr_engine`, pulled via `get_state()` the same way `FXDock`/
 `GenerationDock` persist their own widget state) - but Vosk's model folder
 is *not*: it lives in the `VOSK_MODEL_PATH` environment variable, normally
@@ -45,6 +46,7 @@ from kokoro_gui.engine.asr import (
 )
 from kokoro_gui.engines import audio8_tts
 from kokoro_gui.engines.audio8_tts import Audio8ReferenceStore
+from kokoro_gui.qt import asr_prompt
 
 
 class VoiceCloneDock(QDockWidget):
@@ -194,8 +196,21 @@ class VoiceCloneDock(QDockWidget):
             QMessageBox.warning(self, "Error", "Enter a Vosk model folder first.")
             return
 
+        downloading = False
+        if engine == "whisper":
+            choice, downloading = asr_prompt.confirm_whisper_download(self)
+            if choice == asr_prompt.CANCEL:
+                return
+            if choice == asr_prompt.OTHER_ENGINE:
+                other = next(i for i in range(self.asr_engine_combo.count())
+                             if self.asr_engine_combo.itemData(i) != "whisper")
+                self.asr_engine_combo.setCurrentIndex(other)
+                self.status_label.setText(
+                    f"Switched to {self.asr_engine_combo.currentText()}. Click Auto-Transcribe to use it.")
+                return
+
         self.transcribe_btn.setEnabled(False)
-        self.status_label.setText("Transcribing...")
+        self.status_label.setText("Downloading Whisper model..." if downloading else "Transcribing...")
 
         def _done(future):
             try:
@@ -218,7 +233,9 @@ class VoiceCloneDock(QDockWidget):
             self.transcript_edit.setPlainText(payload)
             self.status_label.setText("Transcribed - review/edit before saving.")
         else:
-            self.status_label.setText(f"Transcription failed: {payload}")
+            # The asr module's own errors already say "Transcription failed".
+            prefix = "" if payload.startswith("Transcription failed") else "Transcription failed: "
+            self.status_label.setText(f"{prefix}{payload}")
 
     # --- saved references (name -> wav+transcript sidecar pair) ---------
 

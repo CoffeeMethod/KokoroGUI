@@ -55,6 +55,14 @@ def qt_app(tmp_path, monkeypatch, qtbot):
     # or Open (grill TB12); nearly every test leaves edits behind, so the
     # fixture answers Discard. A test about the prompt re-patches this.
     monkeypatch.setattr(qt_app_module.QtTTSApp, "_ask_close_choice", lambda self: "discard")
+    # The Whisper first-use download prompt (grill PR5) answers Yes; the
+    # transcribe call itself is always mocked, so nothing downloads.
+    from kokoro_gui.qt import asr_prompt
+    monkeypatch.setattr(asr_prompt, "ask_whisper_download", lambda *a, **k: asr_prompt.PROCEED)
+    # Word alignment after a generate (phase 2, C1) would otherwise load
+    # Whisper for real; a test about alignment patches in its own words.
+    from kokoro_gui.engine import asr
+    monkeypatch.setattr(asr, "transcribe_wav_words", lambda *a, **k: [])
 
     app = qt_app_module.QtTTSApp()
     qtbot.addWidget(app)

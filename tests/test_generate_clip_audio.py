@@ -64,3 +64,33 @@ def test_generate_clip_audio_does_not_mutate_caller_config(engine, fake_pipeline
 # tests/test_caching.py instead of here - tests/test_meta_caching_policy.py
 # enforces that the caching config flag is only ever turned on in that one
 # module.
+
+
+def test_generate_clip_audio_applies_the_lexicon(engine, fake_pipeline, make_config, monkeypatch):
+    seen = []
+    real_call = type(fake_pipeline).__call__
+
+    def spy(self, text, *a, **k):
+        seen.append(text)
+        return real_call(self, text, *a, **k)
+
+    monkeypatch.setattr(type(fake_pipeline), "__call__", spy)
+    config = make_config(lexicon={"Nguyen": "Win"})
+    results = asyncio.run(engine.generate_clip_audio((0, "Mr Nguyen arrived.", config)))
+
+    assert seen == ["Mr Win arrived."]
+    assert results[0]["text"] == "Mr Win arrived."
+
+
+def test_generate_clip_audio_reports_words_onset_and_tail(engine, fake_pipeline, make_config):
+    config = make_config()
+    results = asyncio.run(engine.generate_clip_audio((0, "Hello brave world.", config)))
+
+    words = results[0]["words"]
+    assert [w[0] for w in words] == ["Hello", "brave", "world."]
+    assert words[0][1] == 0.0
+    assert all(a[2] <= b[1] + 1e-6 for a, b in zip(words, words[1:]))
+    # FakePipeline's sine starts at 0, so the first sample under the
+    # threshold is the onset and the audio runs to the end.
+    assert results[0]["onset_s"] >= 0.0
+    assert results[0]["tail_s"] >= 0.0

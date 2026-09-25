@@ -118,10 +118,13 @@ class AssignCharacterCommand(Command):
     time - correct across any number of undo/redo cycles.
     """
 
-    def __init__(self, start: int, end: int, character_id):
+    def __init__(self, start: int, end: int, character_id, clip_fields: "dict | None" = None):
         self.start = start
         self.end = end
         self.character_id = character_id
+        # Set on the new clip after the split, e.g. `{"gap_before_s": 1.5}`
+        # from a `[pause:x]` marker, so a redo recreates it too.
+        self.clip_fields = dict(clip_fields or {})
         self._pre_runs: "list | None" = None
         self._pre_clips: "list | None" = None
         self.new_clip_id: "str | None" = None
@@ -130,6 +133,8 @@ class AssignCharacterCommand(Command):
         self._pre_runs = copy.deepcopy(document.runs)
         self._pre_clips = copy.deepcopy(document.clips)
         new_clip = document.assign_character_to_range(self.start, self.end, self.character_id)
+        for name, value in self.clip_fields.items():
+            setattr(new_clip, name, copy.deepcopy(value))
         self.new_clip_id = new_clip.id
 
     def undo(self, document) -> None:
@@ -349,6 +354,131 @@ class MoveClipBeforeCommand(Command):
     def undo(self, document) -> None:
         document.runs = copy.deepcopy(self._pre_runs)
         document.clips = copy.deepcopy(self._pre_clips)
+
+
+_MISSING = object()
+
+
+def _field_target(document, target_kind: str, target_id):
+    """The object a `SetFieldCommand` edits: a clip, track or character by
+    id, or the document itself for `"document"` (whose `settings` dict is
+    where project-level values live)."""
+    if target_kind == "clip":
+        return document.get_clip(target_id)
+    if target_kind == "track":
+        return document.get_track(target_id)
+    if target_kind == "character":
+        return document.get_character(target_id)
+    if target_kind == "document":
+        return document
+    raise ValueError(f"unknown SetFieldCommand target kind {target_kind!r}")
+
+
+class SetFieldCommand(Command):
+    """Sets one field on a clip, track, character or the document, undoably.
+    With `key`, the field is a dict (`clip.overrides`, `document.settings`)
+    and the command sets `field[key]`; `value=None` with a key removes the
+    entry. Values are deep-copied both ways, so a caller mutating its list
+    afterwards (a marker list, an automation lane) can't reach the history.
+
+    `SetFieldCommand("clip", id, "fade_in_s", 0.2)`,
+    `SetFieldCommand("document", None, "settings", 0.5, key="gap_s")`."""
+
+    def __init__(self, target_kind: str, target_id, field: str, value, key=None):
+        self.target_kind = target_kind
+        self.target_id = target_id
+        self.field = field
+        self.key = key
+        self.value = copy.deepcopy(value)
+        self._previous = _MISSING
+
+    def do(self, document) -> None:
+        target = _field_target(document, self.target_kind, self.target_id)
+        if target is None:
+            return
+        if self.key is None:
+            self._previous = copy.deepcopy(getattr(target, self.field))
+            setattr(target, self.field, copy.deepcopy(self.value))
+            return
+        container = getattr(target, self.field)
+        previous = container.get(self.key, _MISSING)
+        self._previous = previous if previous is _MISSING else copy.deepcopy(previous)
+        if self.value is None:
+            container.pop(self.key, None)
+        else:
+            container[self.key] = copy.deepcopy(self.value)
+
+    def undo(self, document) -> None:
+        target = _field_target(document, self.target_kind, self.target_id)
+        if target is None:
+            return
+        if self.key is None:
+            if self._previous is not _MISSING:
+                setattr(target, self.field, copy.deepcopy(self._previous))
+            return
+        container = getattr(target, self.field)
+        if self._previous is _MISSING:
+            container.pop(self.key, None)
+        else:
+            container[self.key] = copy.deepcopy(self._previous)
+
+
+class SetActiveTakeCommand(Command):
+    """Makes parked take `index` a clip's active take: its segment list
+    swaps with `clip.segments`, the outgoing list is parked under the
+    outgoing take index, and `clip.overrides["take"]` follows."""
+
+    def __init__(self, clip_id: str, index: int):
+        self.clip_id = clip_id
+        self.index = int(index)
+        self._previous_index = None
+
+    def _swap(self, clip, to_index: int) -> int:
+        from_index = int(clip.overrides.get("take", 0) or 0)
+        incoming = clip.takes.pop(to_index, None)
+        if incoming is None:
+            return from_index
+        if clip.segments:
+            clip.takes[from_index] = clip.segments
+        clip.segments = incoming
+        if to_index:
+            clip.overrides["take"] = to_index
+        else:
+            clip.overrides.pop("take", None)
+        return from_index
+
+    def do(self, document) -> None:
+        clip = document.get_clip(self.clip_id)
+        if clip is None or self.index not in clip.takes:
+            self._previous_index = None
+            return
+        self._previous_index = self._swap(clip, self.index)
+
+    def undo(self, document) -> None:
+        clip = document.get_clip(self.clip_id)
+        if clip is None or self._previous_index is None:
+            return
+        self._swap(clip, self._previous_index)
+
+
+class DeleteTakeCommand(Command):
+    """Drops parked take `index` from a clip. The files stay until
+    close-time GC finds nothing referencing them, so undo can bring the
+    take back."""
+
+    def __init__(self, clip_id: str, index: int):
+        self.clip_id = clip_id
+        self.index = int(index)
+        self._segments = None
+
+    def do(self, document) -> None:
+        clip = document.get_clip(self.clip_id)
+        self._segments = clip.takes.pop(self.index, None) if clip is not None else None
+
+    def undo(self, document) -> None:
+        clip = document.get_clip(self.clip_id)
+        if clip is not None and self._segments is not None:
+            clip.takes[self.index] = self._segments
 
 
 # The split-or-create primitive item 7 ("Auto-split on generation") and

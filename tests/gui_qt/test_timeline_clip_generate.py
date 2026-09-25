@@ -28,7 +28,8 @@ def test_context_menu_shows_generate_action_over_a_clip_block(qt_app):
     menu = qt_app.timeline_dock.timeline_view._build_context_menu(view_pos)
 
     assert menu is not None
-    assert [a.text() for a in menu.actions()] == ["Generate"]
+    # No audio, one take: Generate, then the Status submenu (no Play, Take or Align words).
+    assert [a.text() for a in menu.actions() if not a.isSeparator()] == ["Generate", "Status"]
 
 
 def test_context_menu_empty_over_lane_background(qt_app):
@@ -165,3 +166,120 @@ def test_results_stamp_the_take_key_and_version_the_engine_reports(qt_app):
     assert clip.segments[0].cache_key == "k-take-2"
     assert clip.segments[0].engine_version == "9.9"
     assert qt_app._assemble_generation_config(clip)["take"] == 2
+
+
+# --- phase 2: parked takes, review status, word alignment ------------------------
+
+def _fresh_future(qt_app):
+    import concurrent.futures
+
+    qt_app.engine.worker.run_coro.return_value = concurrent.futures.Future()
+
+
+def _finish_generate(qt_app, clip, take, key, path="a.wav", words=None, text="hello"):
+    """One per-clip generate that lands `take` under `key`."""
+    _fresh_future(qt_app)
+    qt_app.transport_dock.set_busy(False)
+    qt_app.timeline_dock.on_generate_clip_requested(clip.id)
+    qt_app.engine.worker.run_coro.return_value.set_result([
+        {"path": path, "text": text, "duration": 1.0, "seg_idx": 0, "cache_key": key, "take": take,
+         "words": words or []},
+    ])
+
+
+def test_regenerating_twice_parks_two_takes(qt_app):
+    clip = _make_clip(qt_app)
+    _finish_generate(qt_app, clip, 0, "k0", "t0.wav")
+    _finish_generate(qt_app, clip, 1, "k1", "t1.wav")
+    _finish_generate(qt_app, clip, 2, "k2", "t2.wav")
+
+    assert clip.overrides["take"] == 2
+    assert clip.segments[0].audio_path == "t2.wav"
+    assert sorted(clip.takes) == [0, 1]
+    assert clip.takes[0][0].audio_path == "t0.wav"
+    assert clip.takes[1][0].audio_path == "t1.wav"
+    assert clip.status == "generated"
+
+
+def test_re_rendering_a_parked_take_takes_it_out_of_the_parked_list(qt_app):
+    clip = _make_clip(qt_app)
+    _finish_generate(qt_app, clip, 0, "k0", "t0.wav")
+    _finish_generate(qt_app, clip, 1, "k1", "t1.wav")
+    _finish_generate(qt_app, clip, 0, "k0", "t0.wav")
+    assert sorted(clip.takes) == [1]
+    assert "take" not in clip.overrides
+
+
+def test_a_cache_hit_keeps_the_words_the_file_was_first_generated_with(qt_app):
+    clip = _make_clip(qt_app)
+    _finish_generate(qt_app, clip, 0, "k0", "t0.wav", words=[["hello", 0.0, 0.5]])
+    _finish_generate(qt_app, clip, 1, "k1", "t1.wav")
+    _finish_generate(qt_app, clip, 0, "k0", "t0.wav")  # a hit: no words in the result
+    assert clip.segments[0].words == [["hello", 0.0, 0.5]]
+
+
+def test_alignment_runs_after_generate_for_an_engine_without_word_timing(qt_app, monkeypatch):
+    from kokoro_gui.engine import asr
+
+    calls = []
+
+    def fake_words(path, engine="whisper", model_path=None):
+        calls.append((path, engine))
+        return [("hello", 0.1, 0.4), ("world", 0.5, 0.9)]
+
+    monkeypatch.setattr(asr, "transcribe_wav_words", fake_words)
+    monkeypatch.setattr(qt_app, "_engine_has_word_timing", lambda clip: False)
+    clip = _make_clip(qt_app, end=11)
+    _finish_generate(qt_app, clip, 0, "k", "a.wav", text="hello world")
+    qt_app.wait_for_word_alignment()
+
+    assert calls == [("a.wav", "whisper")]
+    assert clip.segments[0].words == [["hello", 0.1, 0.4], ["world", 0.5, 0.9]]
+    assert "Aligned words" in qt_app.transport_dock.status_text()
+
+
+def test_no_automatic_alignment_when_the_engine_stamps_words(qt_app, monkeypatch):
+    from kokoro_gui.engine import asr
+
+    def refuse(*_a, **_k):
+        raise AssertionError("aligned a clip whose engine has token timing")
+
+    monkeypatch.setattr(asr, "transcribe_wav_words", refuse)
+    clip = _make_clip(qt_app)
+    _finish_generate(qt_app, clip, 0, "k0", "t0.wav")
+    assert qt_app._word_align_thread is None
+
+
+def test_align_words_from_the_menu_forces_a_run(qt_app, monkeypatch):
+    from kokoro_gui.engine import asr
+
+    monkeypatch.setattr(asr, "transcribe_wav_words", lambda *a, **k: [("hello", 0.0, 0.3)])
+    clip = _make_clip(qt_app)
+    _finish_generate(qt_app, clip, 0, "k0", "t0.wav", words=[["hello", 0.0, 0.9]])
+
+    qt_app.timeline_dock.on_align_words_requested(clip.id)
+    qt_app.wait_for_word_alignment()
+
+    assert clip.segments[0].words == [["hello", 0.0, 0.3]]
+
+
+def test_declining_the_whisper_download_stops_asking_this_session(qt_app, monkeypatch):
+    from kokoro_gui.daw.models import Segment
+    from kokoro_gui.engine import asr
+    from kokoro_gui.qt import asr_prompt
+
+    asked = []
+
+    def decline(*_a, **_k):
+        asked.append(True)
+        return asr_prompt.CANCEL
+
+    monkeypatch.setattr(asr, "whisper_model_cached", lambda name=None: False)
+    monkeypatch.setattr(asr_prompt, "ask_whisper_download", decline)
+    monkeypatch.setattr(qt_app, "_engine_has_word_timing", lambda clip: False)
+    clip = _make_clip(qt_app)
+    clip.segments = [Segment(text="hello", audio_path="a.wav")]
+
+    assert qt_app.schedule_word_alignment([clip.id]) is False
+    assert qt_app.schedule_word_alignment([clip.id]) is False
+    assert asked == [True]

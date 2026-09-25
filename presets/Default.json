@@ -3,7 +3,6 @@
     "speed": 1.0,
     "volume": 1.0,
     "pitch": 0.0,
-    "split_pattern": "\\n+",
     "normalize": false,
     "trim": false
 }

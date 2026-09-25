@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QDockWidget, QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QToolButton, QVBoxLayout, QWidget,
 )
 
+from kokoro_gui.daw.timecode import format_position
 from kokoro_gui.engine.time_utils import format_duration
 from kokoro_gui.qt import icons, theme
 
@@ -202,7 +203,12 @@ class TransportDock(QDockWidget):
     # -- transport readout -------------------------------------------------
 
     def set_position(self, position_s: float, total_s: float) -> None:
-        self.time_label.setText(f"{format_clock(position_s)} / {format_clock(total_s)}")
+        """mm:ss.t, or timecode when the project enables it."""
+        settings = self.app.document.settings if getattr(self.app, "document", None) is not None else {}
+        now, total = format_position(settings, position_s), format_position(settings, total_s)
+        if now is None or total is None:
+            now, total = format_clock(position_s), format_clock(total_s)
+        self.time_label.setText(f"{now} / {total}")
 
     def set_playing(self, playing: bool) -> None:
         self.play_btn.setEnabled(not playing)

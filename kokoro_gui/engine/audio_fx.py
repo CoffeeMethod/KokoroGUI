@@ -15,6 +15,11 @@ from pedalboard import (
 # factor (here and caching.py's ETA speed compensation) clamp to this range
 # first: `2 ** (pitch/12.0)` is otherwise unbounded and can OverflowError or
 # attempt a multi-GB scipy.signal.resample allocation at extreme values.
+# Trim silence's threshold on |sample|. `wordtiming.silence_bounds` measures
+# a segment's onset and tail against the same value at generation time, so
+# the trimmed length can be computed without reading the file.
+TRIM_THRESHOLD = 0.01
+
 PITCH_SEMITONES_MIN = -12.0
 PITCH_SEMITONES_MAX = 12.0
 
@@ -41,7 +46,7 @@ def process_audio(audio, sr, config):
     change). Returns the processed mono float array at the same `sr`."""
     # 1. Trim Silence (Simple threshold)
     if config.get('trim_silence', False):
-        threshold = 0.01
+        threshold = TRIM_THRESHOLD
         # Find first index > threshold
         mask = np.abs(audio) > threshold
         if np.any(mask):

@@ -178,11 +178,11 @@ def test_auto_transcribe_without_wav_selected_is_a_noop(qt_app, monkeypatch):
 
 # --- ASR engine picker ----------------------------------------------------
 
-def test_default_engine_is_audio8_and_vosk_row_hidden(qt_app, monkeypatch):
+def test_default_engine_is_whisper_and_vosk_row_hidden(qt_app, monkeypatch):
     _switch_to_audio8(qt_app, monkeypatch)
     dock = qt_app.voice_clone_dock
 
-    assert dock.asr_engine_combo.currentData() == "audio8"
+    assert dock.asr_engine_combo.currentData() == "whisper"
     # isHidden() (not isVisible()) - the dock's never .show()n in this
     # offscreen test, so isVisible() would be False for everything
     # regardless of our explicit setVisible() calls.
@@ -309,3 +309,68 @@ def test_asr_engine_choice_persists_via_get_state(qt_app, monkeypatch):
 
     qt_app.save_settings()
     assert qt_app.settings["asr_engine"] == "vosk"
+
+
+# --- Whisper first-use download prompt (grill PR5) --------------------------
+
+def _whisper_not_cached(monkeypatch, answer):
+    from kokoro_gui.engine import asr
+    from kokoro_gui.qt import asr_prompt
+
+    asked = []
+    monkeypatch.setattr(asr, "whisper_model_cached", lambda name=None: False)
+    monkeypatch.setattr(asr_prompt, "ask_whisper_download",
+                        lambda parent, name, size: (asked.append((name, size)), answer)[1])
+    return asked
+
+
+def test_whisper_download_prompt_names_the_size_and_says_downloading(qt_app, monkeypatch, tmp_path, qtbot):
+    from kokoro_gui.qt import asr_prompt
+
+    monkeypatch.delenv("WHISPER_MODEL", raising=False)
+    _switch_to_audio8(qt_app, monkeypatch)
+    asked = _whisper_not_cached(monkeypatch, asr_prompt.PROCEED)
+    statuses = []
+    monkeypatch.setattr(_TRANSCRIBE_TARGET,
+                        lambda path, **kwargs: (statuses.append(dock.status_label.text()), "Words.")[1])
+    dock = qt_app.voice_clone_dock
+    dock.wav_path_edit.setText(_write_wav(tmp_path / "ref.wav"))
+
+    dock._on_transcribe_clicked()
+
+    qtbot.waitUntil(lambda: dock.transcript_edit.toPlainText() == "Words.", timeout=5000)
+    assert asked == [("large-v3-turbo", "1.6 GB")]
+    assert statuses == ["Downloading Whisper model..."]
+
+
+def test_whisper_download_prompt_use_another_engine_switches_without_transcribing(qt_app, monkeypatch, tmp_path):
+    from kokoro_gui.qt import asr_prompt
+
+    _switch_to_audio8(qt_app, monkeypatch)
+    _whisper_not_cached(monkeypatch, asr_prompt.OTHER_ENGINE)
+    called = []
+    monkeypatch.setattr(_TRANSCRIBE_TARGET, lambda path, **kwargs: called.append(path) or "x")
+    dock = qt_app.voice_clone_dock
+    dock.wav_path_edit.setText(_write_wav(tmp_path / "ref.wav"))
+
+    dock._on_transcribe_clicked()
+
+    assert dock.asr_engine_combo.currentData() != "whisper"
+    assert called == []
+    assert dock.transcribe_btn.isEnabled()
+
+
+def test_whisper_download_prompt_cancel_does_nothing(qt_app, monkeypatch, tmp_path):
+    from kokoro_gui.qt import asr_prompt
+
+    _switch_to_audio8(qt_app, monkeypatch)
+    _whisper_not_cached(monkeypatch, asr_prompt.CANCEL)
+    called = []
+    monkeypatch.setattr(_TRANSCRIBE_TARGET, lambda path, **kwargs: called.append(path) or "x")
+    dock = qt_app.voice_clone_dock
+    dock.wav_path_edit.setText(_write_wav(tmp_path / "ref.wav"))
+
+    dock._on_transcribe_clicked()
+
+    assert dock.asr_engine_combo.currentData() == "whisper"
+    assert called == []

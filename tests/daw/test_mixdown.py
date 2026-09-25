@@ -18,6 +18,8 @@ def _doc(text, tagged, **kwargs):
         cursor = end
     if cursor < len(text):
         runs.append(Run(text=text[cursor:]))
+    # These tests are about order and length; gaps have their own tests.
+    kwargs.setdefault("settings", {"gap_s": 0.0, "paragraph_gap_s": 0.0})
     return Document(runs=runs, clips=[c for _s, _e, c in tagged], **kwargs)
 
 
@@ -134,3 +136,87 @@ def test_mixdown_applies_post_config_per_clip(tmp_path):
     data, _rate = sf.read(str(out), dtype="float32")
     assert np.allclose(data[:8000], 0.5, atol=1e-3)  # a: 0.25 * 2
     assert np.allclose(data[8000:], 0.5, atol=1e-3)  # b: untouched
+
+
+# -- phase 2: stereo, track controls, range, cue sheet, word SRT -----------------
+
+
+def test_mixdown_is_stereo_by_default_and_mono_averages(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+    doc.tracks[0].pan = -1.0
+
+    mixdown(doc, str(tmp_path / "st.wav"), fmt="wav", sample_rate=8000)
+    mixdown(doc, str(tmp_path / "mono.wav"), fmt="wav", sample_rate=8000, channels=1)
+
+    stereo, _ = sf.read(str(tmp_path / "st.wav"), dtype="float32")
+    mono, _ = sf.read(str(tmp_path / "mono.wav"), dtype="float32")
+    assert stereo.shape == (12000, 2)
+    assert np.allclose(stereo[:8000, 1], 0.0, atol=1e-3)  # a panned hard left
+    assert np.allclose(stereo[:8000, 0], 0.25 * 2 ** 0.5, atol=1e-3)
+    assert mono.ndim == 1
+    assert np.allclose(mono[8000:], 0.5, atol=1e-3)
+
+
+def test_mixdown_honours_mute_and_solo(tmp_path):
+    doc, a, b = _two_generated_clips(tmp_path)
+    doc.tracks[1].mute = True
+    mixdown(doc, str(tmp_path / "m.wav"), fmt="wav", sample_rate=8000)
+    data, _ = sf.read(str(tmp_path / "m.wav"), dtype="float32")
+    assert np.allclose(data[8000:], 0.0)
+
+    doc.tracks[1].mute = False
+    doc.tracks[1].solo = True
+    mixdown(doc, str(tmp_path / "s.wav"), fmt="wav", sample_rate=8000)
+    data, _ = sf.read(str(tmp_path / "s.wav"), dtype="float32")
+    assert np.allclose(data[:8000], 0.0)
+    assert np.allclose(data[8000:], 0.5, atol=1e-3)
+
+
+def test_mixdown_applies_clip_fades(tmp_path):
+    doc, a, _b = _two_generated_clips(tmp_path)
+    a.fade_in_s = 0.5
+    mixdown(doc, str(tmp_path / "f.wav"), fmt="wav", sample_rate=8000, channels=1)
+    data, _ = sf.read(str(tmp_path / "f.wav"), dtype="float32")
+    assert abs(data[2000] - 0.125) < 2e-3  # halfway up a 0.5s fade on a 0.25 clip
+    assert abs(data[6000] - 0.25) < 2e-3
+
+
+def test_mixdown_range_renders_only_the_region(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+    result = mixdown(doc, str(tmp_path / "r.wav"), fmt="wav", sample_rate=8000, channels=1,
+                     range_s=(0.5, 1.25), include_srt=True)
+    data, _ = sf.read(str(tmp_path / "r.wav"), dtype="float32")
+    assert len(data) == 6000
+    assert np.allclose(data[:4000], 0.25, atol=1e-3)
+    assert np.allclose(data[4000:], 0.5, atol=1e-3)
+    assert result.duration_s == 0.75
+    assert "00:00:00,500 --> 00:00:01,000\nGeneral Kenobi." in open(result.srt_path, encoding="utf-8").read()
+
+
+def test_cue_sheet_rows_use_timecode_when_enabled(tmp_path):
+    import csv
+
+    doc, a, b = _two_generated_clips(tmp_path)
+    a.status, a.note, a.source_text = "approved", "nice", "Bonjour."
+    doc.settings["timecode"] = {"enabled": True, "frame_rate": 25.0}
+    result = mixdown(doc, str(tmp_path / "c.wav"), fmt="wav", sample_rate=8000, include_cue_sheet=True)
+
+    with open(result.cue_sheet_path, encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+    assert rows[0] == ["start", "end", "character", "source_text", "text", "status", "note"]
+    assert rows[1] == ["00:00:00:00", "00:00:01:00", "Alice", "Bonjour.", "Hello there.", "approved", "nice"]
+    assert rows[2][:3] == ["00:00:01:00", "00:00:01:12", "Bo b/ok"]
+    assert rows[2][5] == "todo"
+
+
+def test_word_level_srt_uses_stored_word_times(tmp_path):
+    doc, a, _b = _two_generated_clips(tmp_path)
+    a.segments[0].words = [["Hello", 0.0, 0.4], ["there.", 0.5, 0.9]]
+    arrangement = compute_arrangement(doc, chars_per_second=15.0)
+
+    write_srt(doc, arrangement, str(tmp_path / "w.srt"), granularity="word")
+
+    text = open(tmp_path / "w.srt", encoding="utf-8").read()
+    assert "1\n00:00:00,000 --> 00:00:00,400\nHello\n" in text
+    assert "2\n00:00:00,500 --> 00:00:00,900\nthere.\n" in text
+    assert "Kenobi" not in text  # b has no stored words

@@ -2,6 +2,10 @@
 voice, FX preset; the Audio8 reference-pair picker stays in the Voice
 Reference dock until the WF4 global library exists).
 
+A character on a cloning backend (Audio8) also gets a variants table:
+variant name -> reference (`Character.variants`), which a clip picks with
+the transcript's Variant combo.
+
 Edits `app.document.characters` directly. Adding a character also adds a
 `Track` for it (Q8's auto-placement default, same as migration.py does).
 Removing one is refused while any clip still uses it.
@@ -13,8 +17,9 @@ from __future__ import annotations
 
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QColorDialog, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLineEdit,
-    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout, QWidget,
+    QColorDialog, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
+    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character, Track
@@ -79,6 +84,27 @@ class CharactersDialog(QDialog):
         self.fx_combo.currentTextChanged.connect(self._on_fx_changed)
         form.addRow("FX preset:", self.fx_combo)
 
+        self.variants_label = QLabel("Variants:")
+        variants_box = QWidget()
+        variants_layout = QVBoxLayout(variants_box)
+        variants_layout.setContentsMargins(0, 0, 0, 0)
+        self.variants_table = QTableWidget(0, 2)
+        self.variants_table.setHorizontalHeaderLabels(["Variant", "Reference"])
+        self.variants_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.variants_table.verticalHeader().setVisible(False)
+        self.variants_table.itemChanged.connect(lambda _item: self._commit_variants())
+        variants_layout.addWidget(self.variants_table)
+        variant_buttons = QHBoxLayout()
+        self.add_variant_btn = QPushButton("Add variant")
+        self.add_variant_btn.clicked.connect(self.add_variant)
+        self.remove_variant_btn = QPushButton("Remove variant")
+        self.remove_variant_btn.clicked.connect(self.remove_variant)
+        variant_buttons.addWidget(self.add_variant_btn)
+        variant_buttons.addWidget(self.remove_variant_btn)
+        variants_layout.addLayout(variant_buttons)
+        self.variants_box = variants_box
+        form.addRow(self.variants_label, variants_box)
+
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         self.buttons.rejected.connect(self.accept)
         self.buttons.accepted.connect(self.accept)
@@ -135,8 +161,87 @@ class CharactersDialog(QDialog):
             if self.fx_combo.findText(fx) < 0:
                 self.fx_combo.addItem(fx)
             self.fx_combo.setCurrentText(fx)
+            self._fill_variants(character)
         finally:
             self._loading = False
+
+    # -- variants (cloning backends) ---------------------------------------------
+
+    def _supports_variants(self, character) -> bool:
+        backend = self.app._backend_for(character.backend_id or "kokoro") if character is not None else None
+        return bool(backend is not None and getattr(backend.capabilities, "supports_voice_cloning", False))
+
+    def _reference_combo(self, value: str) -> QComboBox:
+        combo = QComboBox()
+        combo.setEditable(True)
+        for voice in self.app.get_all_voices():
+            combo.addItem(voice)
+        if value and combo.findText(value) < 0:
+            combo.addItem(value)
+        combo.setCurrentText(value or "")
+        combo.currentTextChanged.connect(lambda _t: self._commit_variants())
+        return combo
+
+    def _fill_variants(self, character) -> None:
+        shown = self._supports_variants(character)
+        self.variants_label.setVisible(shown)
+        self.variants_box.setVisible(shown)
+        self.variants_table.blockSignals(True)
+        try:
+            self.variants_table.setRowCount(0)
+            for name, reference in sorted((character.variants or {}).items()):
+                self._append_variant_row(name, reference)
+        finally:
+            self.variants_table.blockSignals(False)
+
+    def _append_variant_row(self, name: str, reference: str) -> None:
+        row = self.variants_table.rowCount()
+        self.variants_table.insertRow(row)
+        self.variants_table.setItem(row, 0, QTableWidgetItem(name))
+        self.variants_table.setCellWidget(row, 1, self._reference_combo(reference))
+
+    def variant_rows(self) -> dict:
+        """The table as `{variant: reference}`, blank names or references
+        left out."""
+        out = {}
+        for row in range(self.variants_table.rowCount()):
+            item = self.variants_table.item(row, 0)
+            combo = self.variants_table.cellWidget(row, 1)
+            name = item.text().strip() if item is not None else ""
+            reference = combo.currentText().strip() if combo is not None else ""
+            if name and reference:
+                out[name] = reference
+        return out
+
+    def _commit_variants(self) -> None:
+        if self._loading or self._current is None:
+            return
+        variants = self.variant_rows()
+        if variants != (self._current.variants or {}):
+            self._current.variants = variants
+            self._changed()
+
+    def add_variant(self) -> None:
+        if self._current is None:
+            return
+        names = set(self.variant_rows())
+        name, n = "variant", 2
+        while name in names:
+            name, n = f"variant {n}", n + 1
+        self.variants_table.blockSignals(True)
+        try:
+            self._append_variant_row(name, self._current.preset_data.get("voice", ""))
+        finally:
+            self.variants_table.blockSignals(False)
+        self._commit_variants()
+
+    def remove_variant(self) -> None:
+        row = self.variants_table.currentRow()
+        if row < 0:
+            row = self.variants_table.rowCount() - 1
+        if row >= 0:
+            self.variants_table.removeRow(row)
+            self._commit_variants()
 
     def _set_color_widgets(self, color: str) -> None:
         self.color_edit.setText(color)

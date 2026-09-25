@@ -159,9 +159,14 @@ class ConversionMixin:
         model output and post-processed on read (kokoro_gui/audio/post.py),
         so an FX change is audible without regenerating. Only the no-clips
         whole-document path still bakes FX into its files.
+
+        Applies `config["lexicon"]` to the text first, so the segment key
+        and `Segment.text` are over what the engine speaks; the dirty check
+        applies the same function before hashing.
         """
         index, text, config = chunk_data
         config = dict(config)
+        text = self.apply_lexicon(text, config.get("lexicon") or {})
         config["voice"] = self.resolve_voice_path(config["voice"])
         config["raw_output"] = True
         os.makedirs(config["out_dir"], exist_ok=True)

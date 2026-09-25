@@ -13,9 +13,9 @@ used only for TTS generation, cache-key input, word count, and export - it
 is never the authoritative field.
 
 - A `Clip` is a user-facing unit that may map to multiple engine-level
-  `Segment`s (Q3) - the engine's own text splitting (KPipeline's
-  `split_pattern`) stays internal to a clip, not surfaced as the primary
-  structure.
+  `Segment`s (Q3) - the pieces a clip's text is generated as
+  (kokoro_gui/engine/segmenting.py) stay internal to the clip, not surfaced
+  as the primary structure.
 - `Clip.id` is a UUID, never derived from content - this is what keeps cache
   identity (a content hash, see kokoro_gui/engine/caching.py) and clip
   identity (Q18) genuinely independent: deleting a clip removes the object
@@ -75,6 +75,11 @@ class Character:
     preset_data: dict = field(default_factory=dict)
     highlight_color: str = DEFAULT_HIGHLIGHT_PALETTE[0]
     backend_id: str = "kokoro"
+    # Variant name ("angry", "whisper") -> voice name. For a cloning backend
+    # (Audio8) the voice is a reference name, so a clip's
+    # `overrides["variant"]` swaps the reference and the segment key follows
+    # through the normal voice fingerprint. Ignored for other backends.
+    variants: dict = field(default_factory=dict)
     id: str = field(default_factory=_new_id)
     # Fields this version doesn't know, carried through a load/save so an
     # older KokoroGUI doesn't strip what a newer one wrote (see
@@ -115,6 +120,16 @@ class Track:
     name: str
     character_id: Optional[str] = None
     order_index: int = 0
+    # Mixer controls, applied when the transport and the exporter build
+    # their schedule: fader gain, mute, solo (any soloed track silences the
+    # rest), constant-power pan in [-1, 1], and a volume automation lane of
+    # `[seconds, gain]` breakpoints (gain in [0, 2], linear between points;
+    # empty means none).
+    gain: float = 1.0
+    mute: bool = False
+    solo: bool = False
+    pan: float = 0.0
+    automation: list = field(default_factory=list)
     id: str = field(default_factory=_new_id)
     extra: dict = field(default_factory=dict)  # unknown fields, see Character
 
@@ -157,8 +172,21 @@ class Segment:
     duration: Optional[float] = None
     raw: bool = True
     engine_version: Optional[str] = None
+    # `[text, start_s, end_s]` per spoken word, relative to this segment's
+    # start: Kokoro's token timestamps, or a Whisper alignment for engines
+    # without them (kokoro_gui/daw/wordalign.py). Not a generation input.
+    words: list = field(default_factory=list)
+    # Seconds of leading and trailing audio under the trim threshold
+    # (`audio_fx.TRIM_THRESHOLD`), measured from the raw output, so the
+    # trimmed length is known without reading the file. None: not measured
+    # (a segment generated before these fields).
+    onset_s: Optional[float] = None
+    tail_s: Optional[float] = None
     id: str = field(default_factory=_new_id)
     extra: dict = field(default_factory=dict)  # unknown fields, see Character
+
+
+CLIP_STATUSES = ("todo", "generated", "approved", "needs_rewrite")
 
 
 @dataclass
@@ -177,6 +205,20 @@ class Clip:
     segments: list = field(default_factory=list)
     source: str = "generated"  # "generated" | "imported"
     original_audio_path: Optional[str] = None
+    # Silence before this clip when it's placed after its text-order
+    # predecessor; None uses the document's `gap_s`/`paragraph_gap_s`.
+    gap_before_s: Optional[float] = None
+    # Parked takes: take index -> segment list. `segments` is the active
+    # take and `overrides["take"]` its index, so readers of `segments` never
+    # see a parked one. JSON stores the index as a string.
+    takes: dict = field(default_factory=dict)
+    fade_in_s: float = 0.0
+    fade_out_s: float = 0.0
+    # Review state (`CLIP_STATUSES`) and a free-text note, for the cue sheet.
+    status: str = "todo"
+    note: str = ""
+    # The original-language line a dub is written against, when there is one.
+    source_text: Optional[str] = None
     id: str = field(default_factory=_new_id)
     extra: dict = field(default_factory=dict)  # unknown fields, see Character
 
@@ -239,6 +281,12 @@ class Document:
     # to `dirty.is_clip_dirty`; unset (tests, headless use) the check falls
     # back to the name-only `compute_cache_key`. Never serialized.
     segment_key_fn: Optional[Callable] = field(default=None, init=False, repr=False)
+    # Runtime-only, set beside `segment_key_fn`: `clip -> config`, the app's
+    # `_assemble_generation_config`. The dirty check reads the lexicon and
+    # the segmentation keys from it, which live in app settings, not in the
+    # clip's character or overrides. Unset, `dirty_clips` falls back to
+    # `effective_config_for_clip`. Never serialized.
+    generation_config_fn: Optional[Callable] = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         self.undo_stack = UndoStack(self)
@@ -363,11 +411,11 @@ class Document:
         the dependency one-directional and local here is simplest)."""
         from kokoro_gui.daw.dirty import is_clip_dirty
 
+        config_for = self.generation_config_fn or self.effective_config_for_clip
         return [
             clip
             for clip in self.clips
-            if is_clip_dirty(clip, self.clip_text(clip), self.effective_config_for_clip(clip),
-                             key_fn=self.segment_key_fn)
+            if is_clip_dirty(clip, self.clip_text(clip), config_for(clip), key_fn=self.segment_key_fn)
         ]
 
     # -- run-list maintenance (private) -------------------------------------

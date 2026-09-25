@@ -41,8 +41,10 @@ from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QWidget
 
 from kokoro_engine import KokoroEngine
-from kokoro_gui.daw.arrangement import compute_arrangement
-from kokoro_gui.daw.auto_split import plan_auto_split_clips
+from kokoro_gui.daw import wordalign
+from kokoro_gui.daw.arrangement import compute_arrangement, segment_timeline
+from kokoro_gui.daw.mixplan import clip_mixes
+from kokoro_gui.daw.auto_split import plan_auto_split_clips, plan_pause_gaps
 from kokoro_gui.daw.undo import AssignCharacterCommand
 from kokoro_gui.engine import caching
 from kokoro_gui.engines import registry as engine_registry
@@ -83,6 +85,10 @@ class QtTTSApp(QMainWindow):
     # marshalled onto the GUI thread.
     projectIoProgress = Signal(float, str)
     _projectIoFinished = Signal(object)
+    # Word alignment on a worker thread (phase 2, C1): progress as
+    # (done, total), the result as [(clip_id, segment_id, words)].
+    _wordAlignProgress = Signal(int, int)
+    _wordsAligned = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -117,6 +123,12 @@ class QtTTSApp(QMainWindow):
         self._asset_backends: dict = {}
         self.projectIoProgress.connect(self._on_project_io_progress)
         self._projectIoFinished.connect(self._on_project_io_finished)
+        self._wordAlignProgress.connect(self._on_word_align_progress)
+        self._wordsAligned.connect(self._on_words_aligned)
+        self._word_align_thread: threading.Thread | None = None
+        # Set when the user turns down the Whisper download for alignment,
+        # so the next Generate doesn't ask again this session.
+        self._word_align_declined = False
         self.document = self._load_initial_document()
 
         self.selection = SelectionModel()
@@ -558,8 +570,8 @@ class QtTTSApp(QMainWindow):
 
         if self.settings_dock is not None:
             gen_state = self.settings_dock.get_state()
-            for key in ("lang_code", "voice", "speed", "volume", "pitch", "num_threads", "split_pattern",
-                        "caching", "normalize", "format"):
+            for key in ("lang_code", "voice", "speed", "volume", "pitch", "num_threads",
+                        "caching", "normalize", "format", *spec.SEGMENTATION_KEYS):
                 if key in gen_state:
                     self.settings[key] = gen_state[key]
             self.settings["trim"] = gen_state.get("trim_silence", self.settings.get("trim", False))
@@ -631,7 +643,7 @@ class QtTTSApp(QMainWindow):
             "lang_code": gen_state["lang_code"],
             "voice": gen_state["voice"],
             "speed": gen_state["speed"],
-            "split_pattern": gen_state["split_pattern"],
+            **self._segmentation_config(gen_state),
             # Sanitize the free-text filename field the same way voice/preset
             # names are sanitized elsewhere - it flows unvalidated into an
             # os.path.join sink in caching.py otherwise.
@@ -654,11 +666,19 @@ class QtTTSApp(QMainWindow):
             config.update(self.fx_dock.project_fx_state())
         return config
 
+    @staticmethod
+    def _segmentation_config(gen_state: dict) -> dict:
+        """The segmentation keys (`spec.SEGMENTATION_KEYS`) from the
+        Settings tab, defaulted: where every path cuts text into pieces."""
+        return {key: gen_state.get(key, spec.SETTINGS_DEFAULTS[key]) for key in spec.SEGMENTATION_KEYS}
+
     def _assemble_generation_config(self, clip) -> dict:
         """Exactly the inputs that decide what a clip's audio *is*: the
         segment key hashes these and nothing else, and `_assemble_clip_config`
         is built on top. App defaults from the Settings tab, the backend's
-        "Model" schema group (Audio8's sampling knobs), then the clip's
+        "Model" schema group (Audio8's sampling knobs), the Lexicon (the
+        key is over the text after substitution), the segmentation settings
+        (they decide the pieces), then the clip's
         `effective_config_for_clip` (character preset, then overrides) on
         top, then `project_dir` and the clip's take. The take is read off
         `clip.overrides` directly, not through the `ALLOWED_PRESET_KEYS`
@@ -672,18 +692,34 @@ class QtTTSApp(QMainWindow):
             "voice": gen_state["voice"],
             "speed": gen_state["speed"],
             "pitch": gen_state["pitch"],
-            "split_pattern": gen_state["split_pattern"],
+            "lexicon": dict(self.settings.get("lexicon", {})),
+            **self._segmentation_config(gen_state),
         }
         for field in self.backend.get_config_schema():
             if field.group == "Model" and field.key in gen_state:
                 config[field.key] = gen_state[field.key]
         clip_config = dict(self.document.effective_config_for_clip(clip))
-        for key in ("voice", "speed", "pitch", "split_pattern", "lang_code"):
+        for key in ("voice", "speed", "pitch", "lang_code"):
             if key in clip_config:
                 config[key] = clip_config[key]
+        variant_voice = self._variant_voice(clip)
+        if variant_voice:
+            config["voice"] = variant_voice
         config["project_dir"] = self.project_dir
         config["take"] = int(clip.overrides.get("take", 0) or 0)
         return config
+
+    def _variant_voice(self, clip):
+        """The reference name `clip.overrides["variant"]` picks from its
+        character's `variants`, or None. Only a cloning backend has
+        variants; on any other the override is ignored."""
+        variant = (clip.overrides or {}).get("variant")
+        if not variant or not getattr(self.backend.capabilities, "supports_voice_cloning", False):
+            return None
+        character = self.document.get_character(clip.character_id)
+        if character is None:
+            return None
+        return (character.variants or {}).get(variant) or None
 
     def _assemble_clip_config(self, clip) -> dict:
         """The config dict for a per-clip Generate action and, through
@@ -692,8 +728,7 @@ class QtTTSApp(QMainWindow):
         the audio (output location and naming, threads, caching, the post
         keys) with `clip`'s character/override settings merged on top, so
         the clip's own values win. Defaults must come first:
-        `process_chunk_task` reads `config['voice']`/`config['split_pattern']`
-        by direct indexing, so a clip with no character must still end up
+        `process_chunk_task` reads `config['voice']` by direct indexing, so a clip with no character must still end up
         with usable defaults. FX come from `fx_resolve.resolve_fx`, the same
         resolver the Audio FX tab renders."""
         gen_state = self.settings_dock.get_state()
@@ -746,7 +781,9 @@ class QtTTSApp(QMainWindow):
         the backend's `cache_key_extra` (Audio8's transcript, itself cached
         by mtime), which is the only way a key changes without its inputs
         changing (a re-saved mix, a re-recorded reference). So a rehighlight
-        of a book costs about two stats per clip and no hashing or reads."""
+        of a book costs about two stats per clip and no hashing or reads.
+        Also sets `Document.generation_config_fn`, so the dirty check reads
+        the lexicon and segmentation settings the generation will use."""
         backend = self.backend
         memo: dict = {}
 
@@ -768,6 +805,15 @@ class QtTTSApp(QMainWindow):
             return key
 
         self.document.segment_key_fn = key_fn
+        self.document.generation_config_fn = self._dirty_check_config
+
+    def _dirty_check_config(self, clip) -> dict:
+        """`Document.generation_config_fn`: `_assemble_generation_config`,
+        or the clip's own config while the Settings tab is still being
+        built (the editor can rehighlight before it exists)."""
+        if self.settings_dock is None:
+            return self.document.effective_config_for_clip(clip)
+        return self._assemble_generation_config(clip)
 
     # --- read-time post-processing (kokoro_gui/audio/post.py) ---------------
 
@@ -780,8 +826,10 @@ class QtTTSApp(QMainWindow):
     def clip_duration_s(self, clip):
         """`compute_arrangement`'s `clip_duration`: the clip's rendered
         length (trim and pitch change it), or the raw `Segment.duration`
-        for a file that can't be read, or None with no audio at all. Falls
-        back to the raw durations while the docks are still being built."""
+        for a file that can't be read, or None with no audio at all. A
+        segment with a stored onset and tail is measured from those, without
+        reading its file (`post.duration_hint`). Falls back to the raw
+        durations while the docks are still being built."""
         segments = [s for s in clip.segments if s.audio_path]
         if not segments:
             return None
@@ -792,7 +840,8 @@ class QtTTSApp(QMainWindow):
         total = 0.0
         for segment in segments:
             try:
-                total += post.rendered_duration_s(segment.audio_path, post_config, rate)
+                total += post.rendered_duration_s(segment.audio_path, post_config, rate,
+                                                  hint=post.duration_hint(segment, post_config))
             except Exception:
                 total += segment.duration or 0.0
         return total
@@ -1009,8 +1058,41 @@ class QtTTSApp(QMainWindow):
         if self.fx_dock is not None:
             self.fx_dock.refresh_for_selection()
         self.refresh_timeline()
+        session = project_io.read_session(self.project_dir) if self.project_dir else None
+        loop = (session or {}).get("loop_s")
+        if isinstance(loop, list) and len(loop) == 2:
+            self.set_loop_range(loop[0], loop[1], remember=False)
+        else:
+            self.set_loop_range(None, None, remember=False)
         self._update_window_title()
         self.schedule_save()
+
+    def set_loop_range(self, start_s, end_s, remember: bool = True) -> None:
+        """The transport's loop region (phase 2, A3), shaded on the ruler.
+        Runtime state: it goes into the project dir's `session.json`, never
+        into the document or the bundle. `None` clears it."""
+        if start_s is None or end_s is None or abs(float(end_s) - float(start_s)) < 1e-3:
+            loop = None
+        else:
+            loop = tuple(sorted((max(0.0, float(start_s)), max(0.0, float(end_s)))))
+        self.transport.set_loop_range_s(*(loop or (None, None)))
+        if self.timeline_dock is not None:
+            self.timeline_dock.timeline_view.set_loop_s(loop)
+        if remember and self.project_dir:
+            session = project_io.read_session(self.project_dir) or {}
+            session["loop_s"] = list(loop) if loop else None
+            try:
+                project_io.write_session(self.project_dir, session)
+            except OSError:
+                pass
+
+    def loop_range(self):
+        """`(start_s, end_s)` of the loop region, or None."""
+        loop = self.transport.loop_range
+        if loop is None:
+            return None
+        rate = float(self.transport.sample_rate)
+        return loop[0] / rate, loop[1] / rate
 
     def _engine_meta(self, engine_id: str) -> dict:
         engines = self._project_manifest.get("engines") if isinstance(self._project_manifest, dict) else None
@@ -1497,7 +1579,7 @@ class QtTTSApp(QMainWindow):
         dialog = ExportDialog(self)
         if dialog.exec() != ExportDialog.DialogCode.Accepted:
             return
-        run_export(self, dialog.values(), parent=self, bundle=dialog.bundle_values())
+        run_export(self, dialog.values(), parent=self, bundle=dialog.bundle_values(), range_s=dialog.range_s())
 
     def _on_export_progress(self, percent: float, detail: str) -> None:
         self.transport_dock.set_progress(percent, detail)
@@ -1675,8 +1757,10 @@ class QtTTSApp(QMainWindow):
             QMessageBox.information(self, "Nothing to split", "No taggable text found to auto-split.")
             return
 
+        gaps = plan_pause_gaps(self.document, triples)
         for start, end, character_id in triples:
-            self.document.undo_stack.push(AssignCharacterCommand(start, end, character_id))
+            fields = {"gap_before_s": gaps[start]} if start in gaps else None
+            self.document.undo_stack.push(AssignCharacterCommand(start, end, character_id, clip_fields=fields))
 
         self.editor.rehighlight()
         self.schedule_save()
@@ -1716,23 +1800,34 @@ class QtTTSApp(QMainWindow):
         return self._arrangement
 
     def _rebuild_transport_schedule(self) -> None:
+        """The transport's schedule from the arrangement and the mix plan
+        (`daw/mixplan.py`): muted and soloed-out tracks are left out; the
+        track's gain, pan and automation and the clip's fades ride each
+        entry. A clip's fade-in goes on its first segment and its fade-out
+        on its last."""
         self._arrangement = self.build_arrangement()
         rate = self.project_sample_rate()
+        mixes = clip_mixes(self.document, self._arrangement)
         schedule = []
         for placed in self._arrangement.placed:
-            if placed.estimated:
+            mix = mixes.get(placed.clip.id)
+            if placed.estimated or mix is None:
                 continue
             post_config = self.post_config_for_clip(placed.clip)
             # One ScheduledClip per segment so multi-segment clips play
             # back to back at their real (rendered) offsets.
             offset = placed.start_s
-            for segment in sorted(placed.clip.segments, key=lambda s: s.order_index):
-                if not segment.audio_path:
-                    continue
-                schedule.append(ScheduledClip(clip_id=placed.clip.id, start_s=offset, path=segment.audio_path,
-                                              post_config=post_config))
+            segments = [s for s in sorted(placed.clip.segments, key=lambda s: s.order_index) if s.audio_path]
+            for index, segment in enumerate(segments):
+                schedule.append(ScheduledClip(
+                    clip_id=placed.clip.id, start_s=offset, path=segment.audio_path, post_config=post_config,
+                    gain=mix.gain, pan=mix.pan, automation=mix.automation,
+                    fade_in_s=mix.fade_in_s if index == 0 else 0.0,
+                    fade_out_s=mix.fade_out_s if index == len(segments) - 1 else 0.0,
+                ))
                 try:
-                    offset += post.rendered_duration_s(segment.audio_path, post_config, rate)
+                    offset += post.rendered_duration_s(segment.audio_path, post_config, rate,
+                                                       hint=post.duration_hint(segment, post_config))
                 except Exception:
                     offset += segment.duration or 0.0
         self.transport.load(schedule, sample_rate=self.project_sample_rate(),
@@ -1747,10 +1842,164 @@ class QtTTSApp(QMainWindow):
             self.timeline_dock.timeline_view.set_playhead(seconds)
         arrangement = self.current_arrangement()
         playing = None
+        word = None
         if self.transport.is_playing:
             hits = arrangement.at_time(seconds)
             playing = hits[0].clip.id if hits else None
+            if hits:
+                word = self.word_at(hits[0], seconds)
         self.selection.set_playing_clip(playing)
+        if self.editor is not None:
+            self.editor.set_playing_word(word)
+
+    def word_at(self, placed, seconds: float):
+        """`(start, end)` document offsets of the word the playhead is on
+        inside `placed`, or None. Segment by cumulative duration, word by
+        time, then the word's offset in the clip's spoken text mapped back
+        through the lexicon (`apply_lexicon(..., with_spans=True)`) to the
+        transcript."""
+        for segment, seg_start, scale in segment_timeline(placed):
+            words = segment.words or []
+            seg_end = seg_start + float(segment.duration or 0.0) * scale
+            if not words or not (seg_start <= seconds < seg_end):
+                continue
+            local = (seconds - seg_start) / scale if scale else 0.0
+            index = next((i for i, w in enumerate(words) if w[1] <= local < w[2]), None)
+            if index is None:
+                return None
+            return self._word_offsets(placed.clip, segment, index)
+        return None
+
+    def _word_offsets(self, clip, segment, word_index: int):
+        """Document offsets of word `word_index` of `segment`: the n-th
+        whitespace word of the segment's text, found in the clip's spoken
+        text from where the segment's text starts."""
+        from kokoro_gui.engine.lexicon import apply_lexicon, original_span
+
+        extent = self.document.clip_extent(clip.id)
+        if extent is None:
+            return None
+        clip_text = self.document.clip_text(clip)
+        spoken, spans = apply_lexicon(clip_text, self.settings.get("lexicon", {}), with_spans=True)
+        seg_words = (segment.text or "").split()
+        if word_index >= len(seg_words):
+            return None
+        cursor = spoken.find(seg_words[0]) if seg_words else -1
+        cursor = max(cursor, 0)
+        for i, token in enumerate(seg_words):
+            found = spoken.find(token, cursor)
+            if found < 0:
+                return None
+            if i == word_index:
+                start, end = original_span(spans, found, found + len(token))
+                return extent[0] + start, extent[0] + max(end, start + 1)
+            cursor = found + len(token)
+        return None
+
+    def seek_to_offset(self, offset: int) -> bool:
+        """Ctrl+click in the transcript: seek the transport to the word at
+        document `offset` (the clip's start when it has no word times).
+        False when the offset isn't inside a placed clip."""
+        clip = self.document.clip_covering(offset)
+        if clip is None:
+            return False
+        placed = self.current_arrangement().by_clip_id().get(clip.id)
+        if placed is None:
+            return False
+        target = placed.start_s
+        for segment, seg_start, scale in segment_timeline(placed):
+            for index, word in enumerate(segment.words or []):
+                span = self._word_offsets(clip, segment, index)
+                if span is not None and span[0] <= offset < span[1]:
+                    target = seg_start + float(word[1]) * scale
+                    self.transport.seek(target)
+                    return True
+        self.transport.seek(target)
+        return True
+
+    # --- word alignment (phase 2, C1) ------------------------------------------
+
+    def _engine_has_word_timing(self, clip) -> bool:
+        """True when generation already stamps word times for `clip`:
+        Kokoro and Dummy in English (KPipeline's other languages yield no
+        tokens), never Audio8."""
+        if not getattr(self.backend.capabilities, "supports_word_timing", False):
+            return False
+        if self.backend.id != "kokoro":
+            return True
+        return self._assemble_generation_config(clip).get("lang_code") in ("a", "b")
+
+    def schedule_word_alignment(self, clip_ids, force: bool = False) -> bool:
+        """Runs Whisper over each listed clip's segments that have no word
+        times, on a worker thread, and stores the aligned words
+        (`daw/wordalign.py`). Automatic after a generate only for engines
+        without token timing; `force` (the timeline's "Align words") runs
+        it for any clip and re-aligns segments that have words. Never
+        dirties a clip: words aren't a generation input. False when nothing
+        was scheduled."""
+        from kokoro_gui.qt import asr_prompt
+
+        if self._word_align_thread is not None:
+            return False
+        jobs = []
+        for clip_id in clip_ids:
+            clip = self.document.get_clip(clip_id)
+            if clip is None or (not force and self._engine_has_word_timing(clip)):
+                continue
+            for segment in clip.segments:
+                if segment.audio_path and (force or not segment.words):
+                    jobs.append((clip.id, segment.id, segment.audio_path, segment.text))
+        if not jobs or (self._word_align_declined and not force):
+            return False
+        choice, _downloading = asr_prompt.confirm_whisper_download(self)
+        if choice != asr_prompt.PROCEED:
+            self._word_align_declined = True
+            return False
+
+        def _work():
+            from kokoro_gui.engine import asr
+
+            out = []
+            for done, (clip_id, segment_id, path, text) in enumerate(jobs, start=1):
+                self._wordAlignProgress.emit(done, len(jobs))
+                try:
+                    heard = asr.transcribe_wav_words(path, "whisper")
+                except Exception:  # noqa: BLE001 - one bad file skips one segment
+                    continue
+                out.append((clip_id, segment_id, wordalign.align(text, heard)))
+            self._wordsAligned.emit(out)
+
+        self._word_align_thread = threading.Thread(target=_work, name="word-align", daemon=True)
+        self._word_align_thread.start()
+        return True
+
+    def wait_for_word_alignment(self, timeout_s: float = 30.0) -> None:
+        """Test hook: blocks until the alignment thread finishes and its
+        result has been applied."""
+        thread = self._word_align_thread
+        if thread is not None:
+            thread.join(timeout_s)
+        QApplication.processEvents()
+
+    def _on_word_align_progress(self, done: int, total: int) -> None:
+        self.set_status(f"Aligning words {done}/{total}", "busy")
+
+    def _on_words_aligned(self, results) -> None:
+        self._word_align_thread = None
+        by_id = {}
+        for clip in self.document.clips:
+            for segments in (clip.segments, *clip.takes.values()):
+                for segment in segments:
+                    by_id[segment.id] = segment
+        applied = 0
+        for _clip_id, segment_id, words in results:
+            segment = by_id.get(segment_id)
+            if segment is not None:
+                segment.words = words
+                applied += 1
+        if applied:
+            self.schedule_save()
+        self.set_status(f"Aligned words for {applied} segment(s).", "success" if applied else "info")
 
     def _on_transport_state(self, state: str) -> None:
         self.transport_dock.set_playing(state == "playing")

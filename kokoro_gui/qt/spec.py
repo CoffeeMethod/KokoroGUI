@@ -22,11 +22,18 @@ from typing import Optional
 # --- Generation config dict (non-FX keys) --------------------------------
 
 GENERATION_BASE_KEYS = [
-    "engine_id", "lang_code", "voice", "speed", "split_pattern", "filename",
+    "engine_id", "lang_code", "voice", "speed", "filename",
     "format", "out_dir", "separate", "combine", "export_subtitles", "caching",
     "time_id", "num_threads", "volume", "pitch", "normalize", "trim_silence",
-    "lexicon",
+    "lexicon", "segment_target_words", "segment_at_paragraphs", "segment_at_sentences",
+    "segment_at_pauses",
 ]
+
+# Project-wide segmentation settings (kokoro_gui/engine/segmenting.py): what
+# decides the pieces a text is generated as, on every path.
+SEGMENTATION_KEYS = (
+    "segment_target_words", "segment_at_paragraphs", "segment_at_sentences", "segment_at_pauses",
+)
 
 # --- FX preset / config-merge keys ----------------------------------------
 
@@ -154,7 +161,11 @@ SETTINGS_DEFAULTS = {
     "volume": 1.0,
     "pitch": 0.0,
     "num_threads": 1,
-    "split_pattern": r"\n+",
+    # Where text is cut before synthesis (kokoro_gui/engine/segmenting.py).
+    "segment_target_words": 40,
+    "segment_at_paragraphs": True,
+    "segment_at_sentences": True,
+    "segment_at_pauses": True,
     "separate": True,
     "combine": True,
     "export_subtitles": False,
@@ -215,7 +226,7 @@ SETTINGS_DEFAULTS = {
     "gain_enabled": False,
     "gain_db": 0.0,
     "engine_id": "kokoro",
-    "asr_engine": "audio8",
+    "asr_engine": "whisper",
     "lexicon": {},
     # Workspace layouts: {"Advanced": {"state": b64, "geometry": b64}, ...}
     # (kokoro_gui/qt/workspace.py). The old flat dock_state/geometry keys

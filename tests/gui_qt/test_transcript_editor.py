@@ -297,3 +297,59 @@ def test_create_mime_data_from_selection_tags_source_character(qt_app):
     mime = editor.createMimeDataFromSelection()
     tagged_id = bytes(mime.data(editor.CHARACTER_ID_MIME_TYPE)).decode("utf-8")
     assert tagged_id == character.id
+
+
+
+def test_playing_word_is_a_second_extra_selection(qt_app):
+    editor = qt_app.editor
+    editor.load_text("hello brave world")
+    editor.set_playing_word((6, 11))
+    selections = editor.extraSelections()
+    assert (selections[-1].cursor.selectionStart(), selections[-1].cursor.selectionEnd()) == (6, 11)
+    editor.set_playing_word(None)
+    assert editor.playing_word() is None
+
+
+def test_word_at_maps_the_playhead_through_the_lexicon(qt_app):
+    from kokoro_gui.daw.models import Segment
+
+    qt_app.document.text = "Dr Who arrives."
+    clip = qt_app.document.assign_character_to_range(0, 15, qt_app.document.characters[0].id)
+    qt_app.settings["lexicon"] = {"Dr": "Doctor"}
+    clip.segments = [Segment(text="Doctor Who arrives.", audio_path="a.wav", duration=3.0,
+                             words=[["Doctor", 0.0, 1.0], ["Who", 1.0, 2.0], ["arrives.", 2.0, 3.0]])]
+    placed = qt_app.build_arrangement().by_clip_id()[clip.id]
+
+    assert qt_app.word_at(placed, placed.start_s + 1.5) == (3, 6)
+    assert qt_app.word_at(placed, placed.start_s + 0.5) == (0, 2)
+
+
+def test_ctrl_click_seeks_to_the_word(qt_app, qtbot):
+    from PySide6.QtCore import Qt
+
+    from kokoro_gui.daw.models import Segment
+
+    qt_app.document.text = "hello brave world"
+    clip = qt_app.document.assign_character_to_range(0, 17, qt_app.document.characters[0].id)
+    clip.segments = [Segment(text="hello brave world", audio_path="a.wav", duration=3.0,
+                             words=[["hello", 0.0, 1.0], ["brave", 1.2, 2.0], ["world", 2.1, 3.0]])]
+    qt_app._rebuild_transport_schedule()  # seek goes by what the transport plays
+    seeks = []
+    qt_app.transport.seek = seeks.append
+    placed = qt_app.current_arrangement().by_clip_id()[clip.id]
+
+    assert qt_app.seek_to_offset(8) is True
+    assert seeks == [placed.start_s + 1.2]
+    assert qt_app.seek_to_offset(1000) is False
+
+
+def test_gutter_tooltip_shows_the_source_text(qt_app):
+    qt_app.document.text = "Hello."
+    clip = qt_app.document.assign_character_to_range(0, 6, qt_app.document.characters[0].id)
+    clip.source_text = "Bonjour."
+    qt_app.editor.load_text(qt_app.document.text)
+    gutter = qt_app.editor._gutter
+    from PySide6.QtGui import QPaintEvent
+    gutter.paintEvent(QPaintEvent(gutter.rect()))
+    rect, _start, _end = gutter._label_rects[0]
+    assert gutter.tooltip_at(rect.center()) == "Source: Bonjour."

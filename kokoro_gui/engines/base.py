@@ -75,20 +75,37 @@ class EngineCapabilities:
     supports_multi_speaker_script: bool = False  # [Speaker:FX]: syntax
     is_local_model: bool = True               # device/GPU picker vs API-key field
     supports_jit_streaming: bool = True
+    # Generation stamps `Segment.words` from the model's own timings; without
+    # it the app aligns words with Whisper after a generate.
+    supports_word_timing: bool = False
 
 
 # Choice presets for schema fields whose *meaning* isn't actually
-# model-specific, just conventionally offered by more than one backend: how
-# raw input text gets split into chunks before parallel processing, and
+# model-specific, just conventionally offered by more than one backend:
 # which container formats get written to disk. Backends are free to ignore
 # these or offer their own instead - they're shared defaults, not part of
 # the Protocol.
-COMMON_SPLIT_PATTERN_CHOICES = [
-    ("Natural (Newlines)", r"\n+"),
-    ("Paragraphs (Double Newline)", r"\n\n+"),
-    ("Sentences (.!?)", r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|\!)\s"),
-]
 COMMON_OUTPUT_FORMAT_CHOICES = [("wav", "wav"), ("flac", "flac"), ("mp3", "mp3"), ("ogg", "ogg")]
+
+
+def segmentation_fields() -> list:
+    """The Settings fields for where text is cut before synthesis
+    (kokoro_gui/engine/segmenting.py, grill PR6): a word target and the
+    three boundary toggles. Every backend lists them; they apply
+    project-wide, not per character."""
+    from kokoro_gui.engine import segmenting
+
+    return [
+        ConfigField("segment_target_words", "Target Words per Segment", ConfigFieldType.INT,
+                    default=segmenting.DEFAULT_TARGET_WORDS, min=segmenting.MIN_TARGET_WORDS,
+                    max=segmenting.MAX_TARGET_WORDS, step=5, group="Generation"),
+        ConfigField("segment_at_paragraphs", "Split at Paragraphs", ConfigFieldType.BOOL,
+                    default=True, group="Generation"),
+        ConfigField("segment_at_sentences", "Split at Sentences", ConfigFieldType.BOOL,
+                    default=True, group="Generation"),
+        ConfigField("segment_at_pauses", "Split at Pauses (, ; : dashes)", ConfigFieldType.BOOL,
+                    default=True, group="Generation"),
+    ]
 
 
 @dataclass(frozen=True)

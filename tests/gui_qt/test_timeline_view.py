@@ -51,6 +51,8 @@ def _tagged_doc(text, tagged=(), **kwargs):
     clips = kwargs.pop("clips", None)
     if clips is None:
         clips = [clip for _start, _end, clip in tagged]
+    # Placement tests here predate gaps; test_arrangement.py covers those.
+    kwargs.setdefault("settings", {"gap_s": 0.0, "paragraph_gap_s": 0.0})
     return Document(runs=runs, clips=clips, **kwargs)
 
 
@@ -278,7 +280,8 @@ def test_context_menu_over_clip_with_audio_shows_generate_and_play(qtbot, tmp_pa
     pos = view.mapFromScene(block.mapToScene(0, 0))
     menu = view._build_context_menu(pos)
 
-    assert _menu_action_texts(menu) == ["Generate", "Play"]
+    # Status is always there; Align words needs audio.
+    assert _menu_action_texts(menu) == ["Generate", "Play", "", "Status", "Align words"]
 
 
 def test_context_menu_over_clip_without_audio_shows_generate_only(qtbot):
@@ -294,7 +297,7 @@ def test_context_menu_over_clip_without_audio_shows_generate_only(qtbot):
     pos = view.mapFromScene(block.mapToScene(0, 0))
     menu = view._build_context_menu(pos)
 
-    assert _menu_action_texts(menu) == ["Generate"]
+    assert _menu_action_texts(menu) == ["Generate", "", "Status"]
 
 
 def test_triggering_play_emits_play_clip_requested(qtbot, tmp_path):
@@ -903,3 +906,220 @@ def test_sub_range_drag_too_small_to_select_a_character_emits_nothing(qtbot):
 
     assert sub_range_received == []
     assert drag_received == []
+
+
+# --- phase 2: track header, fades, markers, loop, automation, filter, takes -----
+
+
+def _generated_doc(tmp_path):
+    """One generated 1 s clip on one track (so it's not estimated and has
+    fade handles)."""
+    alice = Character.from_preset_dict("Alice", {})
+    track = Track(name="Alice", character_id=alice.id)
+    path = tmp_path / "a.wav"
+    _write_tone_wav(path, seconds=1.0)
+    clip = Clip(character_id=alice.id, track_id=track.id,
+                segments=[Segment(order_index=0, text="x" * 10, audio_path=str(path), duration=1.0)])
+    doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
+    return doc, clip, track
+
+
+def test_header_controls_emit_track_field_changes(qtbot):
+    widget = TimelineWidget()
+    qtbot.addWidget(widget)
+    doc, _clip, track = _build_doc_with_one_clip()
+    widget.render_document(doc, compute_arrangement(doc, chars_per_second=CPS))
+    received = []
+    widget.header.trackFieldChanged.connect(lambda tid, field, value: received.append((tid, field, value)))
+
+    controls = widget.header.controls[track.id]
+    controls["mute"].click()
+    controls["solo"].click()
+    controls["gain"].setValue(50)
+    controls["gain"].sliderReleased.emit()
+    controls["pan"].setValue(3)  # inside the centre detent
+    controls["pan"].sliderReleased.emit()
+
+    assert received == [(track.id, "mute", True), (track.id, "solo", True), (track.id, "gain", 0.5),
+                        (track.id, "pan", 0.0)]
+    assert controls["pan"].value() == 0
+
+
+def test_header_a_toggle_shows_the_automation_lane(qtbot):
+    widget = TimelineWidget()
+    qtbot.addWidget(widget)
+    doc, _clip, track = _build_doc_with_one_clip()
+    track.automation = [[0.0, 1.0], [1.0, 0.5]]
+    widget.render_document(doc, compute_arrangement(doc, chars_per_second=CPS))
+
+    widget.header.controls[track.id]["auto"].click()
+
+    lane = widget.view.automation_item(track.id)
+    assert lane is not None
+    assert lane.points == [[0.0, 1.0], [1.0, 0.5]]
+    assert widget.header.controls[track.id]["auto"].isChecked()
+
+
+def test_dragging_the_fade_in_handle_emits_fade_changed(qtbot, tmp_path):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    view.resize(800, 300)
+    doc, clip, _track = _generated_doc(tmp_path)
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+    received = []
+    view.fadeChanged.connect(lambda cid, field, seconds: received.append((cid, field, seconds)))
+
+    press = view.mapFromScene(block.mapToScene(block.fade_in_handle_rect().center()))
+    release = view.mapFromScene(block.mapToScene(QPointF(25.0, 4.0)))  # 25 px = 0.5 s at 50 px/s
+    _press_release(view, qtbot, press, release)
+
+    assert received == [(clip.id, "fade_in_s", 0.5)]
+
+
+def test_fades_draw_as_handle_positions(qtbot, tmp_path):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _generated_doc(tmp_path)
+    clip.fade_out_s = 0.2
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+    width = block.boundingRect().width()
+    assert block.fade_out_handle_rect().right() == width - seconds_to_x(0.2, DEFAULT_PIXELS_PER_SECOND)
+
+
+def test_ruler_menu_adds_a_marker_and_a_flag_menu_offers_rename_and_delete(qtbot):
+    from kokoro_gui.daw import markers
+
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, _clip, _track = _build_doc_with_one_clip()
+    _render(view, doc)
+    added = []
+    view.markerAddRequested.connect(added.append)
+
+    menu = view._build_ruler_menu(seconds_to_x(2.0, DEFAULT_PIXELS_PER_SECOND))
+    assert [a.text() for a in menu.actions()] == ["Add marker here"]
+    menu.actions()[0].trigger()
+    assert added == [2.0]
+
+    doc.settings["markers"], m = markers.add_marker(doc.settings, 2.0, name="Intro")
+    doc.settings["markers"], _later = markers.add_marker(doc.settings, 4.0)
+    _render(view, doc)
+    menu = view._build_ruler_menu(seconds_to_x(2.0, DEFAULT_PIXELS_PER_SECOND) + 2)
+    assert [a.text() for a in menu.actions()] == ["Rename marker...", "Delete marker", "Loop to next marker"]
+    loops = []
+    view.loopRangeRequested.connect(lambda a, b: loops.append((a, b)))
+    menu.actions()[2].trigger()
+    assert loops == [(2.0, 4.0)]
+
+
+def test_dragging_a_marker_flag_moves_it_and_shift_drag_sets_a_loop(qtbot):
+    from kokoro_gui.daw import markers
+
+    view = TimelineView()
+    qtbot.addWidget(view)
+    view.resize(800, 300)
+    doc, _clip, _track = _build_doc_with_one_clip()
+    doc.settings["markers"], m = markers.add_marker(doc.settings, 1.0)
+    _render(view, doc)
+    moved, loops = [], []
+    view.markerMoved.connect(lambda mid, s: moved.append((mid, s)))
+    view.loopRangeRequested.connect(lambda a, b: loops.append((a, b)))
+
+    y = RULER_HEIGHT_PX / 2
+    press = view.mapFromScene(QPointF(seconds_to_x(1.0, DEFAULT_PIXELS_PER_SECOND), y))
+    release = view.mapFromScene(QPointF(seconds_to_x(3.0, DEFAULT_PIXELS_PER_SECOND), y))
+    _press_release(view, qtbot, press, release)
+    assert moved == [(m["id"], 3.0)]
+
+    press = view.mapFromScene(QPointF(seconds_to_x(5.0, DEFAULT_PIXELS_PER_SECOND), y))
+    release = view.mapFromScene(QPointF(seconds_to_x(7.0, DEFAULT_PIXELS_PER_SECOND), y))
+    _press_release(view, qtbot, press, release, SHIFT)
+    assert loops == [(5.0, 7.0)]
+
+
+def test_automation_double_click_adds_a_point_and_right_click_deletes_it(qtbot):
+    widget = TimelineWidget()
+    qtbot.addWidget(widget)
+    widget.resize(900, 300)
+    view = widget.view
+    doc, _clip, track = _build_doc_with_one_clip()
+    widget.render_document(doc, compute_arrangement(doc, chars_per_second=CPS))
+    view.set_automation_visible(track.id, True)
+    changes = []
+    view.automationChanged.connect(lambda tid, points: changes.append((tid, points)))
+
+    lane = view.automation_item(track.id)
+    scene = QPointF(seconds_to_x(2.0, DEFAULT_PIXELS_PER_SECOND), lane.gain_to_y(1.0))
+    qtbot.mouseDClick(view.viewport(), Qt.MouseButton.LeftButton, pos=view.mapFromScene(scene))
+    assert changes[-1][0] == track.id
+    assert changes[-1][1] == [[2.0, 1.0]]
+
+    track.automation = [[2.0, 1.0]]
+    widget.render_document(doc, compute_arrangement(doc, chars_per_second=CPS))
+    assert view._delete_automation_point_at(scene)
+    assert changes[-1][1] == []
+
+
+def test_dragging_an_automation_point_is_clamped_between_its_neighbours(qtbot):
+    widget = TimelineWidget()
+    qtbot.addWidget(widget)
+    widget.resize(900, 300)
+    view = widget.view
+    doc, _clip, track = _build_doc_with_one_clip()
+    track.automation = [[1.0, 1.0], [2.0, 1.0], [3.0, 1.0]]
+    view.set_automation_visible(track.id, True)
+    widget.render_document(doc, compute_arrangement(doc, chars_per_second=CPS))
+    changes = []
+    view.automationChanged.connect(lambda tid, points: changes.append(points))
+
+    lane = view.automation_item(track.id)
+    press = view.mapFromScene(lane.point_pos([2.0, 1.0]))
+    release = view.mapFromScene(QPointF(seconds_to_x(5.0, DEFAULT_PIXELS_PER_SECOND), lane.gain_to_y(2.0)))
+    _press_release(view, qtbot, press, release)
+
+    assert changes[-1][1] == [3.0, 2.0]
+
+
+def test_status_filter_dims_blocks_that_do_not_match(qtbot):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _build_doc_with_one_clip()
+    clip.status = "approved"
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+
+    view.set_status_filter("not_approved")
+    assert block.opacity() < 1.0
+    view.set_status_filter("all")
+    assert block.opacity() == 1.0
+
+
+def test_take_menu_lists_takes_and_marks_old_text(qtbot):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _build_doc_with_one_clip()
+    clip.segments = [Segment(text="x" * 10, audio_path="t1.wav", duration=1.0)]
+    clip.overrides["take"] = 1
+    clip.takes = {0: [Segment(text="something else", audio_path="t0.wav", duration=2.0)]}
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+    menu = view._build_context_menu(view.mapFromScene(block.mapToScene(10, 30)))
+
+    take_menu = next(a.menu() for a in menu.actions() if a.text() == "Take")
+    labels = [a.text() for a in take_menu.actions()]
+    assert labels == ["Take 1 (2.0s) - old text", "Take 2 (1.0s)"]
+    picked = []
+    view.takeSelected.connect(lambda cid, i: picked.append((cid, i)))
+    take_menu.actions()[0].trigger()
+    assert picked == [(clip.id, 0)]
+
+
+def test_ruler_labels_in_timecode_when_enabled(qtbot):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, _clip, _track = _build_doc_with_one_clip()
+    doc.settings["timecode"] = {"enabled": True, "frame_rate": 25.0, "start": "01:00:00:00"}
+    _render(view, doc)
+    assert view._ruler.label_for(2.0) == "01:00:02:00"

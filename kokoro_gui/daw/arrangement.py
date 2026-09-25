@@ -13,16 +13,26 @@ change the length the raw file has); one without is
 estimated from its text length at the engine's recorded chars/sec (UI11:
 learned from `generation_stats.json`, 15 chars/s when there's no history),
 divided by the clip's effective speed. A clip starts at its own
-`timeline_timestamp` when the user has dragged it, else right where the
+`timeline_timestamp` when the user has dragged it, else a gap after the
 previous clip in text order ended - across every track, so the default is
 one continuous read-through no matter how many lanes there are.
+
+The gap is the clip's own `gap_before_s` when set (a `[pause:x]` marker
+sets it), else `document.settings["paragraph_gap_s"]` when the text between
+the two clips holds a blank line, else `document.settings["gap_s"]`. The
+first clip gets only its own override. A pinned clip ignores gaps.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 FALLBACK_CHARS_PER_SECOND = 15.0
+DEFAULT_GAP_S = 0.35
+DEFAULT_PARAGRAPH_GAP_S = 0.9
+# A blank line, whitespace-only lines included.
+_PARAGRAPH_BREAK = re.compile(r"\n[ \t\r\f\v]*\n")
 
 
 @dataclass(frozen=True)
@@ -82,6 +92,31 @@ def clip_audio_duration_s(clip) -> Optional[float]:
     return float(sum(s.duration or 0.0 for s in clip.segments))
 
 
+def _setting_s(document, key: str, default: float) -> float:
+    try:
+        return max(0.0, float((document.settings or {}).get(key, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def boundary_gap_s(document, text: str, previous_end: Optional[int], clip, extent_start: int) -> float:
+    """The silence placed before `clip`: its `gap_before_s` override, else
+    the paragraph or clip gap depending on the text between the previous
+    clip's extent end and this one's start. `previous_end=None` means this
+    is the first clip, which has no default gap."""
+    if clip.gap_before_s is not None:
+        try:
+            return max(0.0, float(clip.gap_before_s))
+        except (TypeError, ValueError):
+            pass
+    if previous_end is None:
+        return 0.0
+    between = text[previous_end:extent_start]
+    if _PARAGRAPH_BREAK.search(between):
+        return _setting_s(document, "paragraph_gap_s", DEFAULT_PARAGRAPH_GAP_S)
+    return _setting_s(document, "gap_s", DEFAULT_GAP_S)
+
+
 def compute_arrangement(document, engine_id: Optional[str] = None,
                         chars_per_second: Optional[float] = None,
                         clip_duration: Optional[Callable] = None) -> Arrangement:
@@ -99,12 +134,14 @@ def compute_arrangement(document, engine_id: Optional[str] = None,
         extent = document.clip_extent(clip.id)
         if extent is None:
             continue
-        with_extent.append((extent[0], clip))
-    with_extent.sort(key=lambda pair: pair[0])
+        with_extent.append((extent[0], extent[1], clip))
+    with_extent.sort(key=lambda item: item[0])
 
+    text = document.text
     placed = []
     cursor = 0.0
-    for _start_offset, clip in with_extent:
+    previous_end = None
+    for extent_start, extent_end, clip in with_extent:
         audio_duration = clip_duration(clip)
         if audio_duration is not None:
             duration = audio_duration
@@ -113,13 +150,34 @@ def compute_arrangement(document, engine_id: Optional[str] = None,
             config = document.effective_config_for_clip(clip)
             duration = estimate_duration_s(document.clip_text(clip), config.get("speed", 1.0), chars_per_second)
             estimated = True
-        start = clip.timeline_timestamp if clip.timeline_timestamp is not None else cursor
+        if clip.timeline_timestamp is not None:
+            start = clip.timeline_timestamp
+        else:
+            start = cursor + boundary_gap_s(document, text, previous_end, clip, extent_start)
         start = max(0.0, float(start))
         placed.append(PlacedClip(clip=clip, start_s=start, duration_s=duration, estimated=estimated))
         cursor = start + duration
+        previous_end = extent_end
 
     total = max((p.end_s for p in placed), default=0.0)
     return Arrangement(placed=placed, total_duration_s=total)
+
+
+def segment_timeline(placed: PlacedClip) -> list:
+    """`[(segment, start_s, scale)]` for a placed clip's audio segments in
+    order: where each segment starts on the timeline and the factor from its
+    raw seconds to placed seconds. The placed length is the rendered one
+    (trim and pitch change it), so raw times map linearly onto it. Word
+    times go through this: `start_s + word_start * scale`."""
+    segments = sorted((s for s in placed.clip.segments if s.audio_path), key=lambda s: s.order_index)
+    raw_total = sum(float(s.duration or 0.0) for s in segments)
+    scale = placed.duration_s / raw_total if raw_total > 0 else 1.0
+    out = []
+    cursor = placed.start_s
+    for segment in segments:
+        out.append((segment, cursor, scale))
+        cursor += float(segment.duration or 0.0) * scale
+    return out
 
 
 def text_order_predecessor(arrangement: Arrangement, clip_id: str):

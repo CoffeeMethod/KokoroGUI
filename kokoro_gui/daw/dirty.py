@@ -36,6 +36,17 @@ import os
 from kokoro_gui.daw.models import Segment
 from kokoro_gui.engine import caching
 from kokoro_gui.engine.caching import compute_cache_key, effective_speed
+from kokoro_gui.engine.lexicon import apply_lexicon
+
+# Compiled lexicon patterns, shared across dirty checks (the engine keeps
+# its own per instance).
+_lexicon_patterns = {}
+
+
+def spoken_text(text: str, config: dict) -> str:
+    """`text` after `config["lexicon"]`: what generation hands the engine,
+    and so what the key and the predicted segment texts are over."""
+    return apply_lexicon(text, config.get("lexicon") or {}, _lexicon_patterns)
 
 
 def compute_expected_cache_hash(text: str, config: dict, engine_version=None, key_fn=None, clip=None) -> str:
@@ -44,7 +55,13 @@ def compute_expected_cache_hash(text: str, config: dict, engine_version=None, ke
     over the clip's real generation inputs; without one it's the name-only
     `compute_cache_key` over `config["voice"]`, defaulting `lang_code` to
     "a" the way the pre-bundle check did. `engine_version=None` means the
-    installed one."""
+    installed one. Applies the lexicon to `text` first."""
+    return _key_for_spoken(spoken_text(text, config), config, engine_version, key_fn, clip)
+
+
+def _key_for_spoken(text, config, engine_version, key_fn, clip):
+    """`compute_expected_cache_hash` over text the lexicon has already
+    rewritten (a lexicon isn't idempotent, so it must run once)."""
     if key_fn is not None:
         return key_fn(text, clip, engine_version)
     lang_code = config.get("lang_code", "a")
@@ -54,10 +71,14 @@ def compute_expected_cache_hash(text: str, config: dict, engine_version=None, ke
 
 
 def predict_segment_texts(text: str, config: dict) -> list:
-    """The sub-segment texts `process_chunk_task` would expect to find cached
-    (or generate) for `text`/`config` - the same prediction caching.py
-    makes, read from there rather than duplicated."""
-    return caching.predict_segment_texts(text, config.get("split_pattern", r"\n+"))
+    """The pieces `process_chunk_task` would generate (or find cached) for
+    `text`/`config`: `caching.split_segments`, read from there rather than
+    duplicated."""
+    return caching.split_segments(text, config)
+
+
+def _collapse_ws(text) -> str:
+    return " ".join((text or "").split())
 
 
 def segment_file_missing(segment) -> bool:
@@ -82,8 +103,16 @@ def is_clip_dirty(clip, text: str, config: dict, key_fn=None) -> bool:
     if any(not segment.raw for segment in clip.segments):
         return True
 
-    expected_count = len(predict_segment_texts(text, config))
-    if len(clip.segments) != expected_count:
+    text = spoken_text(text, config)
+    predicted = predict_segment_texts(text, config)
+    if len(clip.segments) != len(predicted):
+        return True
+    # Same count, different boundaries (a splitter or budget change) is
+    # dirty too. Whitespace is collapsed on both sides: segments generated
+    # before per-piece generation stored KPipeline's rebuilt graphemes,
+    # which can differ from the piece in whitespace alone.
+    stored = sorted(clip.segments, key=lambda s: s.order_index)
+    if any(_collapse_ws(s.text) != _collapse_ws(p) for s, p in zip(stored, predicted)):
         return True
 
     expected_by_version = {}
@@ -95,9 +124,7 @@ def is_clip_dirty(clip, text: str, config: dict, key_fn=None) -> bool:
         # `None` key looks up.
         version = segment.engine_version if segment.audio_path else None
         if version not in expected_by_version:
-            expected_by_version[version] = compute_expected_cache_hash(
-                text, config, engine_version=version, key_fn=key_fn, clip=clip,
-            )
+            expected_by_version[version] = _key_for_spoken(text, config, version, key_fn, clip)
         if segment.cache_key != expected_by_version[version]:
             return True
     return False
@@ -126,9 +153,33 @@ def build_segments_from_results(expected_hash, results: list) -> list:
     return [
         Segment(order_index=i, text=result["text"], cache_key=result.get("cache_key") or expected_hash,
                 audio_path=result["path"], duration=result["duration"],
-                raw=bool(result.get("raw", True)), engine_version=result.get("engine_version"))
+                raw=bool(result.get("raw", True)), engine_version=result.get("engine_version"),
+                words=[list(w) for w in result.get("words") or []],
+                onset_s=result.get("onset_s"), tail_s=result.get("tail_s"))
         for i, result in enumerate(results)
     ]
+
+
+def carry_segment_timing(new_segments: list, previous_lists) -> None:
+    """Copies `words`, `onset_s` and `tail_s` onto freshly built segments
+    from an earlier segment for the same file (same `cache_key`,
+    `order_index` and `audio_path`) when the new one lacks them. A cache
+    hit hands back the file without re-running the model, so it has no
+    token timings of its own; the segment it was first generated as does."""
+    known = {}
+    for segments in previous_lists:
+        for segment in segments or []:
+            known.setdefault((segment.cache_key, segment.order_index, segment.audio_path), segment)
+    for segment in new_segments:
+        old = known.get((segment.cache_key, segment.order_index, segment.audio_path))
+        if old is None:
+            continue
+        if not segment.words and old.words:
+            segment.words = [list(w) for w in old.words]
+        if segment.onset_s is None:
+            segment.onset_s = old.onset_s
+        if segment.tail_s is None:
+            segment.tail_s = old.tail_s
 
 
 def take_from_results(results: list, default: int = 0) -> int:

@@ -2,6 +2,7 @@
 segments, and process_chunk_task's `raw_output` contract that feeds it.
 No Qt, no audio device."""
 import numpy as np
+import pytest
 import soundfile as sf
 
 from kokoro_gui.audio import post
@@ -107,3 +108,41 @@ def test_generate_clip_audio_marks_segments_raw(engine, fake_pipeline, make_conf
     assert results and all(r["raw"] is True for r in results)
     # The caller's dict is untouched (generate_clip_audio copies it).
     assert "raw_output" not in config
+
+
+# -- duration hint (phase 2, C1) -------------------------------------------------
+
+
+def test_duration_hint_accounts_for_trim_and_pitch():
+    from kokoro_gui.audio.post import duration_hint
+    from kokoro_gui.daw.models import Segment
+
+    segment = Segment(duration=2.0, onset_s=0.1, tail_s=0.3)
+    assert duration_hint(segment, {}) == 2.0
+    assert duration_hint(segment, {"trim_silence": True}) == pytest.approx(1.6)
+    assert duration_hint(segment, {"trim_silence": True, "pitch": 12}) == pytest.approx(0.8)
+    assert duration_hint(Segment(duration=2.0), {}) is None
+
+
+def test_rendered_duration_uses_the_hint_without_reading_the_file(tmp_path, monkeypatch):
+    from kokoro_gui.audio import post
+
+    post.clear_render_cache()
+
+    def no_reads(_path):
+        raise AssertionError("read the file")
+
+    monkeypatch.setattr(post, "_read_mono", no_reads)
+    assert post.rendered_duration_s(str(tmp_path / "never.wav"), {}, 24000, hint=1.25) == 1.25
+
+
+def test_rendered_duration_prefers_a_memoized_render_over_the_hint(tmp_path):
+    import soundfile as sf
+
+    from kokoro_gui.audio import post
+
+    path = str(tmp_path / "a.wav")
+    sf.write(path, np.full(8000, 0.5, dtype=np.float32), 8000)
+    post.clear_render_cache()
+    post.render(path, {}, 8000)
+    assert post.rendered_duration_s(path, {}, 8000, hint=9.0) == 1.0

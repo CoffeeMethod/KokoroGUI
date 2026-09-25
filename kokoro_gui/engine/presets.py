@@ -12,7 +12,7 @@ import os
 # able to steer (presets are shareable JSON with no import/export vetting -
 # see Claude/SECURITY_AUDIT.md).
 ALLOWED_PRESET_KEYS = frozenset({
-    "voice", "speed", "volume", "pitch", "split_pattern", "normalize",
+    "voice", "speed", "volume", "pitch", "normalize",
     "trim", "format", "apply_fx", "fx_preset",
 })
 

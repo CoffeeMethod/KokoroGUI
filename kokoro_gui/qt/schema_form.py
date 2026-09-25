@@ -2,7 +2,7 @@
 (kokoro_gui/engines/base.py) into Qt form rows.
 
 This is the concrete payoff of workstream 1 for workstream 3a: the Qt
-Generation dock's schema-covered fields (lang_code/voice/speed/split_pattern/
+Generation dock's schema-covered fields (lang_code/voice/speed/segmentation/
 format/num_threads/caching) are built by walking whatever
 `backend.get_config_schema()` returns, not hard-coded per engine. Rebuilding
 this widget from a new backend's schema is what makes engine-switching

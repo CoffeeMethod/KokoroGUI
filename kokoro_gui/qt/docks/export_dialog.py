@@ -1,7 +1,10 @@
 """File > Export... (section 6 of Claude/PLAN_ui_shell_redesign.md).
 
 Holds what left the Settings tab: output folder, base filename, format,
-"also write .srt", "keep per-clip files". Values persist per project in
+"also write .srt" (per clip or per word), "keep per-clip files", plus
+channels (stereo, or mono as the average of the two), a range (the whole
+project or between two markers) and "also write a cue sheet (.csv)"
+(kokoro_gui/daw/mixdown.py's `write_cue_sheet`). Values persist per project in
 `app.project_settings["export"]`, falling back to the old `config_qt.json`
 keys (`out_dir`/`filename`/`format`/`export_subtitles`/`separate`) so an
 existing user's choices carry over.
@@ -30,6 +33,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QPushButton, QWidget,
 )
 
+from kokoro_gui.daw import markers as marker_ops
 from kokoro_gui.daw.mixdown import mixdown
 from kokoro_gui.qt import project as project_io
 
@@ -45,6 +49,9 @@ def export_defaults(app) -> dict:
         "format": project.get("format", app.settings.get("format", "wav")),
         "srt": bool(project.get("srt", app.settings.get("export_subtitles", False))),
         "keep_clip_files": bool(project.get("keep_clip_files", app.settings.get("separate", False))),
+        "channels": 1 if project.get("channels") == 1 else 2,
+        "srt_words": bool(project.get("srt_words", False)),
+        "cue_sheet": bool(project.get("cue_sheet", False)),
     }
 
 
@@ -76,9 +83,35 @@ class ExportDialog(QDialog):
         self.format_combo.setCurrentText(values["format"] if values["format"] in FORMATS else "wav")
         form.addRow("Format:", self.format_combo)
 
+        self.channels_combo = QComboBox()
+        self.channels_combo.addItem("Stereo", 2)
+        self.channels_combo.addItem("Mono", 1)
+        self.channels_combo.setCurrentIndex(self.channels_combo.findData(values["channels"]))
+        form.addRow("Channels:", self.channels_combo)
+
+        # Whole project, or between two markers (kokoro_gui/daw/markers.py).
+        self.range_combo = QComboBox()
+        self.range_combo.addItem("Whole project", None)
+        found = marker_ops.list_markers(app.document.settings)
+        for a, b in zip(found, found[1:]):
+            self.range_combo.addItem(f"{a['name']} to {b['name']}", (a["seconds"], b["seconds"]))
+        loop = app.loop_range() if hasattr(app, "loop_range") else None
+        if loop is not None:
+            self.range_combo.addItem("Loop region", loop)
+        self.range_combo.setEnabled(self.range_combo.count() > 1)
+        form.addRow("Range:", self.range_combo)
+
         self.srt_check = QCheckBox("Also write .srt subtitles")
         self.srt_check.setChecked(values["srt"])
         form.addRow("", self.srt_check)
+        self.srt_words_check = QCheckBox("One subtitle per word")
+        self.srt_words_check.setChecked(values["srt_words"])
+        self.srt_words_check.setToolTip("Uses the word times stored with each segment; clips without them are left out.")
+        form.addRow("", self.srt_words_check)
+
+        self.cue_sheet_check = QCheckBox("Also write a cue sheet (.csv)")
+        self.cue_sheet_check.setChecked(values["cue_sheet"])
+        form.addRow("", self.cue_sheet_check)
 
         self.keep_clips_check = QCheckBox("Keep per-clip files next to the mixdown")
         self.keep_clips_check.setChecked(values["keep_clip_files"])
@@ -122,10 +155,19 @@ class ExportDialog(QDialog):
             "format": self.format_combo.currentText(),
             "srt": self.srt_check.isChecked(),
             "keep_clip_files": self.keep_clips_check.isChecked(),
+            "channels": self.channels_combo.currentData(),
+            "srt_words": self.srt_words_check.isChecked(),
+            "cue_sheet": self.cue_sheet_check.isChecked(),
         }
 
+    def range_s(self):
+        """`(start_s, end_s)` or None for the whole project. Not saved with
+        the export settings: markers move."""
+        data = self.range_combo.currentData()
+        return tuple(data) if data else None
 
-def run_export(app, values: dict, parent=None, bundle: dict | None = None) -> bool:
+
+def run_export(app, values: dict, parent=None, bundle: dict | None = None, range_s=None) -> bool:
     """Validates, remembers `values` (and the `bundle` options, if given) in
     the project, and schedules the mixdown. Returns False when nothing was
     scheduled."""
@@ -179,7 +221,8 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None) -> bo
         return await asyncio.to_thread(
             mixdown, document, out_path, values["format"], sample_rate,
             values["srt"], values["keep_clip_files"], arrangement, app.backend.id, _progress,
-            lambda clip: post_configs.get(clip.id),
+            lambda clip: post_configs.get(clip.id), values.get("channels", 2), range_s,
+            "word" if values.get("srt_words") else "clip", bool(values.get("cue_sheet")),
         )
 
     def _done(future):
@@ -190,6 +233,8 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None) -> bo
                 extras.append("srt")
             if result.clip_files:
                 extras.append(f"{len(result.clip_files)} clip files")
+            if result.cue_sheet_path:
+                extras.append("cue sheet")
             suffix = f" (+ {', '.join(extras)})" if extras else ""
             app.exportFinished.emit(True, f"Exported {result.audio_path}{suffix}")
         except Exception as e:  # noqa: BLE001 - surfaced to the status line

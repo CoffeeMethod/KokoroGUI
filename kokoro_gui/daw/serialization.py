@@ -82,6 +82,8 @@ def document_to_dict(doc: Document) -> dict:
     for clip in doc.clips:
         data = _to_dict(clip)
         data["segments"] = [_to_dict(s) for s in clip.segments]
+        data["takes"] = {str(index): [_to_dict(s) for s in segments]
+                         for index, segments in sorted(clip.takes.items())}
         clips.append(data)
     return {
         "runs": [_to_dict(r) for r in doc.runs],
@@ -100,9 +102,14 @@ def rewrite_audio_paths(data: dict, fn) -> dict:
     for clip in data.get("clips", []):
         if clip.get("original_audio_path"):
             clip["original_audio_path"] = fn(clip["original_audio_path"])
-        for segment in clip.get("segments", []):
-            if segment.get("audio_path"):
-                segment["audio_path"] = fn(segment["audio_path"])
+        segment_lists = [clip.get("segments", [])]
+        takes = clip.get("takes")
+        if isinstance(takes, dict):
+            segment_lists.extend(v for v in takes.values() if isinstance(v, list))
+        for segments in segment_lists:
+            for segment in segments:
+                if isinstance(segment, dict) and segment.get("audio_path"):
+                    segment["audio_path"] = fn(segment["audio_path"])
     return data
 
 
@@ -135,6 +142,20 @@ def _runs_from_legacy_offsets(text: str, clips: list, legacy_offsets: dict) -> l
     return runs
 
 
+def _segments_from_list(items) -> list:
+    """`Segment`s from a saved list. A saved segment without "raw" predates
+    read-time FX: its file has FX baked in, so it must not be
+    post-processed again (see Segment's docstring; dirty.is_clip_dirty
+    regenerates it)."""
+    segments = []
+    for seg in items if isinstance(items, list) else []:
+        if not isinstance(seg, dict):
+            continue
+        known, extra = _split_unknown(Segment, {"raw": False, **seg})
+        segments.append(Segment(extra=extra, **known))
+    return segments
+
+
 def document_from_dict(data: dict) -> Document:
     """Inverse of `document_to_dict`. Tolerant of missing keys (an older or
     hand-edited `document.json`) the same way the rest of this codebase reads
@@ -145,17 +166,19 @@ def document_from_dict(data: dict) -> Document:
     legacy_offsets = {}
     for clip_data in data.get("clips", []):
         clip_data = dict(clip_data)
-        # A saved segment without "raw" predates read-time FX: its file has
-        # FX baked in, so it must not be post-processed again (see
-        # Segment's docstring; dirty.is_clip_dirty regenerates it).
-        segments = []
-        for seg in clip_data.pop("segments", []):
-            known, extra = _split_unknown(Segment, {"raw": False, **seg})
-            segments.append(Segment(extra=extra, **known))
+        segments = _segments_from_list(clip_data.pop("segments", []))
+        takes = {}
+        raw_takes = clip_data.pop("takes", None)
+        if isinstance(raw_takes, dict):
+            for index, seg_list in raw_takes.items():
+                try:
+                    takes[int(index)] = _segments_from_list(seg_list)
+                except (TypeError, ValueError):
+                    continue
         start_offset = clip_data.pop("start_offset", None)
         end_offset = clip_data.pop("end_offset", None)
         known, extra = _split_unknown(Clip, clip_data)
-        clip = Clip(segments=segments, extra=extra, **known)
+        clip = Clip(segments=segments, takes=takes, extra=extra, **known)
         clips.append(clip)
         if start_offset is not None and end_offset is not None:
             legacy_offsets[clip.id] = (start_offset, end_offset)

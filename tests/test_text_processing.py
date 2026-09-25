@@ -171,3 +171,8 @@ def test_extract_text_from_file_epub(engine, tmp_path, monkeypatch):
 
     text = engine.extract_text_from_file(str(p))
     assert "Chapter text." in text
+
+
+def test_parse_multispeaker_drops_pause_markers(engine):
+    result = engine.parse_multispeaker_text("[Narrator]: Hello. [pause:1.5]\n[Bob]: Hi.")
+    assert result == [("Narrator", None, "Hello."), ("Bob", None, "Hi.")]

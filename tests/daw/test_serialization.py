@@ -226,3 +226,66 @@ def test_segment_engine_version_round_trips():
     doc = Document(runs=[Run(text="x", clip_id=clip.id)], clips=[clip])
     restored = document_from_dict(document_to_dict(doc))
     assert restored.clips[0].segments[0].engine_version == "0.9.4"
+
+
+def test_phase_two_fields_round_trip_when_set():
+    import json
+
+    doc = _sample_document()
+    clip, track, character = doc.clips[0], doc.tracks[0], doc.characters[0]
+    clip.gap_before_s = 1.25
+    clip.fade_in_s, clip.fade_out_s = 0.1, 0.2
+    clip.status, clip.note, clip.source_text = "approved", "good read", "Bonjour"
+    clip.takes = {0: [Segment(order_index=0, text="hello", cache_key="old", audio_path="/p/old_0.wav",
+                              duration=1.0, words=[["hello", 0.0, 0.5]], onset_s=0.01, tail_s=0.02)]}
+    clip.segments[0].words = [["hello", 0.1, 0.6]]
+    clip.segments[0].onset_s, clip.segments[0].tail_s = 0.05, 0.1
+    track.gain, track.mute, track.solo, track.pan = 0.5, True, True, -0.5
+    track.automation = [[0.0, 1.0], [2.0, 0.5]]
+    character.variants = {"angry": "alice_angry"}
+
+    back = document_from_dict(json.loads(json.dumps(document_to_dict(doc))))
+    c2, t2, ch2 = back.clips[0], back.tracks[0], back.characters[0]
+    assert (c2.gap_before_s, c2.fade_in_s, c2.fade_out_s) == (1.25, 0.1, 0.2)
+    assert (c2.status, c2.note, c2.source_text) == ("approved", "good read", "Bonjour")
+    assert list(c2.takes) == [0]
+    parked = c2.takes[0][0]
+    assert isinstance(parked, Segment)
+    assert parked.cache_key == "old" and parked.words == [["hello", 0.0, 0.5]] and parked.tail_s == 0.02
+    assert c2.segments[0].words == [["hello", 0.1, 0.6]]
+    assert (c2.segments[0].onset_s, c2.segments[0].tail_s) == (0.05, 0.1)
+    assert (t2.gain, t2.mute, t2.solo, t2.pan) == (0.5, True, True, -0.5)
+    assert t2.automation == [[0.0, 1.0], [2.0, 0.5]]
+    assert ch2.variants == {"angry": "alice_angry"}
+
+
+def test_phase_two_fields_default_when_absent():
+    doc = _sample_document()
+    data = document_to_dict(doc)
+    for key in ("gap_before_s", "takes", "fade_in_s", "fade_out_s", "status", "note", "source_text"):
+        data["clips"][0].pop(key)
+    for key in ("gain", "mute", "solo", "pan", "automation"):
+        data["tracks"][0].pop(key)
+    for key in ("words", "onset_s", "tail_s"):
+        data["clips"][0]["segments"][0].pop(key)
+    data["characters"][0].pop("variants")
+
+    back = document_from_dict(data)
+    clip, track = back.clips[0], back.tracks[0]
+    assert clip.gap_before_s is None and clip.takes == {} and clip.status == "todo"
+    assert clip.fade_in_s == 0.0 and clip.note == "" and clip.source_text is None
+    assert (track.gain, track.mute, track.solo, track.pan, track.automation) == (1.0, False, False, 0.0, [])
+    segment = clip.segments[0]
+    assert segment.words == [] and segment.onset_s is None and segment.tail_s is None
+    assert back.characters[0].variants == {}
+
+
+def test_rewrite_audio_paths_walks_parked_takes():
+    from kokoro_gui.daw.serialization import rewrite_audio_paths
+
+    doc = _sample_document()
+    doc.clips[0].segments[0].audio_path = "a.wav"
+    doc.clips[0].takes = {2: [Segment(audio_path="b.wav")]}
+    data = rewrite_audio_paths(document_to_dict(doc), lambda p: "X/" + p)
+    assert data["clips"][0]["segments"][0]["audio_path"] == "X/a.wav"
+    assert data["clips"][0]["takes"]["2"][0]["audio_path"] == "X/b.wav"

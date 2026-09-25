@@ -36,7 +36,7 @@ class LexiconDock(QDockWidget):
         self.list_scroll.setWidget(self._list_container)
         layout.addWidget(self.list_scroll, 1)
 
-        layout.addWidget(QLabel("Note: Replacements are case-insensitive. Applied before generation."))
+        layout.addWidget(QLabel("Note: Replacements are case-insensitive. Applied before generation; a change marks the clips it affects stale."))
 
         self.setWidget(content)
         self.refresh_list()
@@ -53,14 +53,22 @@ class LexiconDock(QDockWidget):
         self.app.settings["lexicon"][orig] = rep
         self.orig_edit.clear()
         self.replace_edit.clear()
-        self.app.save_settings()
-        self.refresh_list()
+        self._rules_changed()
 
     def delete_rule(self, key: str) -> None:
         if key in self.app.settings.get("lexicon", {}):
             del self.app.settings["lexicon"][key]
-            self.app.save_settings()
-            self.refresh_list()
+            self._rules_changed()
+
+    def _rules_changed(self) -> None:
+        """Saves, redraws the list, and re-runs the dirty check: the
+        lexicon is a generation input, so a rule stales the clips whose
+        text it rewrites."""
+        self.app.save_settings()
+        self.refresh_list()
+        if self.app.editor is not None:
+            self.app.editor.rehighlight()
+        self.app.refresh_timeline()
 
     def refresh_list(self) -> None:
         while self._list_layout.count():

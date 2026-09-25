@@ -50,9 +50,10 @@ from kokoro_gui.engine import (
     SrtMixin, TextExtractionMixin,
 )
 from kokoro_gui.engine.caching import voice_fingerprint
+from kokoro_gui.engine.paths import ensure_private_dir
 from kokoro_gui.engines.base import (
     BackendHooksMixin, ConfigField, ConfigFieldType, EngineCapabilities, VoiceInfo,
-    COMMON_SPLIT_PATTERN_CHOICES, COMMON_OUTPUT_FORMAT_CHOICES, bundle_asset_for,
+    COMMON_OUTPUT_FORMAT_CHOICES, bundle_asset_for, segmentation_fields,
 )
 from kokoro_gui.engines.registry import register_engine
 
@@ -179,7 +180,7 @@ class Audio8ReferenceStore:
         safe_name = Audio8ReferenceStore._safe_name(name)
         if not safe_name:
             raise ValueError("Reference name must not be empty.")
-        os.makedirs(AUDIO8_REFS_DIR, exist_ok=True)
+        ensure_private_dir(AUDIO8_REFS_DIR, fallback=False)
         out_wav = os.path.join(AUDIO8_REFS_DIR, f"{safe_name}.wav")
         out_txt = os.path.join(AUDIO8_REFS_DIR, f"{safe_name}.txt")
         shutil.copyfile(wav_path, out_wav)
@@ -281,7 +282,9 @@ class _Audio8Pipeline:
 
     def __call__(self, text, voice=None, speed=1.0, split_pattern=r"\n+"):
         try:
-            segments = [s.strip() for s in re.split(split_pattern, text) if s.strip()]
+            # `split_pattern=None` means "don't split", as in KPipeline.
+            parts = re.split(split_pattern, text) if split_pattern else [text]
+            segments = [s.strip() for s in parts if s.strip()]
         except re.error:
             segments = []
         if not segments and text.strip():
@@ -344,7 +347,7 @@ class Audio8Engine(
         # ref-codes cache (see `warm_reference_codes`).
         self._warmed_project_dir = None
 
-        os.makedirs(AUDIO8_REFS_DIR, exist_ok=True)
+        ensure_private_dir(AUDIO8_REFS_DIR, fallback=False)
 
     async def init_pipeline_async(self, lang_code="a", device=None):
         if self.on_status:
@@ -487,7 +490,7 @@ class Audio8Engine(
                     probe["reference_audio_values"], probe["reference_audio_lengths"],
                 )
                 trimmed = codes[0, :, : int(code_lengths[0])].detach().cpu().numpy().astype(np.int64)
-            os.makedirs(cache_dir, exist_ok=True)
+            ensure_private_dir(cache_dir, fallback=False)
             np.save(cache_path, trimmed)
         except Exception as e:
             print(f"Audio8 reference-codes cache write error: {e}")
@@ -614,8 +617,7 @@ class Audio8BackendAdapter(BackendHooksMixin):
                         default=None, group="Generation"),
             ConfigField("speed", "Speed", ConfigFieldType.SLIDER,
                         default=1.0, min=0.5, max=2.0, step=0.1, group="Generation"),
-            ConfigField("split_pattern", "Split By", ConfigFieldType.CHOICE,
-                        default=r"\n+", choices=list(COMMON_SPLIT_PATTERN_CHOICES), group="Generation"),
+            *segmentation_fields(),
             ConfigField("format", "Output Format", ConfigFieldType.CHOICE,
                         default="wav", choices=list(COMMON_OUTPUT_FORMAT_CHOICES), group="Generation"),
             ConfigField("num_threads", "Parallel Threads", ConfigFieldType.INT,
