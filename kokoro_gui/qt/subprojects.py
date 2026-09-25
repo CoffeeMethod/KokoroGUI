@@ -989,9 +989,12 @@ class SubprojectsMixin:
         child_document = Document(runs=runs, clips=clips, tracks=tracks,
                                   characters=self._seed_child_characters(document, moved), settings=settings)
         child_document._normalize_runs()
+        _copy_imported_audio(child_document, project_dir)
         generated = os.path.join(project_dir, *project_io.AUDIO_GENERATED.split("/"))
         os.makedirs(generated, exist_ok=True)
         for clip in child_document.clips:
+            if clip.source == "imported":
+                continue  # its audio is under audio/imported/, copied above
             for segments in (clip.segments, *clip.takes.values()):
                 for segment in segments:
                     if segment.audio_path and os.path.isfile(segment.audio_path):
@@ -1174,6 +1177,42 @@ class SubprojectsMixin:
         self._missing_children.clear()
         self._closed_child_states.clear()
         self.focus = self.level = self.root
+
+
+def _copy_imported_audio(document, project_dir: str) -> None:
+    """New Subproject's imported audio (phase 5 P3): each recording source
+    the moved text's words use, and each moved music bed's file, is copied
+    into the child's `audio/imported/` (`project.import_audio_file`) and
+    named there, so the child plays and saves it from its own dir. The
+    child's `settings["sources"]` keeps only the sources it uses; one whose
+    file is missing stays listed with no path. Recording clips' segments
+    are rebuilt on the copies."""
+    from kokoro_gui.daw import imported
+    from kokoro_gui.daw.models import SOURCES_KEY
+
+    used = {w[2] for run in document.runs for w in run.words or () if len(w) > 2}
+    sources = {}
+    for name in sorted(used):
+        entry = dict(document.sources.get(name) or {})
+        path = document.source_path(name)
+        entry["path"] = None
+        if path and os.path.isfile(path):
+            try:
+                _source, entry = imported.source_entry(project_io.import_audio_file(path, project_dir))
+            except (OSError, project_io.ProjectError):
+                pass
+        sources[name] = entry
+    if sources:
+        document.settings[SOURCES_KEY] = sources
+    else:
+        document.settings.pop(SOURCES_KEY, None)
+    for clip in document.clips:
+        if clip.is_bed and os.path.isfile(clip.original_audio_path):
+            try:
+                clip.original_audio_path = project_io.import_audio_file(clip.original_audio_path, project_dir)
+            except (OSError, project_io.ProjectError):
+                pass
+    document.refresh_imported_segments()
 
 
 def _snap_to_clips(document, start: int, end: int) -> tuple:

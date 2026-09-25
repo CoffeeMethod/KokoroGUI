@@ -134,6 +134,40 @@ def test_parent_with_an_embedded_child_round_trips(qt_app, tmp_path):
     assert project_io.read_session(reopened.project_dir)["source_path"] == f"{path}#{child_id}"
 
 
+def test_a_recording_moved_into_a_subproject_plays_there_after_save_and_reopen(qt_app, tmp_path):
+    from kokoro_gui.daw import imported
+    from tests.gui_qt.test_transcript_editor import HELLO, _recording
+
+    qt_app.document.text = "Intro."
+    qt_app.editor.load_text(qt_app.document.text)
+    source, (clip_id,) = _recording(qt_app, tmp_path, [HELLO])
+    start = qt_app.document.text.index("Hello")
+    child = qt_app.new_subproject(start, len(qt_app.document.text), title="Interview")
+
+    moved = child.document.get_clip(clip_id)
+    copy = child.document.source_path(source)
+    assert copy.startswith(os.path.join(child.project_dir, "audio", "imported")) and os.path.isfile(copy)
+    assert [(s.audio_path, s.range) for s in moved.segments] == [(copy, [0.0, 1.5])]
+
+    qt_app.save_project_as(str(tmp_path / "show"))
+    qt_app.wait_for_project_io()
+    path = qt_app.project_path
+    qt_app.new_project()
+    qt_app.open_project(path)
+    qt_app.wait_for_project_io()
+    nested = next(c for c in qt_app.document.clips if c.is_nested)
+    reopened = qt_app.open_child(nested)
+    qt_app.wait_for_project_io()
+    reopened = reopened or qt_app.children[child.project_id]
+
+    moved = reopened.document.get_clip(clip_id)
+    segment, = moved.segments
+    assert segment.audio_path.startswith(reopened.project_dir) and os.path.isfile(segment.audio_path)
+    assert segment.range == [0.0, 1.5]
+    assert imported.missing_sources(reopened.document) == []
+    assert not any("missing" in n for n in getattr(reopened, "notices", []) or [])
+
+
 def test_a_child_edit_makes_the_root_dirty_and_saves_into_the_parent(qt_app, tmp_path):
     _intro, _chapter, child = _book(qt_app)
     qt_app.save_project_as(str(tmp_path / "book"))

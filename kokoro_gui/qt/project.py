@@ -763,6 +763,12 @@ def extract_audio(info: BundleInfo, project_dir: str, progress=None, cancelled=N
                 progress(done, total)
 
 
+def _is_imported_path(path: str) -> bool:
+    """True for a path (bundle-relative or absolute) under an
+    `audio/imported/` dir."""
+    return f"/{AUDIO_IMPORTED}/" in "/" + path.replace("\\", "/")
+
+
 def _load_dir(project_dir: str) -> tuple:
     """`(document, project_settings, notices)` from a project dir's
     `document.json` and `project.json`, audio paths made absolute (a file
@@ -801,8 +807,17 @@ def _load_dir(project_dir: str) -> tuple:
 
     serialization.rewrite_audio_paths(data, to_absolute)
     document = serialization.document_from_dict(data)
-    if missing:
-        notices.append(f"{len(missing)} audio file(s) missing from the bundle; those clips will regenerate.")
+    # An imported file (a recording, a music bed) can't be regenerated, so
+    # it gets its own count; a recording's segments name its file too, so
+    # each file counts once.
+    imported_missing = {rel for rel in missing if _is_imported_path(rel)}
+    generated_missing = [rel for rel in missing if rel not in imported_missing]
+    if generated_missing:
+        notices.append(f"{len(generated_missing)} audio file(s) missing from the bundle; "
+                       f"those clips will regenerate.")
+    if imported_missing:
+        notices.append(f"{len(imported_missing)} imported audio file(s) missing from the bundle; "
+                       f"their clips play nothing until the file is imported again.")
     # The source track stays project-relative in the document and resolves
     # at use time (`source_track_path`); a missing one is only a notice.
     if source_track_settings(document.settings) is not None and source_track_path(document, project_dir) is None:
