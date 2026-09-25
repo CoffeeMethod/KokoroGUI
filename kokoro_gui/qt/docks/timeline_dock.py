@@ -187,7 +187,9 @@ class TimelineDock(QDockWidget):
         """Handles `TimelineView.clipMoved`. Pins the clip's timestamp; if
         the drop lands at or before the start of the clip that precedes it in
         text order, the clip's text moves too (grill Q13) - to just before the
-        first clip in text order that now starts at or after it."""
+        first clip in text order that now starts at or after it. A clip whose
+        onset is aligned (`PlacedClip.aligned_onset_s`) stores its drop
+        point plus that onset, so it lands where it was dropped."""
         document = self._doc
         clip = document.get_clip(clip_id)
         if clip is None:
@@ -196,16 +198,17 @@ class TimelineDock(QDockWidget):
         order = [p for p in arrangement.placed]
         index = next((i for i, p in enumerate(order) if p.clip.id == clip_id), None)
         predecessor = order[index - 1] if index is not None and index > 0 else None
+        timestamp = new_start_s + (order[index].aligned_onset_s if index is not None else 0.0)
 
         if predecessor is not None and new_start_s <= predecessor.start_s:
             before = next((p for p in order if p.clip.id != clip_id and p.start_s >= new_start_s), None)
             if before is not None:
-                document.undo_stack.push(MoveClipBeforeCommand(clip_id, before.clip.id, timestamp=new_start_s))
+                document.undo_stack.push(MoveClipBeforeCommand(clip_id, before.clip.id, timestamp=timestamp))
                 self.app.editor.load_text(document.text)
                 self.app.schedule_save()
                 self.app.refresh_timeline()
                 return
-        document.undo_stack.push(SetClipTimestampCommand(clip_id, new_start_s))
+        document.undo_stack.push(SetClipTimestampCommand(clip_id, timestamp))
         self.app.schedule_save()
         self.app.refresh_timeline()
 

@@ -1210,11 +1210,15 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     def build_arrangement(self, project=None):
         """Every `compute_arrangement` call goes through here so they all
         measure clips the same way. Default: the `level` project, the one
-        the timeline and transport show."""
+        the timeline and transport show. The clip's post config decides
+        whether onset alignment applies (trim already cut the silence)."""
         project = project or self.level
+        docks_ready = self.settings_dock is not None and self.fx_dock is not None
         return compute_arrangement(project.document, engine_id=self.backend.id,
                                    clip_duration=lambda clip: self.clip_duration_s(clip, project),
-                                   clip_estimate=self.nested_estimate_s)
+                                   clip_estimate=self.nested_estimate_s,
+                                   clip_post_config=(lambda clip: self.post_config_for_clip(clip, project))
+                                   if docks_ready else None)
 
     # --- Options: engine / device / theme ---------------------------------
 

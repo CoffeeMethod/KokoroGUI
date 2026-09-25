@@ -22,6 +22,11 @@ sets it), else `document.settings["paragraph_gap_s"]` when the text between
 the two clips holds a blank line, else `document.settings["gap_s"]`. The
 first clip gets only its own override. A pinned clip ignores gaps.
 
+Onset alignment (`document.settings["align_onset"]`, `align_onset_enabled`):
+a pinned clip placed by timestamp starts its leading silence early, so the
+first word lands on the timestamp. A subtitle cue's in-time is where the
+line should be heard, not where the file starts.
+
 `overlaps` lists clips on the same track whose spans intersect (the
 timeline paints them red). `plan_ripple` is ripple on regenerate: when a
 regenerated clip comes back longer or shorter, every clip placed by
@@ -50,6 +55,10 @@ class PlacedClip:
     start_s: float
     duration_s: float
     estimated: bool
+    # Seconds of leading silence subtracted from the clip's timestamp so its
+    # first voiced frame lands on it (`align_onset`); 0.0 when not aligned.
+    # A drag adds it back to the dropped block's start to get the timestamp.
+    aligned_onset_s: float = 0.0
 
     @property
     def end_s(self) -> float:
@@ -138,21 +147,89 @@ def boundary_gap_s(document, text: str, previous_end: Optional[int], clip, exten
     return _setting_s(document, "gap_s", DEFAULT_GAP_S)
 
 
+def align_onset_enabled(document) -> bool:
+    """`document.settings["align_onset"]` when the project set it, else on
+    for a project with any pinned clip (a cue placed in time, where the
+    first word should land on the cue) and off otherwise."""
+    value = (document.settings or {}).get("align_onset")
+    if value is not None:
+        return bool(value)
+    return any(getattr(clip, "pinned", False) for clip in document.clips)
+
+
+def first_onset_s(clip) -> Optional[float]:
+    """Raw seconds of silence before the clip's first voiced frame, from its
+    first audio segment: the earliest stored word start when `words` is
+    non-empty (Kokoro's token timing or a Whisper alignment), else the
+    energy `onset_s`. None when the segment has neither."""
+    segments = sorted((s for s in clip.segments if getattr(s, "audio_path", None)), key=lambda s: s.order_index)
+    if not segments:
+        return None
+    first = segments[0]
+    starts = []
+    for word in getattr(first, "words", None) or []:
+        try:
+            starts.append(float(word[1]))
+        except (TypeError, ValueError, IndexError):
+            continue
+    if starts:
+        return max(0.0, min(starts))
+    onset = getattr(first, "onset_s", None)
+    if onset is None:
+        return None
+    try:
+        return max(0.0, float(onset))
+    except (TypeError, ValueError):
+        return None
+
+
+def _trims_silence(document, clip, clip_post_config: Optional[Callable]) -> bool:
+    if clip_post_config is not None:
+        config = clip_post_config(clip) or {}
+        return bool(config.get("trim_silence", False))
+    config = document.effective_config_for_clip(clip)
+    return bool(config.get("trim_silence", config.get("trim", False)))
+
+
+def _aligned_onset_s(document, clip, duration: float, clip_post_config: Optional[Callable]) -> float:
+    """What `compute_arrangement` subtracts from a pinned clip's timestamp:
+    its first onset in placed seconds (raw seconds scaled the way
+    `segment_timeline` scales them, so pitch is accounted for), or 0.0 when
+    the clip's post config trims silence, since the render has already cut
+    that silence."""
+    onset = first_onset_s(clip)
+    if not onset or _trims_silence(document, clip, clip_post_config):
+        return 0.0
+    raw_total = sum(segment_seconds(s) for s in clip.segments if getattr(s, "audio_path", None))
+    scale = duration / raw_total if raw_total > 0 else 1.0
+    return onset * scale
+
+
 def compute_arrangement(document, engine_id: Optional[str] = None,
                         chars_per_second: Optional[float] = None,
                         clip_duration: Optional[Callable] = None,
-                        clip_estimate: Optional[Callable] = None) -> Arrangement:
+                        clip_estimate: Optional[Callable] = None,
+                        clip_post_config: Optional[Callable] = None) -> Arrangement:
     """Pass `chars_per_second` to bypass the stats lookup (tests, or a
     caller that already has the number). `clip_duration(clip)` replaces
     `clip_audio_duration_s` when given: it returns the clip's audible
     length in seconds, or None for a clip with no audio yet.
     `clip_estimate(clip)` may give a better estimate than the clip's own
     text for a clip with no audio (a subproject: its content, not its
-    title), or None to use the text."""
+    title), or None to use the text.
+
+    With `align_onset_enabled(document)`, a pinned clip placed by its
+    timestamp starts its first onset (`first_onset_s`) earlier, so the
+    first voiced frame lands on the timestamp (the cue's in-time), unless
+    the clip's post config has `trim_silence` on. `clip_post_config(clip)`
+    gives that config (the app passes `post_config_for_clip`); without it
+    the clip's `effective_config_for_clip` "trim" answers. A start never
+    goes below 0."""
     if chars_per_second is None:
         chars_per_second = recorded_chars_per_second(engine_id)
     if clip_duration is None:
         clip_duration = clip_audio_duration_s
+    align = align_onset_enabled(document)
 
     with_extent = []
     for clip in document.clips:
@@ -179,12 +256,17 @@ def compute_arrangement(document, engine_id: Optional[str] = None,
                 config = document.effective_config_for_clip(clip)
                 duration = estimate_duration_s(document.clip_text(clip), config.get("speed", 1.0), chars_per_second)
             estimated = True
+        aligned = 0.0
         if clip.timeline_timestamp is not None:
             start = clip.timeline_timestamp
+            if align and not estimated and getattr(clip, "pinned", False):
+                aligned = _aligned_onset_s(document, clip, duration, clip_post_config)
+                start = float(start) - aligned
         else:
             start = cursor + boundary_gap_s(document, text, previous_end, clip, extent_start)
         start = max(0.0, float(start))
-        placed.append(PlacedClip(clip=clip, start_s=start, duration_s=duration, estimated=estimated))
+        placed.append(PlacedClip(clip=clip, start_s=start, duration_s=duration, estimated=estimated,
+                                 aligned_onset_s=aligned))
         cursor = start + duration
         previous_end = extent_end
 

@@ -58,6 +58,25 @@ def test_drop_before_the_predecessor_moves_the_text_too(qt_app):
     assert qt_app.document.get_clip(b.id).timeline_timestamp is None
 
 
+def test_dropping_an_onset_aligned_clip_lands_its_block_where_it_was_dropped(qt_app, tmp_path):
+    import numpy as np
+    import soundfile as sf
+
+    from kokoro_gui.daw.models import Segment
+
+    a, _b = _two_clips(qt_app)
+    path = str(tmp_path / "a.wav")
+    sf.write(path, np.full(24000, 0.25, dtype=np.float32), 24000)
+    a.segments = [Segment(order_index=0, audio_path=path, duration=1.0, onset_s=0.2, tail_s=0.1)]
+    a.timeline_timestamp, a.pinned = 3.0, True
+    assert abs(qt_app.build_arrangement().by_clip_id()[a.id].start_s - 2.8) < 1e-9
+
+    qt_app.timeline_dock.on_clip_moved(a.id, 5.0)
+
+    assert abs(a.timeline_timestamp - 5.2) < 1e-9
+    assert abs(qt_app.build_arrangement().by_clip_id()[a.id].start_s - 5.0) < 1e-9
+
+
 def test_unpin_clears_the_timestamp(qt_app):
     a, _b = _two_clips(qt_app)
     qt_app.timeline_dock.on_clip_moved(a.id, 5.0)

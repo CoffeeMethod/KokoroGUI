@@ -245,3 +245,95 @@ def test_ripple_from_several_clips_adds_up():
     shifts = plan_ripple(arrangement, {c["one"].id: 0.5, c["two"].id: 0.25})
     # two moves for one's change only; three for both.
     assert shifts == {c["two"].id: 0.5, c["three"].id: 0.75}
+
+
+# -- D3: onset alignment of pinned clips -------------------------------------------
+
+
+def _cue_doc(timestamp=2.0, pinned=True, words=None, onset_s=0.2, overrides=None, **settings):
+    """One clip with 1 s of audio at `timestamp`, and a text-order follower."""
+    cue = Clip(timeline_timestamp=timestamp, pinned=pinned, overrides=dict(overrides or {}),
+               segments=[Segment(order_index=0, duration=1.0, audio_path="cue.wav",
+                                 words=list(words or []), onset_s=onset_s, tail_s=0.1)])
+    after = Clip(segments=[Segment(duration=0.5, audio_path="after.wav")])
+    doc = _doc("x" * 20, [(0, 10, cue), (10, 20, after)])
+    doc.settings.update(settings)
+    return doc, cue, after
+
+
+def test_align_onset_starts_a_pinned_clip_early_by_its_onset():
+    doc, cue, after = _cue_doc(align_onset=True)
+    placed = compute_arrangement(doc, chars_per_second=10.0).by_clip_id()
+
+    assert abs(placed[cue.id].start_s - 1.8) < 1e-9
+    assert abs(placed[cue.id].aligned_onset_s - 0.2) < 1e-9
+    # The follower is placed after the audio's real end.
+    assert abs(placed[after.id].start_s - 2.8) < 1e-9
+
+
+def test_align_onset_off_places_the_clip_at_its_timestamp():
+    doc, cue, _after = _cue_doc(align_onset=False)
+    placed = compute_arrangement(doc, chars_per_second=10.0).by_clip_id()[cue.id]
+    assert placed.start_s == 2.0 and placed.aligned_onset_s == 0.0
+
+
+def test_trim_on_disables_alignment():
+    """Trim already cut the leading silence; subtracting it again would
+    place the clip early."""
+    doc, cue, _after = _cue_doc(align_onset=True, overrides={"trim": True})
+    assert compute_arrangement(doc, chars_per_second=10.0).by_clip_id()[cue.id].start_s == 2.0
+
+    doc, cue, _after = _cue_doc(align_onset=True)
+    trims = {"trim_silence": True}
+    arrangement = compute_arrangement(doc, chars_per_second=10.0, clip_post_config=lambda clip: trims)
+    assert arrangement.by_clip_id()[cue.id].start_s == 2.0
+    arrangement = compute_arrangement(doc, chars_per_second=10.0, clip_post_config=lambda clip: {})
+    assert abs(arrangement.by_clip_id()[cue.id].start_s - 1.8) < 1e-9
+
+
+def test_first_word_start_wins_over_the_energy_onset():
+    from kokoro_gui.daw.arrangement import first_onset_s
+
+    doc, cue, _after = _cue_doc(align_onset=True, words=[["hello", 0.35, 0.6], ["there", 0.7, 0.9]])
+    assert first_onset_s(cue) == 0.35
+    assert abs(compute_arrangement(doc, chars_per_second=10.0).by_clip_id()[cue.id].start_s - 1.65) < 1e-9
+
+    cue.segments[0].words, cue.segments[0].onset_s = [], None
+    assert first_onset_s(cue) is None
+    assert compute_arrangement(doc, chars_per_second=10.0).by_clip_id()[cue.id].start_s == 2.0
+
+
+def test_alignment_needs_a_pinned_clip_placed_by_timestamp():
+    doc, cue, _after = _cue_doc(pinned=False, align_onset=True)
+    assert compute_arrangement(doc, chars_per_second=10.0).by_clip_id()[cue.id].start_s == 2.0
+
+    doc, cue, _after = _cue_doc(timestamp=None, align_onset=True)
+    assert compute_arrangement(doc, chars_per_second=10.0).by_clip_id()[cue.id].start_s == 0.0
+
+
+def test_aligned_start_never_goes_below_zero():
+    doc, cue, _after = _cue_doc(timestamp=0.1, align_onset=True)
+    assert compute_arrangement(doc, chars_per_second=10.0).by_clip_id()[cue.id].start_s == 0.0
+
+
+def test_onset_is_scaled_to_the_rendered_length():
+    """A pitch shift that halves the length halves the onset too."""
+    doc, cue, _after = _cue_doc(align_onset=True)
+    arrangement = compute_arrangement(doc, chars_per_second=10.0, clip_duration=lambda clip: 0.5)
+    assert abs(arrangement.by_clip_id()[cue.id].start_s - 1.9) < 1e-9
+
+
+def test_align_onset_default_follows_the_pinned_clips():
+    from kokoro_gui.daw.arrangement import align_onset_enabled
+
+    doc, cue, _after = _cue_doc()  # no align_onset key, one pinned clip
+    assert "align_onset" not in doc.settings and align_onset_enabled(doc)
+    assert abs(compute_arrangement(doc, chars_per_second=10.0).by_clip_id()[cue.id].start_s - 1.8) < 1e-9
+
+    doc, cue, _after = _cue_doc(pinned=False)
+    assert not align_onset_enabled(doc)
+    # An explicit value wins either way.
+    doc.settings["align_onset"] = True
+    assert align_onset_enabled(doc)
+    doc, cue, _after = _cue_doc(align_onset=False)
+    assert not align_onset_enabled(doc)
