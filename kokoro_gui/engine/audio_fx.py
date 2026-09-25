@@ -1,6 +1,7 @@
-"""Post-processing audio FX chain (pitch, volume, Pedalboard FX, normalize, trim)."""
+"""Post-processing audio FX chain (pitch, volume, time stretch, Pedalboard FX, normalize, trim)."""
 import numpy as np
 import scipy.signal
+from pedalboard import time_stretch as pedalboard_time_stretch
 from pedalboard import (
     Pedalboard, Reverb, Compressor, HighShelfFilter, LowShelfFilter,
     Chorus, Distortion, Phaser, Clipping, Gain, Limiter,
@@ -23,6 +24,12 @@ TRIM_THRESHOLD = 0.01
 PITCH_SEMITONES_MIN = -12.0
 PITCH_SEMITONES_MAX = 12.0
 
+# `time_stretch` factor bounds (1.0 = none, above 1 = faster and shorter).
+# Fit to slot stays well inside them; the clamp is for a hand-edited
+# document.json, where 0.001 would ask for a thousandfold longer buffer.
+TIME_STRETCH_MIN = 0.5
+TIME_STRETCH_MAX = 2.0
+
 
 def clamp_pitch_semitones(pitch_semitones):
     """Coerces `pitch_semitones` to a float and clamps it to the GUI's
@@ -36,10 +43,22 @@ def clamp_pitch_semitones(pitch_semitones):
     return max(PITCH_SEMITONES_MIN, min(PITCH_SEMITONES_MAX, pitch_semitones))
 
 
+def clamp_time_stretch(factor):
+    """`factor` as a float clamped to `TIME_STRETCH_MIN..TIME_STRETCH_MAX`;
+    1.0 (no stretch) for a missing or non-numeric value."""
+    try:
+        factor = float(factor)
+    except (TypeError, ValueError):
+        return 1.0
+    if not np.isfinite(factor):
+        return 1.0
+    return max(TIME_STRETCH_MIN, min(TIME_STRETCH_MAX, factor))
+
+
 def process_audio(audio, sr, config):
     """The post-processing stage, in the order the numbered comments below
-    run: trim silence, volume, pitch (resample), the Pedalboard FX chain,
-    normalize. Reads only `config`, never engine state, so it runs equally
+    run: trim silence, volume, pitch (resample), time stretch, the
+    Pedalboard FX chain, normalize. Reads only `config`, never engine state, so it runs equally
     well inside `process_chunk_task` (the whole-document path) and at read
     time from `kokoro_gui.audio.post.render` (clip playback/export, where FX
     are applied on top of the raw segment file every time the settings
@@ -70,7 +89,17 @@ def process_audio(audio, sr, config):
             except Exception as e:
                 print(f"Resample failed: {e}")
 
-    # 4. Pedalboard FX
+    # 4. Time stretch: length divided by the factor, pitch kept. Fit to
+    # slot sets it on a clip whose engine has no speed control.
+    stretch = clamp_time_stretch(config.get('time_stretch', 1.0))
+    if stretch != 1.0 and len(audio):
+        try:
+            stretched = pedalboard_time_stretch(np.asarray(audio, dtype=np.float32), sr, stretch)
+            audio = np.asarray(stretched, dtype=np.float32).reshape(-1)
+        except Exception as e:
+            print(f"Time stretch failed: {e}")
+
+    # 5. Pedalboard FX
     fx_chain = []
 
     if config.get('apply_fx', True):
@@ -171,7 +200,7 @@ def process_audio(audio, sr, config):
         except Exception as e:
             print(f"Pedalboard FX failed: {e}")
 
-    # 5. Normalization
+    # 6. Normalization
     if config.get('normalize', False):
         peak = np.max(np.abs(audio))
         if peak > 0:
