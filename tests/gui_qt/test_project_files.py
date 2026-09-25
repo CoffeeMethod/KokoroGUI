@@ -659,7 +659,10 @@ def test_include_imported_audio_off_leaves_a_recording_source_out(tmp_path, isol
     assert loaded.document.source_path(source) is None
     assert loaded.document.clips[0].segments[0].audio_path is None
     assert loaded.document.dirty_clips() == []
-    assert any("missing" in n for n in loaded.notices)
+    # The source and the segment cached from it name one file, and a
+    # recording can't regenerate, so the notice says so.
+    notice, = [n for n in loaded.notices if "missing" in n]
+    assert notice.startswith("1 imported audio file(s) missing") and "regenerate" not in notice
 
 
 def test_open_drops_a_recording_source_outside_the_project_dir(tmp_path, isolated_dirs):

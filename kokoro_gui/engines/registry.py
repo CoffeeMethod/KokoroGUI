@@ -33,6 +33,13 @@ def get_engine(engine_id: str, *args, **kwargs):
     return _registry[engine_id](*args, **kwargs)
 
 
+def get_capabilities(engine_id: str):
+    """The `EngineCapabilities` the factory registered under `engine_id`
+    declares as a class attribute, read without constructing a backend, or
+    None for an unknown id or a factory that declares none."""
+    return getattr(_registry.get(engine_id), "capabilities", None)
+
+
 def list_engines() -> list:
     """Return the sorted list of registered engine ids."""
     return sorted(_registry)

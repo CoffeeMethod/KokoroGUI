@@ -52,12 +52,15 @@ from kokoro_gui.daw.auto_split import plan_auto_split_clips, plan_pause_gaps
 from kokoro_gui.daw.beds import playable_segments
 from kokoro_gui.daw.mixdown import duck_db_setting
 from kokoro_gui.daw.reference import SOURCE_TRACK_KEY, reference_slices, source_track_settings
-from kokoro_gui.daw.undo import AssignCharacterCommand, ImportBedCommand, ImportCuesCommand, SetFieldCommand
+from kokoro_gui.daw.undo import (
+    AssignCharacterCommand, ImportBedCommand, ImportCuesCommand, ImportRecordingCommand, SetFieldCommand,
+)
 from kokoro_gui.engine import caching
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
 from kokoro_gui.qt import settings as qt_settings
 from kokoro_gui.qt.open_projects import OpenProject
+from kokoro_gui.qt import recording_import
 from kokoro_gui.qt.subprojects import ParentStore, SubprojectsMixin
 from kokoro_gui.qt.selection import SelectionModel
 from kokoro_gui.qt.speaker_mapping_dialog import (
@@ -102,6 +105,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     # (done, total), the result as [(clip_id, segment_id, words)].
     _wordAlignProgress = Signal(int, int)
     _wordsAligned = Signal(object)
+    # Import Recording's Whisper pass on a worker thread (phase 5 P3):
+    # progress as (done, total), the result as (job, error).
+    _recordingProgress = Signal(int, int)
+    _recordingTranscribed = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -169,6 +176,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self._wordAlignProgress.connect(self._on_word_align_progress)
         self._wordsAligned.connect(self._on_words_aligned)
         self._word_align_thread: threading.Thread | None = None
+        self._recordingProgress.connect(self._on_recording_progress)
+        self._recordingTranscribed.connect(self._on_recording_transcribed)
+        self._recording_thread: threading.Thread | None = None
         # Set when the user turns down the Whisper download for alignment,
         # so the next Generate doesn't ask again this session.
         self._word_align_declined = False
@@ -637,7 +647,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.import_subtitles_action = self._action("Import S&ubtitles...", self.import_subtitles_dialog)
         self.file_menu.addAction(self.import_subtitles_action)
         self.import_audio_action = self._action("Import Au&dio...", self.import_audio_dialog)
-        self.import_audio_action.setToolTip("Add an audio file as a music bed on the Music track.")
+        self.import_audio_action.setToolTip("Add an audio file as a music bed, or as a recording to edit as text.")
         self.file_menu.addAction(self.import_audio_action)
         self.import_source_track_action = self._action("Import Sou&rce Track...", self.import_source_track_dialog)
         self.file_menu.addAction(self.import_source_track_action)
@@ -2128,16 +2138,207 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         return command.clip_ids
 
     def import_audio_dialog(self) -> None:
-        """File > Import Audio...: picks a file and adds it as a music bed.
-        Recording import (phase 5 P3) adds its own choice ahead of this
-        one; a bed is the only kind of audio import so far."""
+        """File > Import Audio...: picks a file, then asks what it is
+        (`recording_import.ImportAudioDialog`): a music bed (phase 5 P2) or
+        a recording to edit as text (P3), with its transcript from Whisper
+        or a caption file."""
         path, _ = QFileDialog.getOpenFileName(self, "Import audio", "", project_io.AUDIO_FILTER)
         if not path:
+            return
+        choice = self._ask_audio_import(path)
+        if choice is None:
+            return
+        if choice.get("kind") == recording_import.RECORDING:
+            self.import_recording(path, choice.get("transcript", recording_import.WHISPER),
+                                  choice.get("caption_path") or None, bool(choice.get("refine")))
             return
         at_s = self._ask_bed_placement(self.transport.position())
         if at_s is None:
             return
         self.import_music_bed(path, at_s)
+
+    def _ask_audio_import(self, path: str):
+        """Import Audio's first page: its `choice()` dict, or None on
+        Cancel. Its own method so tests answer it without a modal."""
+        return recording_import.ImportAudioDialog.ask(os.path.basename(path), self)
+
+    # --- import a recording (phase 5 P3) ---------------------------------------
+
+    def can_clone(self, character) -> bool:
+        """True when `character`'s engine can clone a voice
+        (`capabilities.supports_voice_cloning`), read from the registered
+        adapter class, so no backend is built for the check. Only such a
+        character can voice an imported recording (grill Q24/Q25)."""
+        engine_id = (character.backend_id if character is not None else None) or self._primary_engine_id
+        capabilities = engine_registry.get_capabilities(engine_id)
+        return bool(getattr(capabilities, "supports_voice_cloning", False))
+
+    def _unknown_speaker_character(self, index: int):
+        """"Unknown speaker": a local character with no voice, on the first
+        engine that clones voices, for a recording whose speaker has no
+        clone yet. It can't generate until it gets a reference."""
+        names = {c.name for c in self.document.characters}
+        name, n = recording_import.UNKNOWN_SPEAKER_NAME, 2
+        while name in names:
+            name = f"{recording_import.UNKNOWN_SPEAKER_NAME} {n}"
+            n += 1
+        engine_id = next((e for e in engine_registry.list_engines()
+                          if getattr(engine_registry.get_capabilities(e), "supports_voice_cloning", False)),
+                         self._primary_engine_id)
+        color = DEFAULT_HIGHLIGHT_PALETTE[(len(self.document.characters) + index) % len(DEFAULT_HIGHLIGHT_PALETTE)]
+        return Character.from_preset_dict(name, {}, highlight_color=color, backend_id=engine_id)
+
+    def import_recording(self, path: str, transcript: str = recording_import.WHISPER,
+                         caption_path: str | None = None, refine: bool = False) -> bool:
+        """Import a recording to edit as text (phase 5 P3): the file is
+        copied into the focus project (`project.import_audio_file`) and
+        transcribed, by Whisper on a worker thread behind `is_busy`, or
+        read from a caption file (`transcript == "captions"`, no Whisper
+        unless `refine`, which re-times each cue's words on its slice). A
+        caption file naming speakers goes through the speaker mapping. The
+        review dialog follows, then one `ImportRecordingCommand`. Returns
+        False when nothing was started."""
+        import soundfile as sf
+
+        from kokoro_gui.daw import imported
+        from kokoro_gui.qt import asr_prompt
+
+        if self.is_busy() or self._recording_thread is not None:
+            self.set_status("Wait for the current job to finish before importing a recording.", "warning")
+            return False
+        if not self.project_dir:
+            QMessageBox.warning(self, "Import failed", "This project has no folder to copy the recording into.")
+            return False
+        try:
+            sf.info(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Import failed", f"Can't read {os.path.basename(path)} as audio: {e}")
+            return False
+        cues = None
+        if transcript == recording_import.CAPTIONS:
+            try:
+                cues = subtitles.parse(caption_path or "")
+            except (OSError, subtitles.SubtitleError) as e:
+                QMessageBox.critical(self, "Import failed", f"Couldn't read the caption file: {e}")
+                return False
+            if not cues:
+                QMessageBox.warning(self, "Empty", "No cues found in that caption file.")
+                return False
+        try:
+            stored = project_io.import_audio_file(path, self.project_dir)
+        except (OSError, project_io.ProjectError) as e:
+            QMessageBox.critical(self, "Import failed", str(e))
+            return False
+        source, entry = imported.source_entry(stored)
+        job = recording_import.RecordingJob(path=stored, name=os.path.basename(path), source=source, entry=entry,
+                                            transcript=transcript, refine=bool(refine))
+
+        if cues is not None:
+            rows = speaker_rows(cues)
+            character_ids = None
+            if rows:
+                answer = self._ask_speaker_mapping(rows, list(self.document.characters))
+                if answer is None:
+                    return False
+                mapping = {row: NARRATOR for row in rows}
+                mapping.update({k: v for k, v in answer.items() if k in mapping})
+                character_ids, job.new_characters = resolve_mapping(mapping, self.document.characters,
+                                                                    self._new_speaker_character)
+                job.mapped = True
+            job.rows = recording_import.rows_from_cues(cues, source, character_ids)
+            if not refine:
+                self._review_recording(job)
+                return True
+
+        choice, downloading = asr_prompt.confirm_whisper_download(self)
+        if choice != asr_prompt.PROCEED:
+            return False
+
+        def _work():
+            from kokoro_gui.engine import asr
+
+            error = None
+            try:
+                if job.transcript == recording_import.CAPTIONS:
+                    for done, row in enumerate(job.rows, start=1):
+                        self._recordingProgress.emit(done, len(job.rows))
+                        recording_import.refine_row(row, job.path, job.source,
+                                                    lambda wav: asr.transcribe_wav_words(wav, "whisper"))
+                else:
+                    self._recordingProgress.emit(0, 1)
+                    job.rows = recording_import.rows_from_asr_words(asr.transcribe_wav_words(job.path, "whisper"),
+                                                                    job.source)
+            except Exception as e:  # noqa: BLE001 - reported on the GUI thread
+                error = str(e) or type(e).__name__
+            self._recordingTranscribed.emit((job, error))
+
+        self.transport_dock.set_busy(True)
+        self.set_status("Downloading Whisper model..." if downloading
+                        else f"Transcribing {job.name} with Whisper...", "busy")
+        self._recording_thread = threading.Thread(target=_work, name="import-recording", daemon=True)
+        self._recording_thread.start()
+        return True
+
+    def wait_for_recording_import(self, timeout_s: float = 30.0) -> None:
+        """Test hook: blocks until the transcription thread finishes and
+        its result has been handled."""
+        thread = self._recording_thread
+        if thread is not None:
+            thread.join(timeout_s)
+        QApplication.processEvents()
+
+    def _on_recording_progress(self, done: int, total: int) -> None:
+        if total > 1:
+            self.transport_dock.set_progress(100.0 * done / total, f"Refining word timing {done}/{total}")
+
+    def _on_recording_transcribed(self, payload) -> None:
+        job, error = payload
+        self._recording_thread = None
+        self.transport_dock.set_busy(False)
+        if error:
+            self.set_status(f"Transcription failed: {error}", "error")
+            QMessageBox.critical(self, "Import failed", f"Transcription failed: {error}")
+            return
+        if not job.rows:
+            self.set_status(f"Whisper heard no words in {job.name}.", "warning")
+            return
+        self._review_recording(job)
+
+    def _ask_recording_review(self, dialog) -> bool:
+        """Runs the review dialog; True on Import. Its own method so tests
+        answer it without a modal."""
+        return dialog.exec() == dialog.DialogCode.Accepted
+
+    def _review_recording(self, job) -> list:
+        """The review dialog, then the commit: the rows as clips at the end
+        of the focus project's transcript, one undo step. Returns the new
+        clips' ids ([] when cancelled)."""
+        characters = None
+        if not job.mapped:
+            characters = [(c.id, c.name) for c in self.document.characters if self.can_clone(c)]
+        dialog = recording_import.RecordingReviewDialog(job.rows, job.source, job.path, characters, parent=self)
+        if not self._ask_recording_review(dialog):
+            self.set_status("Recording import cancelled.")
+            return []
+        rows = dialog.rows()
+        if not rows:
+            return []
+        new_characters = list(job.new_characters)
+        if not job.mapped:
+            character_id = dialog.character_choice()
+            if character_id == recording_import.UNKNOWN_SPEAKER or self.document.get_character(character_id) is None:
+                character = self._unknown_speaker_character(len(new_characters))
+                new_characters.append(character)
+                character_id = character.id
+            for row in rows:
+                row["character_id"] = character_id
+        command = ImportRecordingCommand(rows, {job.source: job.entry}, new_characters)
+        self.document.undo_stack.push(command)
+        if self.editor is not None:
+            self.editor.load_text(self.document.text)
+        self.on_characters_changed()
+        self.set_status(f"Imported {job.name}: {len(command.clip_ids)} clip(s) to edit as text.", "success")
+        return command.clip_ids
 
     def _ask_bed_placement(self, playhead_s: float):
         """Where a new bed starts: 0.0, or the playhead when it isn't at
@@ -2652,6 +2853,22 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                     self.transport.seek(target)
                     return True
         self.transport.seek(target)
+        return True
+
+    def play_clip(self, clip_id: str) -> bool:
+        """The gutter's play button on an imported recording clip (phase 5
+        P3): the transport plays on from the clip's placed start. False
+        when the clip isn't placed in the level the transport plays."""
+        if self.focus is not self.level:
+            return False
+        if self._schedule_timer.isActive():
+            self._schedule_timer.stop()
+            self._rebuild_transport_schedule()
+        placed = self.current_arrangement().by_clip_id().get(clip_id)
+        if placed is None:
+            return False
+        self.transport.seek(placed.start_s)
+        self.transport.play()
         return True
 
     # --- word alignment (phase 2, C1) ------------------------------------------

@@ -14,7 +14,10 @@ paste and move edit the words with the text, and the audio follows.
 The helpers here build words for an import: `run_from_asr_words` from a
 Whisper pass (`asr.transcribe_wav_words`), `words_from_cue` for a caption
 cue (proportional times), and `run_words_for_text` for text realigned to
-ASR words (`wordalign.align`). `words_payload` is the clipboard shape a
+ASR words (`wordalign.align`). `group_asr_words` cuts a Whisper pass into
+the clips an import makes, and `realign_words` is what the review dialog
+runs on a line the user corrected. `untimed_gaps` finds text typed into a
+recording, which has no audio. `words_payload` is the clipboard shape a
 cut or copy carries (`WORDS_MIME_TYPE`), which `Document.apply_words`
 reads back on paste. `segment_plays` is what playback and export read:
 consecutive ranges of one imported clip join with a short crossfade, so a
@@ -38,6 +41,12 @@ JOIN_GAP_S = 0.06
 JOIN_CROSSFADE_S = 0.005
 # The clipboard format for timed text (JSON, see `words_payload`).
 WORDS_MIME_TYPE = "application/x-kokorogui-words+json"
+# How a Whisper import cuts the recording into clips (`group_asr_words`): a
+# pause longer than this, or a clip longer than this, starts a new one.
+CLIP_PAUSE_S = 0.7
+CLIP_MAX_S = 15.0
+_SENTENCE_ENDS = (".", "?", "!", "…")
+_CLOSING = "\"'”’)]»"
 
 # Punctuation trimmed off a word's character span, so deleting a comma or a
 # quote next to a word doesn't take the word's audio with it.
@@ -264,6 +273,119 @@ def words_from_cue(text: str, start_s: float, end_s: float, source: str) -> list
         lo, hi = _core_span(match.group())
         words.append([match.start() + lo, match.start() + hi, source, _round(w_start), _round(w_end)])
     return words
+
+
+def group_asr_words(words: list, pause_s: float = CLIP_PAUSE_S, max_s: float = CLIP_MAX_S) -> list:
+    """Whisper's flat word list (`asr.transcribe_wav_words`) cut into the
+    clips an import makes, each a list of `(word, start_s, end_s)` in
+    order. A clip ends after a word that ends a sentence (`.`, `?`, `!` or
+    an ellipsis, closing quotes and brackets ignored), before a pause
+    longer than `pause_s`, and before a word that would take it past
+    `max_s`. Rows that aren't `(text, number, number)` are skipped."""
+    groups: list = []
+    current: list = []
+    for item in words or []:
+        try:
+            word, start_s, end_s = str(item[0]).strip(), float(item[1]), float(item[2])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if not word:
+            continue
+        if current and (start_s - current[-1][2] > pause_s or end_s - current[0][1] > max_s):
+            groups.append(current)
+            current = []
+        current.append((word, start_s, end_s))
+        if word.rstrip(_CLOSING).endswith(_SENTENCE_ENDS):
+            groups.append(current)
+            current = []
+    if current:
+        groups.append(current)
+    return groups
+
+
+def heard_words(text: str, run_words: list) -> list:
+    """`[(word, start_s, end_s)]` for `run_words` (`Run.words` entries of
+    `text`): what the review dialog aligns an edited line against, so a
+    corrected spelling keeps the times the line had."""
+    out = []
+    for word in run_words or []:
+        try:
+            out.append((text[int(word[0]):int(word[1])], float(word[3]), float(word[4])))
+        except (TypeError, ValueError, IndexError):
+            continue
+    return out
+
+
+def realign_words(text: str, heard: list, source: str) -> list:
+    """`Run.words` for `text` aligned to `heard` (`[(word, start_s,
+    end_s)]`, from Whisper or from the line as it was) with
+    `wordalign.align`: a word that still matches keeps its times, a new or
+    respelled one takes the times around it. When the text has as many
+    words as were heard, each word takes the heard word in its place
+    instead, so a line whose spelling was corrected keeps every time.
+    `align` gives the unmatched words before the first match (or after the
+    last) no length; here they share what was heard before that match (or
+    after it), so a corrected first or last word keeps its audio. The text
+    is never changed."""
+    from kokoro_gui.daw.wordalign import align
+
+    tokens = (text or "").split()
+    if tokens and len(tokens) == len(heard or []):
+        try:
+            return run_words_for_text(text, [[t, float(h[1]), float(h[2])] for t, h in zip(tokens, heard)], source)
+        except (TypeError, ValueError, IndexError):
+            pass
+    rows = align(text, heard)
+    timed = [i for i, row in enumerate(rows) if row[2] > row[1]]
+    if rows and timed and heard:
+        _spread(rows, 0, timed[0], float(heard[0][1]), rows[timed[0]][1])
+        _spread(rows, timed[-1] + 1, len(rows), rows[timed[-1]][2], float(heard[-1][2]))
+    return run_words_for_text(text, rows, source)
+
+
+def _spread(rows: list, lo: int, hi: int, start_s: float, end_s: float) -> None:
+    """Shares `[start_s, end_s]` evenly among `rows[lo:hi]` in place, when
+    there is anything to share."""
+    count = hi - lo
+    if count <= 0 or end_s <= start_s:
+        return
+    step = (end_s - start_s) / count
+    for k in range(count):
+        rows[lo + k][1] = round(start_s + k * step, 4)
+        rows[lo + k][2] = round(start_s + (k + 1) * step, 4)
+
+
+def untimed_gaps(document) -> list:
+    """`(doc_start, doc_end)` of every untagged run holding more than
+    whitespace in a paragraph that also holds imported recording text:
+    text typed into a recording, which has no audio until a character is
+    assigned to it (grill Q32). The editor greys it and marks its line."""
+    import bisect
+
+    text = document.text
+    # [start, end, has_recording, gaps] per paragraph, in order.
+    paragraphs: list = []
+    start = 0
+    for line in text.split("\n"):
+        paragraphs.append([start, start + len(line), False, []])
+        start += len(line) + 1
+    starts = [p[0] for p in paragraphs]
+
+    for run, r_start, r_end in document._iter_runs_with_offsets():
+        recording = document._recording_clip_of(run) is not None
+        if r_end <= r_start or not (recording or (run.clip_id is None and run.text.strip())):
+            continue
+        index = max(0, bisect.bisect_right(starts, r_start) - 1)
+        while index < len(paragraphs) and paragraphs[index][0] < r_end:
+            paragraph = paragraphs[index]
+            lo, hi = max(r_start, paragraph[0]), min(r_end, paragraph[1])
+            if hi > lo:
+                if recording:
+                    paragraph[2] = True
+                elif text[lo:hi].strip():
+                    paragraph[3].append((lo, hi))
+            index += 1
+    return [gap for paragraph in paragraphs if paragraph[2] for gap in paragraph[3]]
 
 
 def source_entry(path: str) -> tuple:
