@@ -128,11 +128,15 @@ def boundary_gap_s(document, text: str, previous_end: Optional[int], clip, exten
 
 def compute_arrangement(document, engine_id: Optional[str] = None,
                         chars_per_second: Optional[float] = None,
-                        clip_duration: Optional[Callable] = None) -> Arrangement:
+                        clip_duration: Optional[Callable] = None,
+                        clip_estimate: Optional[Callable] = None) -> Arrangement:
     """Pass `chars_per_second` to bypass the stats lookup (tests, or a
     caller that already has the number). `clip_duration(clip)` replaces
     `clip_audio_duration_s` when given: it returns the clip's audible
-    length in seconds, or None for a clip with no audio yet."""
+    length in seconds, or None for a clip with no audio yet.
+    `clip_estimate(clip)` may give a better estimate than the clip's own
+    text for a clip with no audio (a subproject: its content, not its
+    title), or None to use the text."""
     if chars_per_second is None:
         chars_per_second = recorded_chars_per_second(engine_id)
     if clip_duration is None:
@@ -156,8 +160,12 @@ def compute_arrangement(document, engine_id: Optional[str] = None,
             duration = audio_duration
             estimated = False
         else:
-            config = document.effective_config_for_clip(clip)
-            duration = estimate_duration_s(document.clip_text(clip), config.get("speed", 1.0), chars_per_second)
+            better = clip_estimate(clip) if clip_estimate is not None else None
+            if better is not None:
+                duration = float(better)
+            else:
+                config = document.effective_config_for_clip(clip)
+                duration = estimate_duration_s(document.clip_text(clip), config.get("speed", 1.0), chars_per_second)
             estimated = True
         if clip.timeline_timestamp is not None:
             start = clip.timeline_timestamp

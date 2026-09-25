@@ -207,6 +207,8 @@ class TranscriptGutter(QWidget):
     def _label_key(self, daw_doc, clip):
         if clip is None:
             return (None, None)
+        if clip.is_nested:
+            return ("nested", clip.id)
         return (clip.character_id, clip_fx_name(daw_doc, clip))
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt override)
@@ -254,7 +256,14 @@ class TranscriptGutter(QWidget):
             line_h = max(int(rect.height()), 1)
             text_right = self.width() - GUTTER_BUTTON_PX - 10
 
-            if key != previous_key and character is not None:
+            if key != previous_key and clip is not None and clip.is_nested:
+                # A subproject's line (phase 4): labelled, no picker.
+                name_rect = QRect(4, top, text_right - 4, metrics_h)
+                painter.setFont(base_font)
+                painter.setPen(QColor(pal.gutter_text))
+                painter.drawText(name_rect, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+                                 "Subproject")
+            elif key != previous_key and character is not None:
                 name_rect = QRect(4, top, text_right - 4, metrics_h)
                 painter.setFont(base_font)
                 painter.setPen(QColor(character.highlight_color))

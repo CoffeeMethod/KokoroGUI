@@ -1,13 +1,15 @@
 """Render the Qt shell to a PNG without a display or a model.
 
     python scripts/render_screenshot.py out.png [--theme dark] [--workspace Simple]
-                                                 [--size 1600x1000]
+                                                 [--size 1600x1000] [--subproject]
 
 Builds a `QtTTSApp` against `tests.conftest.StubEngine` (no Kokoro, no
 eSpeak, no audio device) in a temp working directory, loads a small sample
 project with three characters, marks two clips as generated with synthetic
 audio so the timeline shows waveforms next to estimated clips, and grabs
-the window. Used to compare each step of Claude/PLAN_ui_shell_redesign.md
+the window. `--subproject` turns the last line into a subproject (phase 4),
+so the transcript shows its placeholder line and the timeline its block and
+breadcrumb. Used to compare each step of Claude/PLAN_ui_shell_redesign.md
 against the wireframe, and to refresh the README/docs screenshots.
 """
 from __future__ import annotations
@@ -42,7 +44,7 @@ def _write_tone(path: str, seconds: float, freq: float, rate: int = 24000) -> No
     sf.write(path, data, rate)
 
 
-def build_app(workdir: str, theme_name: str, workspace: str):
+def build_app(workdir: str, theme_name: str, workspace: str, subproject: bool = False):
     from tests.conftest import StubEngine  # noqa: E402
 
     import kokoro_gui.qt.app as qt_app_module  # noqa: E402
@@ -101,6 +103,10 @@ def build_app(workdir: str, theme_name: str, workspace: str):
         config = app._assemble_clip_config(clip)
         expected = compute_expected_cache_hash(text, config)
         clip.segments = build_segments_from_results(expected, [{"text": text, "path": path, "duration": seconds}])
+    if subproject:
+        start, end = doc.clip_extent(c3.id)
+        app.new_subproject(start, end, title="Chapter 2")
+        app.editor.load_text(doc.text)
     del c3
 
     app.editor.rehighlight()
@@ -118,12 +124,13 @@ def main() -> None:
     parser.add_argument("--theme", default="light", choices=("light", "dark"))
     parser.add_argument("--workspace", default="Advanced", choices=("Advanced", "Simple"))
     parser.add_argument("--size", default="1600x1000")
+    parser.add_argument("--subproject", action="store_true", help="show a subproject line, block and breadcrumb")
     args = parser.parse_args()
     width, height = (int(v) for v in args.size.lower().split("x"))
 
     out = os.path.abspath(args.out)
     workdir = tempfile.mkdtemp(prefix="kokorogui_shot_")
-    qapp, app = build_app(workdir, args.theme, args.workspace)
+    qapp, app = build_app(workdir, args.theme, args.workspace, args.subproject)
     app.resize(width, height)
     app.workspaces.apply_default(args.workspace)
     app.show()

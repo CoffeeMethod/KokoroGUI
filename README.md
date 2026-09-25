@@ -37,6 +37,18 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
     few lanes (3 by default) and moves to the next lane each time the speaker changes, so a
     conversation alternates lanes. Mute, solo, fader and pan then act per lane. Switching back
     puts each clip on its character's track. Either switch is one undo step.
+-   **Subprojects.** A project can hold other projects: File > New Subproject turns the selected
+    text into a subproject embedded in this one (a chapter, an episode segment, a scene), and
+    File > Add Subproject... links an existing `.tbaw`. The parent shows each as one read-only
+    line and one block that plays the subproject's rendered mix. Click the block to edit the
+    subproject in the transcript and Settings tabs; double-click to enter it on the timeline,
+    with a breadcrumb back. Generate renders out-of-date subprojects after the parent's own
+    clips. The New from text button makes an EPUB one subproject per chapter. Characters come
+    in three scopes: Global (the library), Project (shared by every subproject of a book) and
+    Local. A project with subprojects needs this version or newer to open.
+-   **Each character picks its engine.** The Engine box in Edit > Characters replaces
+    Options > Engine, so Kokoro and Audio8 voices can share a project. The Settings and Voices
+    tabs follow the selected clip's character.
 -   **Ripple on regenerate.** When a regenerated clip comes back longer or shorter, clips you
     placed by dragging that sit after it move by the same amount. Right-click a clip > Lock in
     time to keep it where it is, or turn ripple off in Settings > Project. Clips that overlap on

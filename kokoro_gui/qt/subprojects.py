@@ -254,6 +254,7 @@ class SubprojectsMixin:
         )
         self.children[child.project_id] = child
         self._missing_children.discard(child.project_id)
+        self._closed_child_states.pop(child.project_id, None)
         self._install_segment_key_fn(child)
         self._install_nested_state_fn(child)
         self._resolve_child_characters(child)
@@ -316,13 +317,20 @@ class SubprojectsMixin:
             return self.child_state(child)
         if self.is_child_missing(clip):
             return "missing"
+        # A closed child's dir can't change until it's opened or rendered,
+        # so its answer is kept (dropped by `open_child` and teardown).
+        child_id = self.child_id_of(clip)
+        cached = self._closed_child_states.get(child_id)
+        if cached is not None:
+            return cached
         parent = project or self.project_for(clip)
         project_dir = self._closed_child_dir(parent, clip)
         info = project_io.read_mixdown_info(project_dir)
         session = project_io.read_session(project_dir) if project_dir else None
-        if info and session and not session.get("dirty") and info.get("digest") == session.get("saved_digest"):
-            return "ok"
-        return "stale"
+        state = "ok" if (info and session and not session.get("dirty")
+                         and info.get("digest") == session.get("saved_digest")) else "stale"
+        self._closed_child_states[child_id] = state
+        return state
 
     def invalidate_child_states(self) -> None:
         for child in self.children.values():
@@ -348,6 +356,17 @@ class SubprojectsMixin:
             project_dir = self._closed_child_dir(project or self.project_for(clip), clip)
         info = project_io.read_mixdown_info(project_dir)
         return info["duration_s"] if info else None
+
+    def nested_estimate_s(self, clip):
+        """An unrendered subproject's estimated length: its open document's
+        arrangement, so the block is sized by its content rather than its
+        title. None for any other clip, or a child that isn't open."""
+        if clip is None or not clip.is_nested:
+            return None
+        child = self.child_project(clip)
+        if child is None:
+            return None
+        return self.build_arrangement(child).total_duration_s
 
     def nested_post_config(self, clip, project=None) -> dict:
         """What the parent applies over a child's mixdown: nothing but FX
@@ -1145,6 +1164,7 @@ class SubprojectsMixin:
                 project_io.delete_project_dir(child.project_dir)
         self.children.clear()
         self._missing_children.clear()
+        self._closed_child_states.clear()
         self.focus = self.level = self.root
 
 

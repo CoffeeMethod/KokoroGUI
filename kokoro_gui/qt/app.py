@@ -135,6 +135,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         # Child project ids whose bundle couldn't be opened (painted as
         # missing, with Relink).
         self._missing_children: set = set()
+        # child id -> "ok"/"stale" for subprojects that aren't open.
+        self._closed_child_states: dict = {}
         # Stale subprojects waiting to be generated and rendered, one at a
         # time behind is_busy: [(nested clip, then)], and the render step a
         # child's batch generate hands back to.
@@ -1209,7 +1211,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         the timeline and transport show."""
         project = project or self.level
         return compute_arrangement(project.document, engine_id=self.backend.id,
-                                   clip_duration=lambda clip: self.clip_duration_s(clip, project))
+                                   clip_duration=lambda clip: self.clip_duration_s(clip, project),
+                                   clip_estimate=self.nested_estimate_s)
 
     # --- Options: engine / device / theme ---------------------------------
 
@@ -1935,11 +1938,14 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def project_sample_rate(self) -> int:
         """The mix rate for transport and export: the highest output rate
-        among the engines the document's characters use (44.1k with an
+        among the engines the open projects' characters use (44.1k with an
         Audio8 character, 24k otherwise). Clips rendered at another rate
         are resampled once on load."""
+        engine_ids = set()
+        for project in self.open_projects():
+            engine_ids.update(self._document_engine_ids(project.document))
         rates = [int(getattr(self._backends[eid].engine, "SAMPLE_RATE", 24000) or 24000)
-                 for eid in self._document_engine_ids(self.document) if eid in self._backends]
+                 for eid in engine_ids if eid in self._backends]
         return max(rates, default=24000)
 
     # --- Edit menu ------------------------------------------------------------

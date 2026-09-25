@@ -143,15 +143,20 @@ class TimelineDock(QDockWidget):
     def refresh_breadcrumb(self) -> None:
         """`Book › Chapter 12`: a button per project from the root to the
         level; clicking one shows it."""
+        app = self.app
+        chain = app.chain_of(app.level) if hasattr(app, "chain_of") else []
+        show = len(chain) > 1 or bool(chain and chain[0].document.nested_clips())
+        self.breadcrumb.setVisible(show)
+        # Rebuilt only when the chain or a title changed, not per keystroke.
+        key = tuple((id(p), p.title()) for p in chain) if show else ()
+        if key == getattr(self, "_breadcrumb_key", None):
+            return
+        self._breadcrumb_key = key
         while self.breadcrumb_layout.count():
             item = self.breadcrumb_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        app = self.app
-        chain = app.chain_of(app.level) if hasattr(app, "chain_of") else []
-        show = len(chain) > 1 or bool(chain and chain[0].document.nested_clips())
-        self.breadcrumb.setVisible(show)
         self.breadcrumb_buttons = []
         for index, project in enumerate(chain):
             if index:
