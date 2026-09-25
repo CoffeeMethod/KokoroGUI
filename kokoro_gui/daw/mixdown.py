@@ -40,7 +40,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from kokoro_gui.audio import mixer
+from kokoro_gui.audio import mixer, post
 from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement, segment_timeline
 from kokoro_gui.daw.mixplan import ClipMix, clip_mixes
 from kokoro_gui.daw.timecode import format_position
@@ -145,7 +145,8 @@ def _safe_component(name: str) -> str:
 def _clip_samples(clip, sample_rate: int, post_config: Optional[dict] = None,
                   nested_audio_path: Optional[Callable] = None) -> Optional[np.ndarray]:
     """All of a clip's segments concatenated at `sample_rate`, post-processed
-    per `post_config`, or None if none of them can be read. A nested clip
+    per `post_config`, or None if none of them can be read. A segment with a
+    `range` contributes only that slice of its file. A nested clip
     (a subproject) is its child's mixdown file, `nested_audio_path(clip)`."""
     if getattr(clip, "source", None) == "nested":
         path = nested_audio_path(clip) if nested_audio_path is not None else None
@@ -160,7 +161,8 @@ def _clip_samples(clip, sample_rate: int, post_config: Optional[dict] = None,
         if not segment.audio_path:
             continue
         try:
-            parts.append(mixer.load_clip_samples(segment.audio_path, sample_rate, post_config))
+            parts.append(mixer.load_clip_samples(segment.audio_path, sample_rate, post_config,
+                                                 post.segment_range(segment)))
         except Exception:
             continue
     if not parts:

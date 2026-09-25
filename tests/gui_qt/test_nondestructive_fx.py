@@ -135,6 +135,32 @@ def test_arrangement_measures_the_rendered_length(qt_app, tmp_path):
     assert qt_app.document.dirty_clips() == []
 
 
+def test_segments_with_a_range_are_measured_scheduled_and_drawn_as_slices(qt_app, tmp_path):
+    text = "hello world"
+    qt_app.document.text = text
+    character = qt_app.document.characters[0]
+    clip = qt_app.document.assign_character_to_range(0, len(text), character.id)
+    path = tmp_path / "recording.wav"
+    ramp = (np.arange(RATE * 2) / (RATE * 2.0)).astype(np.float32)
+    sf.write(str(path), ramp, RATE, subtype="FLOAT")
+    # A trim setting doesn't reach a slice (post._slice_config).
+    clip.overrides["trim"] = True
+    clip.segments = [Segment(order_index=0, audio_path=str(path), range=[1.0, 1.5]),
+                     Segment(order_index=1, audio_path=str(path), range=[0.25, 0.5])]
+
+    placed = qt_app.build_arrangement().by_clip_id()[clip.id]
+    assert placed.duration_s == 0.75 and not placed.estimated
+
+    qt_app._rebuild_transport_schedule()
+    loaded = sorted(qt_app.transport.loaded_clips(), key=lambda c: c.start_frame)
+    assert [len(c.samples) for c in loaded] == [RATE // 2, RATE // 4]
+    assert loaded[1].start_frame - loaded[0].start_frame == RATE // 2
+    assert np.allclose(loaded[0].samples, ramp[RATE:RATE + RATE // 2], atol=1e-6)
+
+    samples, rate = qt_app.rendered_clip_samples(clip)
+    assert rate == RATE and len(samples) == RATE * 3 // 4
+
+
 def test_legacy_baked_segment_is_dirty_and_a_fresh_one_is_not(qt_app, tmp_path):
     clip = _generated_clip(qt_app, tmp_path)
     assert qt_app.document.dirty_clips() == []

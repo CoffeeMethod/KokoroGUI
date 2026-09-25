@@ -7,9 +7,13 @@ or the timeline waveform reads the file, and never written back. Changing an
 FX setting therefore never dirties a clip: `daw/dirty.py` only looks at the
 generation keys, and this module only looks at `POST_KEYS`.
 
-`render()` memoizes by `(path, mtime, post_key, target_rate)`, so a slider
-move re-renders only the clips whose resolved post config changed, and a
-transport rebuild with nothing changed is a dict lookup per segment.
+`render()` memoizes by `(path, mtime, post_key, target_rate, range_s)`, so
+a slider move re-renders only the clips whose resolved post config changed,
+and a transport rebuild with nothing changed is a dict lookup per segment.
+
+`range_s` (or `render_slice`) plays a time range of a file instead of the
+whole file: a `Segment.range` (an imported recording's words), a source
+track sliced per clip, a trimmed music bed. Only those frames are read.
 
 Qt-free. `process_audio` is the same function `process_chunk_task` uses on
 the whole-document path, called later.
@@ -61,27 +65,74 @@ def is_identity(config: dict) -> bool:
     return not (config.get("eq_bass", 0.0) or config.get("eq_treble", 0.0))
 
 
-def _read_mono(path: str):
+def segment_range(segment) -> Optional[tuple]:
+    """`segment.range` as a `(start_s, end_s)` float pair, or None when the
+    segment plays its whole file (no range, or one that isn't two numbers,
+    as a hand-edited `document.json` might hold)."""
+    return _clean_range(getattr(segment, "range", None))
+
+
+def _clean_range(range_s) -> Optional[tuple]:
+    if not isinstance(range_s, (list, tuple)):
+        return None
+    try:
+        start, end = float(range_s[0]), float(range_s[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if not (np.isfinite(start) and np.isfinite(end)):
+        return None
+    return start, end
+
+
+def _read_mono(path: str, range_s: Optional[tuple] = None):
+    """`(mono, rate)` for the whole file, or with `range_s` only the frames
+    from `start_s` to `end_s`: a seek and a read, so a slice of a long
+    recording never decodes the rest. The range is clamped to the file; an
+    empty or inverted one gives an empty array."""
     import soundfile as sf
 
-    data, rate = sf.read(path, dtype="float32", always_2d=True)
+    if range_s is None:
+        data, rate = sf.read(path, dtype="float32", always_2d=True)
+    else:
+        with sf.SoundFile(path) as f:
+            rate = f.samplerate
+            first = min(max(0, int(round(range_s[0] * rate))), f.frames)
+            last = min(max(0, int(round(range_s[1] * rate))), f.frames)
+            if last <= first:
+                return np.zeros(0, dtype=np.float32), int(rate)
+            f.seek(first)
+            data = f.read(last - first, dtype="float32", always_2d=True)
     mono = data.mean(axis=1).astype(np.float32) if data.shape[1] > 1 else data[:, 0]
     return mono, int(rate)
 
 
-def render(path: str, post_config: Optional[dict], target_rate: int) -> np.ndarray:
+def _slice_config(post_config: Optional[dict], range_s: Optional[tuple]) -> Optional[dict]:
+    """The config a render applies. A slice ignores `trim_silence`: its
+    range already says where the audio starts and ends (a word boundary, a
+    cue, a trimmed bed), and trimming inside it would move that."""
+    if range_s is None or not post_config or not post_config.get("trim_silence", False):
+        return post_config
+    return dict(post_config, trim_silence=False)
+
+
+def render(path: str, post_config: Optional[dict], target_rate: int,
+           range_s: Optional[tuple] = None) -> np.ndarray:
     """`path` read, post-processed at its native rate per `post_config`, then
     resampled to `target_rate`. Mono float32. Raises whatever soundfile
-    raises for an unreadable file. `post_config=None` means no processing."""
+    raises for an unreadable file. `post_config=None` means no processing.
+    `range_s` (`(start_s, end_s)` seconds into the file) reads and processes
+    only that slice; None reads the whole file."""
     from kokoro_gui.audio.mixer import resample
 
-    key = _cache_key(path, post_config, target_rate)
+    range_s = _clean_range(range_s)
+    post_config = _slice_config(post_config, range_s)
+    key = _cache_key(path, post_config, target_rate, range_s)
     cached = _RENDER_CACHE.get(key)
     if cached is not None:
         return cached
 
-    mono, rate = _read_mono(path)
-    if post_config and not is_identity(post_config):
+    mono, rate = _read_mono(path, range_s)
+    if len(mono) and post_config and not is_identity(post_config):
         from kokoro_gui.engine.audio_fx import process_audio
 
         mono = np.asarray(process_audio(mono, rate, post_config), dtype=np.float32).reshape(-1)
@@ -90,12 +141,19 @@ def render(path: str, post_config: Optional[dict], target_rate: int) -> np.ndarr
     return out
 
 
-def _cache_key(path: str, post_config: Optional[dict], target_rate: int) -> tuple:
+def render_slice(path: str, start_s: float, end_s: float, post_config: Optional[dict],
+                 target_rate: int) -> np.ndarray:
+    """`render` of the `[start_s, end_s)` seconds of `path`."""
+    return render(path, post_config, target_rate, range_s=(start_s, end_s))
+
+
+def _cache_key(path: str, post_config: Optional[dict], target_rate: int,
+               range_s: Optional[tuple] = None) -> tuple:
     try:
         mtime = os.path.getmtime(path)
     except OSError:
         mtime = None
-    return (os.path.abspath(path), mtime, post_key(post_config or {}), int(target_rate))
+    return (os.path.abspath(path), mtime, post_key(post_config or {}), int(target_rate), range_s)
 
 
 def duration_hint(segment, post_config: Optional[dict]) -> Optional[float]:
@@ -103,15 +161,21 @@ def duration_hint(segment, post_config: Optional[dict]) -> Optional[float]:
     (`duration`, `onset_s`, `tail_s`) without reading audio, or None for a
     segment that predates those fields. Trim removes the onset and tail;
     pitch resamples by `2 ** (semitones / 12)`; nothing else in
-    `process_audio` changes the length."""
-    duration = getattr(segment, "duration", None)
-    onset, tail = getattr(segment, "onset_s", None), getattr(segment, "tail_s", None)
-    if duration is None or onset is None or tail is None:
-        return None
+    `process_audio` changes the length. A segment with a `range` is
+    `end - start` long before pitch, and trim doesn't apply to it (see
+    `_slice_config`)."""
     config = post_config or {}
-    length = float(duration)
-    if config.get("trim_silence", False):
-        length = max(0.0, length - float(onset) - float(tail))
+    range_s = segment_range(segment)
+    if range_s is not None:
+        length = max(0.0, range_s[1] - range_s[0])
+    else:
+        duration = getattr(segment, "duration", None)
+        onset, tail = getattr(segment, "onset_s", None), getattr(segment, "tail_s", None)
+        if duration is None or onset is None or tail is None:
+            return None
+        length = float(duration)
+        if config.get("trim_silence", False):
+            length = max(0.0, length - float(onset) - float(tail))
     from kokoro_gui.engine.audio_fx import clamp_pitch_semitones
 
     semitones = clamp_pitch_semitones(config.get("pitch", 0.0))
@@ -121,16 +185,18 @@ def duration_hint(segment, post_config: Optional[dict]) -> Optional[float]:
 
 
 def rendered_duration_s(path: str, post_config: Optional[dict], target_rate: int,
-                        hint: Optional[float] = None) -> float:
+                        hint: Optional[float] = None, range_s: Optional[tuple] = None) -> float:
     """The rendered length in seconds. A render already in the memo answers
     exactly; otherwise `hint` (from `duration_hint`) answers without reading
-    the file, which is what lets a long project place every clip at open."""
-    cached = _RENDER_CACHE.get(_cache_key(path, post_config, target_rate))
+    the file, which is what lets a long project place every clip at open.
+    `range_s` measures that slice of the file, as `render` does."""
+    range_s = _clean_range(range_s)
+    cached = _RENDER_CACHE.get(_cache_key(path, _slice_config(post_config, range_s), target_rate, range_s))
     if cached is not None:
         return len(cached) / float(target_rate)
     if hint is not None:
         return float(hint)
-    return len(render(path, post_config, target_rate)) / float(target_rate)
+    return len(render(path, post_config, target_rate, range_s)) / float(target_rate)
 
 
 def clear_render_cache() -> None:

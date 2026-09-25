@@ -297,6 +297,23 @@ def test_transport_scheduled_clip_carries_fades_pan_and_automation(tmp_path, mak
     assert clip.automation is not None
 
 
+def test_transport_scheduled_clip_with_a_slice_plays_only_that_range(tmp_path, make_transport):
+    ramp = (np.arange(8000) / 8000.0).astype(np.float32)
+    path = str(tmp_path / "ramp.wav")
+    sf.write(path, ramp, 8000, subtype="FLOAT")
+    transport = make_transport()
+    transport.load([ScheduledClip("c1", 1.0, path, slice=(0.25, 0.5))], sample_rate=8000)
+
+    clip = transport.loaded_clips()[0]
+    assert len(clip.samples) == 2000 and clip.start_frame == 8000
+    assert transport.duration() == 1.25
+    transport.seek(1.0)
+    block = render_block_for_test(transport, 2000)
+    assert np.allclose(block[:, 0], ramp[2000:4000], atol=1e-6)
+    assert np.allclose(block[:, 1], ramp[2000:4000], atol=1e-6)
+    assert np.allclose(render_block_for_test(transport, 100), 0.0)
+
+
 # -- mix plan (track controls) ---------------------------------------------------
 
 

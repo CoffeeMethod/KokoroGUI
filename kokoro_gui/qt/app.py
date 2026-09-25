@@ -1154,7 +1154,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         length (trim and pitch change it), or the raw `Segment.duration`
         for a file that can't be read, or None with no audio at all. A
         segment with a stored onset and tail is measured from those, without
-        reading its file (`post.duration_hint`). Falls back to the raw
+        reading its file (`post.duration_hint`), and a segment with a
+        `range` as `end - start`. Falls back to the raw
         durations while the docks are still being built. A nested clip is
         its child's mixdown length, from `mixdown.json` (no read)."""
         if clip.is_nested:
@@ -1170,7 +1171,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         for segment in segments:
             try:
                 total += post.rendered_duration_s(segment.audio_path, post_config, rate,
-                                                  hint=post.duration_hint(segment, post_config))
+                                                  hint=post.duration_hint(segment, post_config),
+                                                  range_s=post.segment_range(segment))
             except Exception:
                 total += segment.duration or 0.0
         return total
@@ -1196,7 +1198,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         parts = []
         for segment in segments:
             try:
-                parts.append(post.render(segment.audio_path, post_config, rate))
+                parts.append(post.render(segment.audio_path, post_config, rate, post.segment_range(segment)))
             except Exception:
                 continue
         if not parts:
@@ -2188,7 +2190,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         (`daw/mixplan.py`): muted and soloed-out tracks are left out; the
         track's gain, pan and automation and the clip's fades ride each
         entry. A clip's fade-in goes on its first segment and its fade-out
-        on its last."""
+        on its last. A segment with a `range` becomes a sliced entry."""
         level = self.level
         self._arrangement = self.build_arrangement(level)
         rate = self.project_sample_rate()
@@ -2214,15 +2216,18 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             offset = placed.start_s
             segments = [s for s in sorted(placed.clip.segments, key=lambda s: s.order_index) if s.audio_path]
             for index, segment in enumerate(segments):
+                range_s = post.segment_range(segment)
                 schedule.append(ScheduledClip(
                     clip_id=placed.clip.id, start_s=offset, path=segment.audio_path, post_config=post_config,
                     gain=mix.gain, pan=mix.pan, automation=mix.automation,
                     fade_in_s=mix.fade_in_s if index == 0 else 0.0,
                     fade_out_s=mix.fade_out_s if index == len(segments) - 1 else 0.0,
+                    slice=range_s,
                 ))
                 try:
                     offset += post.rendered_duration_s(segment.audio_path, post_config, rate,
-                                                       hint=post.duration_hint(segment, post_config))
+                                                       hint=post.duration_hint(segment, post_config),
+                                                       range_s=range_s)
                 except Exception:
                     offset += segment.duration or 0.0
         self.transport.load(schedule, sample_rate=self.project_sample_rate(),

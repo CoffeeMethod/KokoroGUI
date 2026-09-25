@@ -62,6 +62,15 @@ def _to_dict(obj) -> dict:
     return {**extra, **data}
 
 
+def _segment_to_dict(segment: Segment) -> dict:
+    """A segment's dict, without `range` when it is None, so a document
+    with no sliced segments saves exactly as it did before the field."""
+    data = _to_dict(segment)
+    if data.get("range") is None:
+        data.pop("range", None)
+    return data
+
+
 def _character_to_dict(character: Character) -> dict:
     data = _to_dict(character)
     stripped = (character.extra or {}).get("preset_data")
@@ -100,8 +109,8 @@ def document_to_dict(doc: Document) -> dict:
     clips = []
     for clip in doc.clips:
         data = _to_dict(clip)
-        data["segments"] = [_to_dict(s) for s in clip.segments]
-        data["takes"] = {str(index): [_to_dict(s) for s in segments]
+        data["segments"] = [_segment_to_dict(s) for s in clip.segments]
+        data["takes"] = {str(index): [_segment_to_dict(s) for s in segments]
                          for index, segments in sorted(clip.takes.items())}
         clips.append(data)
     return {

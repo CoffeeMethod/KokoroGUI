@@ -93,12 +93,24 @@ def estimate_duration_s(text: str, speed: float, chars_per_second: Optional[floa
     return chars / (rate * speed)
 
 
+def segment_seconds(segment) -> float:
+    """A segment's raw length: its `range` (`end - start`) when it plays a
+    slice of its file, else its stored `duration`."""
+    range_s = getattr(segment, "range", None)
+    if range_s is not None:
+        try:
+            return max(0.0, float(range_s[1]) - float(range_s[0]))
+        except (TypeError, ValueError, IndexError):
+            pass
+    return float(segment.duration or 0.0)
+
+
 def clip_audio_duration_s(clip) -> Optional[float]:
-    """Sum of the clip's segment durations, or None when no segment carries
+    """Sum of the clip's segment lengths, or None when no segment carries
     audio yet."""
     if not any(getattr(s, "audio_path", None) for s in clip.segments):
         return None
-    return float(sum(s.duration or 0.0 for s in clip.segments))
+    return float(sum(segment_seconds(s) for s in clip.segments))
 
 
 def _setting_s(document, key: str, default: float) -> float:
@@ -187,13 +199,13 @@ def segment_timeline(placed: PlacedClip) -> list:
     (trim and pitch change it), so raw times map linearly onto it. Word
     times go through this: `start_s + word_start * scale`."""
     segments = sorted((s for s in placed.clip.segments if s.audio_path), key=lambda s: s.order_index)
-    raw_total = sum(float(s.duration or 0.0) for s in segments)
+    raw_total = sum(segment_seconds(s) for s in segments)
     scale = placed.duration_s / raw_total if raw_total > 0 else 1.0
     out = []
     cursor = placed.start_s
     for segment in segments:
         out.append((segment, cursor, scale))
-        cursor += float(segment.duration or 0.0) * scale
+        cursor += segment_seconds(segment) * scale
     return out
 
 
