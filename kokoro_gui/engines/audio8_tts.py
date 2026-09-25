@@ -600,6 +600,8 @@ class Audio8BackendAdapter(BackendHooksMixin):
         supports_multi_speaker_script=True,
         is_local_model=True,
         supports_jit_streaming=False,
+        # The model synthesizes at its own pace (see `generate_segment`).
+        supports_speed=False,
     )
 
     def __init__(self, engine: Optional[Audio8Engine] = None):

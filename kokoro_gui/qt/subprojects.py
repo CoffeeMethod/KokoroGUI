@@ -29,6 +29,7 @@ import os
 from PySide6.QtWidgets import QMessageBox
 
 from kokoro_gui.daw import library as character_library
+from kokoro_gui.engine.presets import filter_fx_preset_values
 from kokoro_gui.qt import project as project_io
 from kokoro_gui.qt.open_projects import OpenProject
 
@@ -380,12 +381,15 @@ class SubprojectsMixin:
         if not clip.fx_override and not own:
             return {}
         values = {}
-        preset = fx_resolve.load_fx_preset_values(self, own, project or self.project_for(clip)) if own else None
+        target = project or self.project_for(clip)
+        preset = fx_resolve.load_fx_preset_values(self, own, target) if own else None
         if preset:
             values.update(preset)
         if clip.fx_override:
-            values.update(clip.fx_override)
+            values.update(filter_fx_preset_values(clip.fx_override))
         values["apply_fx"] = True
+        # A convolution impulse response resolves in the parent's dir first.
+        values["project_dir"] = getattr(target, "project_dir", None)
         return post.extract_post_config(values)
 
     def render_subproject(self, child, then=None) -> bool:
@@ -1124,12 +1128,16 @@ class SubprojectsMixin:
         plans = []
         warnings = []
         to_save = self._children_to_save()
+        # A child's clips render with the project-scope FX too, so its bundle
+        # carries the impulse response those name.
+        fx_dock = getattr(self, "fx_dock", None)
+        project_fx = fx_dock.project_fx_state() if fx_dock is not None else None
         for child, target in to_save:
             pending = {c.project_id for c, _t in to_save if c.parent_id == child.project_id}
             plan, child_warnings = project_io.plan_save(
                 child.document, child.project_settings, target, child.project_dir, child.project_id,
                 self._backend_for, fx_presets_dir, project_io.read_session(child.project_dir), child.manifest,
-                pending_children=pending,
+                pending_children=pending, project_fx=project_fx,
             )
             source = target if child.kind == "linked" else self.source_of(child)
             plans.append((child, plan, source))

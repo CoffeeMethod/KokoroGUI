@@ -27,6 +27,11 @@ is audible on the next transport rebuild and never dirties a clip.
 
 Seven FX_PRESET_KEYS fields have no widget here (see spec.py's docstring);
 their values live in `self._hidden_values` and only change via preset load.
+
+A `spec.FXFileSpec` field (the convolution reverb's impulse response) is a
+combo of names from its store, project-local first (`fx_presets.list_ir_names`),
+with a "None" entry that stores "", and an "Add..." button that copies a wav
+into the global store (`fx_presets.import_ir_file`).
 """
 from __future__ import annotations
 
@@ -36,20 +41,21 @@ import re
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFormLayout,
+    QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
     QGroupBox, QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPushButton,
     QScrollArea, QVBoxLayout, QWidget,
 )
 
 import kokoro_gui.qt.app as qt_app_module
 from kokoro_gui.daw.undo import SetClipFxCommand
-from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, filter_allowed_keys
+from kokoro_gui.engine.presets import filter_fx_preset_values
 from kokoro_gui.qt import fx_resolve, spec
-from kokoro_gui.qt.fx_presets import list_fx_preset_names
+from kokoro_gui.qt.fx_presets import import_ir_file, list_fx_preset_names, list_ir_names
 from kokoro_gui.qt.fx_resolve import PLACEHOLDER as _PLACEHOLDER
 
 CLIP_EDIT_DEBOUNCE_MS = 300
 PROJECT_EDIT_DEBOUNCE_MS = 300
+FILE_FIELD_NONE = "None"
 
 
 class FXDock(QDockWidget):
@@ -60,6 +66,7 @@ class FXDock(QDockWidget):
 
         self._value_widgets: dict[str, QDoubleSpinBox] = {}
         self._enabled_checks: dict[str, QCheckBox] = {}
+        self._file_combos: dict[str, QComboBox] = {}
         self._hidden_values: dict[str, float] = {
             k: spec.SETTINGS_DEFAULTS[k] for k in spec.FX_KEYS_WITHOUT_WIDGET
         }
@@ -157,6 +164,9 @@ class FXDock(QDockWidget):
 
             form = QFormLayout()
             for s in section_specs:
+                if isinstance(s, spec.FXFileSpec):
+                    form.addRow(s.label + ":", self._build_file_field(s))
+                    continue
                 spin = QDoubleSpinBox()
                 spin.setRange(s.minimum, s.maximum)
                 span = s.maximum - s.minimum
@@ -168,6 +178,63 @@ class FXDock(QDockWidget):
                 form.addRow(s.label + ":", spin)
                 self._value_widgets[s.key] = spin
             box_layout.addLayout(form)
+
+    def _build_file_field(self, s) -> QWidget:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        combo = QComboBox()
+        combo.addItem(FILE_FIELD_NONE, "")
+        combo.currentIndexChanged.connect(self._on_widget_changed)
+        add_btn = QPushButton("Add...")
+        add_btn.setToolTip("Copy a wav file into the global impulse response store (presets/fx/ir)")
+        add_btn.clicked.connect(lambda _checked=False, key=s.key: self._add_ir_file(key))
+        layout.addWidget(combo, 1)
+        layout.addWidget(add_btn)
+        self._file_combos[s.key] = combo
+        self._fill_file_combo(combo, self.app.settings.get(s.key, ""))
+        return row
+
+    def _fill_file_combo(self, combo: QComboBox, current) -> None:
+        """Lists the store's names under "None" and selects `current`. A name
+        that resolves nowhere is still listed (marked missing) so showing a
+        preset or override that names it doesn't drop the name."""
+        current = current if isinstance(current, str) else ""
+        was_loading = self._loading
+        self._loading = True
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItem(FILE_FIELD_NONE, "")
+            names = list_ir_names(getattr(self.app, "project_dir", None))
+            for name in names:
+                combo.addItem(name, name)
+            if current and current not in names:
+                combo.addItem(f"{current} (missing)", current)
+            index = combo.findData(current)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+        finally:
+            combo.blockSignals(False)
+            self._loading = was_loading
+
+    def refresh_ir_choices(self) -> None:
+        """Re-lists every file field's names (the project dir changed, or a
+        file was added), keeping each selection."""
+        for combo in self._file_combos.values():
+            self._fill_file_combo(combo, combo.currentData())
+
+    def _add_ir_file(self, key: str) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Add impulse response", "", "WAV files (*.wav)")
+        if not path:
+            return
+        try:
+            name = import_ir_file(path)
+        except (OSError, ValueError) as e:
+            QMessageBox.critical(self, "Error", f"Couldn't add the impulse response: {e}")
+            return
+        self.refresh_ir_choices()
+        combo = self._file_combos[key]
+        combo.setCurrentIndex(max(0, combo.findData(name)))
 
     # --- scope ---------------------------------------------------------------
 
@@ -300,6 +367,8 @@ class FXDock(QDockWidget):
             state[key] = spin.value()
         for key, check in self._enabled_checks.items():
             state[key] = check.isChecked()
+        for key, combo in self._file_combos.items():
+            state[key] = combo.currentData() or ""
         return state
 
     def project_fx_state(self) -> dict:
@@ -318,6 +387,9 @@ class FXDock(QDockWidget):
             for key, check in self._enabled_checks.items():
                 if key in data:
                     check.setChecked(bool(data[key]))
+            for key, combo in self._file_combos.items():
+                if key in data:
+                    self._fill_file_combo(combo, data[key])
             for key in self._hidden_values:
                 if key in data:
                     self._hidden_values[key] = data[key]
@@ -327,6 +399,7 @@ class FXDock(QDockWidget):
     # --- presets (presets/fx/*.json) --------------------------------------
 
     def refresh_presets(self) -> None:
+        self.refresh_ir_choices()
         current = self.preset_combo.currentText()
         presets = [_PLACEHOLDER] + list_fx_preset_names(self.app.project_dir)
         self.preset_combo.blockSignals(True)
@@ -376,7 +449,7 @@ class FXDock(QDockWidget):
             return
         try:
             with open(fpath, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
+                data = filter_fx_preset_values(json.load(fh))
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load FX preset: {e}")
             return
@@ -385,7 +458,7 @@ class FXDock(QDockWidget):
             self.set_values(data)
             self._set_combo_text(safe_name)
         else:
-            self._none_values.update(filter_allowed_keys(data, ALLOWED_FX_PRESET_KEYS))
+            self._none_values.update(data)
         if getattr(self.app, "settings_dock", None) is not None:
             self.app.settings_dock.set_fx_preset_display(safe_name)
         self.app.schedule_save()

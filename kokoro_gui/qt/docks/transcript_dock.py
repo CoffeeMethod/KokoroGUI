@@ -26,7 +26,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QComboBox, QDockWidget, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from kokoro_gui.daw.undo import SetClipFxCommand, SetFieldCommand
-from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, filter_allowed_keys
+from kokoro_gui.engine.presets import filter_fx_preset_values
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
 from kokoro_gui.qt.transcript_editor import TranscriptEditor, clip_fx_name
 
@@ -236,7 +236,7 @@ class TranscriptDock(QDockWidget):
             fx_values = None
         else:
             preset = self.app.engine.load_fx_preset(preset_name, self.app.project_dir)
-            fx_values = filter_allowed_keys(preset, ALLOWED_FX_PRESET_KEYS) if preset else None
+            fx_values = filter_fx_preset_values(preset) if preset else None
         self.app.document.undo_stack.push(SetClipFxCommand(clip_id, fx_values, preset_name=preset_name or None))
         self.editor.rehighlight()
         self.app.schedule_save()

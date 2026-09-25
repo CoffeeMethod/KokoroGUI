@@ -78,6 +78,9 @@ class EngineCapabilities:
     # Generation stamps `Segment.words` from the model's own timings; without
     # it the app aligns words with Whisper after a generate.
     supports_word_timing: bool = False
+    # The model honours the `speed` config key. Fit to slot regenerates at a
+    # new speed when it does and time-stretches the render when it doesn't.
+    supports_speed: bool = True
 
 
 # Choice presets for schema fields whose *meaning* isn't actually

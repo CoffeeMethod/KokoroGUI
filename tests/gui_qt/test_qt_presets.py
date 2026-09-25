@@ -11,7 +11,7 @@ def _stub_get_text(monkeypatch, value):
     monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: (value, True)))
 
 
-def test_save_fx_preset_writes_all_43_keys(qt_app, monkeypatch):
+def test_save_fx_preset_writes_every_fx_key(qt_app, monkeypatch):
     from kokoro_gui.qt import spec
     _stub_get_text(monkeypatch, "MyFX")
     qt_app.fx_dock._value_widgets["gain_db"].setValue(3.0)

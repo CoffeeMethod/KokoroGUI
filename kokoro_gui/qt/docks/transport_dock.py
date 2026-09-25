@@ -6,7 +6,10 @@ moved into a dock and reshaped into three rows:
 
 1. play / pause / stop (round `QToolButton`s with `kokoro_gui.qt.icons`
    glyphs, retinted on `themeChanged`), elapsed / total time, loop toggle -
-   driven by `kokoro_gui.audio.transport.Transport` through the app.
+   driven by `kokoro_gui.audio.transport.Transport` through the app, and
+   the Dub / Original / Both monitor toggle (phase 5 D5): what the
+   transport plays when the project has a source track. Without one the
+   toggle is disabled on Dub.
 2. Preview, Generate (the row's one `primary` button: a `QToolButton`
    whose menu holds "Generate dirty clips", "Auto-split then generate" and
    the checkable "Split by paragraph"), Cancel (flat).
@@ -22,12 +25,20 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QDockWidget, QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QToolButton, QVBoxLayout, QWidget,
+    QButtonGroup, QDockWidget, QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QToolButton, QVBoxLayout,
+    QWidget,
 )
 
 from kokoro_gui.daw.timecode import format_position
 from kokoro_gui.engine.time_utils import format_duration
 from kokoro_gui.qt import icons, theme
+
+MONITOR_LABELS = {"dub": "Dub", "original": "Original", "both": "Both"}
+MONITOR_TIPS = {
+    "dub": "Play the dub.",
+    "original": "Play the original dialogue under each clip, from the source track.",
+    "both": "Play the dub and the original together, each 6 dB down.",
+}
 
 
 def format_clock(seconds: float) -> str:
@@ -44,6 +55,7 @@ class TransportDock(QDockWidget):
     pauseRequested = Signal()
     stopRequested = Signal()
     loopToggled = Signal(bool)
+    monitorChanged = Signal(str)  # "dub" | "original" | "both"
 
     def __init__(self, app, parent=None):
         super().__init__("Transport", parent)
@@ -83,6 +95,22 @@ class TransportDock(QDockWidget):
         row1.addSpacing(8)
         row1.addWidget(self.time_label)
         row1.addStretch(1)
+        self.monitor_group = QButtonGroup(self)
+        self.monitor_group.setExclusive(True)
+        self.monitor_buttons: dict = {}
+        for mode, label in MONITOR_LABELS.items():
+            btn = QToolButton()
+            btn.setText(label)
+            btn.setCheckable(True)
+            btn.setToolTip(MONITOR_TIPS[mode])
+            btn.setObjectName(f"monitor_{mode}")
+            self.monitor_group.addButton(btn)
+            self.monitor_buttons[mode] = btn
+            row1.addWidget(btn)
+        self.monitor_buttons["dub"].setChecked(True)
+        self.set_monitor("dub", available=False)
+        self.monitor_group.buttonClicked.connect(self._on_monitor_clicked)
+        row1.addSpacing(8)
         self.loop_btn = QPushButton("Loop")
         self.loop_btn.setCheckable(True)
         row1.addWidget(self.loop_btn)
@@ -213,6 +241,26 @@ class TransportDock(QDockWidget):
     def set_playing(self, playing: bool) -> None:
         self.play_btn.setEnabled(not playing)
         self.pause_btn.setEnabled(playing)
+
+    # -- monitor toggle ----------------------------------------------------
+
+    def monitor(self) -> str:
+        return next((m for m, b in self.monitor_buttons.items() if b.isChecked()), "dub")
+
+    def set_monitor(self, mode: str, available: bool = True) -> None:
+        """Shows `mode` without emitting `monitorChanged`. Unavailable (no
+        source track) shows Dub, disabled."""
+        mode = mode if available and mode in self.monitor_buttons else "dub"
+        self.monitor_buttons[mode].setChecked(True)
+        for btn in self.monitor_buttons.values():
+            btn.setEnabled(available)
+        if not available:
+            self.monitor_buttons["dub"].setToolTip("Import a source track (File menu) to hear the original.")
+        else:
+            self.monitor_buttons["dub"].setToolTip(MONITOR_TIPS["dub"])
+
+    def _on_monitor_clicked(self, _button) -> None:
+        self.monitorChanged.emit(self.monitor())
 
     # -- generate menu -----------------------------------------------------
 

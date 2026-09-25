@@ -179,3 +179,144 @@ def test_get_state_reflects_widgets_while_project_state_survives_scope_changes(q
     assert fx.project_fx_state()["gain_db"] == 7.0
     qt_app.selection.clear()
     assert fx.get_state()["gain_db"] == 7.0
+
+
+# -- convolution reverb impulse response field (grill Q31) -----------------------
+
+def _write_ir(path, value=1.0):
+    import numpy as np
+    import soundfile as sf
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    sf.write(path, np.array([value], dtype=np.float32), 24000, subtype="FLOAT")
+    return path
+
+
+def _global_ir_dir():
+    import kokoro_gui.qt.app as qt_app_module
+
+    return os.path.join(qt_app_module.FX_PRESETS_DIR, "ir")
+
+
+def _combo_names(combo):
+    return [combo.itemData(i) for i in range(combo.count())]
+
+
+def test_ir_field_lists_project_and_global_names_under_none(qt_app):
+    fx = qt_app.fx_dock
+    _write_ir(os.path.join(_global_ir_dir(), "Hall.wav"))
+    _write_ir(os.path.join(qt_app.project_dir, "fx", "ir", "Cave.wav"))
+    _write_ir(os.path.join(qt_app.project_dir, "fx", "ir", "Hall.wav"))
+    fx.refresh_presets()
+
+    combo = fx._file_combos["convolution_ir"]
+    assert combo.itemText(0) == "None"
+    assert _combo_names(combo) == ["", "Cave", "Hall"]
+    assert fx.get_state()["convolution_ir"] == ""
+    assert "convolution_mix" in fx._value_widgets
+
+
+def test_picking_an_ir_feeds_the_clip_post_config(qt_app):
+    from kokoro_gui.audio import post
+
+    fx = qt_app.fx_dock
+    _write_ir(os.path.join(_global_ir_dir(), "Hall.wav"))
+    fx.refresh_presets()
+    combo = fx._file_combos["convolution_ir"]
+    combo.setCurrentIndex(combo.findData("Hall"))
+    fx._value_widgets["convolution_mix"].setValue(0.8)
+
+    assert fx.project_fx_state()["convolution_ir"] == "Hall"
+    clip = _clip_for(qt_app, qt_app.document.characters[0])
+    config = qt_app.post_config_for_clip(clip)
+    assert config["convolution_ir"] == "Hall"
+    assert config["convolution_mix"] == 0.8
+    assert config["project_dir"] == qt_app.project_dir
+    assert post.post_key(config) != post.post_key(dict(config, convolution_ir=""))
+
+
+def test_ir_picked_in_clip_mode_becomes_the_clip_override(qt_app, qtbot):
+    fx = qt_app.fx_dock
+    _write_ir(os.path.join(_global_ir_dir(), "Hall.wav"))
+    fx.refresh_presets()
+    clip = _clip_for(qt_app, qt_app.document.characters[0])
+    qt_app.selection.select_clip(clip.id)
+
+    combo = fx._file_combos["convolution_ir"]
+    combo.setCurrentIndex(combo.findData("Hall"))
+    fx._flush_clip_edit()
+
+    assert clip.fx_override["convolution_ir"] == "Hall"
+    assert fx.project_fx_state()["convolution_ir"] == ""
+
+
+def test_an_ir_name_that_resolves_nowhere_is_kept_and_marked_missing(qt_app):
+    fx = qt_app.fx_dock
+    clip = _clip_for(qt_app, qt_app.document.characters[0])
+    clip.fx_override = {"convolution_ir": "Gone"}
+    qt_app.selection.select_clip(clip.id)
+
+    combo = fx._file_combos["convolution_ir"]
+    assert combo.currentText() == "Gone (missing)"
+    assert fx.get_state()["convolution_ir"] == "Gone"
+
+
+def test_add_copies_a_wav_into_the_global_store_under_a_clean_name(qt_app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    fx = qt_app.fx_dock
+    src_dir = tmp_path / "downloads"
+    first = _write_ir(str(src_dir / "Big Hall.wav"), 1.0)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (first, "")))
+    fx._add_ir_file("convolution_ir")
+
+    assert os.path.isfile(os.path.join(_global_ir_dir(), "Big Hall.wav"))
+    assert fx.get_state()["convolution_ir"] == "Big Hall"
+
+    # A different file with the same stem gets a numbered name; the same
+    # file again reuses the stored one.
+    other = _write_ir(str(src_dir / "other" / "Big Hall.wav"), 0.5)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (other, "")))
+    fx._add_ir_file("convolution_ir")
+    assert fx.get_state()["convolution_ir"] == "Big Hall 2"
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (first, "")))
+    fx._add_ir_file("convolution_ir")
+    assert fx.get_state()["convolution_ir"] == "Big Hall"
+    assert sorted(os.listdir(_global_ir_dir())) == ["Big Hall 2.wav", "Big Hall.wav"]
+
+
+def test_add_refuses_a_file_that_is_not_audio(qt_app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    bogus = tmp_path / "notes.wav"
+    bogus.write_bytes(b"hello")
+    errors = []
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(bogus), "")))
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: errors.append(a)))
+
+    qt_app.fx_dock._add_ir_file("convolution_ir")
+
+    assert errors
+    assert not os.path.exists(os.path.join(_global_ir_dir(), "notes.wav"))
+
+
+def test_fx_presets_resolve_ir_prefers_the_project_copy(qt_app):
+    from kokoro_gui.qt.fx_presets import resolve_ir
+
+    global_hall = _write_ir(os.path.join(_global_ir_dir(), "Hall.wav"))
+    assert resolve_ir("Hall", qt_app.project_dir) == os.path.realpath(global_hall)
+    local_hall = _write_ir(os.path.join(qt_app.project_dir, "fx", "ir", "Hall.wav"))
+    assert resolve_ir("Hall", qt_app.project_dir) == os.path.realpath(local_hall)
+    assert resolve_ir("Hall", None) == os.path.realpath(global_hall)
+    assert resolve_ir("Other", qt_app.project_dir) is None
+
+
+def test_loading_a_preset_with_a_non_string_ir_ignores_it(qt_app):
+    fx = qt_app.fx_dock
+    _write_fx_preset(qt_app, "Bad", {"convolution_ir": {"path": "/etc/passwd"}, "gain_db": 2.0,
+                                     "eq_bass": "loud"})
+    fx.load_preset("Bad")
+
+    assert fx.get_state()["convolution_ir"] == ""
+    assert fx.get_state()["gain_db"] == 2.0
+    assert fx.get_state()["eq_bass"] == 0.0

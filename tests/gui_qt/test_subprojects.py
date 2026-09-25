@@ -347,6 +347,18 @@ def test_the_parent_applies_only_fx_set_on_the_nested_clip(qt_app):
     assert "volume" not in config
 
 
+def test_a_nested_clips_impulse_response_resolves_in_the_parents_dir(qt_app):
+    _intro, _chapter, child = _book(qt_app)
+    nested = qt_app.document.get_clip(child.clip_id)
+    nested.fx_override = {"convolution_ir": "Hall", "convolution_mix": 1.0, "gain_db": "loud"}
+
+    config = qt_app.post_config_for_clip(nested)
+
+    assert config["convolution_ir"] == "Hall"
+    assert config["project_dir"] == qt_app.root.project_dir
+    assert "gain_db" not in config
+
+
 def test_the_gutter_button_generates_and_renders_a_stale_subproject(qt_app):
     _intro, _chapter, child = _book(qt_app)
     nested = qt_app.document.get_clip(child.clip_id)

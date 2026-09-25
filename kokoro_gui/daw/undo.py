@@ -584,8 +584,10 @@ class ImportCuesCommand(Command):
     """Subtitle import (phase 5 D2): each cue becomes a paragraph appended
     to the end of the text (a blank line before it) and a clip over it,
     locked in time at the cue's start (`timeline_timestamp`, `pinned`),
-    with the cue's text as `source_text` and its length as
-    `overrides["target_duration_s"]`. The transcript line is the cue's text
+    with the cue's text as `source_text`, its length as
+    `overrides["target_duration_s"]` and its times as
+    `overrides["reference_range"]` (the slice of the source track the
+    clip dubs, kokoro_gui/daw/reference.py). The transcript line is the cue's text
     on one line (a subtitle's line breaks are layout); `source_text` keeps
     them.
 
@@ -641,7 +643,9 @@ class ImportCuesCommand(Command):
             clip = Clip(
                 character_id=character_id, track_id=document.track_for_character(character_id, create=True),
                 timeline_timestamp=start_s, pinned=True, source_text=source_text,
-                overrides={"target_duration_s": max(0.0, end_s - start_s)}, id=clip_id,
+                overrides={"target_duration_s": max(0.0, end_s - start_s),
+                           "reference_range": [start_s, max(start_s, end_s)]},
+                id=clip_id,
             )
             document.clips.append(clip)
             document.runs.append(Run(text=line, clip_id=clip.id, kind=clip.run_kind))
