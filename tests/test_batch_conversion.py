@@ -4,6 +4,8 @@ pipeline (kokoro_engine.py:568-705, 910-1061). caching=False throughout
 import asyncio
 import json
 
+import pytest
+
 import kokoro_engine
 from kokoro_gui.engine import stats as generation_stats
 
@@ -101,6 +103,34 @@ def test_multispeaker_preset_and_fx_preset_layering(engine, fake_pipeline, make_
     assert captured["config"]["speed"] == 1.25
     assert captured["config"]["reverb_enabled"] is True
     assert captured["config"]["apply_fx"] is True
+
+
+@pytest.mark.parametrize("fx_data,expected_ir", [
+    ({"convolution_ir": "Hall", "convolution_mix": 0.7}, "Hall"),
+    ({"convolution_ir": {"path": "/etc/passwd"}, "convolution_mix": "loud"}, None),
+    ({"convolution_ir": ["Hall"], "reverb_room_size": "big"}, None),
+], ids=["string", "dict", "list"])
+def test_fx_preset_merge_accepts_only_a_string_impulse_response(engine, fake_pipeline, make_config, isolated_dirs,
+                                                                 monkeypatch, tmp_path, fx_data, expected_ir):
+    monkeypatch.chdir(tmp_path)
+    fx_dir = tmp_path / "presets" / "fx"
+    fx_dir.mkdir(parents=True, exist_ok=True)
+    (fx_dir / "Room.json").write_text(json.dumps(fx_data), encoding="utf-8")
+
+    captured = {}
+    real_task = engine.process_chunk_task
+
+    def spy(chunk_data, progress_callback):
+        captured["config"] = chunk_data[2]
+        return real_task(chunk_data, progress_callback)
+
+    monkeypatch.setattr(engine, "process_chunk_task", spy)
+    asyncio.run(engine._process_text_async("[Narrator:Room]: Hello.", make_config(filename="run", time_id="1")))
+
+    assert captured["config"].get("convolution_ir") == expected_ir
+    if expected_ir is None:
+        assert not isinstance(captured["config"].get("convolution_mix"), str)
+        assert not isinstance(captured["config"].get("reverb_room_size"), str)
 
 
 def test_process_text_async_records_generation_stats_under_engine_id(engine, fake_pipeline, make_config, isolated_dirs):

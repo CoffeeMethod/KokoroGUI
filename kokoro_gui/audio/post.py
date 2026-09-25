@@ -10,6 +10,10 @@ generation keys, and this module only looks at `POST_KEYS`.
 `render()` memoizes by `(path, mtime, post_key, target_rate, range_s)`, so
 a slider move re-renders only the clips whose resolved post config changed,
 and a transport rebuild with nothing changed is a dict lookup per segment.
+A config naming a convolution impulse response also carries `project_dir`
+(where the IR resolves first), and `post_key` folds in the resolved IR's
+path and mtime, so replacing the IR file or adding a project-local copy
+re-renders.
 
 `range_s` (or `render_slice`) plays a time range of a file instead of the
 whole file: a `Segment.range` (an imported recording's words), a source
@@ -27,7 +31,7 @@ from typing import Optional
 
 import numpy as np
 
-from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS
+from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, resolve_ir
 
 # Every config key the post stage reads. `pitch` is here (the resample) and
 # also in the generation cache key (the speed compensation), which is why a
@@ -38,14 +42,36 @@ _RENDER_CACHE: dict = {}
 
 
 def extract_post_config(config: dict) -> dict:
-    """The `POST_KEYS` subset of a full clip config."""
-    return {k: config[k] for k in POST_KEYS if k in config}
+    """The `POST_KEYS` subset of a full clip config, plus `project_dir` when
+    it names a convolution impulse response (the IR resolves there first)."""
+    subset = {k: config[k] for k in POST_KEYS if k in config}
+    if subset.get("convolution_ir") and config.get("project_dir"):
+        subset["project_dir"] = config["project_dir"]
+    return subset
+
+
+def _ir_stamp(config: dict):
+    """`[path, mtime]` of the impulse response `config` names, `None` when it
+    names none or it resolves nowhere."""
+    name = config.get("convolution_ir")
+    if not name:
+        return None
+    path = resolve_ir(name, config.get("project_dir"))
+    if path is None:
+        return None
+    try:
+        return [path, os.path.getmtime(path)]
+    except OSError:
+        return None
 
 
 def post_key(config: dict) -> str:
-    """A stable fingerprint of `config`'s post-processing keys. Key order and
+    """A stable fingerprint of `config`'s post-processing keys and, for a
+    convolution reverb, the file its IR name resolves to. Key order and
     non-post keys don't affect it."""
     subset = extract_post_config(config)
+    if subset.get("convolution_ir"):
+        subset["convolution_ir_file"] = _ir_stamp(subset)
     payload = json.dumps(subset, sort_keys=True, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -62,6 +88,8 @@ def is_identity(config: dict) -> bool:
     for key in ALLOWED_FX_PRESET_KEYS:
         if key.endswith("_enabled") and config.get(key, False):
             return False
+    if config.get("convolution_ir"):
+        return False
     return not (config.get("eq_bass", 0.0) or config.get("eq_treble", 0.0))
 
 

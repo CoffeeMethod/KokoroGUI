@@ -77,6 +77,53 @@ def test_trim_changes_rendered_duration(tmp_path):
     assert post.rendered_duration_s(str(path), {"trim_silence": True}, rate) == 0.5
 
 
+def _ir(path, samples, rate=8000):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(path), np.asarray(samples, dtype=np.float32), rate, subtype="FLOAT")
+
+
+def test_extract_post_config_carries_project_dir_only_for_an_impulse_response():
+    cfg = {"volume": 1.0, "project_dir": "/p"}
+    assert "project_dir" not in post.extract_post_config(cfg)
+    assert post.extract_post_config(dict(cfg, convolution_ir="Hall"))["project_dir"] == "/p"
+    assert "project_dir" not in post.extract_post_config(dict(cfg, convolution_ir=""))
+
+
+def test_render_re_renders_when_the_impulse_response_file_changes(tmp_path):
+    import os
+
+    path = _tone(tmp_path / "a.wav")
+    raw, _rate = sf.read(path, dtype="float32")
+    project_dir = tmp_path / "project"
+    ir_path = project_dir / "fx" / "ir" / "Room.wav"
+    _ir(ir_path, [1.0])
+    config = post.extract_post_config({"apply_fx": True, "convolution_ir": "Room", "convolution_mix": 1.0,
+                                       "project_dir": str(project_dir)})
+    assert not post.is_identity(config)
+
+    first = post.render(path, config, 8000)
+    assert np.allclose(first, raw, atol=1e-4)
+    key_before = post.post_key(config)
+
+    # Same name, new file: a 1 ms echo instead of the identity.
+    echo = np.zeros(9)
+    echo[8] = 1.0
+    _ir(ir_path, echo)
+    stat = os.stat(ir_path)
+    os.utime(ir_path, (stat.st_atime, stat.st_mtime + 5))
+    assert post.post_key(config) != key_before
+    second = post.render(path, config, 8000)
+    assert second is not first
+    assert np.allclose(second[8:], raw[:-8], atol=1e-4)
+
+
+def test_render_with_a_missing_impulse_response_plays_dry(tmp_path):
+    path = _tone(tmp_path / "a.wav")
+    raw, _rate = sf.read(path, dtype="float32")
+    config = {"apply_fx": True, "convolution_ir": "Gone", "convolution_mix": 1.0, "project_dir": str(tmp_path)}
+    assert np.allclose(post.render(path, config, 8000), raw, atol=1e-6)
+
+
 def test_mixer_load_clip_samples_goes_through_post(tmp_path):
     path = _tone(tmp_path / "a.wav")
     raw, _rate = sf.read(path, dtype="float32")

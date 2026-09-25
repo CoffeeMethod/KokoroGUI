@@ -23,7 +23,7 @@ import torch
 from pedalboard.io import AudioFile
 
 from kokoro_gui.engine import stats as generation_stats
-from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, ALLOWED_PRESET_KEYS, filter_allowed_keys
+from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys, filter_fx_preset_values
 from kokoro_gui.engine.time_utils import format_duration
 
 # Below this fraction of the *current* run's own chars processed, the
@@ -84,7 +84,7 @@ class ConversionMixin:
                     if fx_name:
                         fx_preset = self.load_fx_preset(fx_name, (extra_config or {}).get("project_dir"))
                         if fx_preset:
-                            target_extra.update(filter_allowed_keys(fx_preset, ALLOWED_FX_PRESET_KEYS))
+                            target_extra.update(filter_fx_preset_values(fx_preset))
                             target_extra['apply_fx'] = True
                             target_extra['fx_preset'] = fx_name
 
@@ -343,7 +343,7 @@ class ConversionMixin:
                 if fx_name:
                     fx_preset = self.load_fx_preset(fx_name, config.get("project_dir"))
                     if fx_preset:
-                        seg_config.update(filter_allowed_keys(fx_preset, ALLOWED_FX_PRESET_KEYS))
+                        seg_config.update(filter_fx_preset_values(fx_preset))
                         seg_config['apply_fx'] = True
                         seg_config['fx_preset'] = fx_name
                     else:
