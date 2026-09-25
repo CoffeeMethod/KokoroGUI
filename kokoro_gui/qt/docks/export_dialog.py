@@ -41,8 +41,19 @@ FORMATS = ("wav", "mp3", "flac", "ogg")
 BUNDLE_AUDIO_FORMATS = ("wav", "flac")
 
 
+def _export_target(app):
+    """`(document, project_settings)` of what Export writes: the project the
+    timeline shows (`app.level`, phase 4), its subprojects as their
+    mixdowns."""
+    level = getattr(app, "level", None)
+    if level is not None:
+        return level.document, level.project_settings
+    return app.document, app.project_settings
+
+
 def export_defaults(app) -> dict:
-    project = dict(app.project_settings.get("export", {})) if isinstance(app.project_settings, dict) else {}
+    _document, settings = _export_target(app)
+    project = dict(settings.get("export", {})) if isinstance(settings, dict) else {}
     return {
         "out_dir": project.get("out_dir", app.settings.get("out_dir", "audio_output")),
         "filename": project.get("filename", app.settings.get("filename", "output")),
@@ -92,7 +103,7 @@ class ExportDialog(QDialog):
         # Whole project, or between two markers (kokoro_gui/daw/markers.py).
         self.range_combo = QComboBox()
         self.range_combo.addItem("Whole project", None)
-        found = marker_ops.list_markers(app.document.settings)
+        found = marker_ops.list_markers(_export_target(app)[0].settings)
         for a, b in zip(found, found[1:]):
             self.range_combo.addItem(f"{a['name']} to {b['name']}", (a["seconds"], b["seconds"]))
         loop = app.loop_range() if hasattr(app, "loop_range") else None
@@ -117,7 +128,7 @@ class ExportDialog(QDialog):
         self.keep_clips_check.setChecked(values["keep_clip_files"])
         form.addRow("", self.keep_clips_check)
 
-        bundle = project_io.bundle_options(app.project_settings)
+        bundle = project_io.bundle_options(_export_target(app)[1])
         self.bundle_audio_check = QCheckBox("Bundle generated audio in the project file")
         self.bundle_audio_check.setChecked(bool(bundle["include_generated_audio"]))
         self.bundle_audio_check.setToolTip("Off gives a small .tbaw whose every clip regenerates on open.")
@@ -172,9 +183,9 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
     the project, and schedules the mixdown. Returns False when nothing was
     scheduled."""
     parent = parent or app
-    document = app.document
+    document, project_settings = _export_target(app)
     if bundle is not None:
-        app.project_settings["bundle"] = project_io.bundle_options({"bundle": bundle})
+        project_settings["bundle"] = project_io.bundle_options({"bundle": bundle})
         app.schedule_save()
     if not document.clips:
         QMessageBox.information(parent, "Nothing to export",
@@ -200,7 +211,7 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
         if clicked is None or box.buttonRole(clicked) == QMessageBox.ButtonRole.RejectRole:
             return False
 
-    app.project_settings["export"] = dict(values)
+    project_settings["export"] = dict(values)
     app.schedule_save()
 
     out_path = os.path.join(values["out_dir"], f"{values['filename']}.{values['format']}")
@@ -208,7 +219,8 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
     sample_rate = app.project_sample_rate()
     # Resolved on the GUI thread (it reads dock state); the export thread
     # only applies them.
-    post_configs = {p.clip.id: app.post_config_for_clip(p.clip) for p in arrangement.placed}
+    level = getattr(app, "level", None)
+    post_configs = {p.clip.id: app.post_config_for_clip(p.clip, level) for p in arrangement.placed}
 
     app.transport_dock.set_busy(True)
     app.transport_dock.set_status("Exporting...", "busy")

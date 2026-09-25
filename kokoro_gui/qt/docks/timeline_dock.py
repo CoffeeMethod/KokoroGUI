@@ -119,6 +119,8 @@ class TimelineDock(QDockWidget):
         # reports the key, take and engine version it generated under in
         # each result dict, so nothing is predicted before dispatch.
         self._pending_results: dict = {}
+        # clip id -> the OpenProject its per-clip generate started from.
+        self._pending_projects: dict = {}
 
         # Outcome list for a batch whose future hasn't been picked up by
         # _on_batch_generation_raw yet - same reasoning as _pending_results.
@@ -128,10 +130,16 @@ class TimelineDock(QDockWidget):
 
         self.refresh()
 
+    @property
+    def _doc(self):
+        """The document the timeline shows: the `level` project's."""
+        return self.app.level.document
+
     def refresh(self) -> None:
         arrangement = self.app.build_arrangement()
-        self.timeline_view.render_document(self.app.document, arrangement,
-                                           clip_samples=self.app.rendered_clip_samples)
+        level = self.app.level
+        self.timeline_view.render_document(self._doc, arrangement,
+                                           clip_samples=lambda clip: self.app.rendered_clip_samples(clip, level))
 
     # -- seconds-axis drags (UI9) ------------------------------------------------
 
@@ -140,7 +148,7 @@ class TimelineDock(QDockWidget):
         the drop lands at or before the start of the clip that precedes it in
         text order, the clip's text moves too (grill Q13) - to just before the
         first clip in text order that now starts at or after it."""
-        document = self.app.document
+        document = self._doc
         clip = document.get_clip(clip_id)
         if clip is None:
             return
@@ -173,26 +181,26 @@ class TimelineDock(QDockWidget):
     # -- phase 2 edits: fades, takes, status, markers, loop, track controls ------
 
     def _push(self, command, rehighlight: bool = False) -> None:
-        self.app.document.undo_stack.push(command)
+        self._doc.undo_stack.push(command)
         if rehighlight and self.app.editor is not None:
             self.app.editor.rehighlight()
         self.app.schedule_save()
         self.app.refresh_timeline()
 
     def on_fade_changed(self, clip_id: str, field: str, seconds: float) -> None:
-        if self.app.document.get_clip(clip_id) is not None and field in ("fade_in_s", "fade_out_s"):
+        if self._doc.get_clip(clip_id) is not None and field in ("fade_in_s", "fade_out_s"):
             self._push(SetFieldCommand("clip", clip_id, field, float(seconds)))
 
     def on_take_selected(self, clip_id: str, index: int) -> None:
-        if self.app.document.get_clip(clip_id) is not None:
+        if self._doc.get_clip(clip_id) is not None:
             self._push(SetActiveTakeCommand(clip_id, index), rehighlight=True)
 
     def on_take_delete_requested(self, clip_id: str, index: int) -> None:
-        if self.app.document.get_clip(clip_id) is not None:
+        if self._doc.get_clip(clip_id) is not None:
             self._push(DeleteTakeCommand(clip_id, index))
 
     def on_status_change_requested(self, clip_id: str, status: str) -> None:
-        if self.app.document.get_clip(clip_id) is not None:
+        if self._doc.get_clip(clip_id) is not None:
             self._push(SetFieldCommand("clip", clip_id, "status", status))
 
     def on_align_words_requested(self, clip_id: str) -> None:
@@ -202,11 +210,11 @@ class TimelineDock(QDockWidget):
         self._push(SetFieldCommand("document", None, "settings", new_list, key=marker_ops.MARKERS_KEY))
 
     def on_marker_add_requested(self, seconds: float) -> None:
-        new_list, _marker = marker_ops.add_marker(self.app.document.settings, seconds)
+        new_list, _marker = marker_ops.add_marker(self._doc.settings, seconds)
         self._set_markers(new_list)
 
     def on_marker_moved(self, marker_id: str, seconds: float) -> None:
-        self._set_markers(marker_ops.move_marker(self.app.document.settings, marker_id, seconds))
+        self._set_markers(marker_ops.move_marker(self._doc.settings, marker_id, seconds))
 
     def _ask_marker_text(self, marker: dict):
         """`(name, note)` from two input boxes, or None on cancel. Its own
@@ -218,15 +226,15 @@ class TimelineDock(QDockWidget):
         return (name, note) if ok else None
 
     def on_marker_rename_requested(self, marker_id: str) -> None:
-        marker = marker_ops.get_marker(self.app.document.settings, marker_id)
+        marker = marker_ops.get_marker(self._doc.settings, marker_id)
         if marker is None:
             return
         answer = self._ask_marker_text(marker)
         if answer is not None:
-            self._set_markers(marker_ops.rename_marker(self.app.document.settings, marker_id, *answer))
+            self._set_markers(marker_ops.rename_marker(self._doc.settings, marker_id, *answer))
 
     def on_marker_delete_requested(self, marker_id: str) -> None:
-        self._set_markers(marker_ops.delete_marker(self.app.document.settings, marker_id))
+        self._set_markers(marker_ops.delete_marker(self._doc.settings, marker_id))
 
     def on_loop_range_requested(self, start_s: float, end_s: float) -> None:
         """Runtime only: the transport loops there and the ruler shades it;
@@ -237,23 +245,23 @@ class TimelineDock(QDockWidget):
         self.app.set_loop_range(None, None)
 
     def on_automation_changed(self, track_id: str, points) -> None:
-        if self.app.document.get_track(track_id) is not None:
+        if self._doc.get_track(track_id) is not None:
             self._push(SetFieldCommand("track", track_id, "automation", [list(p) for p in points]))
 
     def on_track_field_changed(self, track_id: str, field: str, value) -> None:
-        if self.app.document.get_track(track_id) is not None and field in ("mute", "solo", "gain", "pan"):
+        if self._doc.get_track(track_id) is not None and field in ("mute", "solo", "gain", "pan"):
             self._push(SetFieldCommand("track", track_id, field, value))
 
     def on_clip_unpin_requested(self, clip_id: str) -> None:
-        if self.app.document.get_clip(clip_id) is None:
+        if self._doc.get_clip(clip_id) is None:
             return
-        self.app.document.undo_stack.push(SetClipTimestampCommand(clip_id, None))
+        self._doc.undo_stack.push(SetClipTimestampCommand(clip_id, None))
         self.app.schedule_save()
         self.app.refresh_timeline()
 
     # -- per-clip Generate ---------------------------------------------------
 
-    def on_generate_clip_requested(self, clip_id: str, regenerate: bool = False) -> None:
+    def on_generate_clip_requested(self, clip_id: str, regenerate: bool = False, project=None) -> None:
         """`regenerate` is what the gutter button sends for a clip that is
         already clean; the engine then bumps the take instead of returning
         the present file (grill TB8). The dirty batch path never sets it."""
@@ -261,14 +269,18 @@ class TimelineDock(QDockWidget):
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before generating a clip.")
             return
 
-        clip = self.app.document.get_clip(clip_id)
-        if clip is None:
+        # The job holds its project: the results land there even when the
+        # focus or the level moves while it runs (phase 4).
+        project = project or self.app.project_of_clip_id(clip_id)
+        clip = project.document.get_clip(clip_id) if project is not None else None
+        if clip is None or clip.is_nested:
             return
 
-        text = self.app.document.clip_text(clip)
-        config = self.app._assemble_clip_config(clip)
+        text = project.document.clip_text(clip)
+        config = self.app._assemble_clip_config(clip, project)
         if regenerate:
             config["regenerate"] = True
+        self._pending_projects[clip_id] = project
 
         self.app.set_ui_state(True)
 
@@ -284,20 +296,20 @@ class TimelineDock(QDockWidget):
                 self._pending_results[clip_id] = results
             self.clipGenerationFinished.emit(clip_id, success, error)
 
-        engine = self.app.backend_for(clip).engine
+        engine = self.app.backend_for(clip, project).engine
         future = engine.worker.run_coro(engine.generate_clip_audio((0, text, config)))
         future.add_done_callback(_done)
 
     def on_lock_in_time_requested(self, clip_id: str, pinned: bool) -> None:
-        if self.app.document.get_clip(clip_id) is not None:
+        if self._doc.get_clip(clip_id) is not None:
             self._push(SetFieldCommand("clip", clip_id, "pinned", bool(pinned)))
 
-    def _ripple(self, before, clip_ids) -> int:
+    def _ripple(self, before, clip_ids, project) -> int:
         """Ripple on regenerate for `clip_ids`, whose new audio is already
         applied; `before` is the arrangement from just before. Only a clip
         that had audio counts (a first generate replaces an estimate, not a
         take). Returns how many clips moved."""
-        document = self.app.document
+        document = project.document
         if not document.settings.get("ripple", True):
             return 0
         old = before.by_clip_id()
@@ -307,7 +319,7 @@ class TimelineDock(QDockWidget):
             clip = document.get_clip(clip_id)
             if placed is None or placed.estimated or clip is None:
                 continue
-            duration = self.app.clip_duration_s(clip)
+            duration = self.app.clip_duration_s(clip, project)
             if duration is None:
                 continue
             delta = duration - placed.duration_s
@@ -322,12 +334,14 @@ class TimelineDock(QDockWidget):
     def _on_clip_generation_finished(self, clip_id: str, success: bool, error: str) -> None:
         self.app.set_ui_state(False)
 
-        clip = self.app.document.get_clip(clip_id)
+        project = self._pending_projects.pop(clip_id, None) or self.app.project_of_clip_id(clip_id)
+        clip = project.document.get_clip(clip_id) if project is not None else None
         if success and clip is not None:
             results = self._pending_results.pop(clip_id)
-            before = self.app.build_arrangement()
-            self._apply_results(clip, results)
-            self._ripple(before, [clip_id])
+            before = self.app.build_arrangement(project)
+            self._apply_results(clip, results, project)
+            self._ripple(before, [clip_id], project)
+            self.app.on_project_generated(project)
             self.app.editor.rehighlight()
             self.app.schedule_save()
             self.app.refresh_timeline()
@@ -336,17 +350,18 @@ class TimelineDock(QDockWidget):
             self._pending_results.pop(clip_id, None)
             self.app.set_status(f"Clip generation failed: {error}", "error")
 
-    def _apply_results(self, clip, results: list) -> None:
+    def _apply_results(self, clip, results: list, project=None) -> None:
         """Stamps `clip.segments` and `clip.overrides["take"]` from what the
         engine reported. A result without a `cache_key` (a hand-built one
         in tests) falls back to the key the app would compute now."""
+        project = project or self.app.project_for(clip)
         fallback = None
         if any(not r.get("cache_key") for r in results):
             from kokoro_gui.daw.dirty import compute_expected_cache_hash
 
             fallback = compute_expected_cache_hash(
-                self.app.document.clip_text(clip), self.app._assemble_clip_config(clip),
-                key_fn=self.app.document.segment_key_fn, clip=clip,
+                project.document.clip_text(clip), self.app._assemble_clip_config(clip, project),
+                key_fn=project.document.segment_key_fn, clip=clip,
             )
         current_take = int(clip.overrides.get("take", 0) or 0)
         take = take_from_results(results, default=current_take)
@@ -373,7 +388,7 @@ class TimelineDock(QDockWidget):
         undoable `SetClipFxCommand` push lives in
         `TranscriptDock.apply_fx_preset_to_clip`, shared with the transcript
         header's FX combo."""
-        if self.app.document.get_clip(clip_id) is None:
+        if self._doc.get_clip(clip_id) is None:
             return
         self.app.selection.select_clip(clip_id)
         self.app.transcript_dock.apply_fx_preset_to_clip(clip_id, preset_name)
@@ -385,13 +400,13 @@ class TimelineDock(QDockWidget):
     def on_clip_drag_reassigned(self, clip_id: str, target_track_id: str, should_reassign_character: bool) -> None:
         """Handles `TimelineView.clipDragReassigned`. `TimelineView` only
         ever hands over bare ids and the already-resolved Reassign/Just-Move
-        choice (Q9) - it never touches `self.app.document` itself, keeping
+        choice (Q9) - it never touches the document itself, keeping
         it app-independent per this file's module docstring - so clip/track
         are re-resolved fresh here before pushing the actual undoable
         command (`MoveClipCommand` for "just move", `ReassignTrackCommand`
         for "reassign", per item 4)."""
-        clip = self.app.document.get_clip(clip_id)
-        target_track = self.app.document.get_track(target_track_id)
+        clip = self._doc.get_clip(clip_id)
+        target_track = self._doc.get_track(target_track_id)
         if clip is None or target_track is None:
             return
 
@@ -400,7 +415,7 @@ class TimelineDock(QDockWidget):
         else:
             command = MoveClipCommand(clip_id, target_track_id)
 
-        self.app.document.undo_stack.push(command)
+        self._doc.undo_stack.push(command)
         if should_reassign_character:
             # character_id changed, which changes the transcript's
             # highlight color for this clip's run(s) too.
@@ -436,7 +451,7 @@ class TimelineDock(QDockWidget):
         layout.addWidget(QLabel("Character:"))
         character_combo = QComboBox()
         default_index = 0
-        for index, character in enumerate(self.app.document.characters):
+        for index, character in enumerate(self._doc.characters):
             character_combo.addItem(character.name, character.id)
             if character.id == clip.character_id:
                 default_index = index
@@ -458,7 +473,7 @@ class TimelineDock(QDockWidget):
     def on_sub_range_tts_requested(self, clip_id: str, sub_start: int, sub_end: int) -> None:
         """Handles `TimelineView.subRangeTtsRequested`. `TimelineView` only
         ever hands over the bare clip id and document-text offsets - it
-        never touches `self.app.document` itself (same app-independence
+        never touches the document itself (same app-independence
         pattern every other signal on that widget already establishes), so
         the clip is re-resolved here before showing the dialog.
 
@@ -474,11 +489,11 @@ class TimelineDock(QDockWidget):
         clip's remainder, retaining its `source`/`original_audio_path`
         unmodified. Cancel pushes nothing.
         """
-        clip = self.app.document.get_clip(clip_id)
+        clip = self._doc.get_clip(clip_id)
         if clip is None or clip.is_nested:
             return
 
-        document = self.app.document
+        document = self._doc
         original_text = document.text[sub_start:sub_end]
         dialog = self._build_sub_range_dialog(clip, original_text)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -510,7 +525,7 @@ class TimelineDock(QDockWidget):
 
     # -- batch dirty-scoped Generate (item 3) --------------------------------
 
-    def generate_dirty_clips_requested(self) -> None:
+    def generate_dirty_clips_requested(self, project=None) -> None:
         """Dispatches `KokoroEngine.generate_dirty_clips` for every clip
         `Document.dirty_clips()` currently reports as stale. Guarded by the
         same one-job-at-a-time check `on_generate_clip_requested` already
@@ -522,7 +537,10 @@ class TimelineDock(QDockWidget):
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before generating.")
             return
 
-        dirty = self.app.document.dirty_clips()
+        project = project or self.app.level
+        # Nested clips aren't TTS: a stale subproject generates through its
+        # own document (app.generate_subprojects).
+        dirty = [clip for clip in project.document.dirty_clips() if not clip.is_nested]
         if not dirty:
             return
 
@@ -531,10 +549,10 @@ class TimelineDock(QDockWidget):
         groups: dict = {}
         clips_with_configs = []
         for clip in dirty:
-            text = self.app.document.clip_text(clip)
-            config = self.app._assemble_clip_config(clip)
+            text = project.document.clip_text(clip)
+            config = self.app._assemble_clip_config(clip, project)
             clips_with_configs.append((clip.id, text, config))
-            engine = self.app.backend_for(clip).engine
+            engine = self.app.backend_for(clip, project).engine
             groups.setdefault(id(engine), (engine, []))[1].append((clip.id, text, config))
 
         total = len(clips_with_configs)
@@ -571,7 +589,7 @@ class TimelineDock(QDockWidget):
                     remaining[0] -= 1
                     last = remaining[0] == 0
                 if last:
-                    self._pending_batch = outcomes
+                    self._pending_batch = (project, outcomes)
                     self._batchGenerationRaw.emit()
             return _done
 
@@ -586,17 +604,18 @@ class TimelineDock(QDockWidget):
         self._pending_batch = None
         if pending is None:
             return
+        project, pending = pending
 
         succeeded_ids = []
         failed_ids = []
         any_segments_updated = False
-        before = self.app.build_arrangement()
+        before = self.app.build_arrangement(project)
 
         for outcome in pending:
             clip_id = outcome["clip_id"]
-            clip = self.app.document.get_clip(clip_id)
+            clip = project.document.get_clip(clip_id)
             if outcome["success"] and clip is not None:
-                self._apply_results(clip, outcome["results"])
+                self._apply_results(clip, outcome["results"], project)
                 succeeded_ids.append(clip_id)
                 any_segments_updated = True
             else:
@@ -606,7 +625,8 @@ class TimelineDock(QDockWidget):
                 failed_ids.append(clip_id)
 
         if any_segments_updated:
-            self._ripple(before, succeeded_ids)
+            self._ripple(before, succeeded_ids, project)
+            self.app.on_project_generated(project)
             self.app.editor.rehighlight()
             self.app.schedule_save()
             self.app.refresh_timeline()

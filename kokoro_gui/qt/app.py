@@ -52,6 +52,7 @@ from kokoro_gui.engine import caching
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
 from kokoro_gui.qt import settings as qt_settings
+from kokoro_gui.qt.open_projects import OpenProject
 from kokoro_gui.qt.selection import SelectionModel
 from kokoro_gui.qt.signals import EngineSignalBridge, wire_engine
 from kokoro_gui.qt.workspace import ADVANCED, SIMPLE, WorkspaceManager
@@ -115,21 +116,21 @@ class QtTTSApp(QMainWindow):
         self.jit_enabled = self.settings.get("jit_enabled", False)
         self.timecode_format = "%Y%m%d%H%M%S"
 
-        # Project (section 7): the last-opened project, else the classic
-        # document.json next to the config, else a fresh migration.
-        self.project_path: str | None = None
-        self.project_settings: dict = {}
-        # The live project directory (Claude/old/PLAN_tbaw_bundle.md section 3):
-        # `cache/projects/<project_id>/`, held under an OS lock for as long
-        # as the project is open. Every config the segment key or the engine
-        # sees carries it as `project_dir`. `_project_dirty` is the
-        # session's "dir is ahead of the file" flag, set by autosave from a
-        # content digest and cleared by Save.
-        self.project_dir: str | None = None
-        self.project_id: str | None = None
-        self._project_lock: project_io.ProjectLock | None = None
-        self._project_manifest: dict = {}
-        self._project_dirty = False
+        # Projects (phase 4): the root the File menu opened (the last-opened
+        # project, else the classic document.json next to the config, else a
+        # fresh document) and any of its subprojects open beside it
+        # (kokoro_gui/qt/open_projects.py). Each has a live project directory
+        # (Claude/old/PLAN_tbaw_bundle.md section 3), `cache/projects/<id>/`,
+        # held under an OS lock while open; every config the segment key or
+        # the engine sees carries it as `project_dir`. `document`,
+        # `project_dir` and `project_settings` read the `focus` project;
+        # `project_path`, `project_id`, the lock, the manifest and the
+        # dirty flag ("dir is ahead of the file", from autosave's digest,
+        # cleared by Save) read the root.
+        self.root = OpenProject(document=Document(runs=[], clips=[], tracks=[], characters=[], settings={}))
+        self.children: dict = {}
+        self.focus = self.root
+        self.level = self.root
         self._io_thread: threading.Thread | None = None
         self._pending_open_path: str | None = None
         self._closing_after_save = False
@@ -227,6 +228,105 @@ class QtTTSApp(QMainWindow):
             path, self._pending_open_path = self._pending_open_path, None
             self.open_project(path)
 
+    # --- the open projects (phase 4) ---------------------------------------
+
+    @property
+    def document(self):
+        return self.focus.document
+
+    @document.setter
+    def document(self, value) -> None:
+        self.focus.document = value
+
+    @property
+    def project_dir(self):
+        return self.focus.project_dir
+
+    @project_dir.setter
+    def project_dir(self, value) -> None:
+        self.focus.project_dir = value
+
+    @property
+    def project_settings(self) -> dict:
+        return self.focus.project_settings
+
+    @project_settings.setter
+    def project_settings(self, value) -> None:
+        self.focus.project_settings = value
+
+    @property
+    def project_path(self):
+        return self.root.path
+
+    @project_path.setter
+    def project_path(self, value) -> None:
+        self.root.path = value
+
+    @property
+    def project_id(self):
+        return self.root.project_id
+
+    @project_id.setter
+    def project_id(self, value) -> None:
+        self.root.project_id = value
+
+    @property
+    def _project_lock(self):
+        return self.root.lock
+
+    @_project_lock.setter
+    def _project_lock(self, value) -> None:
+        self.root.lock = value
+
+    @property
+    def _project_manifest(self) -> dict:
+        return self.root.manifest
+
+    @_project_manifest.setter
+    def _project_manifest(self, value) -> None:
+        self.root.manifest = value
+
+    @property
+    def _project_dirty(self) -> bool:
+        return self.root.dirty
+
+    @_project_dirty.setter
+    def _project_dirty(self, value) -> None:
+        self.root.dirty = value
+
+    @property
+    def projects(self) -> dict:
+        """Every open project by id: the root and its open subprojects."""
+        out = {self.root.project_id: self.root}
+        out.update(self.children)
+        return out
+
+    def project_of_clip_id(self, clip_id):
+        """The open project whose document has a clip with `clip_id`, or
+        None. Focus, level and root first."""
+        seen = []
+        for project in (self.focus, self.level, self.root, *self.children.values()):
+            if project in seen:
+                continue
+            seen.append(project)
+            if project.document.get_clip(clip_id) is not None:
+                return project
+        return None
+
+    def project_for(self, clip):
+        """The open project whose document holds `clip`: focus, level and
+        root first (almost always one of them), then the other children."""
+        if clip is None:
+            return self.focus
+        seen = []
+        for project in (self.focus, self.level, self.root, *self.children.values()):
+            if project in seen:
+                continue
+            seen.append(project)
+            if any(c is clip for c in project.document.clips):
+                return project
+        return self.focus
+
     # --- project bootstrap ------------------------------------------------
 
     def _load_initial_document(self):
@@ -297,11 +397,12 @@ class QtTTSApp(QMainWindow):
         Untitled project has somewhere to generate into before its first
         Save (Claude/old/PLAN_tbaw_bundle.md section 3)."""
         project_dir, project_id = project_io.create_project_dir()
-        self._project_lock = project_io.ProjectLock(project_dir).acquire()
-        self.project_dir = project_dir
-        self.project_id = project_id
-        self._project_manifest = {}
-        digest = project_io.autosave_to_dir(document, self.project_settings, project_dir)
+        root = self.root
+        root.lock = project_io.ProjectLock(project_dir).acquire()
+        root.project_dir = project_dir
+        root.project_id = project_id
+        root.manifest = {}
+        digest = project_io.autosave_to_dir(document, root.project_settings, project_dir)
         project_io.write_session(project_dir, {
             "source_path": None, "zip_size": None, "zip_mtime": None,
             "saved_digest": digest, "dirty": False, "asset_index": {},
@@ -366,10 +467,12 @@ class QtTTSApp(QMainWindow):
         engine_id = (character.backend_id if character is not None else None) or self._primary_engine_id
         return self._backend_for(engine_id) or self._backends[self._primary_engine_id]
 
-    def backend_for(self, clip):
+    def backend_for(self, clip, project=None):
         """The adapter `clip` generates with: its character's engine."""
-        character = self.document.get_character(clip.character_id) if clip is not None else None
-        return self.backend_for_character(character)
+        if clip is None:
+            return self.backend_for_character(None)
+        document = (project or self.project_for(clip)).document
+        return self.backend_for_character(document.get_character(clip.character_id))
 
     def active_character(self):
         """The character the selection points at (a clip's, or a lane's),
@@ -844,7 +947,7 @@ class QtTTSApp(QMainWindow):
         Settings tab, defaulted: where every path cuts text into pieces."""
         return {key: gen_state.get(key, spec.SETTINGS_DEFAULTS[key]) for key in spec.SEGMENTATION_KEYS}
 
-    def _assemble_generation_config(self, clip) -> dict:
+    def _assemble_generation_config(self, clip, project=None) -> dict:
         """Exactly the inputs that decide what a clip's audio *is*: the
         segment key hashes these and nothing else, and `_assemble_clip_config`
         is built on top. App defaults from the Settings tab, the backend's
@@ -857,8 +960,9 @@ class QtTTSApp(QMainWindow):
         whitelist, which is for untrusted preset files and shouldn't widen
         for a runtime counter. One method decides what both the dirty check
         and a Generate hash, so they can't drift."""
+        project = project or self.project_for(clip)
         gen_state = self.settings_dock.get_state()
-        backend = self.backend_for(clip)
+        backend = self.backend_for(clip, project)
         config = {
             "engine_id": backend.id,
             "lang_code": gen_state["lang_code"],
@@ -871,30 +975,31 @@ class QtTTSApp(QMainWindow):
         for field in backend.get_config_schema():
             if field.group == "Model" and field.key in gen_state:
                 config[field.key] = gen_state[field.key]
-        clip_config = dict(self.document.effective_config_for_clip(clip))
+        clip_config = dict(project.document.effective_config_for_clip(clip))
         for key in ("voice", "speed", "pitch", "lang_code"):
             if key in clip_config:
                 config[key] = clip_config[key]
-        variant_voice = self._variant_voice(clip)
+        variant_voice = self._variant_voice(clip, project)
         if variant_voice:
             config["voice"] = variant_voice
-        config["project_dir"] = self.project_dir
+        config["project_dir"] = project.project_dir
         config["take"] = int(clip.overrides.get("take", 0) or 0)
         return config
 
-    def _variant_voice(self, clip):
+    def _variant_voice(self, clip, project=None):
         """The reference name `clip.overrides["variant"]` picks from its
         character's `variants`, or None. Only a cloning backend has
         variants; on any other the override is ignored."""
+        project = project or self.project_for(clip)
         variant = (clip.overrides or {}).get("variant")
-        if not variant or not getattr(self.backend_for(clip).capabilities, "supports_voice_cloning", False):
+        if not variant or not getattr(self.backend_for(clip, project).capabilities, "supports_voice_cloning", False):
             return None
-        character = self.document.get_character(clip.character_id)
+        character = project.document.get_character(clip.character_id)
         if character is None:
             return None
         return (character.variants or {}).get(variant) or None
 
-    def _assemble_clip_config(self, clip) -> dict:
+    def _assemble_clip_config(self, clip, project=None) -> dict:
         """The config dict for a per-clip Generate action and, through
         `post_config_for_clip`, for read-time post-processing:
         `_assemble_generation_config` plus everything that doesn't change
@@ -904,6 +1009,7 @@ class QtTTSApp(QMainWindow):
         `process_chunk_task` reads `config['voice']` by direct indexing, so a clip with no character must still end up
         with usable defaults. FX come from `fx_resolve.resolve_fx`, the same
         resolver the Audio FX tab renders."""
+        project = project or self.project_for(clip)
         gen_state = self.settings_dock.get_state()
         export = self._export_values()
         config = {
@@ -921,31 +1027,31 @@ class QtTTSApp(QMainWindow):
             if key in gen_state:
                 config[key] = gen_state[key]
 
-        clip_config = dict(self.document.effective_config_for_clip(clip))
+        clip_config = dict(project.document.effective_config_for_clip(clip))
         # ALLOWED_PRESET_KEYS whitelists "trim", but process_audio reads
         # "trim_silence" - same inline rename every other caller does.
         if "trim" in clip_config:
             clip_config["trim_silence"] = clip_config.pop("trim")
         config.update(clip_config)
-        config.update(self._assemble_generation_config(clip))
-        if self.project_dir:
+        config.update(self._assemble_generation_config(clip, project))
+        if project.project_dir:
             # Clips generate straight into the project dir, once, named by
             # their segment key (Claude/old/PLAN_tbaw_bundle.md section 3). The
             # bundle's audio format decides the extension of new segments,
             # over a preset's `format` (that one is for the export path).
-            config["out_dir"] = os.path.join(self.project_dir, *project_io.AUDIO_GENERATED.split("/"))
+            config["out_dir"] = os.path.join(project.project_dir, *project_io.AUDIO_GENERATED.split("/"))
             config["segment_naming"] = "cache_key"
-            config["format"] = project_io.bundle_options(self.project_settings)["audio_format"]
+            config["format"] = project_io.bundle_options(project.project_settings)["audio_format"]
 
         # effective_config_for_clip only ever carries the FX preset's *name*;
         # the resolver turns project values + character preset + clip preset
         # + clip.fx_override into the actual FX keys and the ANDed apply_fx.
-        resolution = fx_resolve.resolve_fx(self, clip=clip)
+        resolution = fx_resolve.resolve_fx(self, clip=clip, project=project)
         config.update(resolution.values)
         config["apply_fx"] = resolution.apply_fx
         return config
 
-    def _install_segment_key_fn(self) -> None:
+    def _install_segment_key_fn(self, project=None) -> None:
         """Sets `Document.segment_key_fn` to a closure that keys each clip
         with its own character's backend (`backend_for`) and the project dir (Claude/old/PLAN_tbaw_bundle.md section 2.3):
         `key_fn(text, clip, engine_version=None) -> caching.segment_key`
@@ -957,11 +1063,12 @@ class QtTTSApp(QMainWindow):
         of a book costs about two stats per clip and no hashing or reads.
         Also sets `Document.generation_config_fn`, so the dirty check reads
         the lexicon and segmentation settings the generation will use."""
+        project = project or self.focus
         memo: dict = {}
 
         def key_fn(text, clip, engine_version=None):
-            backend = self.backend_for(clip)
-            config = self._assemble_generation_config(clip)
+            backend = self.backend_for(clip, project)
+            config = self._assemble_generation_config(clip, project)
             memo_key = (text, json.dumps(config, sort_keys=True, default=str), engine_version)
             name, _fp = caching.normalize_voice(config.get("voice"), backend, config.get("project_dir"))
             voice_file = backend.resolve_voice_file(name, config.get("project_dir")) if name else None
@@ -977,26 +1084,30 @@ class QtTTSApp(QMainWindow):
             memo[memo_key] = (stamp, extra, key)
             return key
 
-        self.document.segment_key_fn = key_fn
-        self.document.generation_config_fn = self._dirty_check_config
+        def config_fn(clip):
+            return self._dirty_check_config(clip, project)
 
-    def _dirty_check_config(self, clip) -> dict:
+        project.document.segment_key_fn = key_fn
+        project.document.generation_config_fn = config_fn
+
+    def _dirty_check_config(self, clip, project=None) -> dict:
         """`Document.generation_config_fn`: `_assemble_generation_config`,
         or the clip's own config while the Settings tab is still being
         built (the editor can rehighlight before it exists)."""
+        project = project or self.project_for(clip)
         if self.settings_dock is None:
-            return self.document.effective_config_for_clip(clip)
-        return self._assemble_generation_config(clip)
+            return project.document.effective_config_for_clip(clip)
+        return self._assemble_generation_config(clip, project)
 
     # --- read-time post-processing (kokoro_gui/audio/post.py) ---------------
 
-    def post_config_for_clip(self, clip) -> dict:
+    def post_config_for_clip(self, clip, project=None) -> dict:
         """The `POST_KEYS` subset of the clip's resolved config: what the
         transport, the exporter and the timeline waveform apply on top of
         the raw segment files. Changing any of it never dirties the clip."""
-        return post.extract_post_config(self._assemble_clip_config(clip))
+        return post.extract_post_config(self._assemble_clip_config(clip, project))
 
-    def clip_duration_s(self, clip):
+    def clip_duration_s(self, clip, project=None):
         """`compute_arrangement`'s `clip_duration`: the clip's rendered
         length (trim and pitch change it), or the raw `Segment.duration`
         for a file that can't be read, or None with no audio at all. A
@@ -1008,7 +1119,7 @@ class QtTTSApp(QMainWindow):
             return None
         if self.settings_dock is None or self.fx_dock is None:
             return clip_audio_duration_s(clip)
-        post_config = self.post_config_for_clip(clip)
+        post_config = self.post_config_for_clip(clip, project)
         rate = self.project_sample_rate()
         total = 0.0
         for segment in segments:
@@ -1019,14 +1130,14 @@ class QtTTSApp(QMainWindow):
                 total += segment.duration or 0.0
         return total
 
-    def rendered_clip_samples(self, clip):
+    def rendered_clip_samples(self, clip, project=None):
         """`(samples, rate)` for the clip's segments concatenated and
         post-processed, or None. The timeline draws its waveform from this
         so it shows what the transport plays."""
         segments = sorted((s for s in clip.segments if s.audio_path), key=lambda s: s.order_index)
         if not segments:
             return None
-        post_config = self.post_config_for_clip(clip)
+        post_config = self.post_config_for_clip(clip, project)
         rate = self.project_sample_rate()
         parts = []
         for segment in segments:
@@ -1040,10 +1151,13 @@ class QtTTSApp(QMainWindow):
 
         return np.concatenate(parts), rate
 
-    def build_arrangement(self):
-        """Every `compute_arrangement` call for the live document goes
-        through here so they all measure clips the same way."""
-        return compute_arrangement(self.document, engine_id=self.backend.id, clip_duration=self.clip_duration_s)
+    def build_arrangement(self, project=None):
+        """Every `compute_arrangement` call goes through here so they all
+        measure clips the same way. Default: the `level` project, the one
+        the timeline and transport show."""
+        project = project or self.level
+        return compute_arrangement(project.document, engine_id=self.backend.id,
+                                   clip_duration=lambda clip: self.clip_duration_s(clip, project))
 
     # --- Options: engine / device / theme ---------------------------------
 
@@ -1164,8 +1278,11 @@ class QtTTSApp(QMainWindow):
         return self.show_welcome()
 
     def _switch_document(self, document, path: str | None, project_settings: dict | None = None) -> None:
+        """The root project now holds `document` (New, Open, a migration);
+        focus and level go back to it."""
         self.transport.stop()
-        self.document = document
+        self.focus = self.level = self.root
+        self.root.document = document
         if self._library_link_ids is not None:
             # First launch with the library: link what the presets import
             # made an exact copy of (one time only).
@@ -1866,6 +1983,10 @@ class QtTTSApp(QMainWindow):
         regenerate = clip is not None and clip not in self.document.dirty_clips()
         self.timeline_dock.on_generate_clip_requested(clip_id, regenerate=regenerate)
 
+    def on_project_generated(self, project) -> None:
+        """A generate finished and its results are in `project`'s document.
+        A subproject's mixdown follows (phase 4); the root has none."""
+
     def on_batch_generation_progress(self, completed: int, total: int, current_clip_label: str) -> None:
         percent = int((completed / total) * 100) if total else 0
         if current_clip_label:
@@ -1956,15 +2077,16 @@ class QtTTSApp(QMainWindow):
         track's gain, pan and automation and the clip's fades ride each
         entry. A clip's fade-in goes on its first segment and its fade-out
         on its last."""
-        self._arrangement = self.build_arrangement()
+        level = self.level
+        self._arrangement = self.build_arrangement(level)
         rate = self.project_sample_rate()
-        mixes = clip_mixes(self.document, self._arrangement)
+        mixes = clip_mixes(level.document, self._arrangement)
         schedule = []
         for placed in self._arrangement.placed:
             mix = mixes.get(placed.clip.id)
             if placed.estimated or mix is None:
                 continue
-            post_config = self.post_config_for_clip(placed.clip)
+            post_config = self.post_config_for_clip(placed.clip, level)
             # One ScheduledClip per segment so multi-segment clips play
             # back to back at their real (rendered) offsets.
             offset = placed.start_s
@@ -2001,7 +2123,8 @@ class QtTTSApp(QMainWindow):
                 word = self.word_at(hits[0], seconds)
         self.selection.set_playing_clip(playing)
         if self.editor is not None:
-            self.editor.set_playing_word(word)
+            # The transcript shows the focus; the transport plays the level.
+            self.editor.set_playing_word(word if self.focus is self.level else None)
 
     def word_at(self, placed, seconds: float):
         """`(start, end)` document offsets of the word the playhead is on
@@ -2027,10 +2150,11 @@ class QtTTSApp(QMainWindow):
         text from where the segment's text starts."""
         from kokoro_gui.engine.lexicon import apply_lexicon, original_span
 
-        extent = self.document.clip_extent(clip.id)
+        document = self.level.document
+        extent = document.clip_extent(clip.id)
         if extent is None:
             return None
-        clip_text = self.document.clip_text(clip)
+        clip_text = document.clip_text(clip)
         spoken, spans = apply_lexicon(clip_text, self.settings.get("lexicon", {}), with_spans=True)
         seg_words = (segment.text or "").split()
         if word_index >= len(seg_words):
@@ -2050,7 +2174,10 @@ class QtTTSApp(QMainWindow):
     def seek_to_offset(self, offset: int) -> bool:
         """Ctrl+click in the transcript: seek the transport to the word at
         document `offset` (the clip's start when it has no word times).
-        False when the offset isn't inside a placed clip."""
+        False when the offset isn't inside a placed clip, or when the
+        transcript shows a subproject the transport isn't playing."""
+        if self.focus is not self.level:
+            return False
         clip = self.document.clip_covering(offset)
         if clip is None:
             return False
@@ -2095,8 +2222,9 @@ class QtTTSApp(QMainWindow):
             return False
         jobs = []
         for clip_id in clip_ids:
-            clip = self.document.get_clip(clip_id)
-            if clip is None or (not force and self._engine_has_word_timing(clip)):
+            project = self.project_of_clip_id(clip_id)
+            clip = project.document.get_clip(clip_id) if project is not None else None
+            if clip is None or clip.is_nested or (not force and self._engine_has_word_timing(clip)):
                 continue
             for segment in clip.segments:
                 if segment.audio_path and (force or not segment.words):
@@ -2139,7 +2267,7 @@ class QtTTSApp(QMainWindow):
     def _on_words_aligned(self, results) -> None:
         self._word_align_thread = None
         by_id = {}
-        for clip in self.document.clips:
+        for clip in (c for project in self.projects.values() for c in project.document.clips):
             for segments in (clip.segments, *clip.takes.values()):
                 for segment in segments:
                     by_id[segment.id] = segment
