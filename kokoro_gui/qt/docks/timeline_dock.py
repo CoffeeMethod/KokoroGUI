@@ -475,7 +475,7 @@ class TimelineDock(QDockWidget):
         unmodified. Cancel pushes nothing.
         """
         clip = self.app.document.get_clip(clip_id)
-        if clip is None:
+        if clip is None or clip.is_nested:
             return
 
         document = self.app.document

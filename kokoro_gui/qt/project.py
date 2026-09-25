@@ -54,7 +54,7 @@ FORMAT = "tbaw"
 SUPPORTED_VERSION = 1
 # Content features this reader implements; a bundle whose `requires` names
 # one that isn't here is refused by name (section 8 of the plan).
-SUPPORTED_FEATURES: frozenset = frozenset({"takes"})
+SUPPORTED_FEATURES: frozenset = frozenset({"takes", "nested"})
 
 MANIFEST = "manifest.json"
 DOCUMENT = "document.json"
@@ -150,6 +150,18 @@ def project_title(path: str | None) -> str:
     if not path:
         return "Untitled"
     return os.path.splitext(os.path.basename(path))[0] or "Untitled"
+
+
+def display_title(project_settings: dict | None, path: str | None, fallback: str = "Untitled") -> str:
+    """A project's name as the parent, the breadcrumb and a placeholder run
+    show it: `project_settings["title"]` (phase 4; `project.json`, not the
+    document, so 4.0 keeps it), else the file stem, else `fallback`."""
+    title = (project_settings or {}).get("title")
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    if path:
+        return project_title(path)
+    return fallback
 
 
 def bundle_path_for(path: str) -> str:
@@ -761,9 +773,16 @@ def bundle_options(project_settings: dict) -> dict:
 
 def required_features(document: Document) -> list:
     """`manifest.requires`: the content features a v1 reader would lose or
-    misplay (section 8 of the bundle plan). Parked takes are the only one: an
-    older reader would drop them on its next Save and GC their files."""
-    return ["takes"] if any(clip.takes for clip in document.clips) else []
+    misplay (section 8 of the bundle plan). Parked takes (an older reader
+    would drop them on its next Save and GC their files) and subprojects
+    (it would read a nested clip's source as unknown and refuse the
+    document)."""
+    requires = []
+    if any(clip.takes for clip in document.clips):
+        requires.append("takes")
+    if any(clip.source == "nested" for clip in document.clips):
+        requires.append("nested")
+    return requires
 
 
 def project_stats(document: Document) -> dict:

@@ -95,7 +95,11 @@ def is_clip_dirty(clip, text: str, config: dict, key_fn=None) -> bool:
     `Clip` object, now dirty; models.Document.replace_text is what
     guarantees a fully-deleted-then-retyped clip never reaches this function
     as the *same* object in the first place - see Q18), or a segment's file
-    is gone."""
+    is gone. A nested clip (a subproject) has no segments to compare;
+    `Document.dirty_clips` asks the app about it, and this headless answer
+    is "stale"."""
+    if getattr(clip, "source", None) == "nested":
+        return True
     if not clip.segments:
         return True
     # A segment baked with its FX at generation time (pre non-destructive

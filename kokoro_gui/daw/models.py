@@ -199,6 +199,11 @@ class Segment:
 
 
 CLIP_STATUSES = ("todo", "generated", "approved", "needs_rewrite")
+# "nested": a subproject placed as a clip (phase 4, grill NP1-NP8). Its
+# audio is the child project's mixdown; it has no segments or takes.
+CLIP_SOURCES = ("generated", "imported", "nested")
+# `Run.kind` of the one read-only run a nested clip owns: the child's title.
+PLACEHOLDER = "placeholder"
 
 
 @dataclass
@@ -215,7 +220,7 @@ class Clip:
     fx_override: Optional[dict] = None
     timeline_timestamp: Optional[float] = None
     segments: list = field(default_factory=list)
-    source: str = "generated"  # "generated" | "imported"
+    source: str = "generated"  # one of CLIP_SOURCES
     original_audio_path: Optional[str] = None
     # Silence before this clip when it's placed after its text-order
     # predecessor; None uses the document's `gap_s`/`paragraph_gap_s`.
@@ -234,12 +239,28 @@ class Clip:
     # Locked in time: ripple on regenerate never moves it (subtitle cues set
     # it). A drag still does. Not the same as having a `timeline_timestamp`.
     pinned: bool = False
+    # A nested clip's subproject: `{"kind": "embedded", "id": project_id}`
+    # (the child bundle rides inside the parent at `projects/<id>.tbaw`) or
+    # `{"kind": "linked", "id": project_id, "path": relative_or_absolute}`
+    # (a `.tbaw` on disk). `id` is the child's manifest `project_id`, so a
+    # relink can tell it found the right file. None for any other clip.
+    child: Optional[dict] = None
     id: str = field(default_factory=_new_id)
     extra: dict = field(default_factory=dict)  # unknown fields, see Character
 
     def __post_init__(self):
-        if self.source not in ("generated", "imported"):
-            raise ValueError(f"Clip.source must be 'generated' or 'imported', got {self.source!r}")
+        if self.source not in CLIP_SOURCES:
+            raise ValueError(f"Clip.source must be one of {CLIP_SOURCES}, got {self.source!r}")
+
+    @property
+    def is_nested(self) -> bool:
+        return self.source == "nested"
+
+    @property
+    def run_kind(self) -> str:
+        """The `Run.kind` of this clip's runs: its source, or
+        `PLACEHOLDER` for a nested clip."""
+        return PLACEHOLDER if self.source == "nested" else self.source
 
 
 @dataclass
@@ -257,10 +278,9 @@ class Run:
     `clip_id=None` means "untagged" - ordinary narration nobody has assigned
     a character to yet, exactly like today's "some text has no clip" state.
     `kind` mirrors the owning `Clip.source` ("generated"/"imported") for a
-    tagged run, or is `None` for an untagged one; `"placeholder"` is reserved
-    for a future ASR-anchored import awaiting transcription (deliberately
-    unused for now - see the plan doc's "Open items", this pass only
-    reserves the marker, it doesn't build the import UX behind it).
+    tagged run, or is `None` for an untagged one. `"placeholder"`
+    (`PLACEHOLDER`) is a nested clip's one read-only run, whose text is the
+    subproject's title (phase 4); the editor refuses edits inside it.
     """
 
     text: str = ""
@@ -302,6 +322,11 @@ class Document:
     # clip's character or overrides. Unset, `dirty_clips` falls back to
     # `effective_config_for_clip`. Never serialized.
     generation_config_fn: Optional[Callable] = field(default=None, init=False, repr=False)
+    # Runtime-only, set beside `segment_key_fn`: `clip -> bool`, True when a
+    # nested clip's subproject is stale (a stale clip inside it, or its
+    # mixdown missing or older than its document). Unset, a nested clip
+    # counts as stale. Never serialized.
+    nested_state_fn: Optional[Callable] = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         self.undo_stack = UndoStack(self)
@@ -471,11 +496,68 @@ class Document:
         from kokoro_gui.daw.dirty import is_clip_dirty
 
         config_for = self.generation_config_fn or self.effective_config_for_clip
-        return [
-            clip
-            for clip in self.clips
-            if is_clip_dirty(clip, self.clip_text(clip), config_for(clip), key_fn=self.segment_key_fn)
-        ]
+        out = []
+        for clip in self.clips:
+            if clip.is_nested:
+                stale = self.nested_state_fn(clip) if self.nested_state_fn is not None else True
+            else:
+                stale = is_clip_dirty(clip, self.clip_text(clip), config_for(clip), key_fn=self.segment_key_fn)
+            if stale:
+                out.append(clip)
+        return out
+
+    def overlaps_nested(self, start: int, end: int) -> bool:
+        """True when `[start, end)` touches a nested clip's placeholder run,
+        which no character assignment or split may retag."""
+        for run, r_start, r_end in self._iter_runs_with_offsets():
+            if run.kind == PLACEHOLDER and r_start < end and r_end > start:
+                return True
+        return False
+
+    def nested_clips(self) -> list:
+        return [clip for clip in self.clips if clip.is_nested]
+
+    def placeholder_extent(self, clip_id: str) -> Optional[tuple]:
+        """`clip_extent` of a nested clip's placeholder run, or None."""
+        clip = self.get_clip(clip_id)
+        return self.clip_extent(clip_id) if clip is not None and clip.is_nested else None
+
+    def insert_nested_clip(self, position: int, child: dict, title: str, character_id=None) -> Clip:
+        """Inserts a nested clip at text offset `position`: one placeholder
+        run holding `title`. An insert inside another clip's run lands at
+        that run's end instead, so no clip is split. Returns the clip; no
+        track is assigned (the caller puts it on one)."""
+        position = max(0, min(int(position), len(self.text)))
+        run = self._run_covering(position - 1) if position > 0 else None
+        if run is not None and run.clip_id is not None:
+            extent = self.clip_extent(run.clip_id)
+            if extent is not None and extent[0] < position < extent[1]:
+                position = extent[1]
+        clip = Clip(character_id=character_id, source="nested", child=dict(child))
+        self._split_at(position)
+        new_runs = []
+        inserted = False
+        pos = 0
+        for existing in self.runs:
+            if not inserted and pos >= position:
+                new_runs.append(Run(text=title or "Subproject", clip_id=clip.id, kind=PLACEHOLDER))
+                inserted = True
+            new_runs.append(existing)
+            pos += len(existing.text)
+        if not inserted:
+            new_runs.append(Run(text=title or "Subproject", clip_id=clip.id, kind=PLACEHOLDER))
+        self.runs = new_runs
+        self.clips.append(clip)
+        self._normalize_runs()
+        return clip
+
+    def set_placeholder_text(self, clip_id: str, text: str) -> None:
+        """Renames a nested clip's placeholder run (the subproject's title
+        changed)."""
+        for run in self.runs:
+            if run.clip_id == clip_id and run.kind == PLACEHOLDER:
+                run.text = text or "Subproject"
+                return
 
     # -- run-list maintenance (private) -------------------------------------
 
@@ -575,6 +657,8 @@ class Document:
                 f"assign_character_to_range requires [start, end) within [0, {text_len}), "
                 f"got start={start}, end={end}"
             )
+        if self.overlaps_nested(start, end):
+            raise ValueError("assign_character_to_range can't retag a subproject's placeholder")
 
         track_id = self.track_for_character(character_id, create=True)
 
@@ -612,9 +696,9 @@ class Document:
         # None of these _retag_range calls change len(self.text), so it's
         # safe to apply them in any order using offsets all computed above,
         # against the pre-edit run layout.
-        self._retag_range(start, end, new_clip.id, new_clip.source)
+        self._retag_range(start, end, new_clip.id, new_clip.run_kind)
         for (l_start, l_end, _old_clip), leftover_clip in zip(leftover_ranges, leftover_clips):
-            self._retag_range(l_start, l_end, leftover_clip.id, leftover_clip.source)
+            self._retag_range(l_start, l_end, leftover_clip.id, leftover_clip.run_kind)
 
         return new_clip
 

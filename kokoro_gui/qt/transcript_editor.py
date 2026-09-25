@@ -498,7 +498,11 @@ class TranscriptEditor(QTextEdit):
     def _push_assign_character(self, start: int, end: int, character_id) -> None:
         """Shared tail end of every character-assignment authoring path
         (Characters menu, gutter picker, header combo, paste-splitting, the
-        `[Speaker:FX]:` shorthand)."""
+        `[Speaker:FX]:` shorthand). A range over a subproject's placeholder
+        line is refused."""
+        if self.app.document.overlaps_nested(start, end):
+            self.app.set_status("A subproject's line can't be assigned a character.", "warning")
+            return
         self.app.document.undo_stack.push(AssignCharacterCommand(start, end, character_id))
         self.rehighlight()
         self.app.schedule_save()

@@ -166,6 +166,8 @@ def plan_auto_split_clips(document, split_by_paragraph: bool):
             elif text[gap_start:gap_end].strip():
                 triples.append((gap_start, gap_end, only_character.id))
 
+    # A subproject's placeholder line is never retagged.
+    triples = [t for t in triples if not document.overlaps_nested(t[0], t[1])]
     triples.sort(key=lambda t: t[0])
     triples, _gaps = _carve_pauses(text, triples)
     return triples, unmatched
