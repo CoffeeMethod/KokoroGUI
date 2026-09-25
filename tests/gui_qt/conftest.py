@@ -24,6 +24,27 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from tests.conftest import StubEngine  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _flush_deferred_deletes(qapp):
+    """Actually destroys the widgets each test leaves behind.
+
+    pytest-qt's teardown calls `deleteLater()` on every `qtbot.addWidget`
+    widget, but a deferred delete only runs when control returns to a Qt
+    event loop, and the suite never runs one (`processEvents()` skips
+    DeferredDelete on purpose). Every test's QtTTSApp (~440 widgets) then
+    lived until the process exited, and each new QtTTSApp's theme.apply()
+    (QApplication.setStyle/setStyleSheet) re-polished all of them, so setup
+    grew linearly with the number of earlier tests and the whole suite
+    quadratically - over an hour for a full local `pytest`. Autouse, so it
+    is set up first and torn down last: after pytest-qt's deleteLater()
+    and after `qt_app`'s own teardown.
+    """
+    yield
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
 @pytest.fixture
 def qt_app(tmp_path, monkeypatch, qtbot):
     import kokoro_gui.qt.app as qt_app_module
