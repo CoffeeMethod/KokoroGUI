@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Kokoro GUI · Settings reference</title>
-<meta name="description" content="Every field in every dock, what it actually does, how the Settings dock's fields scope to a clip or character, which settings Audio8 silently ignores, and why JIT streaming only exists for engines that can generate faster than real time." />
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230b0b10'/%3E%3Cg fill='%23a78bfa'%3E%3Crect x='10' y='26' width='7' height='12' rx='2'/%3E%3Crect x='21' y='16' width='7' height='32' rx='2'/%3E%3Crect x='32' y='22' width='7' height='20' rx='2'/%3E%3Crect x='43' y='10' width='7' height='44' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
+<title>KokoroGUI · Settings reference</title>
+<meta name="description" content="Every field in every KokoroGUI panel and what it does: how the Settings tab scopes to a project, clip or character, the timeline and mixer, export, characters, FX and the voice tools." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231e1f22'/%3E%3Crect x='12' y='13' width='40' height='5' rx='2.5' fill='%23868a91'/%3E%3Crect x='12' y='23' width='26' height='5' rx='2.5' fill='%23e3a72f'/%3E%3Cg fill='%234f8fe6'%3E%3Crect x='12' y='41' width='4' height='8' rx='2'/%3E%3Crect x='19' y='36' width='4' height='18' rx='2'/%3E%3Crect x='26' y='39' width='4' height='12' rx='2'/%3E%3C/g%3E%3Cg fill='%23e0655c'%3E%3Crect x='33' y='34' width='4' height='22' rx='2'/%3E%3Crect x='40' y='39' width='4' height='12' rx='2'/%3E%3Crect x='47' y='42' width='4' height='6' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="assets/site.css" />
 </head>
 <body>
@@ -17,21 +17,19 @@
   <nav class="wrap">
     <a class="brand" href="index.html">
       <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
-        <rect width="64" height="64" rx="16" fill="var(--surface-2)" stroke="var(--border-2)"/>
-        <g fill="var(--accent)">
-          <rect x="10" y="26" width="7" height="12" rx="2"/>
-          <rect x="21" y="16" width="7" height="32" rx="2"/>
-          <rect x="32" y="22" width="7" height="20" rx="2"/>
-          <rect x="43" y="10" width="7" height="44" rx="2"/>
-        </g>
+        <rect width="64" height="64" rx="14" fill="var(--surface-2)" stroke="var(--border-2)"/>
+        <rect x="12" y="13" width="40" height="5" rx="2.5" fill="var(--text-3)"/>
+        <rect x="12" y="23" width="26" height="5" rx="2.5" fill="var(--c1)"/>
+        <g fill="var(--c2)"><rect x="12" y="41" width="4" height="8" rx="2"/><rect x="19" y="36" width="4" height="18" rx="2"/><rect x="26" y="39" width="4" height="12" rx="2"/></g>
+        <g fill="var(--c3)"><rect x="33" y="34" width="4" height="22" rx="2"/><rect x="40" y="39" width="4" height="12" rx="2"/><rect x="47" y="42" width="4" height="6" rx="2"/></g>
       </svg>
-      <span class="brand-word">Kokoro GUI<span class="ver">v4.0.0 beta</span></span>
+      <span class="brand-word">KokoroGUI<span class="ver">TBAW · 4.0 beta</span></span>
     </a>
     <div class="navlinks">
+      <a href="index.html#workflows">Workflows</a>
       <a href="index.html#features">Features</a>
-      <a href="index.html#engines">Engines</a>
-      <a href="index.html#changelog">Changelog</a>
-      <a href="scripting.html">Scripting</a>
+      <a href="changes.html">Changes</a>
+      <a href="scripting.html">Tags</a>
       <a href="settings.html" aria-current="page">Settings</a>
       <a href="format.html">.tbaw format</a>
     </div>
@@ -49,28 +47,29 @@
 </header>
 
 <main>
-  <section class="page-head">
+  <section class="page-head" data-clip="Settings" data-cc="c2">
     <div class="wrap">
-      <span class="eyebrow">Reference</span>
-      <h1>What every setting actually does</h1>
-      <p class="lede">Every field in every dock, grouped the way they're grouped in the app, with the parts that aren't obvious from the label alone called out. Three things are worth reading before the rest: the Settings dock's fields mean something different depending on what's selected, Audio8 quietly ignores two of its own generation fields, and JIT streaming isn't a checkbox every engine gets.</p>
+      <span class="eyebrow c2">Reference</span>
+      <h1>What every setting does</h1>
+      <p class="lede">Every field in every panel, grouped the way the app groups them, with the parts the label doesn't tell you called out. Three are worth knowing first: the Settings tab edits whatever is selected, Audio8 ignores two of its own fields, and JIT streaming only exists for a project with no clips yet.</p>
       <div class="toc">
         <a href="#engine-picker">Options menu</a>
-        <a href="#transcript">Transcript &amp; characters</a>
+        <a href="#transcript">Transcript</a>
+        <a href="#characters">Characters</a>
         <a href="#settings-dock">Settings tab</a>
+        <a href="#project-clip">Project &amp; clip fields</a>
         <a href="#audio-control">Audio control</a>
         <a href="#timeline">Timeline</a>
-        <a href="#transport">Transport &amp; playback</a>
+        <a href="#transport">Playback</a>
         <a href="#video">Video</a>
-        <a href="#undo">Undo &amp; redo</a>
-        <a href="#generation">File menu &amp; projects</a>
+        <a href="#generation">File menu</a>
         <a href="#processing">Export</a>
-        <a href="#workspace">Workspaces &amp; theme</a>
-        <a href="#fx">FX</a>
+        <a href="#workspace">Workspaces</a>
+        <a href="#fx">Audio FX</a>
         <a href="#lexicon">Lexicon</a>
         <a href="#mixing">Mixing</a>
-        <a href="#voice-reference">Voice reference</a>
-        <a href="#presets">Presets &amp; characters</a>
+        <a href="#voice-reference">References</a>
+        <a href="#presets">Preset files</a>
         <a href="#jit">JIT streaming</a>
       </div>
     </div>
@@ -80,8 +79,8 @@
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">Options menu</span>Engines, device, theme</h2>
-        <p><strong>Each character picks its engine</strong> in Edit &gt; Characters, so one project can mix Kokoro and Audio8 voices; every engine a character uses stays loaded. The selected clip's character (or the first character, with nothing selected) decides what the Settings tab's fields look like and what sits behind the Voices tab (Mixing for Kokoro, Voice Reference for Audio8, nothing for the Dummy engine). Everything below is written per-engine where the two differ.</p>
-        <p><strong>Options &gt; Device</strong> picks CPU / CUDA / Auto for the Kokoro pipeline (the CUDA entry is greyed out when torch reports no device) and re-initializes the engine. <strong>Options &gt; Theme</strong> switches between the dark (default) and light palettes. The three checkable entries under them are the old Settings dialog: whether copying text carries its character/FX along, whether a paste splits off its own run, and JIT streaming for clip-free documents. The welcome dialog's "Show at startup" box is the one launch setting that isn't here; it lives on the dialog itself (File &gt; Welcome…).</p>
+        <p><strong>Each character picks its engine</strong> in Edit &gt; Characters, so one project can mix Kokoro and Audio8 voices; every engine a character uses stays loaded. The selected clip's character (or the first character, with nothing selected) decides what the Settings tab's fields look like and what sits behind the Voices tab (Mixing for Kokoro, References for Audio8, nothing for the Dummy engine). Everything below is written per-engine where the two differ.</p>
+        <p><strong>Options &gt; Device</strong> picks CPU / CUDA / Auto for the Kokoro pipeline (the CUDA entry is greyed out when torch reports no device) and re-initializes the engine. <strong>Options &gt; Theme</strong> switches between the dark (default) and light palettes. The three checkable entries under them are whether copying text carries its character and FX along, whether a paste splits off its own run, and <a class="link" href="#jit">JIT streaming</a> for projects with no clips. The welcome dialog's "Show at startup" box is the one launch setting that isn't here; it lives on the dialog itself (File &gt; Welcome…).</p>
       </div>
     </div>
   </section>
@@ -89,10 +88,10 @@
   <section class="doc-section" id="transcript">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">Transcript dock</span>The transcript</h2>
-        <p>The Transcript dock is a syntax-highlighting editor over the document's canonical text, not a plain input field. Two combos sit above it: <strong>Character</strong> and <strong>FX</strong>, both reflecting the clip under the caret. Changing Character reassigns the selection (or the caret's whole clip, or its line for untagged text); changing FX sets a named FX override on the caret's clip, undoable like everything else. The left gutter names the speaker once per character/FX change (<code>Narrator</code> on one line, <code>FX: Echo</code> under it) and shows a small play button beside each out-of-date clip that regenerates just that clip. Out-of-date text is dash-underlined; an out-of-date clip with a target duration whose text reads longer than the target gets a wavy amber or red underline instead (see Target (s) below). Thin rules mark clip boundaries and where Auto-split would cut. A music bed's line holds its file name and can't be edited; delete the whole line to remove the bed.</p>
+        <h2><span class="idx">Transcript tab</span>The transcript</h2>
+        <p>The transcript is a highlighting editor over the project's text, not a plain input field. Two combos sit above it: <strong>Character</strong> and <strong>FX</strong>, both reflecting the clip under the caret. Changing Character reassigns the selection (or the caret's whole clip, or its line for untagged text); changing FX sets a named FX override on the caret's clip, undoable like everything else. The left gutter names the speaker once per character/FX change (<code>Narrator</code> on one line, <code>FX: Echo</code> under it) and shows a small play button beside each stale clip that generates just that clip. Stale text is dash-underlined; a stale clip with a target duration whose text reads longer than the target gets a wavy amber or red underline instead (see Target (s) below). Thin rules mark clip boundaries and where Auto-split would cut. A music bed's line holds its file name and can't be edited; delete the whole line to remove the bed.</p>
         <p> Every run of text is colored by its assigned character and FX, so the boundaries between speakers and effects are visible at a glance, without reading the inline <a href="scripting.html" class="link"><code>[Speaker:FX]:</code></a> syntax.</p>
-        <p>Selecting a range and opening the Characters menu reassigns that range's character/FX directly. Placing the caret inside an existing run instead shows that run's currently active voice/FX in the Settings dock. Copying a range carries its character/FX metadata with it; pasting into a run belonging to a different character splits the paste into its own run rather than silently overwriting the destination's assignment, unless "character/FX paste splits" is turned off, in which case a paste inherits whatever it lands on.</p>
+        <p>Selecting a range and opening the Characters menu reassigns that range's character/FX directly. Placing the caret inside an existing run instead shows that run's voice and FX in the Settings tab. Copying a range carries its character/FX metadata with it; pasting into a run belonging to a different character splits the paste into its own run rather than silently overwriting the destination's assignment, unless "character/FX paste splits" is turned off, in which case a paste inherits whatever it lands on.</p>
       </div>
     </div>
   </section>
@@ -101,35 +100,35 @@
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">Settings tab</span>One panel, three scopes</h2>
-        <p>The schema-driven form, scoped to whatever <code>self.app.selection</code> currently points at:</p>
+        <p>The top of the tab is built from the engine's own list of fields, and it edits whatever is selected:</p>
       </div>
       <div class="table-wrap reveal" style="max-width:760px; margin-top:1rem;">
         <table class="ref">
-          <caption>Settings dock scopes</caption>
+          <caption>Settings tab scopes</caption>
           <thead><tr><th>Selection</th><th>Values come from</th><th>Edits write to</th></tr></thead>
           <tbody>
             <tr><td>Nothing selected</td><td>The app's whole-document defaults</td><td>App settings (<code>config_qt.json</code>)</td></tr>
-            <tr><td>A clip</td><td>Its character's preset, merged with its own overrides</td><td><code>clip.overrides</code>, never the app defaults</td></tr>
-            <tr><td>A character</td><td>That character's saved preset</td><td>The character's preset directly, so every non-overridden clip using it updates live</td></tr>
+            <tr><td>A clip</td><td>Its character's settings, merged with its own overrides</td><td><code>clip.overrides</code>, never the app defaults</td></tr>
+            <tr><td>A character</td><td>That character's settings</td><td>The character directly, so every clip without its own override using it updates live</td></tr>
           </tbody>
         </table>
       </div>
-      <p class="dek" style="margin-top:1rem;">Only the fields below can vary per clip or character. Everything else (Language, Parallel threads, Enable segment cache, and any engine's own non-preset fields like Audio8's sampling knobs) is rendered disabled, not hidden, while a clip or character is selected, since those settings only make sense at the whole-document level.</p>
-      <p class="dek" style="margin-top:1rem;">Schema-driven: the fields below are what both real engines currently declare. Rows marked Audio8 only or Kokoro only don't exist on the other engine's dock at all.</p>
+      <p class="dek" style="margin-top:1rem;">Only the fields below can vary per clip or character. Everything else (Language, Parallel threads, Enable segment cache, and any engine's own non-character fields like Audio8's sampling knobs) is shown disabled, not hidden, while a clip or character is selected, since those settings only make sense at the whole-document level.</p>
+      <p class="dek" style="margin-top:1rem;">The fields below are what the two engines declare. Rows marked Audio8 only don't appear for a Kokoro character at all.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Voice &amp; generation fields</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td>Language</td><td>For Kokoro, picks which phonemization pipeline runs; each language uses its own <code>KPipeline</code> and voice list. For Audio8 it's one of eleven labels from the model card. See the callout below: it currently isn't sent to the model at all.</td></tr>
-            <tr><td>Voice</td><td>Kokoro: a named base voice (<code>af_heart</code>, <code>bm_daniel</code>, ...) or a saved custom mix from the Mixing dock. Audio8: a saved Voice Reference (WAV + transcript pair) from the Voice Reference dock.</td></tr>
+            <tr><td>Voice</td><td>Kokoro: a named base voice (<code>af_heart</code>, <code>bm_daniel</code>, ...) or a saved Mix from the Voices tab. Audio8: a saved Reference (a WAV and its transcript) from the Voices tab.</td></tr>
             <tr><td>Speed</td><td>Kokoro: 0.5x-2.0x, passed straight to the pipeline as a native generation parameter. Audio8: shown in the same range, but see the callout below, it's currently not forwarded to the model either.</td></tr>
             <tr><td>Target words per segment</td><td>5-200, default 40. Text is generated in pieces of about this many words, one file and one subtitle cue each. A piece ends at the strongest enabled boundary between half and one and a half times the target; if there's none, it may run to twice the target to reach one. Only past that is a sentence cut, and never inside a word. Changing it marks the clips whose pieces move as stale.</td></tr>
             <tr><td>Split at paragraphs / sentences / pauses</td><td>Which boundaries a piece may end at, strongest first: a blank line; a sentence end (<code>.</code> <code>!</code> <code>?</code> <code>...</code>, not after <code>Mr.</code>, <code>Dr.</code> or an initial); a pause (comma, semicolon, colon, dash, or a single line break). All on by default. Turning one off demotes its boundaries to the next level on, so with sentences off a full stop still counts as a pause.</td></tr>
-            <tr><td>Output format</td><td><code>wav</code>, <code>flac</code>, <code>mp3</code>, or <code>ogg</code>. Same four choices on both engines.</td></tr>
-            <tr><td>Parallel threads</td><td>Kokoro: 1-32, each worker thread gets its own <code>KPipeline</code>, so raising this genuinely parallelizes generation. Audio8: capped at 1-4 in the schema, and since every segment is serialized through one shared, locked model, raising it doesn't parallelize the model calls themselves.</td></tr>
-            <tr><td>Enable segment cache</td><td>Caches each generated segment as a <code>.wav</code> under <code>cache/</code>, keyed by a hash of the settings that affect what gets generated. Re-running with unchanged settings skips regenerating that segment.</td></tr>
-            <tr><td>Cache reference encoding <span class="engine-note">Audio8 only</span></td><td>A second, separate cache that stores the model's encoded reference audio, keyed by the reference file's contents. Repeated segments against the same voice reference skip re-running the audio encoder, independent of the segment cache above.</td></tr>
+            <tr><td>Output format</td><td><code>wav</code>, <code>flac</code>, <code>mp3</code> or <code>ogg</code>, for whole-document generation in a project with no clips. Clips are always written in the project's bundle format (wav or flac, set in the Export dialog), and the exported file's format is chosen in Export.</td></tr>
+            <tr><td>Parallel threads</td><td>Kokoro: 1-32. Each thread runs its own pipeline, so more threads generate more pieces at once. Audio8: 1-4, but one shared model generates one piece at a time, so more threads don't speed up the model itself.</td></tr>
+            <tr><td>Enable segment cache</td><td>For whole-document and JIT generation: keeps each generated piece under <code>cache/</code>, keyed by a hash of what produced it, so a re-run with the same text and settings skips it. Clips don't need it: each clip's audio is written once into the project, under a name made from the same hash.</td></tr>
+            <tr><td>Cache reference encoding <span class="engine-note">Audio8 only</span></td><td>A second, separate cache that stores the model's encoded reference audio, keyed by the reference file's contents. Repeated segments against the same Reference skip re-running the audio encoder, independent of the segment cache above.</td></tr>
             <tr><td>Max new tokens <span class="engine-note">Audio8 only</span></td><td>Caps how many tokens the model can generate per segment. Default 1024, hard-capped at 2048 to match the model's real <code>max_seq_len</code>; anything higher gets silently clamped by the model anyway.</td></tr>
             <tr><td>Temperature <span class="engine-note">Audio8 only</span></td><td>Sampling temperature, default 0.8. Higher values add more variation between takes of the same text.</td></tr>
             <tr><td>Top P / Top K <span class="engine-note">Audio8 only</span></td><td>Nucleus and top-k sampling cutoffs, default 0.95 and 50. Standard token-sampling controls for the model's decoder.</td></tr>
@@ -139,7 +138,7 @@
       <div class="callout warn reveal" style="max-width:760px; margin-top:1.4rem;">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2.5 17.5a1.7 1.7 0 0 0 1.5 2.5h16a1.7 1.7 0 0 0 1.5-2.5L13.7 3.9a1.7 1.7 0 0 0-3.4 0Z"/></svg>
         <div>
-          <p><strong>Language and Speed do nothing on Audio8, currently.</strong> The model's own processor doesn't accept a <code>language</code> or <code>speed</code> argument at all; passing either raises a hard error. So <code>audio8_tts.py</code> keeps both in its internal function signature only to match the shape shared with the other engines, and never forwards them to the model. Audio8 infers the spoken language from the reference clip and text, and always generates at its own pace. The two fields still show up in the dock because the schema doesn't currently distinguish "displayed" from "functional." Worth knowing before you spend time chasing a Speed slider that isn't moving anything.</p>
+          <p><strong>Language and Speed do nothing on Audio8, currently.</strong> The model doesn't accept a language or speed at all, so the app never sends them. Audio8 takes the language from the reference clip and the text, and always speaks at its own pace. The two fields still show because the field list can't yet mark one as display-only. To change an Audio8 line's length, use Fit to slot, which time-stretches it on playback.</p>
         </div>
       </div>
     </div>
@@ -185,8 +184,8 @@
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td>Volume</td><td>0.1x-2.0x. A plain multiply on the waveform, applied second in the chain, after Trim and before Pitch.</td></tr>
-            <tr><td>Pitch (st)</td><td>-12 to +12 semitones, shifted by resampling to a new length. This changes duration along with pitch, the classic "chipmunk" effect: raise the pitch and playback gets faster, lower it and playback gets slower. For pitch without a duration change, use the FX dock's separate Pitch Shift effect instead.</td></tr>
-            <tr><td>FX preset / Apply</td><td>Loads a saved FX preset into the FX dock's sliders. The Apply checkbox is the master switch for the whole FX chain below; unchecked, none of the FX dock's effects run even if individually enabled.</td></tr>
+            <tr><td>Pitch (st)</td><td>-12 to +12 semitones, shifted by resampling to a new length. This changes duration along with pitch, the classic "chipmunk" effect: raise the pitch and playback gets faster, lower it and playback gets slower. For pitch without a duration change, use the Audio FX tab's separate Pitch Shift effect instead.</td></tr>
+            <tr><td>FX Preset / Apply</td><td>Loads a saved FX into the Audio FX tab's sliders. The Apply checkbox is the master switch for the whole FX chain below; unchecked, none of the Audio FX tab's effects run even if individually enabled.</td></tr>
             <tr><td>Normalize</td><td>Scales the segment so its loudest peak sits at 98% of full scale. A simple peak normalize, not a loudness (LUFS) normalize. Runs last in the chain, after FX.</td></tr>
             <tr><td>Trim silence</td><td>Strips leading and trailing audio below a fixed amplitude threshold. Runs first in the chain, before Volume.</td></tr>
           </tbody>
@@ -197,16 +196,16 @@
 
   <section class="doc-section" id="timeline">
     <div class="wrap">
-      <h2><span class="idx">Timeline dock</span>Timeline</h2>
-      <p class="dek">One track per character in use (or a few shared lanes, see Track layout) on a real seconds axis, bottom-left of the window. Clips sit in text order across all tracks, 0.35 s apart (0.9 s across a blank line; both are Gap and Paragraph gap in the Settings tab with nothing selected, and a clip's Gap before overrides them): at their real duration once generated (with a waveform), at an estimated one before (dashed outline, no waveform; the estimate learns from <code>generation_stats.json</code>). A ruler runs across the top, a fixed header column names the tracks, and Ctrl+wheel zooms between 20 and 400 pixels per second.</p>
+      <h2><span class="idx">Timeline</span>Timeline</h2>
+      <p class="dek">One track per character in use (or a few shared lanes, see Track layout) on a real seconds axis. Clips sit in text order across all tracks, 0.35 s apart (0.9 s across a blank line; both are Gap and Paragraph gap in the Settings tab with nothing selected, and a clip's Gap before overrides them): at their real duration once generated (with a waveform), at an estimated one before (dashed outline, no waveform; the estimate learns from <code>generation_stats.json</code>). A ruler runs across the top, a fixed header column names the tracks, and Ctrl+wheel zooms between 20 and 400 pixels per second.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Timeline</caption>
           <thead><tr><th>Action</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Right-click a clip &gt; Generate</td><td>Renders just that clip's text/settings through the normal cache-aware generation path, populating its segments with real audio.</td></tr>
+            <tr><td>Right-click a clip &gt; Generate</td><td>Generates just that clip's text and settings through the normal cache-aware generation path, populating its segments with real audio.</td></tr>
             <tr><td>Right-click a clip &gt; Play</td><td>Plays that clip's cached audio.</td></tr>
-            <tr><td>Per-clip FX button</td><td>Opens an FX override for that one clip, applied on top of the FX chain and winning over its character's own FX preset. Button opacity shows state at a glance: 50% means no FX override, 90% means one's active.</td></tr>
+            <tr><td>Per-clip FX button</td><td>Opens an FX override for that one clip, applied on top of the FX chain and winning over its character's own FX. Button opacity shows state at a glance: 50% means no FX override, 90% means one's active.</td></tr>
             <tr><td>Drag a clip left or right</td><td>Pins it to that start time (snapping to other clips' edges and the playhead). Drop it at or before the start of the clip that precedes it in the text and its text moves there too, so the timeline and the transcript stay in the same order. Right-click &gt; Unpin from timeline puts it back in the flow.</td></tr>
             <tr><td>Drag a clip onto another track</td><td>Reassigns the clip to that track's character (with a confirmation prompt when the characters actually differ) or just moves it to that lane.</td></tr>
             <tr><td>Shift+drag inside a clip</td><td>Carves out the selected sub-range and opens an editable transcript for it. Confirming replaces just that sub-range with fresh TTS, under any character, not necessarily the clip's own.</td></tr>
@@ -215,16 +214,16 @@
             <tr><td>Shift+drag on the ruler</td><td>Loops playback between the two points. Right-click the ruler &gt; Clear loop to stop.</td></tr>
             <tr><td>Drag a clip's top corner</td><td>The small squares on a generated clip's top-left and top-right corners set its fade-in and fade-out. Settings with nothing selected &gt; Auto-crossfade adds a 10 ms fade wherever clips overlap.</td></tr>
             <tr><td>Overlap warning</td><td>Two clips that overlap on the same track get a red border.</td></tr>
-            <tr><td>A clip with a target</td><td>Its slot (Target (s) in the Settings tab) is drawn as a bracket from the clip's start, which may reach past the block, and its label gives the rendered length as a percentage of the target. Over 103% the clip is tinted amber, over 115% red.</td></tr>
+            <tr><td>A clip with a target</td><td>Its slot (Target (s) in the Settings tab) is drawn as a bracket from the clip's start, which may reach past the block, and its label gives the clip's length as a percentage of the target. Over 103% the clip is tinted amber, over 115% red.</td></tr>
             <tr><td>Right-click a clip &gt; Fit to slot</td><td>Shown for a clip with a target. Changes the clip until it's within 3% of the target, as one undo step. Kokoro regenerates it at a new speed, from 0.7x to 1.6x, up to three times. Audio8 has no speed control, so its playback is time-stretched instead, between 0.87x and 1.15x, without changing the pitch. A line still too long at 1.6x or 1.15x is set to Needs rewrite. Clips placed after it ripple as they do after a regenerate.</td></tr>
             <tr><td>Fit all over slot</td><td>The button above the timeline, shown once any clip has a target. Fits every clip that runs more than 3% past its target.</td></tr>
             <tr><td>A music bed's block</td><td>A file added with File &gt; Import Audio&hellip;, on the Music track. Drag its left or right edge to trim the file; the audio stays where it was on the timeline. Right-click: Play, Loop (repeat the trimmed part; the right edge then sets how long it runs), Reset trim, Unpin from timeline, Lock in time, Remove. A bed has no Generate, Take or Align words.</td></tr>
-            <tr><td>A subproject's block</td><td>A folder glyph and its title. It plays the subproject's rendered mixdown, hatched while that's out of date and crossed out when the subproject can't be opened. Click it: the transcript, Settings and Audio FX tabs show the subproject ("Subproject: …" at the top, Back returns). Double-click it (or its line in the transcript) to enter it: the timeline shows it and a breadcrumb above goes back up. Right-click: Enter, Generate and render, Detach to file… / Embed, Relink…, Remove.</td></tr>
+            <tr><td>A subproject's block</td><td>A folder glyph and its title. It plays the subproject's exported mix, hatched while that's stale and crossed out when the subproject can't be opened. Click it: the transcript, Settings and Audio FX tabs show the subproject ("Subproject: …" at the top, Back returns). Double-click it (or its line in the transcript) to enter it: the timeline shows it and a breadcrumb above goes back up. Right-click: Enter, Generate and render, Detach to file… / Embed, Relink…, Remove.</td></tr>
             <tr><td>Right-click a clip &gt; Take</td><td>Every take the clip has, the active one ticked, with its length. Regenerating keeps the old take. A take made from text you've since changed says "old text"; picking it marks the clip stale. Delete take drops one.</td></tr>
             <tr><td>Right-click a clip &gt; Status</td><td>To do, Generated, Approved or Needs rewrite. Generating sets Generated. The Show box above the timeline dims clips that don't match (All, Not approved, Needs rewrite).</td></tr>
             <tr><td>Right-click a clip &gt; Align words</td><td>Runs Whisper over the clip's audio to work out when each word is spoken. This runs by itself after generating with Audio8, or with Kokoro outside English.</td></tr>
             <tr><td>Track header: M, S, A, D, fader, pan</td><td>Mute, solo (any soloed track silences the others), show the volume automation lane, and duck; below them a fader (0-200%) and pan (snaps to centre). In the automation lane, double-click adds a point, drag moves it, right-click deletes it and Alt+drag moves a segment. <code>D</code> turns the track down while clips on tracks without it play, by Settings &gt; Project &gt; Ducking; it starts off, the Music track's included. Music beds never duck other tracks, and the source track neither ducks nor is ducked. Playback and export both follow these.</td></tr>
-            <tr><td>Generate (Transport dock)</td><td>Once the document has clips, this regenerates every dirty clip in one pass instead of the whole document, with bounded concurrency and cancel-safe queuing; each clip goes to its character's engine. Then every out-of-date subproject is generated and its mixdown rendered, one at a time. A document with no clips yet still falls back to the original whole-document pipeline. Its menu holds Auto-split then generate and the Split by paragraph toggle.</td></tr>
+            <tr><td>Generate (transport)</td><td>Once the project has clips, this generates every stale clip in one pass instead of the whole transcript, with bounded concurrency and cancel-safe queuing; each clip goes to its character's engine. Then every stale subproject is generated and its mix exported into the project, one at a time. A project with no clips yet still falls back to the original whole-document pipeline. Its menu holds Auto-split then generate and the Split by paragraph toggle.</td></tr>
           </tbody>
         </table>
       </div>
@@ -233,17 +232,17 @@
 
   <section class="doc-section" id="transport">
     <div class="wrap">
-      <h2><span class="idx">Transport dock</span>Playback</h2>
-      <p class="dek">Bottom-right. Play / pause / stop, the position readout, the Dub / Original / Both switch and a Loop toggle, then Preview / Generate / Cancel, then one progress bar that carries the status text.</p>
+      <h2><span class="idx">Transport</span>Playback</h2>
+      <p class="dek">Play / pause / stop, the position readout, the Dub / Original / Both switch and a Loop toggle, then Preview / Generate / Cancel, then one progress bar that carries the status text.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Transport</caption>
           <thead><tr><th>Control</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Play / Pause / Stop</td><td>Plays the whole arrangement through one stereo <code>sounddevice</code> output stream that mixes every clip at its timeline position with its track's fader, pan and automation and its own fades (overlaps are a plain sum, clipped to full scale). Position comes from the audio callback's frame counter, so the playhead is sample accurate. Space toggles playback anywhere except inside the text editor; Ctrl+Space toggles everywhere.</td></tr>
+            <tr><td>Play / Pause / Stop</td><td>Plays the whole timeline through one stereo <code>sounddevice</code> output stream that mixes every clip at its timeline position with its track's fader, pan and automation and its own fades (overlaps are a plain sum, clipped to full scale). Position comes from the audio callback's frame counter, so the playhead is sample accurate. Space toggles playback anywhere except inside the text editor; Ctrl+Space toggles everywhere.</td></tr>
             <tr><td>Playhead</td><td>A line across every lane plus a marker on the ruler. The transcript highlights the clip being played and scrolls to it without moving your caret. A clip that finishes generating mid-playback becomes audible without stopping.</td></tr>
             <tr><td>Dub / Original / Both</td><td>What playback plays. Dub is the project as it exports. Original plays the source track's slice under each clip that has an Original (s) range, and nothing else. Both plays the two together, each 6 dB down. Switching mid-play keeps the position. Greyed out on Dub while the project has no source track. The choice isn't saved with the project, and export is always the dub.</td></tr>
-            <tr><td>Loop</td><td>Wraps to the start instead of stopping at the end of the arrangement. A loop region set on the ruler wraps inside that region instead.</td></tr>
+            <tr><td>Loop</td><td>Wraps to the start instead of stopping at the end of the timeline. A loop region set on the ruler wraps inside that region instead.</td></tr>
             <tr><td>Position readout</td><td>mm:ss.t, or <code>HH:MM:SS:FF</code> timecode when Settings (nothing selected) &gt; Timecode is on, at the frame rate and start time set there. 29.97 and 59.94 can be drop-frame.</td></tr>
             <tr><td>Word highlight</td><td>While playing, the transcript underlines the word being spoken. Ctrl+click a word to jump there.</td></tr>
             <tr><td>Preview</td><td>Speaks the selected text (or the first 1000 characters of the document) with the project-scope settings, through the fire-and-forget preview player.</td></tr>
@@ -271,19 +270,34 @@
     </div>
   </section>
 
-  <section class="doc-section" id="undo">
+  <section class="doc-section" id="characters">
     <div class="wrap">
-      <div class="prose reveal">
-        <h2><span class="idx">Edit menu</span>Undo &amp; redo</h2>
-        <p>Text edits ride the editor's native undo; character/FX reassignments, clip moves and FX overrides push onto a plain-Python undo stack tied to the document. Edit &gt; Undo/Redo (or the OS shortcuts) pops whichever happened most recently. <strong>Edit &gt; Characters...</strong> edits each character's name, color, voice and FX preset, and, for an Audio8 character, a table of variants (a name such as "angry" and the voice reference it uses; the transcript's Variant box picks one per clip); a character still used by clips can't be removed. Each row says whether the character is Global (the character library), Project (the top-level project's, shared by its subprojects) or Local to this file; editing a Global or Project one's voice, FX, color, engine or variants changes it everywhere it's used. Promote to Library turns a character into a library entry, Promote to Project (inside a subproject) shares it with the whole project, Rename in library gives the entry this project's name for it, and Add &gt; From library... brings entries into the project. The Engine box picks the engine the character generates with. Track controls, fades, takes, statuses, markers and the Settings tab's Project and Clip fields are undoable too.</p>
+      <h2><span class="idx">Edit &gt; Characters</span>Characters</h2>
+      <p class="dek">A character is a name, a highlight color, an engine, a voice and an FX. Every clip belongs to one. A character still used by clips can't be removed.</p>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>Characters dialog</caption>
+          <thead><tr><th>Field or button</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Name / Color</td><td>The name <code>[Name]:</code> tags match, and the tint its text and clips get. The color picker's presets are the eight default character colors.</td></tr>
+            <tr><td>Engine</td><td>Kokoro or Audio8. One project can mix both. The Settings and Voices tabs follow the selected clip's character.</td></tr>
+            <tr><td>Voice / FX</td><td>A Kokoro voice or Mix, or an Audio8 Reference; and the FX every clip of this character plays through unless it has its own.</td></tr>
+            <tr><td>Variants <span class="engine-note">Audio8</span></td><td>Named alternative References, such as "angry" or "whisper". The transcript's Variant box picks one per clip.</td></tr>
+            <tr><td>Scope</td><td>Global lives in the character library (<code>characters/</code>), and every project that links it follows its voice, FX, color, engine and variants. Project belongs to the top-level project and is shared by its subprojects. Local belongs to this file only. A project always keeps its own copy, so it opens on a machine whose library lacks the character; the dialog then says "Library (not found here)".</td></tr>
+            <tr><td>Promote to Library / Promote to Project</td><td>Turns a local character into a library entry, or, inside a subproject, shares it with the whole project.</td></tr>
+            <tr><td>Rename in library</td><td>Each project keeps its own name for a library character. This copies this project's name to the library entry.</td></tr>
+            <tr><td>Add &gt; From library...</td><td>Brings library characters into the project. File &gt; New starts with every library character.</td></tr>
+          </tbody>
+        </table>
       </div>
+      <p class="dek" style="margin-top:1.2rem;"><strong>Undo and redo</strong> (Edit menu or the usual shortcuts) cover typing, character and FX assignments, clip moves, FX overrides, track controls, fades, takes, statuses, markers and the Settings tab's Project and Clip fields. Typing undoes like a text editor; everything else has its own history, and Undo reverts whichever happened last.</p>
     </div>
   </section>
 
   <section class="doc-section" id="generation">
     <div class="wrap">
       <h2><span class="idx">File menu</span>Projects</h2>
-      <p class="dek">A project is a <code>.tbaw</code> bundle (text based audio workflow): one zip with the text and clips, every generated segment, and the voice mixes, voice references and FX presets it names, so it opens on another machine with the same engines installed. The layout is on the <a class="link" href="format.html">format page</a>. Older <code>.json</code> projects open and are converted next to the original. Launch reopens the last project you had open, then shows the welcome dialog over it.</p>
+      <p class="dek">A project is a <code>.tbaw</code> bundle (text based audio workflow): one zip with the text and clips, every generated segment, and the Mixes, References and saved FX it uses, so it opens on another machine with the same engines installed. The layout is on the <a class="link" href="format.html">format page</a>. Older <code>.json</code> projects open and are converted next to the original. Launch reopens the last project you had open, then shows the welcome dialog over it.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>File menu</caption>
@@ -301,7 +315,7 @@
             <tr><td>Import Audio&hellip; &gt; Recording to edit as text</td><td>The transcript comes from "Transcribe with Whisper" (runs in the background) or "Caption file (SRT, VTT, ASS)", which uses each cue's text with word times spread over the cue by character count; "Refine word timing with Whisper" (off by default) re-times those words and never changes the text. Whisper's words are grouped into clips at sentence ends, pauses over 0.7 s, or 15 s. A review step lists each clip with a play button and editable text (a corrected word keeps its times) and a speaker picker listing voice-cloning characters and "Unknown speaker" (a new character with no voice); caption-file speaker names use the subtitle mapping dialog instead. One undo step. In the transcript, deleting recorded words closes up the audio, cut/copy/paste and drag carry the audio, typed text is grey with a hollow circle in the gutter until it has a character, recorded words are faintly underlined and recording clips get a play button.</td></tr>
             <tr><td>Import Source Track&hellip;</td><td>Copies the original dialogue into the project and names it in Settings &gt; Project &gt; Source track. A second import replaces the first and keeps its offset. One undo step.</td></tr>
             <tr><td>Load Video&hellip;</td><td>Picks an MP4, MOV, MKV, WebM, AVI or M4V file as the project's reference video and shows the Video tab. See <a href="#video" class="link">Video</a>.</td></tr>
-            <tr><td>Export</td><td>The mixdown dialog described next.</td></tr>
+            <tr><td>Export</td><td>The dialog described next.</td></tr>
           </tbody>
         </table>
       </div>
@@ -311,13 +325,13 @@
   <section class="doc-section" id="processing">
     <div class="wrap">
       <h2><span class="idx">File &gt; Export</span>Export</h2>
-      <p class="dek">Generate only fills the per-clip cache. Export is what produces a deliverable: every clip mixed down at its timeline position into one file, using the same summing rule the transport plays. It refuses with a count when clips are out of date and offers to generate first.</p>
+      <p class="dek">Generate only fills the per-clip cache. Export is what produces a deliverable: every clip mixed down at its timeline position into one file, using the same summing rule the transport plays. It refuses with a count when clips are stale and offers to generate first.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Export dialog</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Output folder / Base filename</td><td>Where the mixdown is written and what it's called. Remembered per project.</td></tr>
+            <tr><td>Output folder / Base filename</td><td>Where the exported file is written and what it's called. Remembered per project.</td></tr>
             <tr><td>Project: bundle generated audio / Bundle audio format</td><td>Whether Save puts generated segments into the <code>.tbaw</code> (off gives a small file whose clips regenerate on open) and whether new segments are written as wav or flac. Remembered per project.</td></tr>
             <tr><td>Bundle the reference video in the project file</td><td>Off by default. On, Save stores the reference video under <code>video/</code> in the <code>.tbaw</code>, uncompressed; off keeps only its path. Opening the project where the video already is at that path doesn't extract the bundled copy. Save only reads a video you picked with Load Video on this machine; a project someone sent you keeps the copy it came with.</td></tr>
             <tr><td>Bundle imported audio in the project file</td><td>On by default. Music beds, the source track and imported recordings go under <code>audio/imported/</code> in the <code>.tbaw</code>. Off leaves them out; a copy opened elsewhere plays without them.</td></tr>
@@ -326,7 +340,7 @@
             <tr><td>Range</td><td>The whole project, the stretch between any two neighbouring markers, or the loop region.</td></tr>
             <tr><td>Also write .srt</td><td>Subtitles timed from each clip's timeline start and duration, one row per generated clip. "One subtitle per word" writes a row per spoken word instead, from the stored word timings.</td></tr>
             <tr><td>Also write a cue sheet (.csv)</td><td>One row per clip: start, end (timecode when it's on), character, source text, text, status and note.</td></tr>
-            <tr><td>Keep per-clip files</td><td>Writes each clip next to the mixdown as <code>&lt;base&gt;_001_&lt;Character&gt;.&lt;ext&gt;</code>, numbered in timeline order.</td></tr>
+            <tr><td>Keep per-clip files</td><td>Writes each clip next to the exported file as <code>&lt;base&gt;_001_&lt;Character&gt;.&lt;ext&gt;</code>, numbered in timeline order.</td></tr>
           </tbody>
         </table>
       </div>
@@ -337,7 +351,9 @@
     <div class="wrap">
       <h2><span class="idx">Workspace menu</span>Workspaces &amp; theme</h2>
       <div class="prose reveal">
-        <p>Every panel is a dock you can drag, close and re-tab. <strong>Workspace &gt; Advanced</strong> is the default 2x2 grid; <strong>Simple</strong> hides the timeline and the Video tab and gives the transcript the full height, same document, same Generate behavior; <strong>Reset layout</strong> rebuilds the active one. Whatever you drag around is saved into the active workspace and comes back with it. <strong>Options &gt; Theme</strong> switches dark (the default) and light; the gutter, timeline and ruler read the same palette as the widgets.</p>
+        <p>Every panel is a dock. Drag one by its title to move it, drop it on another to stack them as tabs, or pull it out of the window to float it. Nothing about the layout is fixed.</p>
+        <p><strong>Workspace &gt; Advanced</strong> opens with the transcript and the Settings, Audio FX, Lexicon, Voices and Video tabs above the timeline and transport. <strong>Simple</strong> hides the timeline and the Video tab so the transcript gets the full height; the project and Generate behave the same. Each workspace remembers what you do to it and brings it back next time. <strong>Reset layout</strong> puts the active one back to its default. A project can also name the workspace it opens in.</p>
+        <p><strong>Options &gt; Theme</strong> switches between dark (the default) and light. The gutter, timeline and ruler use the same palette as the rest of the window.</p>
       </div>
     </div>
   </section>
@@ -345,7 +361,7 @@
   <section class="doc-section" id="fx">
     <div class="wrap">
       <h2><span class="idx">Audio FX tab</span>FX</h2>
-      <p class="dek">Five groups, each section gated behind its own enable checkbox except EQ, which is always live (a slider left at 0 dB is simply a no-op), and Convolution Reverb, which is off while its impulse response is None. All of it runs through one Pedalboard chain together as step 5 of the signal chain. The whole chain (and volume, pitch, normalize, trim) is applied on playback and export over the clip's raw generated audio: edit anything here and the timeline plays the change, with no regeneration and no clip marked out of date. The tab follows the selection: project defaults, a character's preset, or one clip's override, layered in that order.</p>
+      <p class="dek">Five groups, each section gated behind its own enable checkbox except EQ, which is always live (a slider left at 0 dB is simply a no-op), and Convolution Reverb, which is off while its impulse response is None. All of it runs through one Pedalboard chain together as step 5 of the signal chain. The whole chain (and volume, pitch, normalize, trim) is applied on playback and export over the clip's raw generated audio: edit anything here and the timeline plays the change, with no regeneration and no clip marked stale. The tab follows the selection: project defaults, a character's FX, or one clip's override, layered in that order.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Dynamics</caption>
@@ -408,23 +424,23 @@
 
   <section class="doc-section" id="lexicon">
     <div class="wrap">
-      <h2><span class="idx">Lexicon dock</span>Lexicon</h2>
+      <h2><span class="idx">Lexicon tab</span>Lexicon</h2>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Lexicon</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Original text / Replacement</td><td>A list of literal find-and-replace rules, applied case-insensitively to every segment's text before synthesis, on every path: clips, whole document, JIT and Preview. Adding or removing a rule marks the clips whose text it changes as stale, and no others. Useful for acronyms, names, or jargon a voice mispronounces.</td></tr>
+            <tr><td>Original text / Replacement</td><td>A list of literal find-and-replace rules, applied case-insensitively to every segment's text before generation, on every path: clips, whole document, JIT and Preview. Adding or removing a rule marks the clips whose text it changes as stale, and no others. Useful for acronyms, names, or jargon a voice mispronounces.</td></tr>
           </tbody>
         </table>
       </div>
-      <p class="dek">Rules apply regardless of which preset or FX preset an <a href="scripting.html" class="link">inline script tag</a> switches to; Lexicon is global, not per-speaker.</p>
+      <p class="dek">Rules apply whichever character a line belongs to, whether it was assigned by hand or by a <a href="scripting.html" class="link">tag</a>. A character can't have its own rules.</p>
     </div>
   </section>
 
   <section class="doc-section" id="mixing">
     <div class="wrap">
-      <h2><span class="idx">Mixing dock</span>Mixing <span class="engine-note">supports_voice_mixing engines only</span></h2>
+      <h2><span class="idx">Voices tab · Kokoro</span>Mixing <span class="engine-note">Kokoro characters</span></h2>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Mixing</caption>
@@ -432,9 +448,9 @@
           <tbody>
             <tr><td>Voice A / Voice B</td><td>Each has its own language and voice picker; the two voices being combined.</td></tr>
             <tr><td>Operation</td><td>Mix, Add, Subtract, Multiply, or Divide, applied directly to the two voices' underlying tensors.</td></tr>
-            <tr><td>Mix slider</td><td>0-100%. For Mix, a straight blend: 0% is all Voice A, 100% is all Voice B. For the other four operations it's an influence amount, not a blend ratio, and the app's own label warns that Divide is "unstable and VERY LOUD."</td></tr>
+            <tr><td>Mix slider</td><td>0-100%. For Mix, a straight blend of the two: 0% is all Voice A, 100% is all Voice B. For the other four operations it's an influence amount, not a ratio, and the app's own label warns that Divide is "unstable and VERY LOUD."</td></tr>
             <tr><td>Preview language / Preview</td><td>Speaks a short preview line in the chosen language using the in-progress mix, before you commit to saving it.</td></tr>
-            <tr><td>New voice name / Create &amp; Save</td><td>Saves the result as a custom voice, which then shows up in the normal Voice dropdown alongside the built-in voices.</td></tr>
+            <tr><td>New voice name / Create &amp; Save</td><td>Saves the result as a Mix, which then shows up in the Voice dropdown alongside the built-in voices.</td></tr>
           </tbody>
         </table>
       </div>
@@ -443,15 +459,15 @@
 
   <section class="doc-section" id="voice-reference">
     <div class="wrap">
-      <h2><span class="idx">Voice Reference dock</span>Voice reference <span class="engine-note">supports_voice_cloning engines only</span></h2>
+      <h2><span class="idx">Voices tab · Audio8</span>References <span class="engine-note">Audio8 characters</span></h2>
       <div class="table-wrap reveal">
         <table class="ref">
-          <caption>Voice reference</caption>
+          <caption>References</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td>Reference audio</td><td>Browse to a WAV file of the voice to clone.</td></tr>
             <tr><td>Transcript</td><td>What's actually said in that WAV, word for word. The cloning model uses this alongside the audio itself.</td></tr>
-            <tr><td>Auto-transcribe</td><td>Runs the reference clip through the chosen ASR engine to pre-fill the transcript, off the Qt main thread so the UI doesn't freeze. Whisper (the default, local, MIT) asks before its first download, about 1.6 GB, and offers another engine instead; <code>WHISPER_MODEL</code> in <code>.env</code> picks a smaller model. Audio8-ASR-0.1B is non-commercial; Vosk is offline and needs a model folder. Always worth proofreading the result before saving.</td></tr>
+            <tr><td>Auto-transcribe</td><td>Runs the reference clip through the chosen ASR engine to pre-fill the transcript, in the background, so the app stays responsive. Whisper (the default, local, MIT) asks before its first download, about 1.6 GB, and offers another engine instead; <code>WHISPER_MODEL</code> in <code>.env</code> picks a smaller model. Audio8-ASR-0.1B is non-commercial; Vosk is offline and needs a model folder. Always worth proofreading the result before saving.</td></tr>
             <tr><td>Save as / Saved references</td><td>Saves the WAV and transcript as a named pair, which then shows up in the Voice dropdown like any other voice.</td></tr>
           </tbody>
         </table>
@@ -461,34 +477,20 @@
 
   <section class="doc-section" id="presets">
     <div class="wrap">
-      <h2><span class="idx">Presets</span>Presets, characters, and how they relate to inline scripting</h2>
+      <h2><span class="idx">Files on disk</span>Preset files</h2>
       <div class="prose reveal">
-        <p>Two preset systems, both plain JSON on disk. <code>presets/&lt;name&gt;.json</code> files are whole-config snapshots (voice, speed, split pattern, and the rest); since 4.0 nothing in the GUI writes them any more, because Edit &gt; Characters... is where a named voice/FX bundle is edited now. The first launch with the character library copies each one into <code>characters/</code> once; after that the files aren't read. "Save FX Preset..." in the Audio FX tab snapshots just the FX sliders, as <code>presets/fx/&lt;name&gt;.json</code>.</p>
-        <p>Every file in <code>presets/</code> also becomes a <code>Character</code> on first load, one per file, with a highlight color assigned from a small fixed palette. If you had no presets saved yet, one "Default" character is seeded from your last-used settings instead, so a returning user's config isn't discarded. The preset files themselves are untouched either way, characters are read from them, not a replacement for them.</p>
-        <p>These aren't a separate feature from <a href="scripting.html" class="link">inline scripting</a>, they're the same thing. A <code>[Name]:</code> tag in the transcript looks up a character by exactly that name, case-insensitively, and a character's name starts out as whatever the preset file it came from was called.</p>
+        <p><strong>Saved FX</strong> are <code>presets/fx/&lt;name&gt;.json</code>, written by "Save FX Preset..." in the Audio FX tab. A project bundles the ones it uses under <code>fx/</code>, and its own copy wins over yours.</p>
+        <p><strong>Character presets</strong>, <code>presets/&lt;name&gt;.json</code>, are from before characters existed. Nothing in the app writes them now. The first launch with the character library copies each one into <code>characters/</code> and links matching characters in the open project. After that, only the <a class="link" href="scripting.html#whole-document">whole-document path</a> reads them, for <code>[Name]:</code> tags in a project with no clips.</p>
       </div>
     </div>
   </section>
 
   <section class="doc-section" id="jit">
     <div class="wrap">
-      <h2><span class="idx">App settings</span>JIT streaming needs speed to spare</h2>
+      <h2><span class="idx">Options menu</span>JIT streaming</h2>
       <div class="prose reveal">
-        <p>JIT mode plays audio back while it's still being generated: a generation thread fills a queue, a playback thread drains it. For that to work at all, generation has to outrun playback, producing more than one second of audio for every second of wall-clock time it spends generating, with enough margin that playback never catches up and stalls waiting on the next chunk. An engine that can only generate at, or slower than, real time simply can't stream: there'd be nothing queued up by the time playback needs it.</p>
-        <p>This is exactly what the <code>supports_jit_streaming</code> capability flag encodes, per engine, not measured live, just declared:</p>
-      </div>
-      <div class="table-wrap reveal" style="max-width:760px;">
-        <table class="ref">
-          <caption>JIT support by engine</caption>
-          <thead><tr><th>Engine</th><th><code>supports_jit_streaming</code></th></tr></thead>
-          <tbody>
-            <tr><td>Kokoro (local)</td><td>True</td></tr>
-            <tr><td>Audio8 TTS (voice cloning)</td><td>False</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="prose reveal" style="margin-top:1.4rem;">
-        <p>Audio8 is a 0.6B-parameter model running through one shared, lock-serialized instance rather than a pipeline per thread, so there's no way to overlap generation the way Kokoro does. Rather than offer a JIT toggle that would just stall constantly, the app disables it outright: with Audio8 active the "JIT streaming" entry under Options is greyed out, its tooltip reading <code>Audio8 TTS (voice cloning) doesn't support streaming - runs as Standard.</code>. Every run on that engine falls back to Standard batch generation, automatically, no separate setting to change.</p>
+        <p>"JIT streaming (no-clips fallback only)" plays a project that has no clips yet while it's still generating: one thread fills a queue, another plays from it. That only works when the engine makes audio faster than it plays, with enough margin that playback never catches up.</p>
+        <p>Kokoro can. Audio8, one large model generating one piece at a time, can't, so with an Audio8 character selected the entry is greyed out and generation runs normally. Once a project has clips, Generate works clip by clip and the transport plays them, and this setting doesn't apply.</p>
       </div>
     </div>
   </section>
@@ -498,25 +500,31 @@
   <div class="wrap">
     <div class="cols">
       <div>
-        <a class="brand" href="index.html" style="margin-bottom:.4rem;">
-          <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="var(--surface-2)" stroke="var(--border-2)"/><g fill="var(--accent)"><rect x="10" y="26" width="7" height="12" rx="2"/><rect x="21" y="16" width="7" height="32" rx="2"/><rect x="32" y="22" width="7" height="20" rx="2"/><rect x="43" y="10" width="7" height="44" rx="2"/></g></svg>
-          <span class="brand-word">Kokoro GUI</span>
+        <a class="brand" href="index.html">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect width="64" height="64" rx="14" fill="var(--surface-2)" stroke="var(--border-2)"/>
+        <rect x="12" y="13" width="40" height="5" rx="2.5" fill="var(--text-3)"/>
+        <rect x="12" y="23" width="26" height="5" rx="2.5" fill="var(--c1)"/>
+        <g fill="var(--c2)"><rect x="12" y="41" width="4" height="8" rx="2"/><rect x="19" y="36" width="4" height="18" rx="2"/><rect x="26" y="39" width="4" height="12" rx="2"/></g>
+        <g fill="var(--c3)"><rect x="33" y="34" width="4" height="22" rx="2"/><rect x="40" y="39" width="4" height="12" rx="2"/><rect x="47" y="42" width="4" height="6" rx="2"/></g>
+      </svg>
+          <span class="brand-word">KokoroGUI</span>
         </a>
-        <p class="blurb">A desktop text-to-speech workstation. Not affiliated with the Kokoro or Audio8 model authors.</p>
+        <p class="blurb">A text-based audio workflow. Write the transcript, cast the characters, and the audio follows the text. Not affiliated with the Kokoro or Audio8 model authors.</p>
       </div>
       <div>
         <h5>Product</h5>
         <ul>
+          <li><a href="index.html#workflows">Workflows</a></li>
           <li><a href="index.html#features">Features</a></li>
-          <li><a href="index.html#engines">Engines</a></li>
-          <li><a href="index.html#changelog">Changelog</a></li>
+          <li><a href="changes.html">Changes</a></li>
           <li><a href="index.html#install">Install</a></li>
         </ul>
       </div>
       <div>
         <h5>Docs</h5>
         <ul>
-          <li><a href="scripting.html">Scripting guide</a></li>
+          <li><a href="scripting.html">Tags guide</a></li>
           <li><a href="settings.html">Settings reference</a></li>
           <li><a href="format.html">.tbaw format</a></li>
         </ul>
@@ -532,7 +540,7 @@
       </div>
     </div>
     <div class="bottom">
-      <span>Apache-2.0. Kokoro GUI 4.0.0 beta.</span>
+      <span>Apache-2.0 · KokoroGUI 4.0 beta</span>
       <span>Kokoro by hexgrad · Audio8 models by Audio8 · Pedalboard by Spotify</span>
     </div>
   </div>

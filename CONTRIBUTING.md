@@ -50,8 +50,9 @@ opt-in. It isn't run in CI.
   to pass on both OSes to merge.
 - A new setting is threaded through `QtTTSApp._assemble_config` and covered in
   `tests/gui_qt/test_qt_config_assembly.py`.
-- If a user can see the change, update the README: the Features list, and a bullet under the
-  current "New in" heading.
+- If a user can see the change, update two files: a one-line bullet in the README's "What's new"
+  (and its Features list if a line there is now wrong), and the full entry under "Unreleased" in
+  `docs/changes.html`.
 - No formatter or linter is configured. Match the style of the file you're in.
 
 ## Layout

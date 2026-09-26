@@ -3,44 +3,40 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Kokoro GUI · Text to speech, edited like a DAW project</title>
-<meta name="description" content="A desktop text-to-speech workstation. Write a transcript, assign characters, generate only the clips that changed, run them through a live FX chain, and export a mixdown. Two local engines: Kokoro's named voices and Audio8's zero-shot voice cloning. Projects travel as one .tbaw file." />
-<meta property="og:title" content="Kokoro GUI" />
-<meta property="og:description" content="Text to speech, edited like a DAW project. Local, open source, two engines, one .tbaw file per project." />
+<title>KokoroGUI · A text-based audio workflow</title>
+<meta name="description" content="KokoroGUI is a text-based audio workflow: write a transcript, give each line a character, and the timeline underneath is generated from the text. Change a word and only that clip generates again. Audiobooks, dubbing, podcasts and game dialogue, all local." />
+<meta property="og:title" content="KokoroGUI" />
+<meta property="og:description" content="A text-based audio workflow. Edit the words and the audio follows. Local, open source, one .tbaw file per project." />
 <meta property="og:type" content="website" />
 <meta property="og:image" content="assets/shell_dark.png" />
 <meta name="twitter:card" content="summary_large_image" />
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230b0b10'/%3E%3Cg fill='%23a78bfa'%3E%3Crect x='10' y='26' width='7' height='12' rx='2'/%3E%3Crect x='21' y='16' width='7' height='32' rx='2'/%3E%3Crect x='32' y='22' width='7' height='20' rx='2'/%3E%3Crect x='43' y='10' width='7' height='44' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231e1f22'/%3E%3Crect x='12' y='13' width='40' height='5' rx='2.5' fill='%23868a91'/%3E%3Crect x='12' y='23' width='26' height='5' rx='2.5' fill='%23e3a72f'/%3E%3Cg fill='%234f8fe6'%3E%3Crect x='12' y='41' width='4' height='8' rx='2'/%3E%3Crect x='19' y='36' width='4' height='18' rx='2'/%3E%3Crect x='26' y='39' width='4' height='12' rx='2'/%3E%3C/g%3E%3Cg fill='%23e0655c'%3E%3Crect x='33' y='34' width='4' height='22' rx='2'/%3E%3Crect x='40' y='39' width='4' height='12' rx='2'/%3E%3Crect x='47' y='42' width='4' height='6' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="assets/site.css" />
 <style>
   /* Hero */
-  .hero{ position: relative; padding: clamp(4rem, 9vw, 6.5rem) 0 0; overflow: hidden; }
-  .hero::before{ content:""; position:absolute; inset:0; background: var(--glow); pointer-events:none; }
-  .hero-grid{
-    position:absolute; inset:0; pointer-events:none; opacity:.35;
-    background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px);
-    background-size: 48px 48px;
-    mask-image: radial-gradient(70% 60% at 50% 0%, black, transparent);
-  }
-  .hero .wrap{ position:relative; }
-  .hero-inner{ max-width: 820px; margin: 0 auto; text-align:center; display:flex; flex-direction:column; align-items:center; gap: 1.3rem; }
-  .hero h1{ max-width: 16ch; }
-  .hero .lede{ font-size: clamp(1.05rem, 1.6vw, 1.22rem); color: var(--text-2); max-width: 58ch; }
-  .hero-ctas{ display:flex; gap:.7rem; flex-wrap:wrap; justify-content:center; margin-top:.3rem; }
-  .hero-chips{ display:flex; gap:.5rem; flex-wrap:wrap; justify-content:center; margin-top:.4rem; }
+  .hero{ padding: clamp(3rem, 7vw, 5rem) 0 clamp(2.5rem, 5vw, 3.5rem); }
+  .hero-grid{ display:grid; grid-template-columns: 1fr 1.05fr; gap: clamp(2rem, 5vw, 3.5rem); align-items:center; }
+  @media (max-width: 960px){ .hero-grid{ grid-template-columns: 1fr; } }
+  .hero-copy{ display:flex; flex-direction:column; gap:1.3rem; }
+  .hero h1 em{ font-style: italic; color: var(--text-2); }
+  .hero .lede{ font-family: var(--font-script); font-size: clamp(1.12rem, 1.7vw, 1.28rem); line-height:1.55; color: var(--text-2); max-width: 36em; }
+  .hero-ctas{ display:flex; gap:.6rem; flex-wrap:wrap; margin-top:.2rem; }
+  .hero-chips{ display:flex; gap:.45rem; flex-wrap:wrap; }
+  .stage{ background: var(--surface); border:1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow); overflow:hidden; }
+  .stage-bar{ display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:.55rem .9rem; border-bottom:1px solid var(--border); background: var(--bg-2); font-family: var(--font-mono); font-size:.68rem; color: var(--text-3); letter-spacing:.04em; }
+  .stage-bar .dirty{ color: var(--playhead); }
+  .stage .script{ padding: 1.2rem 1.2rem 1.3rem 0; --gutter: 7.2rem; font-size: 1.06rem; }
+  .stage .tl{ border:none; border-top:1px solid var(--border); border-radius:0; --tl-head: 7.2rem; }
+  @media (max-width: 620px){ .stage .script{ --gutter: 5.2rem; } .stage .tl{ --tl-head: 5.2rem; } }
+  /* word-by-word highlight, like the app's playback */
+  .karaoke .w{ border-radius:3px; animation: word 7.2s linear infinite; animation-delay: calc(var(--i) * .42s); }
+  @keyframes word{ 0%{ background: color-mix(in srgb, var(--playhead) 38%, transparent); } 6%, 100%{ background: transparent; } }
 
   /* Screenshot */
-  .shot{
-    margin: clamp(2.5rem, 6vw, 4rem) auto 0; max-width: 1120px;
-    border-radius: var(--radius-lg); overflow:hidden; background: var(--surface);
-    box-shadow: var(--shadow-shot); position: relative;
-  }
-  .shot .bar{ display:flex; align-items:center; gap:.45rem; padding: .6rem .9rem; border-bottom:1px solid var(--border); background: var(--surface-2); }
-  .shot .dot{ width:9px; height:9px; border-radius:50%; background: var(--border-2); }
-  .shot .path{ margin-left:.5rem; font-family: var(--font-mono); font-size:.72rem; color: var(--text-3); }
+  .shot{ border:1px solid var(--border); border-radius: var(--radius-lg); overflow:hidden; background: var(--surface); box-shadow: var(--shadow); }
   .shot img{ width:100%; height:auto; aspect-ratio: 16 / 10; object-fit: cover; }
   .shot img.light{ display:none; }
   :root[data-theme="light"] .shot img.dark{ display:none; }
@@ -49,81 +45,63 @@
     :root:not([data-theme="dark"]) .shot img.dark{ display:none; }
     :root:not([data-theme="dark"]) .shot img.light{ display:block; }
   }
-  .shot-fade{ position:absolute; inset:auto 0 0 0; height: 30%; background: linear-gradient(to bottom, transparent, var(--bg)); pointer-events:none; }
-  .hero-bottom{ position:relative; height: 1px; }
+  .shot-cap{ display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-top:.8rem; font-size:.88rem; color: var(--text-3); }
 
-  /* Built-on strip */
-  .built{ padding: 2.2rem 0; border-top:1px solid var(--border); border-bottom:1px solid var(--border); background: var(--bg-2); }
-  .built .wrap{ display:flex; align-items:center; justify-content:center; gap: clamp(1.2rem, 4vw, 3rem); flex-wrap:wrap; }
-  .built .lbl{ font-size:.78rem; color: var(--text-3); font-weight:500; }
-  .built .logo{ font-weight:600; font-size:.95rem; color: var(--text-3); letter-spacing:-.01em; }
+  /* The four moves */
+  .moves .script{ font-size: clamp(1.15rem, 2vw, 1.45rem); row-gap: 1.3rem; --gutter: 8rem; }
+  .moves .script .t small{ display:block; font-family: var(--font-body); font-size:.86rem; color: var(--text-3); margin-top:.3rem; line-height:1.5; }
+  @media (max-width: 620px){ .moves .script{ --gutter: 5.2rem; } }
 
-  /* Steps */
-  .steps3{ display:grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; counter-reset: s; }
-  @media (max-width: 860px){ .steps3{ grid-template-columns: 1fr; } }
-  .step{ background: var(--surface); border:1px solid var(--border); border-radius: var(--radius-lg); padding: 1.5rem; display:flex; flex-direction:column; gap:.6rem; }
-  .step .num{ font-family: var(--font-mono); font-size:.72rem; color: var(--accent); font-weight:600; }
-  .step h3{ font-size:1.1rem; }
-  .step p{ color: var(--text-2); font-size:.94rem; }
-  .step .ex{ margin-top:.4rem; font-family: var(--font-mono); font-size:.78rem; color: var(--text-3); background: var(--surface-2); border:1px solid var(--border); border-radius: 8px; padding:.6rem .8rem; white-space: pre; overflow-x:auto; }
-  .step .ex b{ color: var(--accent); font-weight:500; }
-
-  /* Mini mockups inside bento cards */
-  .mock{ margin-top:.6rem; border:1px solid var(--border); border-radius: 10px; background: var(--bg); padding:.8rem .9rem; font-family: var(--font-mono); font-size:.76rem; line-height:1.7; overflow:hidden; }
-  .mock .g{ color: var(--text-3); display:inline-block; width: 6.5em; }
-  .mock .n{ color:#f5b400; } .mock .c{ color:#5aa0ff; } .mock .a{ color:#3ec48c; }
-  .mock .dash{ text-decoration: underline dashed; text-underline-offset: 3px; text-decoration-color: var(--text-3); }
-  .mock .play{ color: var(--rose); }
-  .lanes{ margin-top:.6rem; border:1px solid var(--border); border-radius: 10px; background: var(--bg); padding:.7rem .8rem; display:flex; flex-direction:column; gap:.4rem; }
-  .lane{ display:grid; grid-template-columns: 4.2em 1fr; gap:.6rem; align-items:center; font-family: var(--font-mono); font-size:.72rem; color: var(--text-3); }
-  .lane .bar{ height: 18px; border-radius: 4px; position:relative; }
-  .lane .bar.n{ background:#f5b400; width:42%; }
-  .lane .bar.c{ background:#5aa0ff; width:22%; margin-left:42%; }
-  .lane .bar.a{ border:1px dashed #3ec48c; width:30%; margin-left:64%; }
-  .lane .bar .w{ position:absolute; inset:0; background: repeating-linear-gradient(90deg, rgba(0,0,0,.25) 0 2px, transparent 2px 6px); opacity:.6; border-radius:4px; }
-  .ruler{ height:1px; background: var(--border-2); margin: .1rem 0 .1rem 4.8em; position:relative; }
-  .ruler::after{ content:""; position:absolute; left:38%; top:-9px; width:1px; height:40px; background: var(--rose); }
-  .chainmini{ display:flex; gap:.35rem; flex-wrap:wrap; margin-top:.5rem; }
-  .chainmini span{ font-family: var(--font-mono); font-size:.72rem; color: var(--text-2); border:1px solid var(--border); background: var(--surface-2); padding:.2em .55em; border-radius:6px; }
-  .chainmini span.on{ color: var(--teal); border-color: color-mix(in srgb, var(--teal) 45%, var(--border)); }
+  /* Workflow picker */
+  .wf{ display:grid; grid-template-columns: 1.05fr 1fr; gap: 1.2rem; align-items:start; }
+  @media (max-width: 900px){ .wf{ grid-template-columns: 1fr; } }
+  .wf-intro{ font-family: var(--font-script); font-size: 1.2rem; line-height:1.5; color: var(--text); margin-bottom: 1rem; max-width: 34em; }
+  .wf .stage .script{ font-size: 1rem; }
+  .wf-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:.1rem; border:1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); overflow:hidden; }
+  .wf-list li{ padding: .8rem 1rem .8rem 1.1rem; border-bottom:1px solid var(--border); display:grid; grid-template-columns: 1fr auto; gap:.2rem 1rem; }
+  .wf-list li:last-child{ border-bottom:none; }
+  .wf-list b{ font-weight:600; font-size:.95rem; }
+  .wf-list span{ grid-column: 1 / -1; color: var(--text-2); font-size:.9rem; }
+  .wf-list a{ font-family: var(--font-mono); font-size:.68rem; color: var(--text-3); text-decoration:none; align-self:center; letter-spacing:.03em; }
+  .wf-list a:hover{ color: var(--accent); }
 
   /* Engine compare */
   .compare{ overflow-x:auto; border:1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
   table.cmp{ width:100%; border-collapse:collapse; min-width: 640px; font-size:.92rem; }
-  table.cmp th{ text-align:left; padding: 1rem 1.2rem; border-bottom:1px solid var(--border); font-weight:600; vertical-align: bottom; }
-  table.cmp th .sub{ display:block; font-family: var(--font-mono); font-size:.7rem; color: var(--text-3); font-weight:500; margin-top:.2rem; }
-  table.cmp th:first-child{ width: 22%; color: var(--text-3); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; }
+  table.cmp th{ text-align:left; padding: 1rem 1.2rem; border-bottom:1px solid var(--border); font-weight:600; vertical-align: bottom; background: var(--bg-2); }
+  table.cmp th .sub{ display:block; font-family: var(--font-mono); font-size:.68rem; color: var(--text-3); font-weight:400; margin-top:.2rem; }
+  table.cmp th:first-child{ width: 20%; }
   table.cmp td{ padding: .8rem 1.2rem; border-bottom:1px solid var(--border); vertical-align: top; color: var(--text-2); }
   table.cmp td:first-child{ color: var(--text); font-weight:500; }
   table.cmp tr:last-child td{ border-bottom:none; }
-  table.cmp .pillrow{ display:inline-flex; align-items:center; gap:.4em; }
 
-  /* Signal chain */
-  .chain{ display:flex; align-items:stretch; gap:.5rem; overflow-x:auto; padding-bottom:.4rem; }
-  .chain-node{ background: var(--surface); border:1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.1rem; min-width: 160px; flex: 1 0 160px; display:flex; flex-direction:column; gap:.3rem; }
-  .chain-node .n{ font-family: var(--font-mono); font-size:.68rem; color: var(--accent); font-weight:600; }
-  .chain-node h4{ font-size:.98rem; font-weight:600; }
-  .chain-node p{ font-size:.82rem; color: var(--text-2); }
-  .chain-arrow{ flex:none; display:flex; align-items:center; color: var(--text-3); }
+  /* Signal chain as insert slots on a channel strip */
+  .inserts{ display:grid; grid-template-columns: repeat(6, 1fr); border:1px solid var(--border); border-radius: var(--radius-lg); overflow:hidden; background: var(--surface); }
+  @media (max-width: 900px){ .inserts{ grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 520px){ .inserts{ grid-template-columns: 1fr 1fr; } }
+  .insert{ padding: 1rem 1.05rem 1.1rem; border-right:1px solid var(--border); border-bottom:1px solid var(--border); display:flex; flex-direction:column; gap:.3rem; margin-bottom:-1px; }
+  .insert .n{ font-family: var(--font-mono); font-size:.66rem; color: var(--text-3); letter-spacing:.06em; }
+  .insert h4{ font-size:.98rem; }
+  .insert p{ font-size:.84rem; color: var(--text-2); }
+  .insert .led{ width:7px; height:7px; border-radius:50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); display:inline-block; margin-right:.4rem; vertical-align: 1px; }
 
   /* Projects */
   .split{ display:grid; grid-template-columns: 1fr 1fr; gap: 2.5rem; align-items:center; }
   @media (max-width: 860px){ .split{ grid-template-columns: 1fr; } }
   .split .sec-head{ margin-bottom: 1.2rem; }
-  .split ul.checks{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:.6rem; }
-  .split ul.checks li{ display:flex; gap:.6rem; align-items:flex-start; font-size:.95rem; color: var(--text-2); }
-  .split ul.checks svg{ flex:none; color: var(--teal); margin-top:.2rem; }
-  .split ul.checks b{ color: var(--text); font-weight:600; }
+  .checks{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:.7rem; }
+  .checks li{ font-size:.95rem; color: var(--text-2); padding-left: 1rem; border-left: 2px solid var(--border-2); }
+  .checks b{ color: var(--text); font-weight:600; }
 
-  /* Changelog */
+  /* What's new */
   .log{ display:flex; flex-direction:column; border:1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); overflow:hidden; }
-  .log-item{ display:grid; grid-template-columns: 150px 1fr; gap: 1.5rem; padding: 1.4rem 1.6rem; border-bottom:1px solid var(--border); }
+  .log-item{ display:grid; grid-template-columns: 170px 1fr; gap: 1.5rem; padding: 1.3rem 1.5rem; border-bottom:1px solid var(--border); }
   .log-item:last-child{ border-bottom:none; }
   @media (max-width: 700px){ .log-item{ grid-template-columns: 1fr; gap:.5rem; } }
-  .log-item .v{ font-family: var(--font-mono); font-size:.82rem; font-weight:600; color: var(--text); display:flex; flex-direction:column; gap:.3rem; align-items:flex-start; }
-  .log-item .v .badge{ font-size:.66rem; font-weight:600; color: var(--accent); border:1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); background: color-mix(in srgb, var(--accent) 10%, transparent); padding:.15em .5em; border-radius:999px; letter-spacing:.03em; }
-  .log-item h3{ font-size:1rem; margin-bottom:.35rem; }
-  .log-item p{ font-size:.92rem; color: var(--text-2); }
+  .log-item .v{ font-family: var(--font-mono); font-size:.8rem; font-weight:500; color: var(--text); display:flex; flex-direction:column; gap:.35rem; align-items:flex-start; }
+  .log-item .v .badge{ font-size:.62rem; letter-spacing:.06em; color: var(--text-2); border:1px solid var(--border-2); padding:.12em .5em; border-radius:4px; }
+  .log-item h3{ font-family: var(--font-script); font-size:1.3rem; font-weight:500; margin-bottom:.4rem; }
+  .log-item p{ font-size:.93rem; color: var(--text-2); }
   .log-item p + p{ margin-top:.5rem; }
 
   /* Install */
@@ -131,40 +109,29 @@
   @media (max-width: 900px){ .install-grid{ grid-template-columns: 1fr; } }
   .req{ display:flex; flex-direction:column; gap:.9rem; }
   .req div{ border-left: 2px solid var(--border-2); padding-left:.9rem; }
-  .req h4{ font-size:.95rem; font-weight:600; margin-bottom:.15rem; }
+  .req h4{ font-size:.95rem; margin-bottom:.15rem; }
   .req p{ font-size:.88rem; color: var(--text-2); }
-
-  /* CTA band */
-  .cta{ position:relative; overflow:hidden; border:1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); padding: clamp(2.5rem, 6vw, 4rem); text-align:center; display:flex; flex-direction:column; align-items:center; gap:1rem; }
-  .cta::before{ content:""; position:absolute; inset:0; background: var(--glow); pointer-events:none; }
-  .cta > *{ position:relative; }
-  .cta h2{ max-width: 20ch; }
-  .cta p{ color: var(--text-2); max-width: 50ch; }
-  .cta .row{ display:flex; gap:.7rem; flex-wrap:wrap; justify-content:center; margin-top:.4rem; }
 </style>
 </head>
 <body>
 
 <header class="site">
   <nav class="wrap">
-    <a class="brand" href="#top">
+    <a class="brand" href="index.html">
       <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
-        <rect width="64" height="64" rx="16" fill="var(--surface-2)" stroke="var(--border-2)"/>
-        <g fill="var(--accent)">
-          <rect x="10" y="26" width="7" height="12" rx="2"/>
-          <rect x="21" y="16" width="7" height="32" rx="2"/>
-          <rect x="32" y="22" width="7" height="20" rx="2"/>
-          <rect x="43" y="10" width="7" height="44" rx="2"/>
-        </g>
+        <rect width="64" height="64" rx="14" fill="var(--surface-2)" stroke="var(--border-2)"/>
+        <rect x="12" y="13" width="40" height="5" rx="2.5" fill="var(--text-3)"/>
+        <rect x="12" y="23" width="26" height="5" rx="2.5" fill="var(--c1)"/>
+        <g fill="var(--c2)"><rect x="12" y="41" width="4" height="8" rx="2"/><rect x="19" y="36" width="4" height="18" rx="2"/><rect x="26" y="39" width="4" height="12" rx="2"/></g>
+        <g fill="var(--c3)"><rect x="33" y="34" width="4" height="22" rx="2"/><rect x="40" y="39" width="4" height="12" rx="2"/><rect x="47" y="42" width="4" height="6" rx="2"/></g>
       </svg>
-      <span class="brand-word">Kokoro GUI<span class="ver">v4.0.0 beta</span></span>
+      <span class="brand-word">KokoroGUI<span class="ver">TBAW · 4.0 beta</span></span>
     </a>
     <div class="navlinks">
-      <a href="#features">Features</a>
-      <a href="#engines">Engines</a>
-      <a href="#projects">Projects</a>
-      <a href="#changelog">Changelog</a>
-      <a href="scripting.html">Scripting</a>
+      <a href="index.html#workflows">Workflows</a>
+      <a href="index.html#features">Features</a>
+      <a href="changes.html">Changes</a>
+      <a href="scripting.html">Tags</a>
       <a href="settings.html">Settings</a>
       <a href="format.html">.tbaw format</a>
     </div>
@@ -182,308 +149,383 @@
 </header>
 
 <main id="top">
-  <section class="hero">
-    <div class="hero-grid"></div>
-    <div class="wrap">
-      <div class="hero-inner reveal">
-        <a class="pill" href="#changelog"><span class="tag">NEW</span> 4.0.0: the DAW-style rebuild, projects in one <code style="background:none;border:none;padding:0;">.tbaw</code> file <span aria-hidden="true">→</span></a>
-        <h1>Text to speech, <span class="grad-text">edited like a DAW project.</span></h1>
-        <p class="lede">Kokoro GUI is a desktop workstation for turning a script, or a whole ebook, into audio. Assign characters to a transcript, watch clips land on their own timeline track, and regenerate only what changed. Everything runs on your machine.</p>
+  <section class="hero" data-clip="Intro" data-cc="c1">
+    <div class="wrap hero-grid">
+      <div class="hero-copy reveal">
+        <span class="eyebrow">A text-based audio workflow</span>
+        <h1>Edit the words.<br><em>The audio follows.</em></h1>
+        <p class="lede">In KokoroGUI the transcript is the project. Every line belongs to a character, every character has a voice, and the timeline underneath is generated from the text. Change a word and only that clip generates again. Everything runs on your machine.</p>
         <div class="hero-ctas">
-          <a class="btn btn-primary btn-lg" href="#install">Install in five commands <span class="arrow" aria-hidden="true">→</span></a>
-          <a class="btn btn-ghost btn-lg" href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">View source</a>
+          <a class="btn btn-primary btn-lg" href="#install">Install <span class="arrow" aria-hidden="true">→</span></a>
+          <a class="btn btn-ghost btn-lg" href="#workflows">See the workflows</a>
         </div>
         <div class="hero-chips">
-          <span class="chip"><span class="dot"></span> Runs locally, no API keys</span>
-          <span class="chip">Apache-2.0</span>
-          <span class="chip">Windows · macOS · Linux</span>
-          <span class="chip"><b>2</b> synthesis engines</span>
+          <a class="pill" href="changes.html"><span class="tag">NEXT</span> Dubbing, a mixer and a shared cast</a>
         </div>
       </div>
 
+      <div class="stage reveal" aria-label="A short radio drama in the transcript, with its timeline underneath">
+        <div class="stage-bar"><span>the-house.tbaw</span><span class="dirty">1 clip stale</span></div>
+        <div class="script">
+          <div class="g named c1">Narrator</div>
+          <div class="t"><span class="run c1 karaoke"><span class="w" style="--i:0">The</span> <span class="w" style="--i:1">house</span> <span class="w" style="--i:2">at</span> <span class="w" style="--i:3">the</span> <span class="w" style="--i:4">end</span> <span class="w" style="--i:5">of</span> <span class="w" style="--i:6">the</span> <span class="w" style="--i:7">lane</span> <span class="w" style="--i:8">had</span> <span class="w" style="--i:9">been</span> <span class="w" style="--i:10">empty</span> <span class="w" style="--i:11">for</span> <span class="w" style="--i:12">years.</span></span></div>
+          <div class="g named c3"><span class="play" aria-label="stale"></span>Marta</div>
+          <div class="t"><span class="run c3 stale">Then why is the kitchen light on?</span></div>
+          <div class="g named c1">Narrator</div>
+          <div class="t"><span class="run c1">She pushed the door. It didn't creak.</span> <span class="tagtxt">[pause:0.8]</span></div>
+          <div class="g named c2">Tomas<span class="fx">FX: Radio</span></div>
+          <div class="t"><span class="run c2">Marta, come in. Marta?</span></div>
+        </div>
+        <div class="tl animate" aria-hidden="true">
+          <div class="tl-ruler"><span style="left:0">0:00</span><span style="left:25%">0:05</span><span style="left:50%">0:10</span><span style="left:75%">0:15</span></div>
+          <div class="tl-lane c1"><div class="tl-name">Narrator</div><div class="tl-track"><div class="clip c1" style="left:1%; width:30%"></div><div class="clip c1" style="left:52%; width:17%"></div></div></div>
+          <div class="tl-lane c3"><div class="tl-name">Marta</div><div class="tl-track"><div class="clip c3 est" style="left:33%; width:17%"></div></div></div>
+          <div class="tl-lane c2"><div class="tl-name">Tomas</div><div class="tl-track"><div class="clip c2" style="left:76%; width:20%"></div></div></div>
+          <div class="tl-lane c6"><div class="tl-name">Music</div><div class="tl-track"><div class="clip c6" style="left:0; width:99%; opacity:.55"></div></div></div>
+          <div class="tl-playhead"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="tight" style="padding-top:0;" data-clip="The app" data-cc="c2">
+    <div class="wrap">
       <div class="shot reveal">
-        <div class="bar">
-          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-          <span class="path">Kokoro GUI 4.0 · Advanced workspace</span>
-        </div>
-        <img class="dark" src="assets/shell_dark.png" alt="Kokoro GUI: a transcript with a character gutter and settings tabs above a seconds-axis timeline with waveforms, a playhead, and the transport" width="1600" height="1000" />
+        <img class="dark" src="assets/shell_dark.png" alt="KokoroGUI: the transcript with its character gutter and the settings tabs above a timeline with waveforms, a playhead and the transport" width="1600" height="1000" />
         <img class="light" src="assets/shell_light.png" alt="" width="1600" height="1000" loading="lazy" />
-        <div class="shot-fade"></div>
       </div>
+      <div class="shot-cap"><span>The Advanced workspace as it opens the first time.</span><span>Every panel docks, stacks into tabs or floats wherever you put it, and each workspace remembers your layout.</span></div>
     </div>
   </section>
 
-  <div class="built">
-    <div class="wrap">
-      <span class="lbl">Built on</span>
-      <span class="logo">Kokoro</span>
-      <span class="logo">Audio8</span>
-      <span class="logo">PySide6</span>
-      <span class="logo">Pedalboard</span>
-      <span class="logo">PyTorch</span>
-      <span class="logo">sounddevice</span>
-    </div>
-  </div>
-
-  <section id="how">
-    <div class="wrap">
-      <div class="sec-head center reveal">
-        <span class="eyebrow">How it works</span>
-        <h2>Write, assign, generate, export</h2>
-        <p>The transcript is the source of truth. Audio is a render of it, tracked per clip, so you never wonder which file is current.</p>
-      </div>
-      <div class="steps3">
-        <div class="step reveal">
-          <span class="num">01</span>
-          <h3>Write the script</h3>
-          <p>Paste text or import a <code>.txt</code>, <code>.pdf</code> or <code>.epub</code>. Tag speakers inline, or select a range and pick a character from the combo above the editor.</p>
-          <div class="ex"><b>[Narrator]:</b> The old house stood at the end of the lane.
-<b>[Villain:Whisper]:</b> Someone should not have come here.</div>
-        </div>
-        <div class="step reveal">
-          <span class="num">02</span>
-          <h3>Generate what changed</h3>
-          <p>Auto-split turns tags into clips on each character's track. Generate renders only the clips whose text or settings moved since their last take. Edit one line, regenerate one clip.</p>
-          <div class="ex">Narrator   ▶ <b>2 clips out of date</b>
-Villain      clean, cache hit
-Generate → 2 segments · 0:07</div>
-        </div>
-        <div class="step reveal">
-          <span class="num">03</span>
-          <h3>Mix and export</h3>
-          <p>Play the arrangement from the transport, drag clips in time, tweak FX while it plays. Export mixes every track down to one file, with an <code>.srt</code> and per-clip files if you want them.</p>
-          <div class="ex">audiobook.wav      12:41
-audiobook.srt      38 cues
-audiobook_001_Narrator.wav …</div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section id="features" style="background: var(--bg-2); border-top:1px solid var(--border); border-bottom:1px solid var(--border);">
+  <section id="how" class="moves" data-clip="How it works" data-cc="c4">
     <div class="wrap">
       <div class="sec-head reveal">
-        <span class="eyebrow">Features</span>
-        <h2>A 2x2 grid of docks, and the model behind it</h2>
-        <p>Transcript and settings tabs on top, timeline and transport underneath. Every panel is a dock; Workspace &gt; Simple hides the timeline when you just want to read text aloud.</p>
+        <span class="eyebrow c4">How it works</span>
+        <h2>Four moves, and the text stays in charge</h2>
       </div>
-      <div class="bento">
-
-        <div class="card span-3 reveal">
-          <div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h13"/></svg></div>
-          <h3>A transcript that knows who's speaking</h3>
-          <p>Each run of text is colored by its character. The gutter names the speaker and FX once per change and draws a play button beside every clip that's out of date. Click it to regenerate that clip alone.</p>
-          <div class="mock" aria-hidden="true">
-            <div><span class="g">Narrator</span><span class="n">The old house stood at the end of the lane.</span></div>
-            <div><span class="g">Charly <span class="play">▶</span></span><span class="c dash">Charly answers here, with an echo on the voice.</span></div>
-            <div><span class="g">FX: Echo</span></div>
-            <div><span class="g">Ada</span><span class="a">The narrator picks the story back up.</span></div>
-          </div>
-          <a class="more" href="settings.html#transcript">Transcript reference →</a>
-        </div>
-
-        <div class="card span-3 reveal">
-          <div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="7" height="14" rx="1"/><rect x="14" y="9" width="7" height="10" rx="1"/></svg></div>
-          <h3>A timeline on a real seconds axis</h3>
-          <p>One track per character. Generated clips show waveforms; ungenerated ones are dashed estimates that learn from past runs. Drag a clip in time, onto another track, or Shift+drag inside it to replace a sub-range with new TTS.</p>
-          <div class="lanes" aria-hidden="true">
-            <div class="ruler"></div>
-            <div class="lane"><span>Narrator</span><div class="bar n"><div class="w"></div></div></div>
-            <div class="lane"><span>Charly</span><div class="bar c"><div class="w"></div></div></div>
-            <div class="lane"><span>Ada</span><div class="bar a"></div></div>
-          </div>
-          <a class="more" href="settings.html#timeline">Timeline reference →</a>
-        </div>
-
-        <div class="card reveal">
-          <div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></div>
-          <h3>FX that never dirty a clip</h3>
-          <p>Seventeen Pedalboard sliders in five groups, applied when a clip is played or exported, never written into it. Move a slider mid-play and you hear it on the next pass.</p>
-          <div class="chainmini" aria-hidden="true"><span class="on">Compressor</span><span class="on">Reverb</span><span>Delay</span><span class="on">Low shelf</span><span>Bitcrush</span></div>
-          <a class="more" href="settings.html#fx">FX reference →</a>
-        </div>
-
-        <div class="card reveal">
-          <div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg></div>
-          <h3>Regenerate only what moved</h3>
-          <p>Every segment is keyed by a hash of its text, voice, speed and engine version. Change any of those and the clip goes out of date. Change anything else and it doesn't.</p>
-          <a class="more" href="format.html#keys">How segment keys work →</a>
-        </div>
-
-        <div class="card reveal">
-          <div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h9M4 12h16M4 18h9"/></svg></div>
-          <h3>Settings scoped to the selection</h3>
-          <p>Nothing selected edits the project defaults. A clip selected edits its overrides. A character selected edits its preset, and every clip using it follows.</p>
-          <a class="more" href="settings.html#settings-dock">Settings reference →</a>
-        </div>
-
-        <div class="card span-3 reveal">
-          <div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="8" r="3"/><circle cx="16" cy="16" r="3"/><path d="M11 8h5M8 11v5"/></svg></div>
-          <h3>Two ways to get a voice</h3>
-          <p>With Kokoro, pick a named voice or blend two into a new one in the Mixing tab. With Audio8, drop in a reference WAV, let the bundled ASR write the transcript, and save it as a clone. The Voices tab shows whichever tool the active engine supports.</p>
-          <a class="more" href="#engines">Compare the engines →</a>
-        </div>
-
-        <div class="card span-3 tinted reveal">
-          <div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4h10l6 6v10H4z"/><path d="M14 4v6h6"/></svg></div>
-          <h3>Projects travel as one file</h3>
-          <p>A <code>.tbaw</code> (text based audio workflow) bundle holds the text, the clips, every generated segment, and the voice mixes, references and FX presets the project names. Open it on another machine with the same engines and it plays.</p>
-          <a class="more" href="format.html">What's inside a .tbaw →</a>
-        </div>
-
+      <div class="script reveal">
+        <div class="g named c1">01 Write</div>
+        <div class="t">Type, paste or import a <span class="run c1">.txt, .pdf, .epub or subtitle file</span>.
+          <small>Or import a recording: Whisper writes its words into the transcript and each word stays tied to where it was said.</small></div>
+        <div class="g named c3">02 Assign</div>
+        <div class="t">Select a line and give it <span class="run c3">a character</span>.
+          <small>Or type <code>[Marta]:</code> in front of it. Each character has a voice, an engine and an FX, and its text is tinted in its color.</small></div>
+        <div class="g named c2"><span class="play"></span>03 Generate</div>
+        <div class="t">Press Generate and <span class="run c2 stale">only the stale lines</span> generate.
+          <small>Each clip is keyed by its text, voice, speed, language and engine version. Change one of those and the clip is stale. Change anything else and it isn't.</small></div>
+        <div class="g named c6">04 Mix</div>
+        <div class="t">Play it, drag it, <span class="run c6">fade it, duck it</span>, export it.
+          <small>FX, volume and pitch are applied when a clip plays, so moving a slider never costs a regenerate. Export writes one file, with subtitles and a cue sheet if you want them.</small></div>
       </div>
     </div>
   </section>
 
-  <section id="engines">
+  <section id="workflows" style="background: var(--bg-2); border-top:1px solid var(--border); border-bottom:1px solid var(--border);" data-clip="Workflows" data-cc="c5">
     <div class="wrap">
       <div class="sec-head reveal">
-        <span class="eyebrow">Engines</span>
-        <h2>Two local models, one interface</h2>
-        <p>Both sit behind the same backend abstraction. Options &gt; Engine swaps the voice list, the sample rate and the Voices tab live. Nothing else about the app changes.</p>
+        <span class="eyebrow c5">Workflows</span>
+        <h2>One project format, four kinds of work</h2>
+        <p>Pick what you're making. The same transcript, timeline and <code>.tbaw</code> file handle all of them; what changes is which tools you reach for.</p>
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="Workflows" data-remember="kg-workflow">
+        <button class="c1" role="tab" id="tab-books" aria-controls="wf-books" aria-selected="true">Audiobooks</button>
+        <button class="c3" role="tab" id="tab-dub" aria-controls="wf-dub" aria-selected="false" tabindex="-1">Dubbing</button>
+        <button class="c6" role="tab" id="tab-pod" aria-controls="wf-pod" aria-selected="false" tabindex="-1">Podcasts &amp; radio drama</button>
+        <button class="c5" role="tab" id="tab-game" aria-controls="wf-game" aria-selected="false" tabindex="-1">Game &amp; animation</button>
+      </div>
+
+      <div role="tabpanel" id="wf-books" aria-labelledby="tab-books">
+        <div class="wf">
+          <div>
+            <p class="wf-intro">Drop in an EPUB and get one subproject per chapter, with the same cast reading every one.</p>
+            <div class="stage">
+              <div class="stage-bar"><span>the-long-road.tbaw › Chapter 3</span><span>14 clips · 11:52</span></div>
+              <div class="script">
+                <div class="g named c1">Narrator</div>
+                <div class="t"><span class="run c1">Chapter Three. The rain had not stopped for a week, and Dr. Ellery had stopped pretending not to notice.</span></div>
+                <div class="g named c4">Ellery</div>
+                <div class="t"><span class="run c4">"We leave at first light," he said.</span></div>
+              </div>
+            </div>
+          </div>
+          <ul class="wf-list">
+            <li><b>A book is a project, a chapter is a subproject</b><a href="settings.html#generation">File menu</a><span>New from text file splits an EPUB, or a PDF with a table of contents, at its chapters. Generate works through every stale chapter in turn.</span></li>
+            <li><b>One cast for the whole series</b><a href="settings.html#characters">Characters</a><span>The character library holds the narrator and every regular. Change a voice there and every book that uses it follows.</span></li>
+            <li><b>Sentence-sized pieces</b><a href="settings.html#settings-dock">Settings</a><span>Text is generated about 40 words at a time and cut at paragraph, sentence or pause boundaries, never mid-word, and never after "Dr.".</span></li>
+            <li><b>Names said right</b><a href="settings.html#lexicon">Lexicon</a><span>Find-and-replace rules fix a name everywhere it appears, and mark only the clips they change as stale.</span></li>
+            <li><b>Chapter files and subtitles</b><a href="settings.html#processing">Export</a><span>Export a file per chapter, or just the stretch between two markers, with an <code>.srt</code> timed to the audio.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div role="tabpanel" id="wf-dub" aria-labelledby="tab-dub" hidden>
+        <div class="wf">
+          <div>
+            <p class="wf-intro">Import the subtitles, hear the original under each line, and fit every new line into its slot.</p>
+            <div class="stage">
+              <div class="stage-bar"><span>episode-04.tbaw</span><span>Dub · <b style="color:var(--text)">Both</b> · Original</span></div>
+              <div class="tl" aria-hidden="true">
+                <div class="tl-ruler"><span style="left:0">01:00:00:00</span><span style="left:50%">01:00:05:00</span></div>
+                <div class="tl-lane c3"><div class="tl-name">Inès</div><div class="tl-track"><div class="clip slot" style="left:4%; width:34%"></div><div class="clip c3" style="left:4%; width:31%"></div></div></div>
+                <div class="tl-lane c2"><div class="tl-name">Karl</div><div class="tl-track"><div class="clip slot" style="left:44%; width:22%"></div><div class="clip c2" style="left:44%; width:27%; border-color: var(--playhead)"></div></div></div>
+                <div class="tl-lane c8"><div class="tl-name">Source</div><div class="tl-track"><div class="clip c8" style="left:3%; width:66%; opacity:.5"></div></div></div>
+                <div class="tl-playhead" style="--p:.46"></div>
+              </div>
+              <div class="script" style="padding-top:1rem;">
+                <div class="g named c2">Karl <span style="color:var(--playhead)">122%</span></div>
+                <div class="t"><span class="run c2" style="text-decoration: underline wavy var(--playhead); text-underline-offset:.25em;">I told you we should have taken the other road.</span></div>
+              </div>
+            </div>
+          </div>
+          <ul class="wf-list">
+            <li><b>Subtitles in, clips out</b><a href="settings.html#generation">Import Subtitles</a><span>SRT, WebVTT and ASS/SSA. Each cue becomes a clip locked to its time, and named speakers map to characters in one dialog.</span></li>
+            <li><b>Fit to slot</b><a href="settings.html#timeline">Timeline</a><span>Each clip shows how full its slot is. Kokoro regenerates at a new speed until it fits within 3%; Audio8 time-stretches on playback.</span></li>
+            <li><b>Hear the original</b><a href="settings.html#transport">Transport</a><span>Import the source track and switch between Dub, Original and Both mid-play. The original under each clip is its cue's slice.</span></li>
+            <li><b>Picture to dub against</b><a href="settings.html#video">Video</a><span>Load an MP4, MOV, MKV or WebM; it plays muted and follows the transport, with an offset for leaders.</span></li>
+            <li><b>Words land on the cue</b><a href="settings.html#project-clip">Project fields</a><span>A locked clip starts early by the breath before its first word, so the word hits the cue's in-time. Timecode on the ruler, drop-frame included.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div role="tabpanel" id="wf-pod" aria-labelledby="tab-pod" hidden>
+        <div class="wf">
+          <div>
+            <p class="wf-intro">Cut a recording by deleting its words, then score it with music that ducks when anyone speaks.</p>
+            <div class="stage">
+              <div class="stage-bar"><span>ep-12-interview.tbaw</span><span>Recording · 38:14</span></div>
+              <div class="script">
+                <div class="g named c4">Host</div>
+                <div class="t"><span class="run c4" style="text-decoration: underline dotted var(--text-3); text-underline-offset:.25em;">So when did you <s style="color:var(--text-3)">um, when did you</s> start building it?</span></div>
+                <div class="g">&#9675;</div>
+                <div class="t plain">Typed text with no audio yet, until you give it a voice.</div>
+                <div class="g named c7">Guest</div>
+                <div class="t"><span class="run c7">About two years ago, on a train.</span></div>
+              </div>
+              <div class="tl" aria-hidden="true">
+                <div class="tl-lane c4"><div class="tl-name">Host</div><div class="tl-track"><div class="clip c4" style="left:1%; width:40%"></div></div></div>
+                <div class="tl-lane c7"><div class="tl-name">Guest</div><div class="tl-track"><div class="clip c7" style="left:44%; width:40%"></div></div></div>
+                <div class="tl-lane c6"><div class="tl-name">Music · D</div><div class="tl-track"><div class="clip c6" style="left:0; width:99%; opacity:.4"></div></div></div>
+              </div>
+            </div>
+          </div>
+          <ul class="wf-list">
+            <li><b>Edit a recording as text</b><a href="settings.html#generation">Import Audio</a><span>Whisper or a caption file puts the words in the transcript. Delete words and the audio closes up; cut, paste and drag carry the audio with them.</span></li>
+            <li><b>Music beds that duck</b><a href="settings.html#timeline">Track header</a><span>Import WAV, FLAC, OGG, MP3 or AIFF as a bed, trim or loop it, and press <code>D</code> on its track to drop it by 12 dB while voices play.</span></li>
+            <li><b>A real mixer</b><a href="settings.html#timeline">Timeline</a><span>Mute, solo, fader, pan and a volume automation lane per track; fade handles on every clip; stereo playback and export.</span></li>
+            <li><b>Rooms and phones</b><a href="settings.html#fx">Audio FX</a><span>Convolution reverb takes your own impulse responses; the GSM codec makes a phone call. Seventeen Pedalboard effects in all.</span></li>
+            <li><b>Conversations on shared lanes</b><a href="settings.html#project-clip">Track layout</a><span>Unified layout alternates a few lanes every time the speaker changes, instead of a track per character.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div role="tabpanel" id="wf-game" aria-labelledby="tab-game" hidden>
+        <div class="wf">
+          <div>
+            <p class="wf-intro">Hundreds of short lines, several takes each, and a sheet that tells everyone which ones are approved.</p>
+            <div class="stage">
+              <div class="stage-bar"><span>act1-barks.tbaw</span><span>Show: Not approved</span></div>
+              <div class="script">
+                <div class="g named c5">Guard<span class="fx">angry</span></div>
+                <div class="t"><span class="run c5">Halt! Who goes there?</span> <span class="tagtxt">take 3 · approved</span></div>
+                <div class="g named c5">Guard<span class="fx">whisper</span></div>
+                <div class="t"><span class="run c5 stale">Did you hear that?</span> <span class="tagtxt">take 1 · needs rewrite</span></div>
+                <div class="g named c8">Merchant</div>
+                <div class="t"><span class="run c8">Finest wares this side of the river.</span> <span class="tagtxt">take 2 · to do</span></div>
+              </div>
+            </div>
+            <div class="code-block" style="margin-top:1rem;">
+              <div class="head">act1-barks_cues.csv</div>
+              <pre>start,end,character,source_text,text,status,note
+00:00:00:00,00:00:01:12,Guard,,"Halt! Who goes there?",approved,
+00:00:02:03,00:00:03:05,Guard,,"Did you hear that?",needs rewrite,too calm</pre>
+            </div>
+          </div>
+          <ul class="wf-list">
+            <li><b>Takes</b><a href="settings.html#timeline">Clip menu</a><span>Regenerating keeps the old version. Switch back from the clip's menu; a take from text you've since changed says "old text".</span></li>
+            <li><b>Review status and notes</b><a href="settings.html#project-clip">Clip fields</a><span>To do, generated, approved or needs rewrite, with a note. The timeline's Show filter dims everything else.</span></li>
+            <li><b>Voice variants</b><a href="settings.html#characters">Characters</a><span>An Audio8 character can carry "angry" and "whisper" References; the transcript's Variant box picks one per line.</span></li>
+            <li><b>Files for the engine</b><a href="settings.html#processing">Export</a><span>Per-clip files named <code>&lt;base&gt;_001_Guard.wav</code>, a cue sheet CSV, and subtitles with one cue per word if you want lip-sync data.</span></li>
+            <li><b>Frame-accurate times</b><a href="settings.html#project-clip">Timecode</a><span>The ruler and clock show <code>HH:MM:SS:FF</code> at your frame rate, from any start time.</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features" data-clip="Features" data-cc="c3">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow c3">Features</span>
+        <h2>Everything is a layer on the text</h2>
+        <p>Voices, clips, takes, FX and word timings all hang off the transcript. Edit it however you like and the layers keep up.</p>
+      </div>
+      <div class="tracks reveal">
+        <div class="track c1">
+          <div class="track-head"><h3>Transcript</h3><div class="msad"><span>M</span><span>S</span><span>A</span><span>D</span></div></div>
+          <div class="track-body"><p>Each run of text is tinted by its character. The gutter names the speaker when it changes and puts a play button beside every stale clip, so you can regenerate one line without touching the rest. During playback the spoken word lights up; Ctrl+click a word to jump there.</p><a class="more" href="settings.html#transcript">Transcript reference →</a></div>
+        </div>
+        <div class="track c2">
+          <div class="track-head"><h3>Timeline</h3><div class="msad"><span>M</span><span>S</span><span>A</span><span>D</span></div></div>
+          <div class="track-body"><p>Clips follow the text in order with a pause between them, or sit where you drag them. When a regenerated clip comes back longer, the clips after it ripple. Markers, loops, timecode, and Shift+drag inside a clip to replace a few words with fresh speech.</p><a class="more" href="settings.html#timeline">Timeline reference →</a></div>
+        </div>
+        <div class="track c6">
+          <div class="track-head"><h3>Mixer</h3><div class="msad"><span>M</span><span>S</span><span>A</span><span>D</span></div></div>
+          <div class="track-body"><p>Mute, solo, fader, pan, a volume automation lane and ducking on every track. Fades on every clip. Playback mixes in stereo in the audio callback, and export uses the same mixer, so what you hear is what you get.</p><a class="more" href="settings.html#transport">Playback reference →</a></div>
+        </div>
+        <div class="track c7">
+          <div class="track-head"><h3>FX</h3><div class="msad"><span>M</span><span>S</span><span>A</span><span>D</span></div></div>
+          <div class="track-body"><p>Seventeen Pedalboard effects, a convolution reverb among them, set for the project, a character or one clip. They're applied when a clip plays, so a slider move is heard on the next pass and never marks anything stale.</p><a class="more" href="settings.html#fx">FX reference →</a></div>
+        </div>
+        <div class="track c4">
+          <div class="track-head"><h3>Characters</h3><div class="msad"><span>M</span><span>S</span><span>A</span><span>D</span></div></div>
+          <div class="track-body"><p>A character is a name, a color, a voice, an engine and an FX. Keep them in a library every project shares, or local to one file. Kokoro and Audio8 characters can talk to each other in the same scene.</p><a class="more" href="settings.html#characters">Characters reference →</a></div>
+        </div>
+        <div class="track c5">
+          <div class="track-head"><h3>Tags</h3><div class="msad"><span>M</span><span>S</span><span>A</span><span>D</span></div></div>
+          <div class="track-body"><p>Type <code>[Marta]:</code> at the start of a line and the line is Marta's when you press Enter. <code>[pause:1.5]</code> puts a second and a half before the next clip. Auto-split turns a whole tagged transcript into clips in one go.</p><a class="more" href="scripting.html">Tags guide →</a></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="engines" style="background: var(--bg-2); border-top:1px solid var(--border); border-bottom:1px solid var(--border);" data-clip="Engines" data-cc="c2">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow c2">Engines</span>
+        <h2>Two local engines, picked per character</h2>
+        <p>Each character chooses its engine in Edit &gt; Characters, so a Kokoro narrator can introduce an Audio8 clone. The Settings and Voices tabs follow whichever character's clip you've selected.</p>
       </div>
       <div class="compare reveal">
         <table class="cmp">
           <thead>
             <tr>
               <th></th>
-              <th>Kokoro <span class="sub">default · hexgrad/kokoro</span></th>
+              <th>Kokoro <span class="sub">hexgrad/kokoro · default</span></th>
               <th>Audio8 <span class="sub">Audio8-TTS-Preview-0.6b</span></th>
             </tr>
           </thead>
           <tbody>
-            <tr><td>Voices</td><td>Named base voices, plus custom mixes</td><td>Zero-shot cloning from a reference WAV and its transcript</td></tr>
-            <tr><td>Languages</td><td>American and British English, Spanish, French, Italian, Portuguese, Japanese, Chinese</td><td>Whatever the reference clip speaks</td></tr>
+            <tr><td>Voices</td><td>Built-in voices, plus your own Mixes from the Voices tab</td><td>Cloned from a Reference: a short WAV and its transcript</td></tr>
+            <tr><td>Languages</td><td>American and British English, Spanish, French, Italian, Portuguese, Japanese, Chinese</td><td>Whatever the reference speaks</td></tr>
+            <tr><td>Speed</td><td>0.5x to 2x, and Fit to slot regenerates at a new speed</td><td>Its own pace; Fit to slot time-stretches instead</td></tr>
+            <tr><td>Word timing</td><td>Reported by the engine in English</td><td>From a Whisper pass after generating</td></tr>
             <tr><td>Sample rate</td><td class="mono">24,000 Hz</td><td class="mono">44,100 Hz</td></tr>
-            <tr><td>Parallelism</td><td>One pipeline per worker thread, so chunks render in parallel</td><td>One shared model behind a lock; threads don't help</td></tr>
-            <tr><td>JIT streaming</td><td><span class="pillrow tag-ok">● Supported</span></td><td><span class="pillrow tag-no">○ Falls back to batch</span></td></tr>
-            <tr><td>Voices tab</td><td>Mixing</td><td>Voice Reference, with Auto-transcribe</td></tr>
-            <tr><td>Licensing note</td><td>Apache-2.0 model</td><td>Auto-transcribe defaults to Whisper (MIT, runs locally). The Audio8-ASR-0.1B option is CC-BY-NC-4.0; Vosk is the Apache-2.0, offline alternative</td></tr>
+            <tr><td>Parallel generation</td><td>One pipeline per thread</td><td>One shared model, one segment at a time</td></tr>
+            <tr><td>Licensing</td><td>Apache-2.0</td><td>Check the model card. Transcribing a reference uses Whisper (MIT) by default; Vosk is the offline Apache-2.0 option</td></tr>
           </tbody>
         </table>
       </div>
     </div>
   </section>
 
-  <section id="signal-chain" class="tight" style="background: var(--bg-2); border-top:1px solid var(--border); border-bottom:1px solid var(--border);">
+  <section id="signal-chain" class="tight" data-clip="Signal chain" data-cc="c7">
     <div class="wrap">
       <div class="sec-head reveal">
-        <span class="eyebrow">Post-processing</span>
-        <h2>One fixed chain, applied at read time</h2>
-        <p>This is the order in <code>process_audio</code>. It runs when a clip is played, drawn on the timeline, or exported, over the raw model output on disk.</p>
+        <span class="eyebrow c7">Signal chain</span>
+        <h2>Raw on disk, FX on the way out</h2>
+        <p>A generated clip is saved as the model made it. These six steps run, in this order, whenever it's played, drawn on the timeline or exported.</p>
       </div>
-      <div class="chain reveal">
-        <div class="chain-node"><span class="n">01</span><h4>Trim</h4><p>Leading and trailing silence, if enabled</p></div>
-        <div class="chain-arrow"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
-        <div class="chain-node"><span class="n">02</span><h4>Volume</h4><p>A plain gain multiply</p></div>
-        <div class="chain-arrow"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
-        <div class="chain-node"><span class="n">03</span><h4>Pitch</h4><p>Shifted by resampling</p></div>
-        <div class="chain-arrow"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
-        <div class="chain-node"><span class="n">04</span><h4>Time stretch</h4><p>Only when Fit to slot set one</p></div>
-        <div class="chain-arrow"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
-        <div class="chain-node"><span class="n">05</span><h4>FX chain</h4><p>Every enabled Pedalboard effect</p></div>
-        <div class="chain-arrow"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
-        <div class="chain-node"><span class="n">06</span><h4>Normalize</h4><p>Peak to 98% of full scale, last</p></div>
+      <div class="inserts reveal">
+        <div class="insert"><span class="n">INSERT 1</span><h4><span class="led"></span>Trim</h4><p>Leading and trailing silence, if on</p></div>
+        <div class="insert"><span class="n">INSERT 2</span><h4><span class="led"></span>Volume</h4><p>A plain gain</p></div>
+        <div class="insert"><span class="n">INSERT 3</span><h4><span class="led"></span>Pitch</h4><p>By resampling, so length changes too</p></div>
+        <div class="insert"><span class="n">INSERT 4</span><h4><span class="led"></span>Stretch</h4><p>Only when Fit to slot set one</p></div>
+        <div class="insert"><span class="n">INSERT 5</span><h4><span class="led"></span>FX chain</h4><p>Every enabled Pedalboard effect</p></div>
+        <div class="insert"><span class="n">INSERT 6</span><h4><span class="led"></span>Normalize</h4><p>Peak to 98% of full scale</p></div>
       </div>
     </div>
   </section>
 
-  <section id="projects">
+  <section id="projects" style="background: var(--bg-2); border-top:1px solid var(--border); border-bottom:1px solid var(--border);" data-clip=".tbaw" data-cc="c8">
     <div class="wrap">
       <div class="split">
         <div class="reveal">
           <div class="sec-head">
-            <span class="eyebrow">Projects</span>
-            <h2>One <span class="mono">.tbaw</span> per project. Nothing else to keep track of.</h2>
-            <p>Text based audio workflow. A zip with a manifest, so anyone can open it, and everything a project needs to play back on a second machine.</p>
+            <span class="eyebrow c8">The file</span>
+            <h2>The format is named after the idea</h2>
+            <p><code>.tbaw</code> stands for text-based audio workflow. It's a zip with a manifest: the text, the clips, every generated segment, and the voices and presets the project uses.</p>
           </div>
           <ul class="checks">
-            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M5 12l5 5L20 7"/></svg><span><b>Saves in the background.</b> Ctrl+S writes a temp file and swaps it in, so a crash never leaves a half-written project. Autosave goes to a working copy, never to your file.</span></li>
-            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M5 12l5 5L20 7"/></svg><span><b>Carries its voices.</b> Custom Kokoro mixes, Audio8 references and FX presets the project names ride inside it. The Voices tab lists a bundle's own voices first.</span></li>
-            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M5 12l5 5L20 7"/></svg><span><b>Recovers after a crash.</b> Reopen the project and it offers the unsaved session, even if the file was renamed or moved in between.</span></li>
-            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M5 12l5 5L20 7"/></svg><span><b>Small when you want it.</b> Untick "bundle generated audio" in the Export dialog and the file holds just text and settings; clips regenerate on open.</span></li>
+            <li><b>Opens on another machine.</b> Mixes, References, saved FX and impulse responses ride inside it.</li>
+            <li><b>Never half-written.</b> Save runs in the background into a temp file and swaps it in. Autosave writes to a working copy, not your file.</li>
+            <li><b>Recovers after a crash.</b> Reopen the project and it offers the unsaved session, even if the file was renamed or moved.</li>
+            <li><b>Small when you want it.</b> Leave the generated audio out and the file is just text and settings; clips regenerate on open.</li>
           </ul>
           <div style="margin-top:1.4rem;"><a class="btn btn-ghost" href="format.html">Read the format spec <span class="arrow" aria-hidden="true">→</span></a></div>
         </div>
         <div class="code-block reveal">
-          <div class="head">my-audiobook.tbaw</div>
-          <pre class="tree"><span class="f">manifest.json</span>      <span class="c">format, version, stats, hashes</span>
-<span class="f">document.json</span>      <span class="c">text, clips, tracks, characters</span>
-<span class="f">project.json</span>       <span class="c">export and bundle options</span>
+          <div class="head">the-house.tbaw</div>
+          <pre class="tree"><span class="f">manifest.json</span>        <span class="c">format, version, stats, hashes</span>
+<span class="f">document.json</span>        <span class="c">text, clips, tracks, characters</span>
+<span class="f">project.json</span>         <span class="c">export and bundle options</span>
 <span class="d">audio/generated/</span>
-  <span class="f">3f9a…c2_0.wav</span>    <span class="c">one file per segment</span>
+  <span class="f">3f9a…c2_0.wav</span>      <span class="c">one file per segment</span>
+<span class="d">audio/imported/</span>
+  <span class="f">9b1e…04.flac</span>       <span class="c">music beds, recordings</span>
 <span class="d">fx/</span>
-  <span class="f">Whisper.json</span>     <span class="c">named FX presets</span>
+  <span class="f">Radio.json</span>         <span class="c">saved FX</span>
+  <span class="f">ir/kitchen.wav</span>     <span class="c">impulse responses</span>
+<span class="d">projects/</span>
+  <span class="f">chapter-2.tbaw</span>     <span class="c">embedded subprojects</span>
 <span class="d">engines/kokoro/voices/</span>
-  <span class="f">narrator_mix.pt</span>  <span class="c">custom voice mixes</span>
+  <span class="f">narrator_mix.pt</span>    <span class="c">Kokoro Mixes</span>
 <span class="d">engines/audio8/refs/</span>
-  <span class="f">villain.wav</span>      <span class="c">cloning reference</span>
-  <span class="f">villain.txt</span>      <span class="c">and its transcript</span></pre>
+  <span class="f">marta.wav</span>          <span class="c">Audio8 Reference</span>
+  <span class="f">marta.txt</span>          <span class="c">and its transcript</span></pre>
         </div>
       </div>
     </div>
   </section>
 
-  <section id="changelog" style="background: var(--bg-2); border-top:1px solid var(--border); border-bottom:1px solid var(--border);">
+  <section id="changelog" data-clip="What's new" data-cc="c1">
     <div class="wrap">
       <div class="sec-head reveal">
-        <span class="eyebrow">Changelog</span>
-        <h2>What's new</h2>
-        <p>4.0.0 is the DAW-style rebuild. The full history, back to 3.1, is in the <a class="link" href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/README.md" target="_blank" rel="noopener">README</a>.</p>
+        <span class="eyebrow c1">What's new</span>
+        <h2>The next update</h2>
+        <p>The short version. Every change in full, back to 3.1, is on the <a class="link" href="changes.html">changes page</a>.</p>
       </div>
       <div class="log reveal">
         <div class="log-item">
-          <div class="v">4.0.0-beta.3 <span class="badge">LATEST</span></div>
+          <div class="v">Unreleased <span class="badge">NEXT</span></div>
           <div>
-            <h3>Pauses, takes and a real mixer</h3>
-            <p>Clips placed one after another get 0.35 s of silence between them and 0.9 s across a blank line, both adjustable, and <code>[pause:1.5]</code> in a script gives the next clip its own gap. Existing projects that aren't hand-timed get longer on first open; set both gaps to 0 for the old placement.</p>
-            <p>Regenerating keeps the old take, and the clip's menu switches between takes. Each track has mute, solo, a fader, pan and a volume automation lane; clips have fade handles, overlaps can crossfade, and playback and export are stereo. Markers on the ruler name points, loop a region and bound an export. The ruler and clock can show SMPTE timecode, drop-frame included.</p>
-            <p>For review and dubbing: a status and note per clip, a filter that dims what's done, a cue sheet CSV on export, and the source line a dub is written against. Generated clips remember word timings (Kokoro's own in English, Whisper otherwise), so the transcript highlights the spoken word, Ctrl+click seeks to a word, and export can write one subtitle per word. Audio8 characters can have named voice variants.</p>
+            <h3>Dubbing, a mixer and a shared cast</h3>
+            <p>Import subtitles as clips locked to their cues, fit each line to its slot, and dub against the original dialogue with a reference video playing along. Tracks get mute, solo, faders, pan, automation and fades; clips get takes, pauses between them and ripple on regenerate. Characters can live in a library every project shares and pick their own engine, and a project can hold subprojects.</p>
+            <p>Also new: music beds with ducking, editing a recording by editing its text, convolution reverb, word-level highlighting, markers, loops and timecode, and Whisper as the default transcriber.</p>
           </div>
         </div>
         <div class="log-item">
-          <div class="v">4.0.0-beta.2</div>
-          <div>
-            <h3>Lexicon on clips, sentence-sized pieces, Whisper</h3>
-            <p>The Lexicon now applies to timeline clips, not just whole-document generation, and adding or removing a rule marks only the clips it rewrites as stale.</p>
-            <p>Text is generated in pieces of about 40 words (adjustable), ending at a paragraph, a sentence end or a pause, each switchable. A sentence is only cut past twice the target, a word never. One piece is one file, so a long paragraph no longer leaves a clip stale forever and subtitle cues end where sentences do.</p>
-            <p>Auto-transcribe defaults to Whisper large-v3-turbo, run locally. It asks before the first download (about 1.6 GB) and can print timed words from the command line. On Linux and macOS the cache and voice folders are now private to your user.</p>
-          </div>
-        </div>
-        <div class="log-item">
-          <div class="v">4.0.0</div>
+          <div class="v">4.0.0-beta.1 <span class="badge">LATEST RELEASE</span></div>
           <div>
             <h3>A document, not a text box</h3>
-            <p>The rebuild. 3.2.0 was a CustomTkinter form; 4.0.0 is a PySide6 shell over a document with clips, tracks and characters layered on top, per-clip dirty tracking, undo and redo, and a settings panel scoped to the selection. Transcript | Settings, Audio FX, Lexicon and Voices tabs on top; Timeline | Transport underneath, with saved Advanced and Simple workspaces. Light and dark themes.</p>
-            <p>Clips sit on a real seconds axis with waveforms, a ruler and a playhead. Play, pause, stop and seek through one <code>sounddevice</code> stream that mixes the arrangement in the callback. File &gt; Export mixes the timeline down to one file with optional <code>.srt</code> and per-clip files. Audio FX are non-destructive: clips are raw model output and the FX chain, volume, pitch, normalize and trim are applied when the transport, the export or the timeline reads them, so moving a slider never marks a clip out of date.</p>
-            <p>A project is one <code>.tbaw</code> file that carries the text, the clips, every generated segment and every named voice mix, reference and FX preset it uses. Save runs in the background and never leaves a half-written file; a crash offers to recover the unsaved session. A clip's audio lands in the project's working copy under a name derived from what produced it, and regenerating a clean clip makes a fresh take. Launch reopens the last project under a welcome dialog with recents, New, New from text file and a details pane.</p>
-            <p>Engines are pluggable: Audio8 voice cloning joined Kokoro as a second real backend, with ASR choices for auto-transcribing a reference.</p>
+            <p>The rebuild: a PySide6 app over a document with clips, tracks and characters, a timeline in seconds, non-destructive FX, undo and redo, projects in one <code>.tbaw</code> file, and Audio8 voice cloning beside Kokoro.</p>
           </div>
         </div>
       </div>
+      <div style="margin-top:1.4rem;" class="reveal"><a class="btn btn-ghost" href="changes.html">See every change <span class="arrow" aria-hidden="true">→</span></a></div>
     </div>
   </section>
 
-  <section id="install">
+  <section id="install" style="background: var(--bg-2); border-top:1px solid var(--border);" data-clip="Install" data-cc="c4">
     <div class="wrap">
       <div class="sec-head reveal">
-        <span class="eyebrow">Install</span>
-        <h2>From clone to first sample</h2>
-        <p>Python 3.11 or newer and eSpeak NG. Both models download from Hugging Face the first time you pick them.</p>
+        <span class="eyebrow c4">Install</span>
+        <h2>From clone to first line</h2>
+        <p>Python 3.11 or newer and eSpeak NG. Models download from Hugging Face the first time you use them.</p>
       </div>
-      <div class="callout info reveal" style="max-width:860px; margin-bottom:1.6rem;">
+      <div class="callout reveal" style="max-width:860px; margin-bottom:1.6rem;">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
         <div>
-          <p><strong>4.0.0 is a beta, and a different program from 3.2.0.</strong> 3.2.0 is the old CustomTkinter app: one text box, one voice, files to a folder. It's frozen and gets no fixes. 4.0.0 is the rebuild this site describes. The intent is that every 4.x release opens a <code>.tbaw</code> made by any earlier 4.x, the beta included; treat that as a goal rather than a promise until 4.0.0 final.</p>
-          <p>Still want 3.2.0? <code>git clone --branch 3.2.0 --depth 1</code> the same URL and follow the README in that checkout; its dependencies and launch steps differ from the ones here. Nothing carries over between the two except the <code>presets/</code> and <code>custom_voices/</code> folders.</p>
+          <p><strong>4.0 is a beta.</strong> <code>4.0.0-beta.1</code> is the latest tag; drop <code>--branch</code> for the development branch and the unreleased changes. The aim is for every 4.x release to open a <code>.tbaw</code> from any earlier 4.x.</p>
+          <p>Looking for 3.2.0, the old one-text-box app? It's frozen. Clone it with <code>--branch 3.2.0</code> and follow its own README. Only <code>presets/</code> and <code>custom_voices/</code> carry over.</p>
         </div>
       </div>
       <div class="install-grid">
         <div style="display:flex; flex-direction:column; gap:1rem;">
           <div class="code-block reveal" data-copy>
             <div class="head"><span>Terminal</span></div>
-            <pre><span class="c1"># clone the current beta (the tag name changes each release;</span>
-<span class="c1"># the Releases page lists them all)</span>
+            <pre><span class="c1"># clone the latest beta</span>
 git clone --branch 4.0.0-beta.1 --depth 1 https://github.com/CoffeeMethod/KokoroGUI.git
 cd KokoroGUI
 
@@ -497,7 +539,7 @@ pip install -r requirements.txt
 <span class="c2">python main.py</span>               <span class="c1"># or run.bat on Windows</span></pre>
           </div>
           <div class="code-block reveal" data-copy>
-            <div class="head"><span>eSpeak NG, the one system dependency</span></div>
+            <div class="head"><span>eSpeak NG</span></div>
             <pre><span class="c1"># Windows: run the installer from</span>
 <span class="c3">https://github.com/espeak-ng/espeak-ng/releases</span>
 
@@ -512,26 +554,12 @@ sudo dnf install espeak-ng</pre>
           </div>
         </div>
         <div class="req reveal">
-          <div><h4>Python 3.11+</h4><p>The only hard language-version requirement.</p></div>
-          <div><h4>eSpeak NG</h4><p>Kokoro's phonemization step needs it at runtime. Install it before the first run.</p></div>
-          <div><h4>A GPU is optional</h4><p>Both models run on CPU. Options &gt; Device picks CUDA when PyTorch reports one.</p></div>
-          <div><h4>First run downloads weights</h4><p>Kokoro and Audio8 pull from Hugging Face on first use. Audio8 loads with <code>trust_remote_code=True</code>. Whisper (about 1.6 GB) asks before it downloads.</p></div>
-          <div><h4>Smaller or offline transcription</h4><p>Copy <code>.env.example</code> to <code>.env</code>. Set <code>WHISPER_MODEL</code> to <code>small</code>, <code>base</code> or <code>tiny</code> for a lighter Whisper, or <code>VOSK_MODEL_PATH</code> to use Vosk.</p></div>
-          <div><h4>Trouble with torch?</h4><p>Follow the platform-specific install at <a class="link" href="https://pytorch.org/get-started/locally/" target="_blank" rel="noopener">pytorch.org</a> before <code>pip install -r requirements.txt</code>.</p></div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="tight" style="padding-top:0;">
-    <div class="wrap">
-      <div class="cta reveal">
-        <span class="eyebrow">Open source</span>
-        <h2>Local, inspectable, Apache-2.0</h2>
-        <p>No account, no upload, no per-character billing. Clone it, read the code, ship your audiobook.</p>
-        <div class="row">
-          <a class="btn btn-primary btn-lg" href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">Star on GitHub</a>
-          <a class="btn btn-ghost btn-lg" href="settings.html">Read the settings reference</a>
+          <div><h4>Python 3.11+</h4><p>The only hard version requirement.</p></div>
+          <div><h4>eSpeak NG</h4><p>Kokoro needs it to turn text into phonemes. Install it before the first run.</p></div>
+          <div><h4>A GPU is optional</h4><p>Everything runs on the CPU. Options &gt; Device picks CUDA when PyTorch finds one.</p></div>
+          <div><h4>First use downloads models</h4><p>Kokoro and Audio8 come from Hugging Face; Audio8 loads with <code>trust_remote_code=True</code>. Whisper is about 1.6 GB and asks before it downloads.</p></div>
+          <div><h4>Smaller or offline transcription</h4><p>Copy <code>.env.example</code> to <code>.env</code>. Set <code>WHISPER_MODEL</code> to <code>small</code>, <code>base</code> or <code>tiny</code>, or <code>VOSK_MODEL_PATH</code> to use Vosk.</p></div>
+          <div><h4>Trouble with torch?</h4><p>Follow <a class="link" href="https://pytorch.org/get-started/locally/" target="_blank" rel="noopener">pytorch.org</a> for your OS and GPU before <code>pip install -r requirements.txt</code>.</p></div>
         </div>
       </div>
     </div>
@@ -542,25 +570,31 @@ sudo dnf install espeak-ng</pre>
   <div class="wrap">
     <div class="cols">
       <div>
-        <a class="brand" href="#top" style="margin-bottom:.4rem;">
-          <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="var(--surface-2)" stroke="var(--border-2)"/><g fill="var(--accent)"><rect x="10" y="26" width="7" height="12" rx="2"/><rect x="21" y="16" width="7" height="32" rx="2"/><rect x="32" y="22" width="7" height="20" rx="2"/><rect x="43" y="10" width="7" height="44" rx="2"/></g></svg>
-          <span class="brand-word">Kokoro GUI</span>
+        <a class="brand" href="index.html">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect width="64" height="64" rx="14" fill="var(--surface-2)" stroke="var(--border-2)"/>
+        <rect x="12" y="13" width="40" height="5" rx="2.5" fill="var(--text-3)"/>
+        <rect x="12" y="23" width="26" height="5" rx="2.5" fill="var(--c1)"/>
+        <g fill="var(--c2)"><rect x="12" y="41" width="4" height="8" rx="2"/><rect x="19" y="36" width="4" height="18" rx="2"/><rect x="26" y="39" width="4" height="12" rx="2"/></g>
+        <g fill="var(--c3)"><rect x="33" y="34" width="4" height="22" rx="2"/><rect x="40" y="39" width="4" height="12" rx="2"/><rect x="47" y="42" width="4" height="6" rx="2"/></g>
+      </svg>
+          <span class="brand-word">KokoroGUI</span>
         </a>
-        <p class="blurb">A desktop text-to-speech workstation. Not affiliated with the Kokoro or Audio8 model authors.</p>
+        <p class="blurb">A text-based audio workflow. Write the transcript, cast the characters, and the audio follows the text. Not affiliated with the Kokoro or Audio8 model authors.</p>
       </div>
       <div>
         <h5>Product</h5>
         <ul>
-          <li><a href="#features">Features</a></li>
-          <li><a href="#engines">Engines</a></li>
-          <li><a href="#changelog">Changelog</a></li>
-          <li><a href="#install">Install</a></li>
+          <li><a href="index.html#workflows">Workflows</a></li>
+          <li><a href="index.html#features">Features</a></li>
+          <li><a href="changes.html">Changes</a></li>
+          <li><a href="index.html#install">Install</a></li>
         </ul>
       </div>
       <div>
         <h5>Docs</h5>
         <ul>
-          <li><a href="scripting.html">Scripting guide</a></li>
+          <li><a href="scripting.html">Tags guide</a></li>
           <li><a href="settings.html">Settings reference</a></li>
           <li><a href="format.html">.tbaw format</a></li>
         </ul>
@@ -576,7 +610,7 @@ sudo dnf install espeak-ng</pre>
       </div>
     </div>
     <div class="bottom">
-      <span>Apache-2.0. Kokoro GUI 4.0.0 beta.</span>
+      <span>Apache-2.0 · KokoroGUI 4.0 beta</span>
       <span>Kokoro by hexgrad · Audio8 models by Audio8 · Pedalboard by Spotify</span>
     </div>
   </div>

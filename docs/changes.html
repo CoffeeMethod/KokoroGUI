@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>KokoroGUI · Changes</title>
+<meta name="description" content="Every change to KokoroGUI, version by version, in full: what each feature does, where it lives in the app, and what it means for existing projects." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231e1f22'/%3E%3Crect x='12' y='13' width='40' height='5' rx='2.5' fill='%23868a91'/%3E%3Crect x='12' y='23' width='26' height='5' rx='2.5' fill='%23e3a72f'/%3E%3Cg fill='%234f8fe6'%3E%3Crect x='12' y='41' width='4' height='8' rx='2'/%3E%3Crect x='19' y='36' width='4' height='18' rx='2'/%3E%3Crect x='26' y='39' width='4' height='12' rx='2'/%3E%3C/g%3E%3Cg fill='%23e0655c'%3E%3Crect x='33' y='34' width='4' height='22' rx='2'/%3E%3Crect x='40' y='39' width='4' height='12' rx='2'/%3E%3Crect x='47' y='42' width='4' height='6' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/site.css" />
+<style>
+  .ver-badge{ display:inline-block; vertical-align:middle; margin-left:.5rem; font-family: var(--font-mono); font-size:.66rem; font-weight:600; color: var(--accent); border:1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); background: color-mix(in srgb, var(--accent) 10%, transparent); padding:.15em .55em; border-radius:999px; letter-spacing:.03em; }
+  .change-group{ max-width: 740px; margin-top: 2rem; }
+  .change-group > h3{ font-family: var(--font-mono); font-size:.76rem; font-weight:500; color: var(--text-3); text-transform: uppercase; letter-spacing:.06em; margin-bottom: .9rem; }
+  .change-list{ display:flex; flex-direction:column; gap: 1.1rem; margin:0; padding:0; }
+  .change-list li{ list-style:none; padding-left: 1rem; border-left: 2px solid var(--border); }
+  .change-list h4{ font-size: 1rem; font-weight: 600; margin-bottom: .3rem; color: var(--text); }
+  .change-list p{ font-size: .94rem; color: var(--text-2); }
+  .change-list p + p{ margin-top: .45rem; }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <nav class="wrap">
+    <a class="brand" href="index.html">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect width="64" height="64" rx="14" fill="var(--surface-2)" stroke="var(--border-2)"/>
+        <rect x="12" y="13" width="40" height="5" rx="2.5" fill="var(--text-3)"/>
+        <rect x="12" y="23" width="26" height="5" rx="2.5" fill="var(--c1)"/>
+        <g fill="var(--c2)"><rect x="12" y="41" width="4" height="8" rx="2"/><rect x="19" y="36" width="4" height="18" rx="2"/><rect x="26" y="39" width="4" height="12" rx="2"/></g>
+        <g fill="var(--c3)"><rect x="33" y="34" width="4" height="22" rx="2"/><rect x="40" y="39" width="4" height="12" rx="2"/><rect x="47" y="42" width="4" height="6" rx="2"/></g>
+      </svg>
+      <span class="brand-word">KokoroGUI<span class="ver">TBAW · 4.0 beta</span></span>
+    </a>
+    <div class="navlinks">
+      <a href="index.html#workflows">Workflows</a>
+      <a href="index.html#features">Features</a>
+      <a href="changes.html" aria-current="page">Changes</a>
+      <a href="scripting.html">Tags</a>
+      <a href="settings.html">Settings</a>
+      <a href="format.html">.tbaw format</a>
+    </div>
+    <div class="navctas">
+      <button class="icon-btn" id="themeToggle" aria-label="Toggle color theme" title="Toggle color theme">
+        <svg id="iconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg id="iconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
+      </button>
+      <button class="icon-btn menu-btn" id="menuToggle" aria-label="Open menu" aria-expanded="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <a class="btn btn-primary" href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+</header>
+
+<main>
+  <section class="page-head" data-clip="Changes" data-cc="c1">
+    <div class="wrap">
+      <span class="eyebrow c1">Changes</span>
+      <h1>Every change, in full</h1>
+      <p class="lede">The README keeps one line per feature. This page has the rest: where each feature lives in the app, how it behaves, and what it does to a project you already have. Newest first.</p>
+      <div class="toc">
+        <a href="#unreleased">Unreleased</a>
+        <a href="#v4-0-0-beta-1">4.0.0-beta.1</a>
+        <a href="#v3-2-0">3.2.0</a>
+        <a href="#v3-1-0">3.1.0</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="unreleased" data-clip="Unreleased" data-cc="c3">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">Development branch</span>Unreleased <span class="ver-badge">NEXT</span></h2>
+        <p>Everything since the 4.0.0-beta.1 tag. It ships as one release. Until then it's on the development branch: clone without <code>--branch</code> to run it.</p>
+      </div>
+      <div class="callout warn reveal" style="max-width:740px; margin-top:1.3rem;">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 2 20h20L12 3Z"/><path d="M12 10v4M12 17h.01"/></svg>
+        <div>
+          <p><strong>Before you open an existing project.</strong> Clips now have a pause between them, so a project that isn't hand-timed gets longer the first time it opens. Set Gap and Paragraph gap to 0 in Settings &gt; Project for the old placement.</p>
+          <p>Text now splits into pieces of about 40 words, so clips whose pieces come out different are marked stale. A <code>split_pattern</code> saved in an old <code>presets/*.json</code> file is ignored.</p>
+          <p>A project that has takes, subprojects or imported audio needs this version or newer to open.</p>
+        </div>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Characters and projects</h3>
+        <ul class="change-list">
+          <li>
+            <h4>A character library shared by every project</h4>
+            <p>Characters can live in a library (<code>characters/</code>, one file per character) as well as in a project. A project's character linked to the library follows it: change its voice, FX or color in Edit &gt; Characters and every project using it picks that up the next time it opens, or at once if it's open in another window. Each project keeps its own name for the character, and "Rename in library" copies it over.</p>
+            <p>Characters made in a project stay local to it until you press "Promote to Library". Add &gt; From library... brings library characters into a project. A project still carries its own copy of every character, so it opens and plays on a machine whose library doesn't have one. The dialog then says "Library (not found here)".</p>
+          </li>
+          <li>
+            <h4>New starts from the library</h4>
+            <p>File &gt; New gets every library character instead of a copy of the last project's. With an empty library you get one "Default" character. The first launch of this version copies your <code>presets/*.json</code> files into the library (the files stay), and characters in the project it opens that match a preset exactly are linked to it.</p>
+          </li>
+          <li>
+            <h4>Each character picks its engine</h4>
+            <p>The Engine box in Edit &gt; Characters replaces Options &gt; Engine, so Kokoro and Audio8 voices can share a project. The Settings and Voices tabs follow the selected clip's character.</p>
+          </li>
+          <li>
+            <h4>Voice variants for Audio8</h4>
+            <p>A character can have named variants ("angry", "whisper"), each its own reference recording, set up in Edit &gt; Characters. The transcript's Variant box picks one per clip.</p>
+          </li>
+          <li>
+            <h4>Subprojects</h4>
+            <p>A project can hold other projects. File &gt; New Subproject turns the selected text into a subproject embedded in this one (a chapter, an episode segment, a scene), and File &gt; Add Subproject... links an existing <code>.tbaw</code>. The parent shows each as one read-only line and one block that plays the subproject's exported mix.</p>
+            <p>Click the block to edit the subproject in the transcript and Settings tabs. Double-click to enter it on the timeline, with a breadcrumb back. Generate works through stale subprojects after the parent's own clips. New from text makes an EPUB one subproject per chapter. Characters come in three scopes: Global (the library), Project (shared by every subproject of a book) and Local.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Timeline and mixing</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Pauses between clips</h4>
+            <p>Clips placed one after another have 0.35 s of silence between them, and 0.9 s across a blank line. Both are in Settings &gt; Project (Gap, Paragraph gap). A clip can override its own gap, and <code>[pause:1.5]</code> in the transcript gives the next clip Auto-split creates a 1.5 s gap. The marker stays in the text and is never read aloud.</p>
+          </li>
+          <li>
+            <h4>Tracks appear when a character is used</h4>
+            <p>A character gets a timeline track the first time you assign it text, and a track with no clips isn't drawn, so a big library doesn't open as dozens of empty lanes. An unused track keeps its mute, fader and pan for when it comes back.</p>
+          </li>
+          <li>
+            <h4>Unified track layout</h4>
+            <p>Settings &gt; Project &gt; Track layout &gt; Unified puts every clip on a few lanes (3 by default) and moves to the next lane each time the speaker changes, so a conversation alternates lanes. Mute, solo, fader and pan then act per lane. Switching back puts each clip on its character's track. Either switch is one undo step.</p>
+          </li>
+          <li>
+            <h4>Takes</h4>
+            <p>Regenerating a clip keeps the old version. Right-click a clip &gt; Take to switch back, or Delete take to drop one. A take recorded from text you've since edited says "old text". Old takes and their audio are saved in the project.</p>
+          </li>
+          <li>
+            <h4>Ripple on regenerate</h4>
+            <p>When a regenerated clip comes back longer or shorter, clips you placed by dragging that sit after it move by the same amount. Right-click a clip &gt; Lock in time to keep it where it is, or turn ripple off in Settings &gt; Project. Clips that overlap on one track get a red border.</p>
+          </li>
+          <li>
+            <h4>Mixer</h4>
+            <p>Each track has mute, solo, a fader, a pan slider and a volume automation lane. The <code>A</code> button shows the lane: double-click adds a point, drag moves it, right-click deletes it, Alt-drag moves a segment. Clips have fade-in and fade-out handles on their top corners. Settings &gt; Project &gt; Auto-crossfade adds a 10 ms fade where clips overlap. Playback and export are stereo, and export follows mute, solo, pan, fades and automation.</p>
+          </li>
+          <li>
+            <h4>Markers and loops</h4>
+            <p>Right-click the ruler to add a marker, and drag a flag to move it. Shift-drag on the ruler, or use "Loop to next marker", to loop a region. Export can write just the stretch between two markers.</p>
+          </li>
+          <li>
+            <h4>Timecode</h4>
+            <p>Settings &gt; Project &gt; Timecode shows the ruler and the transport clock as <code>HH:MM:SS:FF</code> at a frame rate you pick, drop-frame included, from any start time.</p>
+          </li>
+          <li>
+            <h4>Convolution reverb</h4>
+            <p>Audio FX &gt; Spatial &amp; Time &gt; Convolution Reverb puts a clip in a recorded space. Pick an impulse response and set Mix (default 0.5). "Add..." copies a <code>.wav</code> into the impulse response library (<code>presets/fx/ir/</code>). Save bundles every impulse response the project uses, and a project's own copy wins over the library's. A missing one, or one longer than 30 seconds, plays dry and logs a warning.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Dubbing and subtitles</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Subtitle import</h4>
+            <p>File &gt; Import Subtitles... reads SRT, WebVTT and ASS/SSA files. Each cue becomes its own paragraph at the end of the transcript and a clip locked in time at the cue's start, with the cue's text as the clip's source text and the cue's length as its target.</p>
+            <p>When the file names speakers (an ASS Name field, a VTT <code>&lt;v Name&gt;</code> tag), a dialog asks once which character voices each: the narrator, a new character named after the speaker, or one you already have. Cancel imports nothing, and one undo removes the whole import, including the characters it made. Ripple never moves a cue. Dragging one moves it and it stays locked.</p>
+          </li>
+          <li>
+            <h4>Locked clips line up on their first word</h4>
+            <p>Settings &gt; Project &gt; "Align locked clips to their first word" starts a locked clip a little early, by the silence before its first word, so the word lands on the clip's time instead of the breath before it. It's on by default in a project with a locked clip, and skipped for a clip with Trim Silence on.</p>
+          </li>
+          <li>
+            <h4>Target durations and Fit to slot</h4>
+            <p>Settings &gt; Clip &gt; Target (s) gives a clip a length to fill, and subtitle import sets it from each cue. The timeline draws that slot as a bracket, puts how full it is in the clip's label as a percentage, and tints the clip amber past 103% and red past 115%.</p>
+            <p>Right-click &gt; Fit to slot changes the clip until it's within 3% of the target. Kokoro regenerates it at a new speed (0.7x to 1.6x, up to three tries). Audio8 has no speed control, so it time-stretches on playback (0.87x to 1.15x). A line still too long at that limit is marked Needs rewrite. Each fit is one undo step. "Fit all over slot" above the timeline, shown once any clip has a target, fits every clip that runs long.</p>
+            <p>While you type, a stale clip whose text reads longer than its target gets a wavy amber or red underline, judged from how fast each character has spoken in this project.</p>
+          </li>
+          <li>
+            <h4>Original dialogue to dub against</h4>
+            <p>File &gt; Import Source Track... copies the original recording into the project. Settings &gt; Clip &gt; Original (s) holds the part of it a clip dubs (<code>start - end</code>), and subtitle import fills it from each cue's times. The transport's Dub / Original / Both switch picks what you hear: the dub, the original under each clip, or both at -6 dB each, switchable mid-play. It stays on Dub, greyed out, until the project has a source track.</p>
+            <p>Settings &gt; Project shows the source track, a Source offset (where the cue times start in the file) and Remove. Export is still the dub alone.</p>
+          </li>
+          <li>
+            <h4>Reference video</h4>
+            <p>File &gt; Load Video... (MP4, MOV, MKV, WebM, AVI, M4V) opens a Video tab beside Settings that plays the video muted and follows the transport's play, pause, stop and seek. Its Offset box sets which video time sits at the timeline's 0. Workspace &gt; Simple hides the tab.</p>
+            <p>The project keeps the video's path, relative to the <code>.tbaw</code> when it can, and asks you to find the file if it has moved. "Bundle the reference video in the project file" in the Export dialog puts the video inside the <code>.tbaw</code> instead (off by default). Save only copies a video you picked with Load Video on this machine. A project someone sent you keeps the copy it came with.</p>
+          </li>
+          <li>
+            <h4>Source text</h4>
+            <p>A clip can carry the original line it's dubbing. It shows in the transcript gutter's tooltip and next to a rough syllable count of both lines.</p>
+          </li>
+          <li>
+            <h4>Review</h4>
+            <p>Each clip has a status (to do, generated, approved, needs rewrite) and a note, set from the clip's right-click menu or Settings. The timeline's Show filter dims the rest. Export can write a cue sheet (<code>.csv</code>) with times, character, source text, text, status and note.</p>
+          </li>
+          <li>
+            <h4>Word timing</h4>
+            <p>Generated clips remember when each word is spoken. Kokoro reports its own timings in English. Audio8 and Kokoro's other languages get a Whisper pass after generating. During playback the transcript highlights the current word, Ctrl+click on a word jumps there, and export can write one subtitle per word.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Imported audio</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Music beds with ducking</h4>
+            <p>File &gt; Import Audio... &gt; "Music bed" adds a WAV, FLAC, OGG, MP3 or AIFF file on a Music track, locked in time at 0:00 or at the playhead, with its file name as a read-only line at the end of the transcript. Drag a bed's edges to trim it. Right-click for Loop (then drag the right edge to set how long it runs), Reset trim, Lock in time and Remove.</p>
+            <p>The <code>D</code> button on a track's header ducks it: the track drops while clips on tracks without <code>D</code> play, by Settings &gt; Project &gt; Ducking (default -12 dB). The original dialogue neither ducks nor is ducked. Export sounds the same as playback.</p>
+          </li>
+          <li>
+            <h4>Edit a recording as text</h4>
+            <p>File &gt; Import Audio... &gt; "Recording to edit as text" puts a recording's words in the transcript, each tied to where it was said. The transcript comes from Whisper (in the background, with progress) or from an SRT, VTT or ASS caption file, optionally with "Refine word timing with Whisper". A review step lists each clip with a play button, and a corrected word keeps its place in the recording. You pick one speaker for the whole recording from your voice-cloning characters, or "Unknown speaker". A caption file's speaker names go through the same mapping dialog as subtitles.</p>
+            <p>Then edit the text and the audio follows. Delete words and the recording closes up with a 5 ms crossfade. Cut, copy, paste or drag words and their audio moves with them, into another project too. Text you type inside a recording has no audio: it shows grey with a hollow circle in the gutter and splits the recording around it until you assign a character, which makes it an ordinary TTS clip. Recorded words have a faint underline and recording clips get a play button in the gutter. The recording is saved in the project under <code>audio/imported/</code>.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Text and generation</h3>
+        <ul class="change-list">
+          <li>
+            <h4>The Lexicon applies to timeline clips</h4>
+            <p>Before, only whole-document and JIT generation used it. Adding or removing a rule now marks the clips whose text it rewrites as stale, and no others.</p>
+          </li>
+          <li>
+            <h4>Text splits at natural pauses, toward a word count</h4>
+            <p>Settings &gt; Target Words per Segment (default 40) replaces Split By. Each piece ends at the strongest boundary near the target: a paragraph, then a sentence end, then a pause (comma, semicolon, colon, dash, line break), each with its own on/off switch. A sentence is only cut when it runs past twice the target, and a word never is. Each piece is one file and one subtitle cue, so a long paragraph no longer leaves a clip stale forever.</p>
+          </li>
+          <li>
+            <h4>Whisper is the default auto-transcription engine</h4>
+            <p>The Voices tab's Auto-Transcribe (for Audio8 References) runs Whisper large-v3-turbo locally through faster-whisper (MIT). It asks before the first-use download (about 1.6 GB) and offers another engine instead. Set <code>WHISPER_MODEL</code> in <code>.env</code> to pick a smaller model. <code>python -m kokoro_gui.engine.asr ref.wav whisper --words</code> prints timed words. If you picked Audio8 in the dock before, that choice stays until you change it.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Security</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Private cache and voice folders</h4>
+            <p>On Linux and macOS, <code>cache/</code>, <code>custom_voices/</code> and the Audio8 reference folders are created owner-only (0700), and tightened to that if they already exist. A <code>cache/</code> that belongs to another user is left alone and a per-user one under <code>~/.cache/kokorogui/</code> is used instead.</p>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="v4-0-0-beta-1" data-clip="4.0.0-beta.1" data-cc="c2">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">Tag 4.0.0-beta.1</span>4.0.0-beta.1 <span class="ver-badge">LATEST RELEASE</span></h2>
+        <p>The rebuild. 3.2.0 was a CustomTkinter form over one <code>kokoro_engine.py</code>. 4.0.0 is a PySide6 app over a transcript with clips, tracks and characters, pluggable engines with a second real one, and projects that live in one file.</p>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>The app</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Qt frontend, the only frontend</h4>
+            <p><code>python main.py</code> or <code>run.bat</code> launches a PySide6 window of dockable panels: the transcript, the Settings, Audio FX, Lexicon and Voices tabs, the timeline and the transport, under File / Edit / Options / Workspace menus. Every panel can be dragged, stacked into tabs or floated. Workspace &gt; Advanced / Simple / Reset layout are saved layouts, and Simple hides the timeline so the transcript gets the full height. The CustomTkinter app (<code>gui.py</code>) is gone, and PySide6 is a regular dependency.</p>
+          </li>
+          <li>
+            <h4>Welcome screen</h4>
+            <p>Launch opens the last project, then puts a dialog over it: recent projects (the open one first, Resume as the default button), New project, New from text file, Open other, right-click to drop a row, Clear list, and a details pane with the file's path, modified time, character and clip counts, audio length and engines. Untick "Show at startup" for a silent resume. File &gt; Welcome... brings it up any time.</p>
+          </li>
+          <li>
+            <h4>Undo and redo</h4>
+            <p>Edit &gt; Undo/Redo over a plain-Python undo stack. Typing undoes like a normal text editor. Character and FX assignments and timeline moves have their own history, and Ctrl+Z reverts whichever happened most recently.</p>
+          </li>
+          <li>
+            <h4>Dark and light themes</h4>
+            <p>Options &gt; Theme, dark by default. One palette module feeds the custom-painted widgets, the Qt palette and a stylesheet for every control. The UI font is Segoe UI / Inter / Noto Sans at 10pt, the transcript one point larger. Timeline clips have rounded corners, a waveform in the clip's own darker shade and a black or white label picked by contrast. The default character palette is eight hues at one lightness and doubles as the color picker's presets.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Transcript and timeline</h3>
+        <ul class="change-list">
+          <li>
+            <h4>A project, not a text box</h4>
+            <p>The old "generate this text" input is a project: text with clips, tracks and characters layered on top. The transcript is the source of truth and the audio is generated from it, tracked per clip by a hash of what produced it. Generate works on every stale clip in one pass instead of the whole transcript every time. A project with no clips yet still generates the whole transcript at once. Auto-split turns a <code>[Speaker:FX]</code>-tagged transcript (optionally per paragraph) into clips and generates them in one action.</p>
+          </li>
+          <li>
+            <h4>Transcript with character highlighting and a live gutter</h4>
+            <p>Each run is tinted by its character, so you see speaker boundaries without reading the inline <code>[Speaker:FX]:</code> syntax, which turns into a real assignment the moment you finish a tagged line. Character and FX combos above the editor show the caret's clip and reassign the selection or the whole clip. The gutter labels each character or FX change and shows a play button beside each stale clip. Stale text is dash-underlined, and thin rules show where clips end and where Auto-split would cut. Copy and paste carry the character assignment along.</p>
+          </li>
+          <li>
+            <h4>A multi-track timeline on a real seconds axis</h4>
+            <p>One lane per character. Clips sit end to end in text order at their real duration once generated, and at an estimate (dashed outline, no waveform) before. A ruler with a playhead, a fixed track-header column, Ctrl+wheel zoom. Dragging a clip pins it to a time or moves it to another character's track, and dragging it before an earlier clip also moves its text there. Shift+drag inside a clip carves out a sub-range and replaces it with fresh TTS under any character. Each clip has its own FX button.</p>
+          </li>
+          <li>
+            <h4>Playback</h4>
+            <p>Play, pause, stop, click the ruler to seek, a playhead across all lanes, and the transcript highlights and scrolls to the clip being played. Space toggles playback anywhere but the text editor, and Ctrl+Space toggles it everywhere. One <code>sounddevice</code> stream mixes the timeline in its callback, so the position is sample accurate. Loop toggle included.</p>
+          </li>
+          <li>
+            <h4>Export</h4>
+            <p>File &gt; Export mixes every clip down to one file (wav, mp3, flac or ogg) at its timeline position, optionally with a <code>.srt</code> and per-clip files (<code>&lt;base&gt;_001_Narrator.wav</code>). It warns when clips are stale and offers to generate first. The dialog also holds the project's two bundle options: whether to bundle generated audio, and the audio format for new segments.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Settings and FX</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Settings and Audio FX follow the selection</h4>
+            <p>Voice, speed, volume, pitch, normalize and trim live in a Settings tab that reads and writes whatever's selected: the project's defaults, one clip's overrides, or a character. Editing a character affects every clip using it unless that clip has its own override. Audio FX works the same way, with a prompt before changing a character several clips share. The timeline's FX button selects the clip and raises the tab.</p>
+          </li>
+          <li>
+            <h4>Audio FX are non-destructive</h4>
+            <p>Clips are generated as raw model output. The FX chain, volume, pitch, normalize and trim are applied when the transport, the export or the timeline waveform reads them. Move a slider, pick an FX, toggle "Apply": you hear it on the next play, and the clip stays generated. A clip with its own FX override counts as FX-on even if its character's FX is off.</p>
+          </li>
+          <li>
+            <h4>Characters replace bare presets</h4>
+            <p>Existing <code>presets/*.json</code> files become characters on first load (one per file, or a single "Default" seeded from your last settings if you had none), each with its own highlight color. Edit &gt; Characters... edits name, color, voice and FX. The preset files themselves are untouched. Output folder, filename and format moved from the Settings tab to Export.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Projects</h3>
+        <ul class="change-list">
+          <li>
+            <h4><code>.tbaw</code> project bundles</h4>
+            <p>A project is one zip file with the text and clips, every generated segment, and every Mix, Reference and saved FX it uses, so it opens on another machine with the same engines installed. Save writes the file in the background and never leaves a half-written project behind. Save As keeps the same working copy. Autosave writes only into the app's own working copy (<code>cache/projects/</code>), so the file on disk is as new as your last Save.</p>
+            <p>Closing with unsaved changes asks Save / Discard / Cancel, and after a crash the next open offers to recover the unsaved session, even if the file was renamed or moved. The window title names the project and shows <code>*</code> while it has unsaved changes. A bundle only ever names audio inside itself, and Save never copies a file from outside the project's working copy into it. <code>.json</code> projects from the 4.0 previews still open and are converted on the spot, with a <code>.tbaw</code> written next to the untouched <code>.json</code>.</p>
+          </li>
+          <li>
+            <h4>Generation writes once</h4>
+            <p>A clip's audio lands straight in the project's working copy under a name derived from what produced it, instead of one copy in <code>cache/</code> and another in the output folder. Regenerating an up-to-date clip (the gutter button) makes a fresh take under a new name. Opening a project made with another version of an engine keeps its clips clean and says so in the status line.</p>
+          </li>
+          <li>
+            <h4>Segment cache rekeyed</h4>
+            <p>Cache entries are keyed on the voice's name and content rather than its path, so the first generate after upgrading from 3.2.0 misses the old <code>cache/</code> entries.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Engines</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Pluggable engines</h4>
+            <p><code>kokoro_gui/engines/</code> defines an engine interface (settings fields, voices, capabilities, project hooks) with three registered engines: Kokoro, Audio8 and a sine-tone Dummy that exists to prove the interface isn't Kokoro-shaped. Options &gt; Engine swaps the Settings tab's fields and the Voices tab live. <code>kokoro_engine.py</code> is a slim core backed by a <code>kokoro_gui/engine/</code> package split by feature.</p>
+          </li>
+          <li>
+            <h4>Audio8, a voice-cloning engine</h4>
+            <p><a class="link" href="https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b" target="_blank" rel="noopener">Audio8-TTS-Preview-0.6b</a> clones a voice from a reference WAV plus a transcript of what's said in it. The Voices tab lets you browse a WAV, auto-transcribe it, edit the transcript and save it under a name that then shows up in the Voice dropdown. It needs <code>transformers</code> and <code>torchaudio</code>, loads with <code>trust_remote_code=True</code>, and downloads from Hugging Face on first use.</p>
+          </li>
+          <li>
+            <h4>Auto-transcription for References</h4>
+            <p>Auto-Transcribe has an engine picker, also runnable as <code>python -m kokoro_gui.engine.asr &lt;wav&gt;</code>. In this release the default was Audio8-ASR-0.1B (CC-BY-NC-4.0, non-commercial). The alternative is <a class="link" href="https://alphacephei.com/vosk" target="_blank" rel="noopener">Vosk</a>, fully offline and Apache-2.0, which needs a model folder downloaded by hand. Its path lives in <code>VOSK_MODEL_PATH</code> in <code>.env</code>, which the tab's Browse / Save / Reload buttons edit. The reference is converted to the 16-bit mono PCM Vosk requires, whatever format it starts in.</p>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="v3-2-0" data-clip="3.2.0" data-cc="c4">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">Tag 3.2.0</span>3.2.0</h2>
+        <p>The last CustomTkinter release. Frozen, no further fixes.</p>
+      </div>
+      <div class="change-group reveal">
+        <ul class="change-list">
+          <li>
+            <h4>Cross-platform audio playback</h4>
+            <p>Preview and JIT playback go through <code>sounddevice</code> and <code>soundfile</code> instead of the Windows-only <code>winsound</code> module.</p>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="v3-1-0" data-clip="3.1.0" data-cc="c5">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">Tag 3.1.0</span>3.1.0</h2>
+      </div>
+      <div class="change-group reveal">
+        <ul class="change-list">
+          <li><h4>JIT generation</h4><p>Streams audio as it's generated, so you start listening straight away.</p></li>
+          <li><h4>Audio FX</h4><p><a class="link" href="https://github.com/spotify/pedalboard" target="_blank" rel="noopener">Pedalboard</a> reverb, compression and EQ.</p></li>
+          <li><h4>Pronunciation lexicon</h4><p>A custom dictionary that overrides how specific words or acronyms are pronounced.</p></li>
+          <li><h4>Voice mixing</h4><p>Combine existing voices into a new one, a Mix.</p></li>
+          <li><h4>Tags</h4><p><code>[Speaker:FX]: Text</code> switches voice and effects mid-transcript.</p></li>
+          <li><h4>Caching</h4><p>Generated segments are cached so repeated runs skip them.</p></li>
+          <li><h4>Windows quick start</h4><p><code>run.bat</code> starts the app with one click.</p></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <div class="cols">
+      <div>
+        <a class="brand" href="index.html">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect width="64" height="64" rx="14" fill="var(--surface-2)" stroke="var(--border-2)"/>
+        <rect x="12" y="13" width="40" height="5" rx="2.5" fill="var(--text-3)"/>
+        <rect x="12" y="23" width="26" height="5" rx="2.5" fill="var(--c1)"/>
+        <g fill="var(--c2)"><rect x="12" y="41" width="4" height="8" rx="2"/><rect x="19" y="36" width="4" height="18" rx="2"/><rect x="26" y="39" width="4" height="12" rx="2"/></g>
+        <g fill="var(--c3)"><rect x="33" y="34" width="4" height="22" rx="2"/><rect x="40" y="39" width="4" height="12" rx="2"/><rect x="47" y="42" width="4" height="6" rx="2"/></g>
+      </svg>
+          <span class="brand-word">KokoroGUI</span>
+        </a>
+        <p class="blurb">A text-based audio workflow. Write the transcript, cast the characters, and the audio follows the text. Not affiliated with the Kokoro or Audio8 model authors.</p>
+      </div>
+      <div>
+        <h5>Product</h5>
+        <ul>
+          <li><a href="index.html#workflows">Workflows</a></li>
+          <li><a href="index.html#features">Features</a></li>
+          <li><a href="changes.html">Changes</a></li>
+          <li><a href="index.html#install">Install</a></li>
+        </ul>
+      </div>
+      <div>
+        <h5>Docs</h5>
+        <ul>
+          <li><a href="scripting.html">Tags guide</a></li>
+          <li><a href="settings.html">Settings reference</a></li>
+          <li><a href="format.html">.tbaw format</a></li>
+        </ul>
+      </div>
+      <div>
+        <h5>Project</h5>
+        <ul>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">GitHub</a></li>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/README.md" target="_blank" rel="noopener">README</a></li>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/LICENSE" target="_blank" rel="noopener">License</a></li>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI/issues" target="_blank" rel="noopener">Issues</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="bottom">
+      <span>Apache-2.0 · KokoroGUI 4.0 beta</span>
+      <span>Kokoro by hexgrad · Audio8 models by Audio8 · Pedalboard by Spotify</span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

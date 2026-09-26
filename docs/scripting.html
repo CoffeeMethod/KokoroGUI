@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Kokoro GUI · Inline scripting guide</title>
-<meta name="description" content="How the [Preset:FXPreset]: Text syntax works: what it looks up, how text gets split into segments, and what happens when a tag doesn't match anything saved." />
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230b0b10'/%3E%3Cg fill='%23a78bfa'%3E%3Crect x='10' y='26' width='7' height='12' rx='2'/%3E%3Crect x='21' y='16' width='7' height='32' rx='2'/%3E%3Crect x='32' y='22' width='7' height='20' rx='2'/%3E%3Crect x='43' y='10' width='7' height='44' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
+<title>KokoroGUI · Tags</title>
+<meta name="description" content="How [Name]: and [Name:FX]: tags assign characters in KokoroGUI: typing a tag, Auto-split, pauses, and what the whole-document path does differently." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231e1f22'/%3E%3Crect x='12' y='13' width='40' height='5' rx='2.5' fill='%23868a91'/%3E%3Crect x='12' y='23' width='26' height='5' rx='2.5' fill='%23e3a72f'/%3E%3Cg fill='%234f8fe6'%3E%3Crect x='12' y='41' width='4' height='8' rx='2'/%3E%3Crect x='19' y='36' width='4' height='18' rx='2'/%3E%3Crect x='26' y='39' width='4' height='12' rx='2'/%3E%3C/g%3E%3Cg fill='%23e0655c'%3E%3Crect x='33' y='34' width='4' height='22' rx='2'/%3E%3Crect x='40' y='39' width='4' height='12' rx='2'/%3E%3Crect x='47' y='42' width='4' height='6' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="assets/site.css" />
 </head>
 <body>
@@ -17,21 +17,19 @@
   <nav class="wrap">
     <a class="brand" href="index.html">
       <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
-        <rect width="64" height="64" rx="16" fill="var(--surface-2)" stroke="var(--border-2)"/>
-        <g fill="var(--accent)">
-          <rect x="10" y="26" width="7" height="12" rx="2"/>
-          <rect x="21" y="16" width="7" height="32" rx="2"/>
-          <rect x="32" y="22" width="7" height="20" rx="2"/>
-          <rect x="43" y="10" width="7" height="44" rx="2"/>
-        </g>
+        <rect width="64" height="64" rx="14" fill="var(--surface-2)" stroke="var(--border-2)"/>
+        <rect x="12" y="13" width="40" height="5" rx="2.5" fill="var(--text-3)"/>
+        <rect x="12" y="23" width="26" height="5" rx="2.5" fill="var(--c1)"/>
+        <g fill="var(--c2)"><rect x="12" y="41" width="4" height="8" rx="2"/><rect x="19" y="36" width="4" height="18" rx="2"/><rect x="26" y="39" width="4" height="12" rx="2"/></g>
+        <g fill="var(--c3)"><rect x="33" y="34" width="4" height="22" rx="2"/><rect x="40" y="39" width="4" height="12" rx="2"/><rect x="47" y="42" width="4" height="6" rx="2"/></g>
       </svg>
-      <span class="brand-word">Kokoro GUI<span class="ver">v4.0.0 beta</span></span>
+      <span class="brand-word">KokoroGUI<span class="ver">TBAW · 4.0 beta</span></span>
     </a>
     <div class="navlinks">
+      <a href="index.html#workflows">Workflows</a>
       <a href="index.html#features">Features</a>
-      <a href="index.html#engines">Engines</a>
-      <a href="index.html#changelog">Changelog</a>
-      <a href="scripting.html" aria-current="page">Scripting</a>
+      <a href="changes.html">Changes</a>
+      <a href="scripting.html" aria-current="page">Tags</a>
       <a href="settings.html">Settings</a>
       <a href="format.html">.tbaw format</a>
     </div>
@@ -49,154 +47,147 @@
 </header>
 
 <main>
-  <section class="page-head">
+  <section class="page-head" data-clip="Tags" data-cc="c5">
     <div class="wrap">
-      <span class="eyebrow">Guide</span>
-      <h1>Multiple speakers and effects, in the same block of text</h1>
-      <p class="lede">The transcript understands one piece of syntax on top of plain text: a bracketed tag at the start of a line switches which character, and optionally which saved FX preset, applies to everything after it. This page covers exactly what that tag looks up, how the text around it gets split, and what happens when a tag doesn't match anything you've saved. It's the fast-typing alternative to the transcript's Characters menu, not a separate feature from it, both end up assigning the same character metadata to the same text.</p>
+      <span class="eyebrow c5">Guide</span>
+      <h1>Cast the transcript by typing</h1>
+      <p class="lede">The transcript understands one piece of syntax on top of plain text: a character's name in brackets at the start of a line. It's the fast-typing way to do what the Character box and the Characters menu do, and Auto-split can turn a whole tagged transcript into clips at once. This page covers what a tag looks up, where the FX half works, and what happens when a name doesn't match.</p>
       <div class="toc">
         <a href="#syntax">Syntax</a>
-        <a href="#lookup">What gets looked up</a>
-        <a href="#splitting">How segments split</a>
+        <a href="#typing">Typing a tag</a>
+        <a href="#auto-split">Auto-split</a>
         <a href="#example">Worked example</a>
-        <a href="#fallback">When a tag doesn't match</a>
-        <a href="#auto-split">Turning tags into clips</a>
-        <a href="#plays-well">Plays well with</a>
+        <a href="#fx">The FX half</a>
+        <a href="#fallback">When a name doesn't match</a>
+        <a href="#pause">Pauses</a>
+        <a href="#whole-document">Projects with no clips</a>
       </div>
     </div>
   </section>
 
-  <section class="doc-section" id="syntax">
+  <section class="doc-section" id="syntax" data-cc="c1">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">01 · Syntax</span>Two forms of one tag</h2>
-        <p>Both forms sit at the start of a line, followed by a colon and the text that tag applies to:</p>
+        <h2><span class="idx">01 · Syntax</span>A name in brackets, then a colon</h2>
+        <p>A tag sits at the start of a line. Everything after it, up to the next tag or the end of the text, belongs to that character.</p>
       </div>
       <div class="code-block reveal" style="max-width:720px; margin-top:1.3rem;">
         <div class="head">Syntax</div>
-        <pre><span class="c2">[PresetName]:</span> Text spoken with that preset's voice and settings.
+        <pre><span class="c2">[Marta]:</span> Spoken by the character named Marta.
 
-<span class="c2">[PresetName:FXPresetName]:</span> Same, plus that FX preset layered on top.</pre>
+<span class="c2">[Marta:Radio]:</span> Marta again, with the FX named Radio.</pre>
       </div>
       <div class="prose reveal" style="margin-top:1.3rem;">
-        <p>Everything up to the next tag (or the end of the text) belongs to that segment. Plain text with no tag at all is treated as a single segment using whatever voice and settings the Settings tab is currently set to, exactly like today.</p>
+        <p>The name is a <strong>character</strong>, not a voice ID like <code>af_heart</code>. It's matched against the project's characters (Edit &gt; Characters...) by name, ignoring case. A character carries the voice, the engine and the FX, so one tag picks all three.</p>
       </div>
     </div>
   </section>
 
-  <section class="doc-section" id="lookup">
+  <section class="doc-section" id="typing" data-cc="c3">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">02 · What gets looked up</span><code>PresetName</code> is a character name, not a raw voice</h2>
-        <p>This is the part that trips people up: the name in brackets isn't a voice ID like <code>af_heart</code>. It's the name of a <a href="settings.html#presets" class="link">character</a> (Edit &gt; Characters..., or one of the legacy <code>presets/&lt;name&gt;.json</code> snapshots, which each become a character with that same name on load), so a tag's name is looked up as a character, case-insensitively, against whatever's saved. If you haven't saved anything under that name, the tag has nothing to find.</p>
-        <p>Same idea for the FX half: <code>FXPresetName</code> is the name of an FX preset saved from the FX dock's "Save FX Preset" button, stored as <code>presets/fx/&lt;name&gt;.json</code>. The FX dock's full field list is on the <a href="settings.html#fx" class="link">settings reference</a>.</p>
-        <p>So before a script like <code>[Narrator]: ...</code> means anything, a preset literally named <code>Narrator</code> has to already exist in <code>presets/</code>.</p>
-      </div>
-      <div class="callout info reveal" style="max-width:720px; margin-top:1.3rem;">
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/></svg>
-        <div>
-          <p><strong>The FX-only trick.</strong> Leave the preset name blank and start with a colon: <code>[:FXPresetName]: Text</code>. Since there's nothing before the colon, no preset gets applied, only the FX preset does, and the voice stays whatever the Settings tab is currently set to. Handy for layering an effect onto a line without also switching who's speaking.</p>
-        </div>
+        <h2><span class="idx">02 · Typing a tag</span>Finish the line and it's assigned</h2>
+        <p>Type <code>[Marta]: Who's there?</code> and press Enter. If the project has a character named Marta and the line isn't already part of a clip, the line becomes Marta's: it's tinted in her color, the gutter names her, and it lands on her track. It's one undo step, like picking Marta from the Character box.</p>
+        <p>A line that already belongs to a clip isn't reassigned when you revisit it, so editing an old tag doesn't silently move text between characters. Use the Character box or the Characters menu (right-click a selection) to change it.</p>
       </div>
     </div>
   </section>
 
-  <section class="doc-section" id="splitting">
+  <section class="doc-section" id="auto-split" data-cc="c2">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">03 · How segments split</span>Each tag resets to your base settings, not the last tag's</h2>
-        <p>This is the second thing worth knowing before writing a long script: segments don't inherit from each other. Each one starts fresh from the Settings tab's project-scope settings, then layers on its own tag if it has one.</p>
+        <h2><span class="idx">03 · Auto-split</span>A whole transcript in one action</h2>
+        <p>Paste a tagged transcript and choose Generate &gt; Auto-split then generate. Every tagged block becomes a clip for its character, on that character's track, and then every stale clip generates.</p>
+        <p>With <strong>Split by paragraph</strong> on (in the same menu), each block is also cut at blank lines, so a <code>[Narrator]:</code> block of three paragraphs becomes three clips. Untagged text only becomes a clip when the project has exactly one character; otherwise it's left unassigned.</p>
+        <p>Within each clip, text is still generated in pieces of about 40 words, cut at paragraphs, sentence ends or pauses (Settings &gt; Target words per segment). Tags decide who speaks; the splitter decides where the files break.</p>
       </div>
-      <ol class="steps reveal" style="max-width:720px; margin-top:1.3rem;">
-        <li><p><strong>Untagged text</strong> before the first tag, or text with no tags at all, uses the Settings tab's project-scope settings as-is.</p></li>
-        <li><p><strong>A <code>[Preset]:</code> tag</strong> loads that preset and overlays it on top of the base settings for everything until the next tag.</p></li>
-        <li><p><strong>A <code>[:FXPreset]:</code> tag</strong> keeps the base voice and settings, and only overlays the FX preset.</p></li>
-        <li><p><strong>An empty segment</strong>, one tag immediately followed by another with no text between them, is dropped rather than generating a silent clip.</p></li>
-        <li><p><strong>Each segment</strong> is independently split into smaller pieces afterward by the Target Words per Segment setting, so one <code>[Preset]:</code> block can still turn into several audio chunks under the hood. The tags layer on top of smart splitting, they don't replace it.</p></li>
-      </ol>
     </div>
   </section>
 
-  <section class="doc-section" id="example">
+  <section class="doc-section" id="example" data-cc="c4">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">04 · Worked example</span>A four-line script, segment by segment</h2>
-        <p>Assume two presets already exist, <code>Narrator</code> and <code>VillainVoice</code>, along with two FX presets, <code>Reverb Heavy</code> and <code>Whisper</code>. The Settings tab's currently selected voice is whatever you last picked, called out below as "the base voice."</p>
+        <h2><span class="idx">04 · Worked example</span>Four lines, three characters</h2>
+        <p>Assume the project has characters named Narrator, Marta and Tomas.</p>
       </div>
       <div class="code-block reveal" style="max-width:720px; margin-top:1.3rem;">
-        <div class="head">Script</div>
-        <pre>[Narrator]: The old house stood at the end of the lane.
-
-[Narrator:Reverb Heavy]: A single door creaked open in the dark hallway.
-
-[VillainVoice]: "Who dares enter my domain?" a voice boomed.
-
-[:Whisper]: ...someone should not have come here.</pre>
+        <div class="head">Transcript</div>
+        <pre><span class="c2">[Narrator]:</span> The house at the end of the lane had been empty for years.
+<span class="c2">[Marta]:</span> Then why is the kitchen light on?
+<span class="c2">[Narrator]:</span> She pushed the door. It didn't creak.
+[pause:0.8]
+<span class="c2">[Tomas]:</span> Marta, come in. Marta?</pre>
       </div>
-      <div class="anno reveal" style="max-width:720px;">
-        <div class="anno-row">
-          <code>[Narrator]:</code>
-          <p>Loads the <code>Narrator</code> preset. No FX preset, so whatever FX the preset itself specifies (usually none) is all that applies.</p>
-        </div>
-        <div class="anno-row">
-          <code>[Narrator:Reverb Heavy]:</code>
-          <p>Loads <code>Narrator</code> again, since presets don't carry over between segments, and layers the <code>Reverb Heavy</code> FX preset on top for this line only.</p>
-        </div>
-        <div class="anno-row">
-          <code>[VillainVoice]:</code>
-          <p>Switches to a completely different preset. No FX preset here, so no FX preset gets applied, not "whatever the last one was."</p>
-        </div>
-        <div class="anno-row">
-          <code>[:Whisper]:</code>
-          <p>Blank preset name, so this line uses the base voice (not <code>VillainVoice</code>, that only applied to the segment above), with the <code>Whisper</code> FX preset layered on.</p>
-        </div>
+      <div class="script reveal" style="margin-top:1.6rem; max-width:760px;">
+        <div class="g named c1">Narrator</div>
+        <div class="t"><span class="run c1">The house at the end of the lane had been empty for years.</span></div>
+        <div class="g named c3">Marta</div>
+        <div class="t"><span class="run c3">Then why is the kitchen light on?</span></div>
+        <div class="g named c1">Narrator</div>
+        <div class="t"><span class="run c1">She pushed the door. It didn't creak.</span></div>
+        <div class="g"></div>
+        <div class="t plain"><span class="tagtxt">[pause:0.8]</span> stays in the text, unassigned and never read aloud</div>
+        <div class="g named c2">Tomas</div>
+        <div class="t"><span class="run c2">Marta, come in. Marta?</span></div>
+      </div>
+      <div class="prose reveal" style="margin-top:1.4rem;">
+        <p>Auto-split makes four clips: two on the Narrator track, one each on Marta's and Tomas's. Tomas's clip starts 0.8 s after the one before it instead of the usual gap.</p>
       </div>
     </div>
   </section>
 
-  <section class="doc-section" id="fallback">
+  <section class="doc-section" id="fx" data-cc="c7">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">05 · When a tag doesn't match</span>Typos don't stop the run</h2>
-        <p>If a preset name in brackets doesn't match a saved file, that segment doesn't fail. It falls back to the Settings tab's project-scope settings, generation continues, and the status line shows a warning: <code>Warning: Preset 'X' not found.</code></p>
-        <p>Same story for a missing FX preset: <code>Warning: FX Preset 'X' not found.</code> That segment just skips the FX step rather than erroring out.</p>
-        <p>The practical upshot: a typo in a long script quietly generates that block in the wrong voice instead of stopping you. Worth watching the status line while a multi-speaker script is running, especially the first time you use a new preset name.</p>
+        <h2><span class="idx">05 · The FX half</span>Where <code>[Name:FX]</code> applies</h2>
+        <p>The part after the second colon names an FX saved from the Audio FX tab with its "Save FX Preset..." button. Today it only takes effect when the project has no clips yet and Generate runs the whole document at once (see <a class="link" href="#whole-document">below</a>). When a tag assigns a clip, by typing or by Auto-split, only the character is used.</p>
+        <p>To give one line an effect in a project with clips, put the caret in the line and pick the FX from the FX box above the transcript. That sets it for that clip alone, and the gutter shows <code>FX: Radio</code> under the speaker's name.</p>
       </div>
     </div>
   </section>
 
-  <section class="doc-section" id="auto-split">
+  <section class="doc-section" id="fallback" data-cc="c8">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">06 · Turning tags into clips</span>Auto-split does the Characters-menu work for you</h2>
-        <p>Writing a whole script with these tags and then manually selecting each block to assign it in the timeline works, but it's repetitive. Auto-split reads the same tags this page describes and creates one clip per tagged span automatically, landing each clip on its matching character's track, then generates them in one action.</p>
-        <p>Ask for the finer split and it also cuts each tagged span on paragraph breaks, so one <code>[Narrator]:</code> block spanning three paragraphs becomes three clips instead of one. Untagged narration only gets auto-clipped when your project has exactly one character, otherwise it's left alone, same as text nobody's assigned a character to today.</p>
-        <p>A span whose tag name doesn't match any saved character contributes no clip and shows up as a warning rather than failing the whole run, the same forgiving behavior described below for a missing preset.</p>
+        <h2><span class="idx">06 · When a name doesn't match</span>A typo skips a block, it doesn't stop the run</h2>
+        <p>Typing a tag with an unknown name does nothing: the line stays unassigned until you create the character or fix the name.</p>
+        <p>Auto-split skips every block whose name matches no character and tells you which names it couldn't find, then splits and generates the rest.</p>
       </div>
     </div>
   </section>
 
-  <section class="doc-section" id="pause">
+  <section class="doc-section" id="pause" data-cc="c6">
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">07 · Pauses</span><code>[pause:1.5]</code> adds silence before the next clip</h2>
-        <p>Put <code>[pause:1.5]</code> on its own line or inside a line, with the seconds you want. When Auto-split runs, the marker stays in the transcript as plain, untagged text, so it's never read aloud, and the next clip it creates starts that many seconds after the one before it. A marker in the middle of a tagged block splits the block into two clips at that point.</p>
-        <pre><code>[Narrator]: The door creaked open.
-[pause:1.5]
-[Marta]: Who's there?</code></pre>
-        <p>Without a marker, clips placed one after another still get a gap: 0.35 s by default, 0.9 s across a blank line. Both live in Settings with nothing selected (Gap, Paragraph gap), and a selected clip's own Gap before overrides them. A clip you've dragged to a fixed time ignores gaps.</p>
-        <p>Whole-document generation (a project with no clips yet) drops the marker and doesn't add silence.</p>
+        <p>Put <code>[pause:1.5]</code> on its own line or inside a line, with the seconds you want. When Auto-split runs, the marker stays in the transcript as plain, unassigned text, so it's never read aloud, and the next clip starts that many seconds after the one before it. A marker in the middle of a tagged block splits the block into two clips there.</p>
+        <p>Without a marker, clips placed one after another still get a gap: 0.35 s by default, 0.9 s across a blank line. Both are in Settings &gt; Project (Gap, Paragraph gap), and a clip's own Gap before overrides them. A clip locked in time ignores gaps.</p>
       </div>
     </div>
   </section>
 
-  <section class="doc-section" id="plays-well">
+  <section class="doc-section" id="whole-document" data-cc="c5">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">08 · Plays well with</span>Lexicon, generation modes, and both engines</h2>
-        <p>The Lexicon dock's pronunciation overrides apply to every segment's text before synthesis, regardless of which preset or FX preset is active. Lexicon rules are global, not per-speaker.</p>
-        <p>This syntax works the same way in Standard and JIT generation, both call the same parser before splitting text into chunks.</p>
-        <p>Both Kokoro and Audio8 support it today. Since the tags reference saved <a href="settings.html#presets" class="link">presets</a>, not built-in engine voices, switching the active engine doesn't break an existing script as long as the preset names still resolve to something valid for the new engine.</p>
+        <h2><span class="idx">08 · Projects with no clips</span>The whole-document path reads preset files</h2>
+        <p>Before a project has any clips, Generate (and JIT streaming, when it's on in the Options menu) runs the whole transcript through the engine in one go. That older path resolves tags differently:</p>
+      </div>
+      <div class="table-wrap reveal" style="max-width:760px; margin-top:1.1rem;">
+        <table class="ref wrap-first">
+          <caption>Tags on the whole-document path</caption>
+          <thead><tr><th>Tag</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>[Name]:</code></td><td>Loads <code>presets/Name.json</code> over the Settings tab's project values for that block. Blocks don't inherit from each other: each starts from the project values again.</td></tr>
+            <tr><td><code>[Name:FX]:</code></td><td>The same, plus the FX named <code>FX</code>, from the project's own <code>fx/</code> first, then <code>presets/fx/</code>.</td></tr>
+            <tr><td><code>[:FX]:</code></td><td>No preset file, only the FX: the project's voice with an effect on it.</td></tr>
+            <tr><td>A missing preset</td><td>That block uses the project values and the status line says <code>Warning: Preset 'Name' not found.</code> A missing FX says the same and the block plays dry.</td></tr>
+            <tr><td><code>[pause:x]</code></td><td>Dropped, and no silence is added.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose reveal" style="margin-top:1.3rem;">
+        <p>Characters and <code>presets/*.json</code> share names on a fresh install, because the first launch copies each preset file into the character library. Once you rename or edit characters, the two can drift, which is one more reason to Auto-split into clips.</p>
+        <p>The <a class="link" href="settings.html#lexicon">Lexicon</a> applies on both paths, to every block, whoever speaks it.</p>
       </div>
     </div>
   </section>
@@ -206,25 +197,31 @@
   <div class="wrap">
     <div class="cols">
       <div>
-        <a class="brand" href="index.html" style="margin-bottom:.4rem;">
-          <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="var(--surface-2)" stroke="var(--border-2)"/><g fill="var(--accent)"><rect x="10" y="26" width="7" height="12" rx="2"/><rect x="21" y="16" width="7" height="32" rx="2"/><rect x="32" y="22" width="7" height="20" rx="2"/><rect x="43" y="10" width="7" height="44" rx="2"/></g></svg>
-          <span class="brand-word">Kokoro GUI</span>
+        <a class="brand" href="index.html">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect width="64" height="64" rx="14" fill="var(--surface-2)" stroke="var(--border-2)"/>
+        <rect x="12" y="13" width="40" height="5" rx="2.5" fill="var(--text-3)"/>
+        <rect x="12" y="23" width="26" height="5" rx="2.5" fill="var(--c1)"/>
+        <g fill="var(--c2)"><rect x="12" y="41" width="4" height="8" rx="2"/><rect x="19" y="36" width="4" height="18" rx="2"/><rect x="26" y="39" width="4" height="12" rx="2"/></g>
+        <g fill="var(--c3)"><rect x="33" y="34" width="4" height="22" rx="2"/><rect x="40" y="39" width="4" height="12" rx="2"/><rect x="47" y="42" width="4" height="6" rx="2"/></g>
+      </svg>
+          <span class="brand-word">KokoroGUI</span>
         </a>
-        <p class="blurb">A desktop text-to-speech workstation. Not affiliated with the Kokoro or Audio8 model authors.</p>
+        <p class="blurb">A text-based audio workflow. Write the transcript, cast the characters, and the audio follows the text. Not affiliated with the Kokoro or Audio8 model authors.</p>
       </div>
       <div>
         <h5>Product</h5>
         <ul>
+          <li><a href="index.html#workflows">Workflows</a></li>
           <li><a href="index.html#features">Features</a></li>
-          <li><a href="index.html#engines">Engines</a></li>
-          <li><a href="index.html#changelog">Changelog</a></li>
+          <li><a href="changes.html">Changes</a></li>
           <li><a href="index.html#install">Install</a></li>
         </ul>
       </div>
       <div>
         <h5>Docs</h5>
         <ul>
-          <li><a href="scripting.html">Scripting guide</a></li>
+          <li><a href="scripting.html">Tags guide</a></li>
           <li><a href="settings.html">Settings reference</a></li>
           <li><a href="format.html">.tbaw format</a></li>
         </ul>
@@ -240,7 +237,7 @@
       </div>
     </div>
     <div class="bottom">
-      <span>Apache-2.0. Kokoro GUI 4.0.0 beta.</span>
+      <span>Apache-2.0 · KokoroGUI 4.0 beta</span>
       <span>Kokoro by hexgrad · Audio8 models by Audio8 · Pedalboard by Spotify</span>
     </div>
   </div>

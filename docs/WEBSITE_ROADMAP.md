@@ -7,28 +7,40 @@ it's headed.
 
 ## Where it stands today
 
-Four pages, no build step: `docs/index.html` (the pitch: hero, three-step walkthrough, bento
-feature grid, engine comparison table, signal chain, the `.tbaw` pitch, a changelog (4.0.0, then the README for older),
-install), `docs/scripting.html` (the `[Preset:FXPreset]: Text` inline syntax, worked example
-included), `docs/settings.html` (every field in every dock, including the two Audio8 fields that
-are silently inert, the welcome dialog, and why JIT streaming only exists for engines that can
-generate faster than real time) and `docs/format.html` (the `.tbaw` bundle: manifest keys,
-`document.json` shape, segment key inputs, per-engine asset paths, the working copy, what Open
-refuses). Shared tokens, nav, footer components and reference-page styles live in
-`docs/assets/site.css`; `docs/assets/site.js` holds the theme toggle, the mobile menu and the
-copy buttons.
+Five pages, no build step. `docs/index.html` is the pitch: a hero with a transcript and its
+timeline, the app screenshot, "four moves" (write, assign, generate, mix), a workflow picker
+(Audiobooks, Dubbing, Podcasts & radio drama, Game & animation; tabs, the last pick remembered in
+`localStorage`), the features as mixer tracks, the engine table, the signal chain as six steps,
+the `.tbaw` pitch, a two-entry "What's new" and install. `docs/changes.html` is the full
+changelog (the README only carries one-liners). `docs/scripting.html` is the Tags guide (the
+filename stayed), `docs/settings.html` is every field in every panel, and `docs/format.html` is
+the `.tbaw` spec.
 
-The 2026-09-13 pass restyled the site along current SaaS lines: Inter and JetBrains Mono instead
-of Unbounded and IBM Plex, one violet accent instead of the teal/violet/coral gradient, dark as
-the default palette with light as the override, an announcement pill over a centered hero, a
-framed screenshot with a glow that swaps between `shell_dark.png` and `shell_light.png` with
-the theme, and a four-column footer. Page-local `<style>` blocks now hold only layouts unique
-to that page; anything two pages share belongs in `site.css`.
+The look is "script meets timeline", decided with the maintainer on 2026-09-25: the brand is
+KokoroGUI with "a text-based audio workflow" as the tagline. Colors are the app's own dark and
+light palettes from `kokoro_gui/qt/theme.py` and the eight character colors from
+`DEFAULT_HIGHLIGHT_PALETTE` (`--c1` to `--c8`). Newsreader sets transcript text and headings,
+Geist the interface, Geist Mono the gutter labels and timecode. The shared components in
+`docs/assets/site.css` are `.script` (a transcript with a speaker gutter), `.run` (a
+character-tinted stretch of text), `.stale` (the dashed underline), `.tl` (a timeline strip
+with clips, slots and a playhead), `.tracks` (feature rows shaped like mixer tracks) and
+`.eyebrow` (a gutter-style cue label). `docs/assets/site.js` adds the theme toggle, the mobile
+menu, copy buttons, tab groups and the transport bar fixed to the bottom of every page: one clip
+per `<main>` section, the playhead following the scroll, a clock showing the page's read-aloud
+time at 150 words a minute, and Play scrolling at that pace. A section names its clip with
+`data-clip` and picks a color with `data-cc`; without them the bar uses the heading and cycles
+the palette. Page-local `<style>` blocks hold only layouts one page uses.
 
-Content was pulled from the actual code, not just `README.md`/`CLAUDE.md`. Treat "New in X.Y.Z"
-entries in the README as the trigger to revisit all four pages, but check the code too; the
-README's older feature-list prose has drifted before (its "adjustable interface scaling" line
-still doesn't match anything in `kokoro_gui/qt/`).
+The site uses the words in `Claude/VOCABULARY.md` (Stale, Tag, FX, Mix, Reference, Export).
+Where the app's own label still uses an old word ("Save FX Preset...", "Generate and render"),
+the page quotes the label as it is.
+
+`scripts/render_screenshot.py` renders `docs/assets/shell_dark.png` and `shell_light.png` with
+the same Narrator / Tomas / Marta scene the hero shows.
+
+Content was pulled from the actual code, not just `README.md`/`CLAUDE.md`. Treat a new entry on
+`changes.html` as the trigger to revisit the other pages, but check the code too; feature-list
+prose has drifted from the app before.
 
 ## Turning the repo on for Pages
 
@@ -57,11 +69,13 @@ Low effort, no new infrastructure:
   engine-comparison section into something a visitor can actually listen to via `<audio controls>`.
   This is the highest-impact addition on this list: a TTS project's landing page without audio
   undersells the product.
-- **A second and third screenshot.** The bento cards on `index.html` fake the transcript gutter
-  and timeline with CSS mockups. Real crops of the Audio FX tab and the Voice Reference dock,
-  rendered by `scripts/render_screenshot.py`, would replace the two weakest ones.
-- **Favicon polish.** The current favicon is a generated inline SVG. Fine for now, worth revisiting
-  once there's a real logo mark.
+- **Real audio behind the hero.** The hero's transcript and timeline are HTML. Pre-rendered audio
+  of that scene, played by the stage's own transport with the word highlight following it, would
+  show the product doing its one trick.
+- **More screenshots.** Real crops of the Audio FX tab and the Voices tab, rendered by
+  `scripts/render_screenshot.py`, next to the workflow panels that talk about them.
+- **Favicon polish.** The brand mark (two lines of text over a waveform) is an inline SVG. Fine
+  for now, worth revisiting once there's a real logo.
 
 ## Phase 2: light interactivity, still no backend
 
@@ -71,10 +85,10 @@ Still static-hostable, no server required:
   combinations, in any mix) and hear pre-rendered before/after clips instead of just reading a
   static node chain. Keep the real order from `process_audio` as the source of truth; the demo
   should make that order audible, not reinvent it.
-- **Generate the changelog.** `index.html#changelog` is hand-written from the README's "New in
-  X.Y.Z" section (4.0.0 for now). A small build step that greps `README.md` into that
-  `<section>` at publish time would stop it drifting, and is the point where the GitHub Actions
-  workflow from option 2 above starts paying for itself.
+- **Check the changelog pair.** `changes.html` and the README's "What's new" are hand-written
+  together. A small CI step that fails when a README bullet has no matching entry on
+  `changes.html` would stop them drifting, and is the point where the GitHub Actions workflow
+  from option 2 above starts paying for itself.
 
 ## Phase 3: multi-page docs site
 
@@ -102,27 +116,22 @@ settings breakdown and the bundle format, as flat files next to `index.html` rat
   project actually wants to run and pay for.
 - **Analytics.** If it gets added later, keep it privacy-respecting and cookie-free (GoatCounter or
   Plausible, for example) and say so on the page. Don't add a tracker silently.
-- **An interactive timeline demo.** The app's timeline shipped in 4.0.0 and the bento card mocks
+- **An interactive timeline demo.** The app's timeline shipped in 4.0.0 and the `.tl` strips mock
   it in CSS. A draggable in-browser version would be a second implementation of `arrangement.py`
   to keep in sync; the screenshot is enough.
 
 ## Maintenance note
 
-Whenever the README's "New in X.Y.Z" section grows, do a pass over `docs/index.html`. The engine
-comparison, bento grid, and changelog are the sections most likely to go stale first, since they
+Whenever `changes.html` grows, do a pass over `docs/index.html`. The engine comparison, the
+workflow panels, the feature tracks and "What's new" are the sections most likely to go stale first, since they
 enumerate specific capabilities.
 
-Nothing pending from the README's 4.0.0-beta.2 entry: the changelog has it, `settings.html`
-documents Target words per segment and the three split toggles, the Lexicon's stale marking and the Whisper prompt, and
-`index.html`'s engine table and install notes name Whisper. The next "New in" section reopens
-this list.
-
-From the README's 4.0.0-beta.3 entry: `scripting.html` has the `[pause:x]` section (07),
-`index.html`'s changelog has the entry, and `settings.html` has the Project and clip fields
-table, the ruler, fade, take, status, align and track-header rows in the Timeline table, the
-timecode and word-highlight rows in Transport, and the export's Channels, Range, word SRT and
-cue sheet. Still to do: new shell screenshots (`scripts/render_screenshot.py`), since the
-header column is wider and the Settings tab grew,.
+The Unreleased entry on `changes.html` is covered: `settings.html` documents its settings and
+menus (subprojects, subtitle import, video, convolution reverb, music beds, recordings, the
+library, Fit to slot, ripple, the unified layout, the source track), `scripting.html` has the
+`[pause:x]` section (07), and `format.html` has the bundle entries. Still to do: new shell
+screenshots (`scripts/render_screenshot.py`), since the header column is wider and the Settings
+tab grew.
 
 Preview with `python -m http.server 8765 --directory docs` and open `http://localhost:8765/`;
 opening `docs/index.html` straight from the filesystem works too, but a browser pane that

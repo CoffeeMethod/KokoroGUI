@@ -29,11 +29,12 @@ sys.path.insert(0, ROOT)
 import numpy as np  # noqa: E402
 import soundfile as sf  # noqa: E402
 
+# The same short radio drama the docs site's home page shows.
 SAMPLE_TEXT = (
-    "Sample text to demonstrate the transcript panel. It highlights each character's lines.\n"
-    "Even highlights multiple sentences when they belong to the same clip.\n"
-    "Charly answers here, with an echo on the voice.\n"
-    "The narrator picks the story back up and carries it to the end of the page."
+    "The house at the end of the lane had been empty for years.\n"
+    "She pushed the door. It didn't creak, and somewhere inside a radio was playing.\n"
+    "Marta, come in. Marta, are you there?\n"
+    "I'm in the kitchen. The light is on, and the kettle is still warm."
 )
 
 
@@ -51,7 +52,7 @@ def build_app(workdir: str, theme_name: str, workspace: str, subproject: bool = 
     from PySide6.QtWidgets import QApplication  # noqa: E402
 
     from kokoro_gui.daw.dirty import build_segments_from_results, compute_expected_cache_hash  # noqa: E402
-    from kokoro_gui.daw.models import Character, Track  # noqa: E402
+    from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character, Track  # noqa: E402
 
     os.chdir(workdir)
     qt_app_module.CONFIG_FILE = os.path.join(workdir, "config_qt.json")
@@ -78,12 +79,13 @@ def build_app(workdir: str, theme_name: str, workspace: str, subproject: bool = 
     app = qt_app_module.QtTTSApp()
     doc = app.document
     doc.characters = [
-        Character.from_preset_dict("Narrator", {"voice": "af_heart"}, highlight_color="#f4b400"),
-        Character.from_preset_dict("Charly", {"voice": "am_michael", "fx_preset": "Echo"}, highlight_color="#4285f4"),
-        Character.from_preset_dict("Ada", {"voice": "bf_emma"}, highlight_color="#0f9d58"),
+        Character.from_preset_dict("Narrator", {"voice": "af_heart"}, highlight_color=DEFAULT_HIGHLIGHT_PALETTE[0]),
+        Character.from_preset_dict("Tomas", {"voice": "am_michael", "fx_preset": "Echo"},
+                                   highlight_color=DEFAULT_HIGHLIGHT_PALETTE[1]),
+        Character.from_preset_dict("Marta", {"voice": "bf_emma"}, highlight_color=DEFAULT_HIGHLIGHT_PALETTE[2]),
     ]
     doc.tracks = [Track(name=c.name, character_id=c.id, order_index=i) for i, c in enumerate(doc.characters)]
-    narrator, charly, ada = doc.characters
+    narrator, tomas, marta = doc.characters
 
     app.editor.load_text(SAMPLE_TEXT)
     doc.set_plain_text(SAMPLE_TEXT)
@@ -94,8 +96,8 @@ def build_app(workdir: str, theme_name: str, workspace: str, subproject: bool = 
         offsets.append((pos, pos + len(line)))
         pos += len(line) + 1
     c1 = doc.assign_character_to_range(offsets[0][0], offsets[1][1], narrator.id)
-    c2 = doc.assign_character_to_range(offsets[2][0], offsets[2][1], charly.id)
-    c3 = doc.assign_character_to_range(offsets[3][0], offsets[3][1], ada.id)
+    c2 = doc.assign_character_to_range(offsets[2][0], offsets[2][1], tomas.id)
+    c3 = doc.assign_character_to_range(offsets[3][0], offsets[3][1], marta.id)
 
     # Two generated clips (waveforms), one still estimated (dashed).
     audio_dir = os.path.join(workdir, "audio")
