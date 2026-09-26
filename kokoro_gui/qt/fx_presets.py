@@ -87,15 +87,20 @@ def import_ir_file(src_path: str) -> str:
     (`presets/fx/ir/`) and returns the name it's stored under: the file's
     stem with path and reserved characters removed. A different file already
     stored under that name keeps it, and the new one gets a numbered name
-    (`Hall 2`). Raises ValueError for a file soundfile can't read as audio,
+    (`Hall 2`). Raises ValueError for a file soundfile can't read as audio
+    or one longer than the chain would load (`audio_fx.MAX_IR_SECONDS`),
     OSError for a failed copy."""
     import soundfile as sf
 
+    from kokoro_gui.engine.audio_fx import MAX_IR_SECONDS
+
     src = os.path.abspath(src_path)
     try:
-        sf.info(src)
+        info = sf.info(src)
     except Exception as e:  # noqa: BLE001 - soundfile raises several types for a bad file
         raise ValueError(f"not a readable audio file: {e}") from e
+    if info.samplerate <= 0 or info.frames / info.samplerate > MAX_IR_SECONDS:
+        raise ValueError(f"it is longer than {MAX_IR_SECONDS:g} seconds")
     stem = os.path.splitext(os.path.basename(src))[0]
     base = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "", stem).strip() or "impulse"
     directory = _global_ir_dir()

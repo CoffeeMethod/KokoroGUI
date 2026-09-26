@@ -336,3 +336,19 @@ def test_import_ir_file_drops_control_characters_from_the_name(qt_app, tmp_path)
     assert name == "BigHall"
     assert fx_presets.resolve_ir(name) is not None
     assert name in fx_presets.list_ir_names()
+
+
+def test_import_ir_file_refuses_a_file_over_the_length_cap(qt_app, tmp_path):
+    import numpy as np
+    import pytest
+    import soundfile as sf
+
+    from kokoro_gui.engine.audio_fx import MAX_IR_SECONDS
+    from kokoro_gui.qt import fx_presets
+
+    src = tmp_path / "Cathedral.wav"
+    sf.write(str(src), np.zeros(int(100 * (MAX_IR_SECONDS + 1)), dtype=np.float32), 100)
+
+    with pytest.raises(ValueError, match="longer than 30 seconds"):
+        fx_presets.import_ir_file(str(src))
+    assert "Cathedral" not in fx_presets.list_ir_names()

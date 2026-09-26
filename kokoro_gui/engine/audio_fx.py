@@ -1,6 +1,8 @@
 """Post-processing audio FX chain (pitch, volume, time stretch, Pedalboard FX, normalize, trim)."""
 import logging
 import math
+import os
+import threading
 
 import numpy as np
 import scipy.signal
@@ -26,6 +28,66 @@ CONVOLUTION_WET_MAKEUP_DB = 20.0 * math.log10(8.0)
 # (name, project_dir) pairs already reported missing, so a clip with a
 # missing IR logs once, not once per segment.
 _warned_missing_irs = set()
+
+# Longest impulse response the chain loads. A real room or hall rings for a
+# few seconds; a file past this is a mistake (or a crafted bundle) that
+# would be read whole and convolved with every segment. `MAX_IR_SAMPLES`
+# bounds a file whose sample rate is absurd: 30 s of 96 kHz stereo.
+MAX_IR_SECONDS = 30.0
+MAX_IR_SAMPLES = int(MAX_IR_SECONDS * 96000 * 2)
+# Loaded IRs, `(path, mtime_ns, size) -> (impulse, rate)` or None for a file
+# that was refused, so a render doesn't reread the file for every segment
+# and a refused file warns once per version. Kept to the few most recent.
+_IR_CACHE_SIZE = 8
+_ir_cache: dict = {}
+_ir_cache_lock = threading.Lock()
+
+
+def _load_ir(name, path):
+    """`(impulse, rate)` for the IR file at `path`, or None (with a logged
+    warning) when it's too long, can't be read, or is empty or silent.
+    Memoised by the file's path, mtime and size."""
+    try:
+        stat = os.stat(path)
+    except OSError as e:
+        logger.warning("Impulse response %r couldn't be read (%s); convolution reverb skipped", name, e)
+        return None
+    key = (path, stat.st_mtime_ns, stat.st_size)
+    with _ir_cache_lock:
+        if key in _ir_cache:
+            return _ir_cache[key]
+    loaded = _read_ir(name, path)
+    with _ir_cache_lock:
+        _ir_cache[key] = loaded
+        while len(_ir_cache) > _IR_CACHE_SIZE:
+            _ir_cache.pop(next(iter(_ir_cache)))
+    return loaded
+
+
+def _read_ir(name, path):
+    # Read with soundfile rather than handing Convolution the path: given a
+    # file it can't decode, Convolution loads nothing and passes the input
+    # through, which the makeup gain would then turn up by 18 dB. Its
+    # header is checked against the length cap before any sample is read.
+    try:
+        import soundfile as sf
+
+        info = sf.info(path)
+        if info.samplerate <= 0 or info.frames / info.samplerate > MAX_IR_SECONDS \
+                or info.frames * max(1, info.channels) > MAX_IR_SAMPLES:
+            logger.warning("Impulse response %r is longer than %g s; convolution reverb skipped",
+                           name, MAX_IR_SECONDS)
+            return None
+        data, ir_rate = sf.read(path, dtype="float32", always_2d=True)
+    except Exception as e:  # noqa: BLE001 - an unreadable IR is skipped like a missing one
+        logger.warning("Impulse response %r couldn't be read (%s); convolution reverb skipped", name, e)
+        return None
+    if data.size == 0 or not np.all(np.isfinite(data)) or not np.any(data):
+        logger.warning("Impulse response %r is empty or silent; convolution reverb skipped", name)
+        return None
+    impulse = np.ascontiguousarray(data[:, 0] if data.shape[1] == 1 else data.T)
+    impulse.setflags(write=False)
+    return impulse, float(ir_rate)
 
 # Pitch range the Generation dock's spinbox allows (see pitch_spin.setRange
 # in kokoro_gui/qt/docks/generation_dock.py). A preset's `pitch` bypasses
@@ -84,22 +146,12 @@ def _convolution_stage(config):
             _warned_missing_irs.add((name, project_dir))
             logger.warning("Impulse response %r not found; convolution reverb skipped", name)
         return None
-    # Read with soundfile rather than handing Convolution the path: given a
-    # file it can't decode, Convolution loads nothing and passes the input
-    # through, which the makeup gain would then turn up by 18 dB.
-    try:
-        import soundfile as sf
-
-        data, ir_rate = sf.read(path, dtype="float32", always_2d=True)
-    except Exception as e:  # noqa: BLE001 - an unreadable IR is skipped like a missing one
-        logger.warning("Impulse response %r couldn't be read (%s); convolution reverb skipped", name, e)
+    loaded = _load_ir(name, path)
+    if loaded is None:
         return None
-    if data.size == 0 or not np.all(np.isfinite(data)) or not np.any(data):
-        logger.warning("Impulse response %r is empty or silent; convolution reverb skipped", name)
-        return None
-    impulse = np.ascontiguousarray(data[:, 0] if data.shape[1] == 1 else data.T)
+    impulse, ir_rate = loaded
     try:
-        convolution = Convolution(impulse, 1.0, float(ir_rate))
+        convolution = Convolution(impulse, 1.0, ir_rate)
     except Exception as e:  # noqa: BLE001
         logger.warning("Impulse response %r couldn't be loaded (%s); convolution reverb skipped", name, e)
         return None

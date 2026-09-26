@@ -156,3 +156,63 @@ def test_unreadable_impulse_response_is_a_logged_no_op(engine, tmp_path, caplog)
 
     assert np.array_equal(out, audio)
     assert any("Broken" in r.getMessage() for r in caplog.records)
+
+
+def _counting_reads(monkeypatch):
+    import soundfile as sf
+
+    reads = []
+    real_read = sf.read
+
+    def _read(*args, **kwargs):
+        reads.append(args)
+        return real_read(*args, **kwargs)
+
+    monkeypatch.setattr(sf, "read", _read)
+    return reads
+
+
+def test_an_impulse_response_over_the_length_cap_is_skipped_unread(engine, tmp_path, caplog, monkeypatch):
+    from kokoro_gui.engine import audio_fx
+
+    project_dir = tmp_path / "project"
+    rate = 1000
+    ir = np.zeros(int(rate * (audio_fx.MAX_IR_SECONDS + 1)))
+    ir[0] = 1.0
+    _impulse_response(project_dir / "fx" / "ir" / "Cathedral.wav", ir, sr=rate)
+    reads = _counting_reads(monkeypatch)
+    audio = _sine(amp=0.5)
+
+    with caplog.at_level("WARNING", logger="kokoro_gui.engine.audio_fx"):
+        out = engine.process_audio(audio.copy(), 24000, {
+            "convolution_ir": "Cathedral", "convolution_mix": 1.0, "project_dir": str(project_dir),
+        })
+
+    assert np.array_equal(out, audio)
+    assert reads == []
+    assert any("Cathedral" in r.getMessage() and "30" in r.getMessage() for r in caplog.records)
+
+
+def test_a_loaded_impulse_response_is_reused_until_the_file_changes(engine, tmp_path, monkeypatch):
+    import os
+
+    project_dir = tmp_path / "project"
+    path = project_dir / "fx" / "ir" / "Echo.wav"
+    ir = np.zeros(241)
+    ir[240] = 1.0
+    _impulse_response(path, ir)
+    reads = _counting_reads(monkeypatch)
+    audio = _sine(amp=0.5)
+    config = {"convolution_ir": "Echo", "convolution_mix": 1.0, "project_dir": str(project_dir)}
+
+    first = np.asarray(engine.process_audio(audio.copy(), 24000, config)).reshape(-1)
+    second = np.asarray(engine.process_audio(audio.copy(), 24000, config)).reshape(-1)
+    assert len(reads) == 1
+    assert np.allclose(first, second)
+
+    _impulse_response(path, [1.0])
+    stat = os.stat(path)
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10 ** 9))
+    third = np.asarray(engine.process_audio(audio.copy(), 24000, config)).reshape(-1)
+    assert len(reads) == 2
+    assert np.allclose(third, audio, atol=1e-4)
