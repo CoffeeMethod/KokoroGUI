@@ -525,6 +525,62 @@ def test_paste_from_another_project_imports_its_recording(qt_app, tmp_path):
     assert document.text == "Notes: " and document.sources == {}
 
 
+def test_paste_from_another_project_relinks_a_recording_missing_here(qt_app, tmp_path):
+    import numpy as np
+    import soundfile as sf
+
+    from kokoro_gui.daw import imported
+    from kokoro_gui.qt import project as project_io
+
+    other_dir, _other_id = project_io.create_project_dir()
+    wav = str(tmp_path / "elsewhere.wav")
+    sf.write(wav, np.full(RATE * 3, 0.1, dtype=np.float32), RATE)
+    source, entry = imported.source_entry(project_io.import_audio_file(wav, other_dir))
+    document, editor = qt_app.document, qt_app.editor
+    # This project knew the recording, but its file was missing on open.
+    document.settings["sources"] = {source: {"path": None, "sample_rate": RATE, "duration_s": 3.0}}
+    _set_text_via_real_edit(editor, "Notes: ")
+    _caret(editor, 7)
+
+    editor.insertFromMimeData(_words_mime("there", [[0, 5, source, 1.0, 1.5]], {source: entry}))
+
+    local = document.source_path(source)
+    assert local is not None and local.startswith(qt_app.project_dir)
+    clip = document.clip_covering(8)
+    assert clip is not None and [s.range for s in clip.segments] == [[1.0, 1.5]]
+
+    qt_app.undo()
+    assert document.text == "Notes: " and document.source_path(source) is None
+
+
+def test_paste_of_malformed_timed_words_keeps_the_good_ones(qt_app, tmp_path):
+    document, editor = qt_app.document, qt_app.editor
+    source, _ids = _recording(qt_app, tmp_path, [HELLO])
+    entry = dict(document.sources[source])
+    _caret(editor, len(document.text))
+    editor.textCursor().insertText("\n\nNotes: ")
+    at = len(document.text)
+    words = [[0, 3, [source], 1.0, 1.2], [0, 3, {"a": 1}, 1.0, 1.2], "junk", [4, 7, source, 1.3, 1.5],
+             [0, 3], None, [4, 7, source, "x", 1.5]]
+
+    editor.insertFromMimeData(_words_mime("one two", words, {source: entry, "bad": "not a dict"}))
+
+    assert document.text.endswith("Notes: one two")
+    clip = document.clip_covering(at + 4)
+    assert clip is not None and [s.range for s in clip.segments] == [[1.3, 1.5]]
+    assert set(document.sources) == {source}
+
+
+def test_paste_of_only_malformed_timed_words_lands_untimed(qt_app):
+    document, editor = qt_app.document, qt_app.editor
+    _set_text_via_real_edit(editor, "Notes: ")
+    _caret(editor, 7)
+
+    editor.insertFromMimeData(_words_mime("there", [[0, 5, ["x"], 1.0, 1.5]], {}))
+
+    assert document.text == "Notes: there" and document.clips == []
+
+
 def test_deleting_imported_words_undoes_with_their_timing(qt_app, tmp_path, qtbot):
     import copy
 
