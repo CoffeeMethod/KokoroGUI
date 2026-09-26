@@ -2173,11 +2173,13 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         capabilities = engine_registry.get_capabilities(engine_id)
         return bool(getattr(capabilities, "supports_voice_cloning", False))
 
-    def _unknown_speaker_character(self, index: int):
+    def _unknown_speaker_character(self, index: int, document=None):
         """"Unknown speaker": a local character with no voice, on the first
         engine that clones voices, for a recording whose speaker has no
-        clone yet. It can't generate until it gets a reference."""
-        names = {c.name for c in self.document.characters}
+        clone yet. It can't generate until it gets a reference. The name is
+        unique in `document` (default: the focus project's)."""
+        document = document if document is not None else self.document
+        names = {c.name for c in document.characters}
         name, n = recording_import.UNKNOWN_SPEAKER_NAME, 2
         while name in names:
             name = f"{recording_import.UNKNOWN_SPEAKER_NAME} {n}"
@@ -2185,7 +2187,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         engine_id = next((e for e in engine_registry.list_engines()
                           if getattr(engine_registry.get_capabilities(e), "supports_voice_cloning", False)),
                          self._primary_engine_id)
-        color = DEFAULT_HIGHLIGHT_PALETTE[(len(self.document.characters) + index) % len(DEFAULT_HIGHLIGHT_PALETTE)]
+        color = DEFAULT_HIGHLIGHT_PALETTE[(len(document.characters) + index) % len(DEFAULT_HIGHLIGHT_PALETTE)]
         return Character.from_preset_dict(name, {}, highlight_color=color, backend_id=engine_id)
 
     def import_recording(self, path: str, transcript: str = recording_import.WHISPER,
@@ -2231,7 +2233,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             return False
         source, entry = imported.source_entry(stored)
         job = recording_import.RecordingJob(path=stored, name=os.path.basename(path), source=source, entry=entry,
-                                            transcript=transcript, refine=bool(refine))
+                                            project=self.focus, document=self.document,
+                                            project_dir=self.project_dir, transcript=transcript,
+                                            refine=bool(refine))
 
         if cues is not None:
             rows = speaker_rows(cues)
@@ -2304,6 +2308,16 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             return
         self._review_recording(job)
 
+    def _recording_target(self, job):
+        """The open project `job` started in, or None when it is closed or
+        holds another document or dir now (New, Open, a child closed)."""
+        project = job.project
+        if project is None or not any(p is project for p in self.open_projects()):
+            return None
+        if project.document is not job.document or project.project_dir != job.project_dir:
+            return None
+        return project
+
     def _ask_recording_review(self, dialog) -> bool:
         """Runs the review dialog; True on Import. Its own method so tests
         answer it without a modal."""
@@ -2311,11 +2325,18 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def _review_recording(self, job) -> list:
         """The review dialog, then the commit: the rows as clips at the end
-        of the focus project's transcript, one undo step. Returns the new
-        clips' ids ([] when cancelled)."""
+        of the transcript of the project the import started in (not
+        whichever has focus now), one undo step. A result for a project
+        that is no longer open is dropped with a status message. Returns
+        the new clips' ids ([] when cancelled or dropped)."""
+        project = self._recording_target(job)
+        if project is None:
+            self.set_status(f"Dropped the transcript of {job.name}: its project is no longer open.", "warning")
+            return []
+        document = project.document
         characters = None
         if not job.mapped:
-            characters = [(c.id, c.name) for c in self.document.characters if self.can_clone(c)]
+            characters = [(c.id, c.name) for c in document.characters if self.can_clone(c)]
         dialog = recording_import.RecordingReviewDialog(job.rows, job.source, job.path, characters, parent=self)
         if not self._ask_recording_review(dialog):
             self.set_status("Recording import cancelled.")
@@ -2326,16 +2347,16 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         new_characters = list(job.new_characters)
         if not job.mapped:
             character_id = dialog.character_choice()
-            if character_id == recording_import.UNKNOWN_SPEAKER or self.document.get_character(character_id) is None:
-                character = self._unknown_speaker_character(len(new_characters))
+            if character_id == recording_import.UNKNOWN_SPEAKER or document.get_character(character_id) is None:
+                character = self._unknown_speaker_character(len(new_characters), document)
                 new_characters.append(character)
                 character_id = character.id
             for row in rows:
                 row["character_id"] = character_id
         command = ImportRecordingCommand(rows, {job.source: job.entry}, new_characters)
-        self.document.undo_stack.push(command)
-        if self.editor is not None:
-            self.editor.load_text(self.document.text)
+        document.undo_stack.push(command)
+        if self.editor is not None and project is self.focus:
+            self.editor.load_text(document.text)
         self.on_characters_changed()
         self.set_status(f"Imported {job.name}: {len(command.clip_ids)} clip(s) to edit as text.", "success")
         return command.clip_ids
