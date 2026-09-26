@@ -825,3 +825,44 @@ def test_save_waits_while_a_subproject_is_generating(qt_app, tmp_path, monkeypat
     assert warned == ["Busy"]
     assert os.path.getmtime(qt_app.project_path) == before
     assert child.dirty
+
+
+def test_copy_imported_audio_only_copies_files_from_the_parents_imported_folder(tmp_path, isolated_dirs):
+    """A legacy `.json` project's sources, beds and source track are never
+    checked on load; New Subproject copies only what sits under the parent
+    dir's `audio/imported/`, so a crafted path can't pull any other file
+    into the child."""
+    from kokoro_gui.daw.models import Clip, Document, Run
+    from kokoro_gui.qt.subprojects import _copy_imported_audio
+
+    parent_dir, _parent_id = project_io.create_project_dir()
+    child_dir, _child_id = project_io.create_project_dir()
+    project_io.write_session(parent_dir, {"source_path": "/home/victim/secret/Project.tbaw"})
+    inside_src = tmp_path / "inside.wav"
+    sf.write(str(inside_src), np.full(2400, 0.1, dtype=np.float32), 24000)
+    inside = project_io.import_audio_file(str(inside_src), parent_dir)
+    outside = str(tmp_path / "secret.wav")
+    sf.write(outside, np.full(2400, 0.3, dtype=np.float32), 24000)
+    session = os.path.join(parent_dir, "session.json")
+
+    recording = Clip(source="imported")
+    bed_out = Clip(source="imported", original_audio_path=outside)
+    bed_private = Clip(source="imported", original_audio_path=session)
+    words = [[0, 2, "in", 0.0, 0.1], [3, 5, "out", 0.0, 0.1], [6, 8, "priv", 0.0, 0.1]]
+    document = Document(runs=[Run("hi yo ok", recording.id, "imported", words=words),
+                              Run("\n\n"), Run("bed", bed_out.id, bed_out.run_kind),
+                              Run("\n\n"), Run("bed", bed_private.id, bed_private.run_kind)],
+                        clips=[recording, bed_out, bed_private],
+                        settings={"sources": {"in": {"path": inside}, "out": {"path": outside},
+                                              "priv": {"path": session}},
+                                  "source_track": {"path": outside, "offset_s": 0.0}})
+
+    _copy_imported_audio(document, child_dir, parent_dir)
+
+    imported_dir = os.path.join(child_dir, "audio", "imported")
+    copied = os.listdir(imported_dir)
+    assert copied == [os.path.basename(inside)]
+    assert document.source_path("in") == os.path.join(imported_dir, copied[0])
+    assert document.source_path("out") is None and document.source_path("priv") is None
+    assert bed_out.original_audio_path is None and bed_private.original_audio_path is None
+    assert "source_track" not in document.settings

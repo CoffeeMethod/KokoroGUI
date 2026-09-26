@@ -1179,7 +1179,7 @@ class SubprojectsMixin:
         self.focus = self.level = self.root
 
 
-def _copy_imported_audio(document, project_dir: str, parent_dir: str | None = None) -> None:
+def _copy_imported_audio(document, project_dir: str, parent_dir: str | None) -> None:
     """New Subproject's imported audio (phase 5 P3): each recording source
     the moved text's words use, each moved music bed's file and the
     parent's source track (D5, a path relative to `parent_dir`) are copied
@@ -1188,18 +1188,24 @@ def _copy_imported_audio(document, project_dir: str, parent_dir: str | None = No
     child's `settings["sources"]` keeps only the sources it uses; one whose
     file is missing stays listed with no path. A source track whose file
     is missing is dropped. Recording clips' segments are rebuilt on the
-    copies."""
+    copies. Only a file under the parent dir's `audio/imported/` is copied
+    (`project.audio_file_under`): a legacy `.json` project's paths are
+    never checked on load, and one naming any other file must not pull it
+    into the child. A bed whose file isn't there loses its path."""
     from kokoro_gui.daw.reference import SOURCE_TRACK_KEY
     from kokoro_gui.daw import imported
     from kokoro_gui.daw.models import SOURCES_KEY
+
+    def parent_file(path):
+        return project_io.audio_file_under(parent_dir, path, project_io.AUDIO_IMPORTED)
 
     used = {w[2] for run in document.runs for w in run.words or () if len(w) > 2}
     sources = {}
     for name in sorted(used):
         entry = dict(document.sources.get(name) or {})
-        path = document.source_path(name)
+        path = parent_file(document.source_path(name))
         entry["path"] = None
-        if path and os.path.isfile(path):
+        if path is not None:
             try:
                 _source, entry = imported.source_entry(project_io.import_audio_file(path, project_dir))
             except (OSError, project_io.ProjectError):
@@ -1210,11 +1216,16 @@ def _copy_imported_audio(document, project_dir: str, parent_dir: str | None = No
     else:
         document.settings.pop(SOURCES_KEY, None)
     for clip in document.clips:
-        if clip.is_bed and os.path.isfile(clip.original_audio_path):
-            try:
-                clip.original_audio_path = project_io.import_audio_file(clip.original_audio_path, project_dir)
-            except (OSError, project_io.ProjectError):
-                pass
+        if not clip.is_bed:
+            continue
+        path = parent_file(clip.original_audio_path)
+        if path is None:
+            clip.original_audio_path = None
+            continue
+        try:
+            clip.original_audio_path = project_io.import_audio_file(path, project_dir)
+        except (OSError, project_io.ProjectError):
+            pass
     if SOURCE_TRACK_KEY in document.settings:
         source_track = project_io.source_track_path(document, parent_dir)
         block = dict(document.settings[SOURCE_TRACK_KEY]) if isinstance(
