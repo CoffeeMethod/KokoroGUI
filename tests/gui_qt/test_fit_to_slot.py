@@ -253,3 +253,55 @@ def test_reading_rate_learns_the_pace_from_generated_clips(qt_app):
 
     typed = _clip(qt_app, "y" * 30, 1.0)
     assert fit.reading_rate_ratio(qt_app.document, typed, rates) == pytest.approx(1.5)
+
+
+def _stack_depth() -> int:
+    import sys
+
+    depth, frame = 0, sys._getframe()
+    while frame is not None:
+        depth, frame = depth + 1, frame.f_back
+    return depth
+
+
+def test_fit_all_of_many_stretch_fits_does_not_recurse(qt_app, monkeypatch):
+    """An Audio8 fit ends inside the call that starts it; a few hundred of
+    them in one "Fit all over slot" run one after another, not nested."""
+    from types import SimpleNamespace
+
+    from kokoro_gui.daw.models import Clip, Run
+
+    document = qt_app.document
+    character = document.characters[0]
+    runs = []
+    for i in range(300):
+        clip = Clip(character_id=character.id, overrides={"target_duration_s": 1.9},
+                    timeline_timestamp=float(i * 3), pinned=True)
+        document.clips.append(clip)
+        if runs:
+            runs.append(Run(text="\n\n"))
+        runs.append(Run(text=f"line {i}", clip_id=clip.id, kind="generated"))
+    document.runs = runs
+    dock = qt_app.timeline_dock
+    # Every clip is clean and renders 2 s long, and there is no speed control.
+    monkeypatch.setattr(type(document), "dirty_clips", lambda self: [])
+    monkeypatch.setattr(qt_app, "clip_duration_s", lambda clip, project=None: 2.0)
+    no_speed = SimpleNamespace(capabilities=EngineCapabilities(supports_speed=False))
+    monkeypatch.setattr(qt_app, "backend_for", lambda clip, project=None: no_speed)
+    monkeypatch.setattr(qt_app, "refresh_timeline", lambda *a, **k: None)
+    monkeypatch.setattr(dock, "_ripple_shifts", lambda *a, **k: [])
+    depths = []
+    finish = dock._finish_fit
+
+    def _finish(job, failed=False):
+        depths.append(_stack_depth())
+        finish(job, failed)
+
+    monkeypatch.setattr(dock, "_finish_fit", _finish)
+
+    assert dock.fit_all_over_slot() == 300
+
+    assert len(depths) == 300
+    assert max(depths) - min(depths) < 5
+    assert {c.overrides.get("time_stretch") for c in document.clips} == {round(2.0 / 1.9, 4)}
+    assert "Fitted 300 clips" in qt_app.transport_dock.status_text()

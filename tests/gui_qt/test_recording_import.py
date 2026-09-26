@@ -261,3 +261,56 @@ def test_refine_retimes_each_cue_on_its_slice_and_keeps_the_text(qt_app, tmp_pat
     assert document.text == "Hello there"
     clip, = document.clips
     assert [w[3:] for w in imported.clip_words(document, clip)] == [(1.8, 2.25), (2.25, 2.8)]
+
+
+def test_a_whisper_result_goes_to_the_project_the_import_started_in(qt_app, tmp_path, monkeypatch):
+    root = qt_app.focus
+    root.document.text = "Notes"
+    qt_app.editor.load_text(root.document.text)
+    host = _host(qt_app)
+    gate = threading.Event()
+    _heard_by(monkeypatch, HEARD, gate=gate)
+    shown = _answer_review(qt_app, monkeypatch, character=host.id)
+
+    assert qt_app.import_recording(_wav(tmp_path))
+    qt_app._ready_backends.add("audio8")  # the child's focus would load the real model
+    child = qt_app.new_subproject(title="Other")
+    qt_app.set_focus(child)
+    child_text = child.document.text
+    gate.set()
+    qt_app.wait_for_recording_import()
+
+    assert qt_app.focus is child
+    # Only the root's cloning characters are offered, and the clips land there.
+    combo = shown[0].character_combo
+    assert combo.itemData(0) == host.id
+    assert child.document.text == child_text and child.document.sources == {}
+    assert not any(imported.is_recording_clip(c) for c in child.document.clips)
+    recordings = [c for c in root.document.clips if imported.is_recording_clip(c)]
+    assert len(recordings) == 3 and {c.character_id for c in recordings} == {host.id}
+    assert root.document.text.startswith("Notes") and "Hello there." in root.document.text
+    assert qt_app.editor.toPlainText() == child.document.text
+    source, = root.document.sources
+    assert root.document.source_path(source).startswith(os.path.join(root.project_dir, "audio", "imported"))
+
+    qt_app.set_focus(root)
+    assert qt_app.editor.toPlainText() == root.document.text
+
+
+def test_a_whisper_result_for_a_project_no_longer_open_is_dropped(qt_app, tmp_path, monkeypatch):
+    gate = threading.Event()
+    _heard_by(monkeypatch, HEARD, gate=gate)
+    shown = _answer_review(qt_app, monkeypatch, character=_host(qt_app).id)
+    started_in = qt_app.document
+
+    assert qt_app.import_recording(_wav(tmp_path))
+    qt_app.new_project()
+    assert qt_app.document is not started_in
+    gate.set()
+    qt_app.wait_for_recording_import()
+
+    assert shown == []
+    assert qt_app.document.sources == {}
+    assert not any(imported.is_recording_clip(c) for c in qt_app.document.clips)
+    assert "no longer open" in qt_app.transport_dock.status_text()
+    assert not qt_app.is_busy()

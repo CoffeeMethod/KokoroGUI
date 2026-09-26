@@ -510,13 +510,14 @@ class Document:
     def add_sources(self, entries: dict) -> list:
         """Adds each `source -> entry` the document doesn't already have
         (a source's name is its content hash, so a known one is the same
-        file). An entry without a `path` string is skipped. Returns the
-        names added."""
+        file). A known source with no file (missing on open) takes the new
+        entry's, which relinks it. An entry without a `path` string is
+        skipped. Returns the names added or relinked."""
         added = []
         for source, entry in (entries or {}).items():
             if not isinstance(entry, dict) or not isinstance(entry.get("path"), str) or not entry["path"]:
                 continue
-            if source in self.sources:
+            if source in self.sources and self.source_path(source) is not None:
                 continue
             self.settings.setdefault(SOURCES_KEY, {})[str(source)] = {
                 "path": entry["path"],
@@ -589,15 +590,23 @@ class Document:
     def edit_touches_imported(self, position: int, chars_removed: int) -> bool:
         """True when a `replace_text` of `[position, position +
         chars_removed)` changes imported recording text: a delete overlapping
-        a recording clip's runs, or an insert strictly inside one (which
-        splits it). Qt's native undo replays only characters, so it can't
-        give dropped words back; the editor can send such an edit through
+        a recording clip's runs, a delete of everything between two halves
+        of a split clip (`replace_text` joins them), or an insert strictly
+        inside one (which splits it). Qt's native undo replays only
+        characters, so it can't give dropped words back or split a joined
+        clip again; the editor can send such an edit through
         `TextEditCommand` instead, whose undo restores the runs."""
         removed_end = position + chars_removed
         if chars_removed > 0:
-            return any(self._recording_clip_of(run) is not None
-                       for run, r_start, r_end in self._iter_runs_with_offsets()
-                       if r_start < removed_end and r_end > position)
+            if any(self._recording_clip_of(run) is not None
+                   for run, r_start, r_end in self._iter_runs_with_offsets()
+                   if r_start < removed_end and r_end > position):
+                return True
+            if position <= 0 or removed_end >= len(self.text):
+                return False
+            left = self._recording_clip_of(self._run_covering(position - 1))
+            right = self._recording_clip_of(self._run_covering(removed_end))
+            return left is not None and right is not None and left is not right and self._continues(left, right)
         left = self._recording_clip_of(self._run_covering(position - 1)) if position > 0 else None
         right = self._run_covering(position)
         return left is not None and right is not None and right.clip_id == left.id
@@ -1154,8 +1163,9 @@ class Document:
         """Tags `[position, position + length)`, text already inserted (a
         paste or drop of timed text), as imported recording text carrying
         `words` (`Run.words` entries, char offsets relative to `position`).
-        `sources` entries the document lacks are added first
-        (`add_sources`); a word whose source still has no file is dropped.
+        `sources` entries the document lacks, or has no file for, are added
+        first (`add_sources`); a word whose source still has no file is
+        dropped.
         With no word left, nothing changes and None is returned: the span
         stays as it is, untimed (grill Q32).
 
@@ -1174,7 +1184,7 @@ class Document:
             raise ValueError(f"apply_words requires a span inside the text, got {position}+{length}")
         if self.overlaps_nested(position, end):
             raise ValueError("apply_words can't retag a subproject's placeholder")
-        self.add_sources(sources or {})
+        added = self.add_sources(sources or {})
         cleaned = [w for w in clean_words(words, length) if self.source_path(w[2])]
         if not cleaned:
             return None
@@ -1201,7 +1211,8 @@ class Document:
                           source=IMPORTED)
             self.clips.append(target)
         self._retag_range(position, end, target.id, IMPORTED, words=cleaned)
-        self.refresh_imported_segments({target.id})
+        # A relinked source gives other clips' words their file back too.
+        self.refresh_imported_segments(None if added else {target.id})
         return target.id
 
     def _drop_touched_words(self, position: int, removed_end: int, inserting: bool) -> None:

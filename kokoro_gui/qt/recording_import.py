@@ -68,11 +68,17 @@ class PendingRow:
 class RecordingJob:
     """What an import carries from the first page to the commit: the copied
     file, its `Document.sources` name and entry, the rows, and the
-    characters a caption speaker mapping made (`mapped` when it ran)."""
+    characters a caption speaker mapping made (`mapped` when it ran).
+    `project`, `document` and `project_dir` are the open project the
+    import started in, its document and its dir then: the file was copied
+    there, so the result goes there too, whatever has focus by then."""
     path: str
     name: str
     source: str
     entry: dict
+    project: object = None  # open_projects.OpenProject
+    document: object = None  # daw.models.Document
+    project_dir: Optional[str] = None
     transcript: str = WHISPER
     refine: bool = False
     rows: list = field(default_factory=list)

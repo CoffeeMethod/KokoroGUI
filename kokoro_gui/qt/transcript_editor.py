@@ -101,6 +101,17 @@ MAX_WORDS_PAYLOAD_BYTES = 16 * 1024 * 1024
 UNTIMED_TOOLTIP = "No character: this text has no audio. Assign a character to generate it."
 
 
+def _is_word_entry(word) -> bool:
+    """Whether a pasted `words` entry has the `Run.words` shape:
+    `[char_start, char_end, source, start_s, end_s]` with a source name
+    string and numbers elsewhere. `apply_words` checks the values."""
+    if not isinstance(word, (list, tuple)) or len(word) != 5:
+        return False
+    if not isinstance(word[2], str) or not word[2]:
+        return False
+    return all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (word[0], word[1], word[3], word[4]))
+
+
 def clip_fx_name(daw_doc, clip) -> Optional[str]:
     """The FX preset name a clip resolves to for display: its own named
     override (`overrides["fx_preset"]`, set by the FX combo / Settings tab
@@ -624,10 +635,13 @@ class TranscriptEditor(QTextEdit):
             return
         new_text = self.toPlainText()
         document = self.app.document
-        if self._joined_edit or document.edit_touches_imported(position, chars_removed):
+        replaying = self.undo_coordinator.replaying
+        if not replaying and (self._joined_edit or document.edit_touches_imported(position, chars_removed)):
             # Imported recording text (phase 5 P3): Qt's native undo would
             # give back the characters but not their word timing, so the
             # edit is also a `TextEditCommand`, joined to the native step.
+            # An undo or redo replaying a native step never pushes one: that
+            # would land on the stack in the middle of the replay.
             self.undo_coordinator.push_joined(TextEditCommand(position, chars_removed, chars_added, new_text))
         else:
             document.replace_text(position, chars_removed, chars_added, new_text)
@@ -1131,9 +1145,10 @@ class TranscriptEditor(QTextEdit):
     @staticmethod
     def words_from_mime(source: QMimeData) -> Optional[dict]:
         """The `imported.WORDS_MIME_TYPE` payload of a paste or drop as
-        `{"words": list, "sources": dict}`, or None when there is none or
-        it doesn't parse (clipboard data is untrusted; `apply_words`
-        checks each word)."""
+        `{"words": list, "sources": dict}`, or None when there is none, it
+        doesn't parse or no word has the right shape. Clipboard data is
+        untrusted: malformed words and source entries that aren't dicts
+        are left out here, and `apply_words` checks each word's values."""
         if not source.hasFormat(imported.WORDS_MIME_TYPE):
             return None
         raw = bytes(source.data(imported.WORDS_MIME_TYPE))
@@ -1143,10 +1158,14 @@ class TranscriptEditor(QTextEdit):
             data = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
             return None
-        if not isinstance(data, dict) or not isinstance(data.get("words"), list) or not data["words"]:
+        if not isinstance(data, dict) or not isinstance(data.get("words"), list):
+            return None
+        words = [list(w) for w in data["words"] if _is_word_entry(w)]
+        if not words:
             return None
         sources = data.get("sources")
-        return {"words": data["words"], "sources": sources if isinstance(sources, dict) else {}}
+        sources = {str(k): v for k, v in sources.items() if isinstance(v, dict)} if isinstance(sources, dict) else {}
+        return {"words": words, "sources": sources}
 
     def insertFromMimeData(self, source: QMimeData) -> None:  # noqa: N802 (Qt override)
         source_character_id = self._extract_source_character_id(source)
@@ -1201,8 +1220,7 @@ class TranscriptEditor(QTextEdit):
                 if local is not None:
                     added[str(name)] = local
         words = payload["words"]
-        usable = [w for w in words
-                  if isinstance(w, (list, tuple)) and len(w) > 2 and (w[2] in known or w[2] in added)]
+        usable = [w for w in words if _is_word_entry(w) and (w[2] in known or w[2] in added)]
         if not usable:
             self.app.set_status("Pasted without timing: the recording it came from isn't in this project.",
                                 "warning")

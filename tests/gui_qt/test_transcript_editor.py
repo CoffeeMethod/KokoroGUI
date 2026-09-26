@@ -3,6 +3,7 @@
 (Claude/PLAN_text_editor_redesign.md). `ClipHighlighter` replaces the
 retired `CharacterFxHighlighter`'s two-pass reconciliation with a single
 pass over `app.document.runs`, triggered via `TranscriptEditor.rehighlight()`."""
+import pytest
 from PySide6.QtCore import QMimeData, Qt
 from PySide6.QtGui import QFocusEvent, QTextCursor
 
@@ -525,6 +526,62 @@ def test_paste_from_another_project_imports_its_recording(qt_app, tmp_path):
     assert document.text == "Notes: " and document.sources == {}
 
 
+def test_paste_from_another_project_relinks_a_recording_missing_here(qt_app, tmp_path):
+    import numpy as np
+    import soundfile as sf
+
+    from kokoro_gui.daw import imported
+    from kokoro_gui.qt import project as project_io
+
+    other_dir, _other_id = project_io.create_project_dir()
+    wav = str(tmp_path / "elsewhere.wav")
+    sf.write(wav, np.full(RATE * 3, 0.1, dtype=np.float32), RATE)
+    source, entry = imported.source_entry(project_io.import_audio_file(wav, other_dir))
+    document, editor = qt_app.document, qt_app.editor
+    # This project knew the recording, but its file was missing on open.
+    document.settings["sources"] = {source: {"path": None, "sample_rate": RATE, "duration_s": 3.0}}
+    _set_text_via_real_edit(editor, "Notes: ")
+    _caret(editor, 7)
+
+    editor.insertFromMimeData(_words_mime("there", [[0, 5, source, 1.0, 1.5]], {source: entry}))
+
+    local = document.source_path(source)
+    assert local is not None and local.startswith(qt_app.project_dir)
+    clip = document.clip_covering(8)
+    assert clip is not None and [s.range for s in clip.segments] == [[1.0, 1.5]]
+
+    qt_app.undo()
+    assert document.text == "Notes: " and document.source_path(source) is None
+
+
+def test_paste_of_malformed_timed_words_keeps_the_good_ones(qt_app, tmp_path):
+    document, editor = qt_app.document, qt_app.editor
+    source, _ids = _recording(qt_app, tmp_path, [HELLO])
+    entry = dict(document.sources[source])
+    _caret(editor, len(document.text))
+    editor.textCursor().insertText("\n\nNotes: ")
+    at = len(document.text)
+    words = [[0, 3, [source], 1.0, 1.2], [0, 3, {"a": 1}, 1.0, 1.2], "junk", [4, 7, source, 1.3, 1.5],
+             [0, 3], None, [4, 7, source, "x", 1.5]]
+
+    editor.insertFromMimeData(_words_mime("one two", words, {source: entry, "bad": "not a dict"}))
+
+    assert document.text.endswith("Notes: one two")
+    clip = document.clip_covering(at + 4)
+    assert clip is not None and [s.range for s in clip.segments] == [[1.3, 1.5]]
+    assert set(document.sources) == {source}
+
+
+def test_paste_of_only_malformed_timed_words_lands_untimed(qt_app):
+    document, editor = qt_app.document, qt_app.editor
+    _set_text_via_real_edit(editor, "Notes: ")
+    _caret(editor, 7)
+
+    editor.insertFromMimeData(_words_mime("there", [[0, 5, ["x"], 1.0, 1.5]], {}))
+
+    assert document.text == "Notes: there" and document.clips == []
+
+
 def test_deleting_imported_words_undoes_with_their_timing(qt_app, tmp_path, qtbot):
     import copy
 
@@ -576,6 +633,74 @@ def test_typing_inside_a_recording_splits_it_and_undo_joins_it_back(qt_app, tmp_
     qt_app.redo()
     assert document.text == "Hello there my friend." and editor.toPlainText() == document.text
     assert document._run_covering(at + 1).text == " my"
+
+
+def _edit_state(qt_app):
+    """The document's text, the editor's, and its runs with clip ids
+    numbered in text order (a redone split makes a clip with a new id)."""
+    document = qt_app.document
+    names: dict = {}
+    runs = []
+    for run in document.runs:
+        name = names.setdefault(run.clip_id, len(names)) if run.clip_id else None
+        runs.append((run.text, name, run.kind, [list(w) for w in run.words]))
+    clips = sorted((names[c.id], [s.range for s in c.segments]) for c in document.clips if c.id in names)
+    return document.text, qt_app.editor.toPlainText(), runs, clips
+
+
+@pytest.mark.parametrize("typed", [" x", "x"])
+def test_typing_then_backspacing_inside_a_recording_undoes_and_redoes_step_by_step(qt_app, tmp_path, qtbot, typed):
+    """Type inside a recording (it splits), Backspace it all away (the
+    last one joins the halves again), then undo and redo all of it, twice:
+    each step gives back the same text, runs, words and clips, and no undo
+    or redo pushes a command of its own."""
+    document, editor = qt_app.document, qt_app.editor
+    _recording(qt_app, tmp_path, [HELLO])
+    states = [_edit_state(qt_app)]
+    at = document.text.index(" friend")
+    _caret(editor, at)
+    editor.setFocus()
+
+    qtbot.keyClicks(editor, typed)
+    states.append(_edit_state(qt_app))
+    assert document.text == f"Hello there{typed} friend." and len(document.clips) == 2
+    for _char in typed:
+        qtbot.keyClick(editor, Qt.Key.Key_Backspace)
+        states.append(_edit_state(qt_app))
+    assert document.text == "Hello there friend." and len(document.clips) == 1
+    stack = document.undo_stack
+    commands = len(stack._undo) + len(stack._redo)
+
+    for _round in range(2):
+        for expected in reversed(states[:-1]):
+            qt_app.undo()
+            assert _edit_state(qt_app) == expected
+            assert len(stack._undo) + len(stack._redo) == commands
+        for expected in states[1:]:
+            qt_app.redo()
+            assert _edit_state(qt_app) == expected
+            assert len(stack._undo) + len(stack._redo) == commands
+
+
+def test_a_native_undo_or_redo_never_pushes_a_command(qt_app, qtbot, monkeypatch):
+    """Even when the text a native step replays reads as an edit of
+    imported text, the replay only syncs the document."""
+    document, editor = qt_app.document, qt_app.editor
+    _caret(editor, len(document.text))
+    editor.setFocus()
+    qtbot.keyClicks(editor, "Notes")
+    text = document.text
+    stack = document.undo_stack
+    commands = len(stack._undo) + len(stack._redo)
+    monkeypatch.setattr(type(document), "edit_touches_imported", lambda self, position, removed: True)
+
+    qt_app.undo()
+    assert editor.toPlainText() == document.text and "Notes" not in document.text
+    assert len(stack._undo) + len(stack._redo) == commands
+    qt_app.redo()
+    assert editor.toPlainText() == document.text == text
+    assert len(stack._undo) + len(stack._redo) == commands
+    assert not editor.undo_coordinator.replaying
 
 
 def test_imported_words_get_a_faint_underline(qt_app, tmp_path):

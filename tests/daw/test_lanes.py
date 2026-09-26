@@ -141,3 +141,35 @@ def test_track_layout_is_normalised():
     assert doc.track_layout() == {"mode": "unified", "lanes": 1}
     assert Document(settings={"track_layout": "junk"}).track_layout() == {"mode": "character"}
     assert Document().track_layout() == {"mode": "character"}
+
+
+def test_an_imported_recording_and_a_pasted_timed_span_get_lanes_in_unified_mode():
+    from kokoro_gui.daw.undo import ApplyWordsCommand, ImportRecordingCommand
+
+    source = "a" * 16
+    sources = {source: {"path": "/p/audio/imported/a.wav", "sample_rate": 24000, "duration_s": 60.0}}
+    doc, clips = _conversation("AB", track_layout={"mode": "unified", "lanes": 3})
+    doc.undo_stack.push(RelaneCommand())
+    a, b = clips[0].character_id, clips[1].character_id
+
+    command = ImportRecordingCommand([{"text": "hello there", "character_id": b,
+                                       "words": [[0, 5, source, 0.0, 0.5], [6, 11, source, 0.5, 1.0]]}], sources)
+    doc.undo_stack.push(command)
+
+    recording = doc.get_clip(command.clip_ids[0])
+    assert recording.track_id is not None
+    assert doc.get_track(recording.track_id).lane == 2  # A, B, B: no speaker change
+
+    start = len(doc.text)
+    doc.replace_text(start, 0, 4, doc.text + " two")
+    paste = ApplyWordsCommand(start + 1, 3, [[0, 3, source, 1.3, 1.6]], sources, character_id=a)
+    doc.undo_stack.push(paste)
+
+    pasted = doc.get_clip(paste.clip_id)
+    assert pasted is not None and pasted.track_id is not None
+    assert doc.get_track(pasted.track_id).lane == 3  # A, B, B, A
+    assert all(doc.get_track(c.track_id).lane is not None for c in doc.clips)
+
+    doc.undo_stack.undo()
+    doc.undo_stack.undo()
+    assert sorted(lane_tracks(doc)) == [1, 2]

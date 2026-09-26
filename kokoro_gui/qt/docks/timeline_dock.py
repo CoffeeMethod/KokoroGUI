@@ -180,8 +180,10 @@ class TimelineDock(QDockWidget):
 
         # Fit to slot: clip id -> its running `_FitJob`, the clips "Fit all
         # over slot" has yet to start, and (clip id, needs rewrite) per
-        # finished fit for the batch's summary.
+        # finished fit for the batch's summary. `_fit_looping` is True while
+        # `_start_next_fit` walks the queue.
         self._fits: dict = {}
+        self._fit_looping = False
         self._fit_queue: list = []
         self._fit_batch: list = []
 
@@ -627,10 +629,19 @@ class TimelineDock(QDockWidget):
         return len(clips)
 
     def _start_next_fit(self) -> None:
-        while self._fit_queue and not self._fits:
-            clip_id, project = self._fit_queue.pop(0)
-            if self._start_fit(clip_id, project):
-                return
+        # A fit that needs no generate (a time stretch, a speed already at
+        # the clamp) ends inside `_start_fit` and calls back in here; the
+        # loop below already goes on to the next clip, so that call returns
+        # at once instead of nesting one stack frame chain per clip.
+        if self._fit_looping:
+            return
+        self._fit_looping = True
+        try:
+            while self._fit_queue and not self._fits:
+                clip_id, project = self._fit_queue.pop(0)
+                self._start_fit(clip_id, project)
+        finally:
+            self._fit_looping = False
         if not self._fits and len(self._fit_batch) > 1:
             rewrites = sum(1 for _clip_id, rewrite in self._fit_batch if rewrite)
             message = f"Fitted {len(self._fit_batch)} clips to their slots."
