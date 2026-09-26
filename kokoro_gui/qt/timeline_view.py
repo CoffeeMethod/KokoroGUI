@@ -65,7 +65,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QGraphicsItem, QGraphicsLineItem, QGraphicsProxyWidget, QGraphicsRectItem, QGraphicsScene,
@@ -108,6 +108,13 @@ DEFAULT_PIXELS_PER_SECOND = 50.0
 MIN_PIXELS_PER_SECOND = 20.0
 MAX_PIXELS_PER_SECOND = 400.0
 HEADER_WIDTH_PX = 150
+# Track header controls: the M/S/A/D buttons, and the Vol/Pan sliders
+# indented past their text labels. Name row, button row and two slider
+# rows fit one LANE_HEIGHT_PX.
+TOGGLE_WIDTH_PX = 24
+TOGGLE_HEIGHT_PX = 20
+SLIDER_LEFT_PX = 34
+SLIDER_HEIGHT_PX = 14
 CLIP_RADIUS_PX = 4.0
 # A clip's fill is its character color over the lane at this alpha: the
 # label stays readable in both themes and the waveform (the color's darker
@@ -680,11 +687,12 @@ class TrackHeaderView(QGraphicsView):
 
     def _toggle(self, text: str, tip: str, checked: bool) -> QToolButton:
         button = QToolButton()
+        button.setProperty("trackToggle", True)
         button.setText(text)
         button.setToolTip(tip)
         button.setCheckable(True)
         button.setChecked(checked)
-        button.setFixedSize(22, 18)
+        button.setFixedSize(TOGGLE_WIDTH_PX, TOGGLE_HEIGHT_PX)
         return button
 
     def _slider(self, lo: int, hi: int, value: int, tip: str) -> QSlider:
@@ -692,8 +700,17 @@ class TrackHeaderView(QGraphicsView):
         slider.setRange(lo, hi)
         slider.setValue(value)
         slider.setToolTip(tip)
-        slider.setFixedSize(HEADER_WIDTH_PX - 30, 14)
+        slider.setFixedSize(HEADER_WIDTH_PX - SLIDER_LEFT_PX - 8, SLIDER_HEIGHT_PX)
+        # Without this the proxied slider paints a window-colored strip
+        # over the header row.
+        slider.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         return slider
+
+    def _slider_label(self, text: str, y: float, color: str) -> None:
+        label = QGraphicsSimpleTextItem(text)
+        label.setBrush(QColor(color))
+        label.setPos(6, y + (SLIDER_HEIGHT_PX - label.boundingRect().height()) / 2)
+        self._scene.addItem(label)
 
     def render_tracks(self, tracks: list, document, automation_shown=frozenset()) -> None:
         pal = theme.current()
@@ -723,26 +740,47 @@ class TrackHeaderView(QGraphicsView):
             self._scene.addItem(label)
             self._labels.append(label)
 
-            mute = self._add_widget(self._toggle("M", "Mute", bool(track.mute)), 6, y + 24)
-            solo = self._add_widget(self._toggle("S", "Solo", bool(track.solo)), 30, y + 24)
-            auto = self._add_widget(self._toggle("A", "Show volume automation", track.id in automation_shown),
-                                    54, y + 24)
-            duck = self._add_widget(self._toggle("D", "Duck under speech: turn this track down while "
-                                                      "other clips play", bool(track.duck)), 78, y + 24)
-            gain = self._add_widget(self._slider(0, 200, gain_to_slider(track.gain), "Fader"), 6, y + 46)
-            pan = self._add_widget(self._slider(-100, 100, pan_to_slider(track.pan), "Pan"), 6, y + 62)
+            toggles = [
+                self._toggle("M", "Mute", bool(track.mute)),
+                self._toggle("S", "Solo", bool(track.solo)),
+                self._toggle("A", "Show volume automation", track.id in automation_shown),
+                self._toggle("D", "Duck under speech: turn this track down while other clips play",
+                             bool(track.duck)),
+            ]
+            for j, button in enumerate(toggles):
+                self._add_widget(button, 6 + j * (TOGGLE_WIDTH_PX + 4), y + 24)
+            mute, solo, auto, duck = toggles
+            gain_y, pan_y = y + 48, y + 48 + SLIDER_HEIGHT_PX + 2
+            self._slider_label("Vol", gain_y, pal.text_muted)
+            self._slider_label("Pan", pan_y, pal.text_muted)
+            gain = self._add_widget(self._slider(0, 200, gain_to_slider(track.gain), "Volume"),
+                                    SLIDER_LEFT_PX, gain_y)
+            pan_slider = self._slider(-100, 100, pan_to_slider(track.pan), "Pan")
+            pan_slider.setProperty("centered", True)  # no accent fill from the left edge
+            pan = self._add_widget(pan_slider, SLIDER_LEFT_PX, pan_y)
             tid = track.id
-            mute.toggled.connect(lambda on, t=tid: self.trackFieldChanged.emit(t, "mute", bool(on)))
-            solo.toggled.connect(lambda on, t=tid: self.trackFieldChanged.emit(t, "solo", bool(on)))
-            auto.toggled.connect(lambda on, t=tid: self.automationToggled.emit(t, bool(on)))
-            duck.toggled.connect(lambda on, t=tid: self.trackFieldChanged.emit(t, "duck", bool(on)))
+            field = self._emit_field_later
+            mute.toggled.connect(lambda on, t=tid: field(t, "mute", bool(on)))
+            solo.toggled.connect(lambda on, t=tid: field(t, "solo", bool(on)))
+            auto.toggled.connect(lambda on, t=tid: self._emit_later(self.automationToggled, t, bool(on)))
+            duck.toggled.connect(lambda on, t=tid: field(t, "duck", bool(on)))
             # sliderReleased, not valueChanged: one undo step per drag.
-            gain.sliderReleased.connect(
-                lambda g=gain, t=tid: self.trackFieldChanged.emit(t, "gain", g.value() / 100.0))
+            gain.sliderReleased.connect(lambda g=gain, t=tid: field(t, "gain", g.value() / 100.0))
             pan.sliderReleased.connect(lambda p=pan, t=tid: self._emit_pan(t, p))
             self.controls[tid] = {"mute": mute, "solo": solo, "auto": auto, "duck": duck, "gain": gain, "pan": pan}
         self._scene.setSceneRect(0, 0, HEADER_WIDTH_PX, total_height)
         self.setBackgroundBrush(QColor(pal.panel))
+
+    def _emit_later(self, signal, *args) -> None:
+        """Every receiver re-renders the header, which deletes the control
+        that sent the edit. Emitting from inside that control's mouse
+        handler leaves Qt running the rest of the handler on a deleted
+        widget, an access violation on Windows. The signal goes out on the
+        next event-loop turn instead."""
+        QTimer.singleShot(0, self, lambda: signal.emit(*args))
+
+    def _emit_field_later(self, track_id: str, field: str, value) -> None:
+        self._emit_later(self.trackFieldChanged, track_id, field, value)
 
     def _emit_pan(self, track_id: str, slider: QSlider) -> None:
         pan = slider_to_pan(slider.value())
@@ -750,7 +788,7 @@ class TrackHeaderView(QGraphicsView):
             slider.blockSignals(True)
             slider.setValue(0)
             slider.blockSignals(False)
-        self.trackFieldChanged.emit(track_id, "pan", pan)
+        self._emit_field_later(track_id, "pan", pan)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().mousePressEvent(event)

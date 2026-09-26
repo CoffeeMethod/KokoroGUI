@@ -251,14 +251,14 @@ def test_edge_drag_on_the_timeline_emits_bed_edge_dragged(qt_app, tmp_path, monk
     assert received == [(bed.id, "right", 1.0)]
 
 
-def test_the_track_duck_toggle_is_one_undoable_field(qt_app, tmp_path, monkeypatch):
+def test_the_track_duck_toggle_is_one_undoable_field(qt_app, qtbot, tmp_path, monkeypatch):
     bed, _asked = _import(qt_app, tmp_path, monkeypatch)
     qt_app.timeline_dock.refresh()
     track = qt_app.document.get_track(bed.track_id)
     header = qt_app.timeline_dock.timeline_widget.header
 
     header.controls[track.id]["duck"].click()
-    assert track.duck is True
+    qtbot.waitUntil(lambda: track.duck is True)
     schedule, _kwargs = _schedule(qt_app, monkeypatch)
     [entry] = [s for s in schedule if s.clip_id == bed.id]
     assert entry.duck is True and entry.sidechain is False

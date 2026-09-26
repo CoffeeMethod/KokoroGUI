@@ -4,6 +4,7 @@ test_waveform_view.py's app-independence, since this widget has no
 dependency on the running app - it only needs a kokoro_gui.daw.models.Document."""
 import numpy as np
 import pytest
+import shiboken6
 import soundfile as sf
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QMessageBox
@@ -971,6 +972,7 @@ def test_header_controls_emit_track_field_changes(qtbot):
     controls["pan"].setValue(3)  # inside the centre detent
     controls["pan"].sliderReleased.emit()
 
+    qtbot.waitUntil(lambda: len(received) == 4)
     assert received == [(track.id, "mute", True), (track.id, "solo", True), (track.id, "gain", 0.5),
                         (track.id, "pan", 0.0)]
     assert controls["pan"].value() == 0
@@ -985,10 +987,41 @@ def test_header_a_toggle_shows_the_automation_lane(qtbot):
 
     widget.header.controls[track.id]["auto"].click()
 
+    qtbot.waitUntil(lambda: widget.view.automation_item(track.id) is not None)
     lane = widget.view.automation_item(track.id)
-    assert lane is not None
     assert lane.points == [[0.0, 1.0], [1.0, 0.5]]
     assert widget.header.controls[track.id]["auto"].isChecked()
+
+
+@pytest.mark.parametrize("name", ["mute", "solo", "auto", "duck"])
+def test_a_header_toggle_outlives_the_click_that_rebuilds_the_header(qtbot, name):
+    """Every receiver re-renders the header. A real click has to return
+    before that happens, or Qt finishes the release handler on a deleted
+    button (0xC0000005 on Windows)."""
+    widget = TimelineWidget()
+    qtbot.addWidget(widget)
+    widget.resize(800, 300)
+    widget.show()
+    doc, _clip, track = _build_doc_with_one_clip()
+    arrangement = compute_arrangement(doc, chars_per_second=CPS)
+    widget.render_document(doc, arrangement)
+    header = widget.header
+    rendered = []
+
+    def rerender(*_args):
+        widget.render_document(doc, arrangement)
+        rendered.append(True)
+
+    header.trackFieldChanged.connect(rerender)
+    header.automationToggled.connect(rerender)
+    button = header.controls[track.id][name]
+    pos = header.mapFromScene(button.graphicsProxyWidget().mapToScene(QPointF(8, 8)))
+
+    qtbot.mouseClick(header.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+
+    assert shiboken6.isValid(button) and not rendered
+    qtbot.waitUntil(lambda: bool(rendered))
+    assert not shiboken6.isValid(button)
 
 
 def test_dragging_the_fade_in_handle_emits_fade_changed(qtbot, tmp_path):
