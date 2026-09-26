@@ -450,6 +450,10 @@ class TimelineDock(QDockWidget):
         clip = project.document.get_clip(clip_id) if project is not None else None
         if clip is None or clip.is_nested or clip.source == "imported":
             return False
+        blocked = self.app.cannot_generate(clip, project)
+        if blocked:
+            self.app.set_status(f"{blocked}: this clip can't be generated.", "warning")
+            return False
 
         text = project.document.clip_text(clip)
         config = self.app._assemble_clip_config(clip, project)
@@ -471,8 +475,7 @@ class TimelineDock(QDockWidget):
                 self._pending_results[clip_id] = results
             self.clipGenerationFinished.emit(clip_id, success, error)
 
-        engine = self.app.backend_for(clip, project).engine
-        future = engine.worker.run_coro(engine.generate_clip_audio((0, text, config)))
+        future = self.app.backend_for(clip, project).generate_clip((0, text, config))
         future.add_done_callback(_done)
         return True
 
@@ -908,6 +911,17 @@ class TimelineDock(QDockWidget):
         # Nested clips aren't TTS: a stale subproject generates through its
         # own document (app.generate_subprojects).
         dirty = [clip for clip in project.document.dirty_clips() if not clip.is_nested]
+        # A clip whose engine isn't installed stays stale (grill EN6); the
+        # status line says so once, and the rest generate.
+        blocked: dict = {}
+        for clip in dirty:
+            reason = self.app.cannot_generate(clip, project)
+            if reason:
+                blocked[reason] = blocked.get(reason, 0) + 1
+        if blocked:
+            dirty = [clip for clip in dirty if not self.app.cannot_generate(clip, project)]
+            self.app.set_status("; ".join(f"{reason}: {n} clip(s) skipped" for reason, n in blocked.items()),
+                                "warning")
         if not dirty:
             return
 
@@ -919,8 +933,8 @@ class TimelineDock(QDockWidget):
             text = project.document.clip_text(clip)
             config = self.app._assemble_clip_config(clip, project)
             clips_with_configs.append((clip.id, text, config))
-            engine = self.app.backend_for(clip, project).engine
-            groups.setdefault(id(engine), (engine, []))[1].append((clip.id, text, config))
+            backend = self.app.backend_for(clip, project)
+            groups.setdefault(backend.id, (backend, []))[1].append((clip.id, text, config))
 
         total = len(clips_with_configs)
         self._batch_completed = 0
@@ -960,8 +974,8 @@ class TimelineDock(QDockWidget):
                     self._batchGenerationRaw.emit()
             return _done
 
-        for engine, group in groups.values():
-            future = engine.worker.run_coro(engine.generate_dirty_clips(group, progress_callback=_on_clip_progress))
+        for backend, group in groups.values():
+            future = backend.generate_clips(group, progress=_on_clip_progress)
             future.add_done_callback(_done_for(group))
 
     def _on_batch_generation_raw(self) -> None:

@@ -1,10 +1,9 @@
 """Text extraction from source files (.txt/.pdf/.epub), multi-speaker script
 parsing, and long-text splitting into synthesis-sized chunks.
 
-`extract_text_from_file` reads `pypdf`/`ebooklib`/`epub` via `kokoro_engine.pypdf`
-/`.ebooklib`/`.epub` (qualified, at call time) rather than importing those names
-directly, so that tests can keep monkeypatching them on the `kokoro_engine` module
-(e.g. `monkeypatch.setattr(kokoro_engine.pypdf, "PdfReader", FakeReader)`).
+`extract_text_from_file` reads `pypdf.PdfReader`/`epub.read_epub` qualified,
+at call time, so tests can monkeypatch them on those modules (e.g.
+`monkeypatch.setattr(text_extraction.pypdf, "PdfReader", FakeReader)`).
 """
 import os
 import re
@@ -12,7 +11,15 @@ from typing import NamedTuple, Optional
 
 from bs4 import BeautifulSoup
 
-import kokoro_engine
+import warnings
+
+import ebooklib
+import pypdf
+from ebooklib import epub
+
+# ebooklib warns on every EPUB it opens.
+warnings.filterwarnings("ignore", category=UserWarning, module="ebooklib")
+warnings.filterwarnings("ignore", category=FutureWarning, module="ebooklib")
 
 # Same tag syntax `TextExtractionMixin.parse_multispeaker_text` matches -
 # duplicated here deliberately rather than shared/refactored out of that
@@ -70,8 +77,8 @@ def _epub_sections(fpath: str) -> list:
     """One `(title, text)` per EPUB spine document with text, in reading
     order; the title is the document's first `<h1>`/`<h2>`, else
     "Chapter N"."""
-    book = kokoro_engine.epub.read_epub(fpath, options={'ignore_ncx': True})
-    documents = [item for item in book.get_items() if item.get_type() == kokoro_engine.ebooklib.ITEM_DOCUMENT]
+    book = epub.read_epub(fpath, options={'ignore_ncx': True})
+    documents = [item for item in book.get_items() if item.get_type() == ebooklib.ITEM_DOCUMENT]
     spine = [entry[0] if isinstance(entry, (tuple, list)) else entry for entry in (getattr(book, "spine", None) or [])]
     if spine:
         by_id = {getattr(item, "id", None) or item.get_id(): item for item in documents}
@@ -94,7 +101,7 @@ def _pdf_sections(fpath: str) -> list:
     """One `(title, text)` per top-level outline entry, from its page to the
     next entry's; the whole document as one section when there's no
     outline."""
-    reader = kokoro_engine.pypdf.PdfReader(fpath)
+    reader = pypdf.PdfReader(fpath)
     pages = [(page.extract_text() or "") for page in reader.pages]
     starts = []
     try:
@@ -138,36 +145,42 @@ def extract_sections(fpath: str) -> list:
     return [(os.path.splitext(os.path.basename(fpath))[0], text)] if text else []
 
 
+def extract_text_from_file(fpath):
+    """The text of a .txt, .pdf or .epub file. A module function: it never
+    needed an engine (the GUI calls it without one)."""
+    if not os.path.exists(fpath):
+        raise FileNotFoundError("File does not exist.")
+
+    text_data = ""
+    lower_path = fpath.lower()
+
+    if lower_path.endswith(".pdf"):
+        reader = pypdf.PdfReader(fpath)
+        for page in reader.pages:
+            extracted = page.extract_text()
+            if extracted:
+                text_data += extracted + "\n\n"
+
+    elif lower_path.endswith(".epub"):
+        book = epub.read_epub(fpath, options={'ignore_ncx': True})
+        for item in book.get_items():
+            if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                soup = BeautifulSoup(item.get_content(), 'html.parser')
+                text_data += soup.get_text(separator='\n\n') + "\n\n"
+    else:
+        # Assume text based
+        with open(fpath, "r", encoding="utf-8") as f:
+            text_data = f.read()
+
+    return text_data
+
+
 class TextExtractionMixin:
     def extract_sections(self, fpath):
         return extract_sections(fpath)
 
     def extract_text_from_file(self, fpath):
-        if not os.path.exists(fpath):
-            raise FileNotFoundError("File does not exist.")
-
-        text_data = ""
-        lower_path = fpath.lower()
-
-        if lower_path.endswith(".pdf"):
-            reader = kokoro_engine.pypdf.PdfReader(fpath)
-            for page in reader.pages:
-                extracted = page.extract_text()
-                if extracted:
-                    text_data += extracted + "\n\n"
-
-        elif lower_path.endswith(".epub"):
-            book = kokoro_engine.epub.read_epub(fpath, options={'ignore_ncx': True})
-            for item in book.get_items():
-                if item.get_type() == kokoro_engine.ebooklib.ITEM_DOCUMENT:
-                    soup = BeautifulSoup(item.get_content(), 'html.parser')
-                    text_data += soup.get_text(separator='\n\n') + "\n\n"
-        else:
-            # Assume text based
-            with open(fpath, "r", encoding="utf-8") as f:
-                text_data = f.read()
-
-        return text_data
+        return extract_text_from_file(fpath)
 
     def parse_multispeaker_text(self, text):
         """

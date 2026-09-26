@@ -177,7 +177,9 @@ def test_generation_dock_state_covers_base_keys_minus_settings_owned(qt_app):
     # Output/format/subtitles/keep-segments live in the Export dialog now
     # (kokoro_gui/qt/docks/export_dialog.py), not the Settings tab.
     export_owned = {"filename", "out_dir", "separate", "combine", "export_subtitles"}
-    assert set(state.keys()) | settings_owned | export_owned == set(spec.GENERATION_BASE_KEYS)
+    # Kept per engine (grill EN5): `app.engine_settings(engine_id)`.
+    engine_owned = {"lang_code", "num_threads", "voice"}
+    assert set(state.keys()) | settings_owned | export_owned | engine_owned == set(spec.GENERATION_BASE_KEYS)
 
 
 def test_assemble_config_does_not_raise_key_error(qt_app):
@@ -390,3 +392,85 @@ def test_syllable_count_is_rough_but_stable():
     assert syllable_count("Hello there friend.") == 5
     assert syllable_count("") == 0
     assert syllable_count("rhythm 42") == 1
+
+
+# ---------------------------------------------------------------------------
+# The Engine row (grill EN1, EN2)
+# ---------------------------------------------------------------------------
+
+def test_engine_row_in_project_scope_sets_the_engine_for_new_characters(qt_app):
+    dock = qt_app.settings_dock
+    assert dock._mode == "none"
+    assert dock.engine_label.text() == "Engine for new characters:"
+    assert dock.engine_combo.isEnabled()
+    assert dock.engine_combo.currentData() == "kokoro"
+
+    dock.engine_combo.setCurrentIndex(dock.engine_combo.findData("dummy"))
+    dock._on_engine_picked()
+
+    assert qt_app.settings["default_engine"] == "dummy"
+    assert qt_app.default_engine_id == "dummy"
+    assert qt_app.document.characters[0].backend_id == "kokoro"
+
+
+def test_engine_row_in_clip_scope_shows_the_characters_engine_disabled(qt_app):
+    clip, character = _make_clip(qt_app)
+    qt_app.selection.select_clip(clip.id)
+    dock = qt_app.settings_dock
+    assert dock.engine_combo.currentData() == "kokoro"
+    assert not dock.engine_combo.isEnabled()
+    assert dock.engine_combo.toolTip() == "Set on the character"
+
+
+def test_engine_row_in_character_scope_switches_the_characters_engine(qt_app, qtbot):
+    character = qt_app.document.characters[0]
+    qt_app.selection.select_character(character.id)
+    dock = qt_app.settings_dock
+    assert dock.engine_combo.isEnabled()
+
+    dock.engine_combo.setCurrentIndex(dock.engine_combo.findData("dummy"))
+    dock._on_engine_picked()
+    # Deferred: the switch rebuilds the dock the combo sits in.
+    assert character.backend_id == "kokoro"
+    qtbot.waitUntil(lambda: character.backend_id == "dummy")
+
+    assert dock.engine_combo.currentData() == "dummy"
+    assert qt_app.backend.id == "dummy"
+    assert dock.schema_form.values()["voice"] == "dummy"
+
+
+def test_engine_switch_is_refused_while_a_job_runs(qt_app, monkeypatch):
+    character = qt_app.document.characters[0]
+    qt_app.selection.select_character(character.id)
+    monkeypatch.setattr(qt_app, "is_busy", lambda: True)
+
+    assert qt_app.settings_dock.pick_character_engine(character, "dummy") is False
+    assert character.backend_id == "kokoro"
+    assert qt_app.settings_dock.engine_combo.currentData() == "kokoro"
+
+
+def test_a_voice_the_new_engine_lists_is_kept(qt_app):
+    character = qt_app.document.characters[0]
+    character.preset_data["voice"] = "bm_daniel"
+    assert qt_app.set_character_engine(character, "dummy")
+    assert character.preset_data["voice"] == "dummy"  # Dummy has no bm_daniel
+
+    assert qt_app.set_character_engine(character, "kokoro")
+    assert character.preset_data["voice"] == "af_heart"  # the schema default
+    character.preset_data["voice"] = "bm_daniel"
+    assert qt_app.set_character_engine(character, "kokoro") is True
+    assert character.preset_data["voice"] == "bm_daniel"  # listed (British English)
+
+
+def test_an_engine_with_no_voices_leaves_the_character_without_one(qt_app, monkeypatch, tmp_path):
+    from kokoro_gui.engines import audio8_tts
+
+    monkeypatch.setattr(audio8_tts, "_get_model", lambda: (object(), object()))
+    monkeypatch.setattr(audio8_tts, "AUDIO8_REFS_DIR", str(tmp_path / "no_refs"))
+    character = qt_app.document.characters[0]
+    character.variants = {"angry": "angry_ref"}
+
+    assert qt_app.set_character_engine(character, "audio8")
+
+    assert "voice" not in character.preset_data
+    assert character.variants == {"angry": "angry_ref"}

@@ -21,10 +21,13 @@ def test_kokoro_backend_shows_mixing_dock(qt_app):
     assert qt_app.mixing_dock is not None
 
 
-def test_a_dummy_character_hides_mixing_dock(qt_app):
+def test_a_dummy_character_leaves_the_voices_tab_on_its_last_editor(qt_app):
+    """Dummy has no voice editor; hiding the tab would hide its Engine
+    combo too, so it keeps showing the last engine's (grill EN3)."""
     _use_engine(qt_app, "dummy")
     assert qt_app.backend.id == "dummy"
-    assert qt_app.mixing_dock is None
+    assert qt_app.voices_engine_id == "kokoro"
+    assert qt_app.mixing_dock is not None and qt_app.voice_clone_dock is None
 
 
 def test_back_to_kokoro_shows_mixing_dock_again(qt_app):
@@ -81,7 +84,7 @@ def test_two_characters_two_engines_stay_resident(qt_app):
     # The Settings tab follows the selected clip's character.
     qt_app.selection.select_clip(second.id)
     assert qt_app.backend.id == "dummy"
-    assert qt_app.mixing_dock is None
+    assert qt_app.voices_engine_id == "kokoro"
     qt_app.selection.select_clip(first.id)
     assert qt_app.backend.id == "kokoro"
     assert qt_app.mixing_dock is not None
@@ -175,3 +178,120 @@ def test_preview_uses_the_active_characters_engine_and_voice(qt_app):
     qt_app.preview_conversion()
     (text, voice, speed, _path, _extra), kwargs = qt_app.engine.generate_preview.call_args
     assert voice == "bf_emma"
+
+
+# --- a project whose engine isn't installed (grill EN6) -----------------------
+
+def _ghost_project(qt_app, seconds=0.2):
+    """A character on an engine nothing is registered under, with a clip
+    that has a generated file."""
+    import os
+
+    import numpy as np
+    import soundfile as sf
+
+    from kokoro_gui.daw.dirty import build_segments_from_results
+
+    doc = qt_app.document
+    doc.text = "hello there"
+    ghost = Character.from_preset_dict("Ghost", {"voice": "boo"}, backend_id="ghost")
+    doc.characters.append(ghost)
+    clip = doc.assign_character_to_range(0, 5, ghost.id)
+    generated = os.path.join(qt_app.project_dir, "audio", "generated")
+    os.makedirs(generated, exist_ok=True)
+    path = os.path.join(generated, "feedface_0.wav")
+    sf.write(path, np.full(int(24000 * seconds), 0.2, dtype=np.float32), 24000)
+    clip.segments = build_segments_from_results("feedface", [{"text": "hello", "path": path,
+                                                              "duration": seconds, "cache_key": "feedface"}])
+    return ghost, clip
+
+
+def test_a_missing_engines_clips_play_and_are_not_stale(qt_app):
+    ghost, clip = _ghost_project(qt_app)
+
+    assert clip not in qt_app.document.dirty_clips()
+    assert qt_app.backend_for(clip).display_name == "ghost (not installed)"
+    assert ghost.backend_id == "ghost"
+    placed = {p.clip.id: p for p in qt_app.build_arrangement().placed}
+    assert placed[clip.id].duration_s > 0.1
+
+
+def test_a_missing_engines_clips_do_not_generate(qt_app, monkeypatch):
+    import os
+
+    ghost, clip = _ghost_project(qt_app)
+    os.remove(clip.segments[0].audio_path)
+    assert clip in qt_app.document.dirty_clips()  # stale, but not generatable
+    assert qt_app.cannot_generate(clip) == "ghost isn't installed"
+
+    assert qt_app.timeline_dock.on_generate_clip_requested(clip.id) is False
+    qt_app.timeline_dock.generate_dirty_clips_requested()
+    assert not qt_app.is_busy()
+    assert "ghost isn't installed: 1 clip(s) skipped" in qt_app.transport_dock.status_text()
+
+    from PySide6.QtGui import QPaintEvent
+
+    qt_app.editor.rehighlight()
+    gutter = qt_app.editor._gutter
+    gutter.paintEvent(QPaintEvent(gutter.rect()))
+    assert gutter.button_rects() == []
+    rect, reason = gutter.blocked_rects()[0]
+    assert gutter.tooltip_at(rect.center()) == "ghost isn't installed: this clip can't be generated here."
+
+
+def test_the_engine_pickers_name_a_missing_engine(qt_app):
+    from kokoro_gui.qt.characters_dialog import CharactersDialog
+
+    ghost, _clip = _ghost_project(qt_app)
+    assert ("ghost (not installed)", "ghost") in qt_app.engine_choices()
+    dialog = CharactersDialog(qt_app)
+    dialog._show(ghost)
+    assert dialog.engine_combo.currentText() == "ghost (not installed)"
+    assert dialog.set_engine("ghost") is False
+    assert dialog.set_engine("kokoro") is True and ghost.backend_id == "kokoro"
+
+
+def test_save_keeps_a_missing_engines_character_and_files(qt_app, tmp_path):
+    import json
+    import zipfile
+
+    ghost, _clip = _ghost_project(qt_app)
+    path = str(tmp_path / "ghost.tbaw")
+    qt_app.save_project_as(path)
+    qt_app.wait_for_project_io()
+    # A bundle saved where the engine was installed carries its files.
+    with zipfile.ZipFile(path, "a") as zf:
+        zf.writestr("engines/ghost/voices/boo.bin", b"the ghost's voice")
+
+    qt_app.open_project(path)
+    qt_app.wait_for_project_io()
+    reopened = next(c for c in qt_app.document.characters if c.name == "Ghost")
+    assert reopened.backend_id == "ghost"
+    qt_app.document.text = "hello there, again"  # an edit, so Save rewrites the file
+    qt_app.save_project()
+    qt_app.wait_for_project_io()
+
+    with zipfile.ZipFile(path) as zf:
+        assert "engines/ghost/voices/boo.bin" in zf.namelist()
+        document = json.loads(zf.read("document.json"))
+    assert any(c.get("backend_id") == "ghost" for c in document["characters"])
+
+
+def test_save_as_keeps_a_missing_engines_files(qt_app, tmp_path):
+    import zipfile
+
+    _ghost_project(qt_app)
+    path = str(tmp_path / "ghost.tbaw")
+    qt_app.save_project_as(path)
+    qt_app.wait_for_project_io()
+    with zipfile.ZipFile(path, "a") as zf:
+        zf.writestr("engines/ghost/voices/boo.bin", b"the ghost's voice")
+    qt_app.open_project(path)
+    qt_app.wait_for_project_io()
+
+    copy = str(tmp_path / "elsewhere" / "copy.tbaw")
+    qt_app.save_project_as(copy)
+    qt_app.wait_for_project_io()
+
+    with zipfile.ZipFile(copy) as zf:
+        assert zf.read("engines/ghost/voices/boo.bin") == b"the ghost's voice"

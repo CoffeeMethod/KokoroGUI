@@ -29,6 +29,7 @@ it safe.
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import tempfile
@@ -40,7 +41,6 @@ from PySide6.QtCore import QFileSystemWatcher, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QWidget
 
-from kokoro_engine import KokoroEngine
 from kokoro_gui.daw import library as character_library, wordalign
 from kokoro_gui.daw.migration import import_presets_to_library, link_exact_matches
 from kokoro_gui.daw import subtitles
@@ -55,8 +55,10 @@ from kokoro_gui.daw.reference import SOURCE_TRACK_KEY, reference_slices, source_
 from kokoro_gui.daw.undo import (
     AssignCharacterCommand, ImportBedCommand, ImportCuesCommand, ImportRecordingCommand, SetFieldCommand,
 )
-from kokoro_gui.engine import caching
+from kokoro_gui.engine import caching, runtime, text_extraction
 from kokoro_gui.engines import registry as engine_registry
+from kokoro_gui.engines.base import per_engine_fields
+from kokoro_gui.engines.missing import MissingBackend
 from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
 from kokoro_gui.qt import settings as qt_settings
 from kokoro_gui.qt.open_projects import OpenProject
@@ -118,6 +120,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         os.makedirs(FX_PRESETS_DIR, exist_ok=True)
 
         self.settings = qt_settings.load_settings(CONFIG_FILE)
+        qt_settings.migrate_engine_settings(self.settings)
         # The global character library (phase 3, grill WF4-WF7/WF12).
         # `library_missing` holds the document character ids whose entry
         # the last resolve didn't find (the Characters dialog's "not found
@@ -168,9 +171,15 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         # once per backend (`_ensure_backend_ready`).
         self._backends: dict = {}
         self._bridges: dict = {}
+        self._missing_backends: dict = {}
         self._ready_backends: set = set()
-        self._primary_engine_id = "kokoro"
+        self._primary_engine_id = engine_registry.DEFAULT_ENGINE_ID
         self._last_active_engine_id = None
+        # The engine whose voice editor the Voices tab shows (grill EN3):
+        # runtime only. A selection change moves it to the active
+        # character's engine; the tab's own Engine combo moves it anywhere.
+        self.voices_engine_id: str | None = None
+        self._characters_dialog = None
         self.projectIoProgress.connect(self._on_project_io_progress)
         self._projectIoFinished.connect(self._on_project_io_finished)
         self._wordAlignProgress.connect(self._on_word_align_progress)
@@ -221,7 +230,16 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.video_dock: VideoDock | None = None
 
         # --- Engines: one resident backend per engine id in use ---
-        self._add_backend(engine_registry.get_engine("kokoro", engine=KokoroEngine()))
+        # The storage dirs first (private, see runtime.prepare_storage), then
+        # the default engine, or any installed one when it isn't.
+        runtime.prepare_storage()
+        first = self._backend_for(self.default_engine_id)
+        for engine_id in engine_registry.list_engines():
+            if first is not None:
+                break
+            first = self._backend_for(engine_id)
+        if first is None:
+            raise RuntimeError("No TTS engine could be loaded; see the install section of the README.")
         self._install_segment_key_fn()
         self._install_nested_state_fn(self.root)
 
@@ -387,7 +405,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             # A placeholder until the Open lands.
             document = Document(runs=[], clips=[], tracks=[], characters=[], settings={})
         else:
-            document = document_state.load_or_create_document(DOCUMENT_FILE, self.settings, self.character_library)
+            # A fresh document's Default character speaks with the default
+            # engine's voice.
+            seed = {**self.settings, "voice": self.engine_settings(self.default_engine_id).get("voice")}
+            document = document_state.load_or_create_document(DOCUMENT_FILE, seed, self.character_library)
             self._resolve_library_into(document)
         self._begin_untitled_project_dir(document)
         return document
@@ -496,22 +517,35 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def _add_backend(self, backend) -> None:
         bridge = EngineSignalBridge()
-        wire_engine(backend.engine, bridge)
+        wire_engine(backend, bridge)
         self._connect_bridge(bridge)
         self._backends[backend.id] = backend
         self._bridges[backend.id] = bridge
 
     def _ensure_backend_ready(self, backend) -> None:
         """Loads `backend`'s pipeline once (the model, for Audio8), on its
-        own worker."""
+        own worker, in that engine's own language."""
         if backend is None or backend.id in self._ready_backends:
             return
         self._ready_backends.add(backend.id)
-        lang_code = self.settings.get("lang_code", "a")
-        if self.settings_dock is not None:
-            lang_code = self.settings_dock.get_state().get("lang_code", lang_code)
-        backend.engine.worker.run_coro(
-            backend.engine.init_pipeline_async(lang_code, device=self.settings.get("device", "auto")))
+        lang_code = self.engine_settings(backend.id).get("lang_code")
+        backend.ensure_ready(lang_code, device=self.settings.get("device", "auto"))
+
+    def engine_settings(self, engine_id: str) -> dict:
+        """The per-engine settings of `engine_id` (grill EN5): the schema
+        defaults of every field that isn't shared (`lang_code`,
+        `num_threads`, the "Model" group, ...), overlaid with
+        `settings["engines"][engine_id]`. A stored value for a key the
+        schema no longer has is dropped."""
+        fields = per_engine_fields(engine_registry.get_config_schema(engine_id))
+        stored = (self.settings.get("engines") or {}).get(engine_id) or {}
+        return {f.key: stored.get(f.key, f.default) for f in fields}
+
+    def set_engine_setting(self, engine_id: str, key: str, value) -> None:
+        """Stores one per-engine value and schedules the config save."""
+        engines = self.settings.setdefault("engines", {})
+        engines.setdefault(engine_id, {})[key] = value
+        self.schedule_save()
 
     @property
     def backends(self) -> dict:
@@ -519,10 +553,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         return dict(self._backends)
 
     def _document_engine_ids(self, document) -> list:
-        """The engine ids `document`'s characters use, the primary engine
+        """The engine ids `document`'s characters use, the default engine
         first, registered ones only."""
         known = set(engine_registry.list_engines())
-        ids = [self._primary_engine_id]
+        ids = [self.default_engine_id] if self.default_engine_id in known else []
         for character in getattr(document, "characters", []) or []:
             engine_id = character.backend_id or self._primary_engine_id
             if engine_id in known and engine_id not in ids:
@@ -530,10 +564,30 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         return ids
 
     def backend_for_character(self, character):
-        """The adapter a character generates with: its `backend_id`, or the
-        primary engine when that id isn't registered here."""
-        engine_id = (character.backend_id if character is not None else None) or self._primary_engine_id
-        return self._backend_for(engine_id) or self._backends[self._primary_engine_id]
+        """The adapter a character generates with: its `backend_id` (no id
+        means the primary engine). An engine this install doesn't have gets
+        a `MissingBackend` (grill EN6): the character keeps its engine, its
+        clips play and don't generate. With no character at all, the default
+        engine."""
+        if character is None:
+            return self._backend_for(self.default_engine_id) or next(iter(self._backends.values()))
+        engine_id = character.backend_id or self._primary_engine_id
+        return self._backend_for(engine_id) or self._missing_backend(engine_id)
+
+    def _missing_backend(self, engine_id: str) -> MissingBackend:
+        """One `MissingBackend` per engine id, kept (not in `_backends`: Save's
+        asset collection and the job/cancel loops only see real engines)."""
+        backend = self._missing_backends.get(engine_id)
+        if backend is None:
+            backend = MissingBackend(engine_id, engine_registry.unavailable_reason(engine_id))
+            self._missing_backends[engine_id] = backend
+        return backend
+
+    def cannot_generate(self, clip, project=None) -> str | None:
+        """Why `clip` can't generate here, or None: its engine isn't
+        installed (grill EN6)."""
+        backend = self.backend_for(clip, project)
+        return backend.message if isinstance(backend, MissingBackend) else None
 
     def backend_for(self, clip, project=None):
         """The adapter `clip` generates with: its character's engine."""
@@ -568,16 +622,78 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     @property
     def engine(self):
+        """The active backend's engine object. For tests and tooling; the GUI
+        itself only talks to the adapter (`backend`)."""
         return self.backend.engine
+
+    def voices_backend(self):
+        """The engine whose voice editor the Voices tab shows
+        (`voices_engine_id`), or the active engine before one is set."""
+        if self.voices_engine_id:
+            backend = self._backend_for(self.voices_engine_id)
+            if backend is not None:
+                return backend
+        return self.backend
+
+    @staticmethod
+    def voice_editor_engines() -> list:
+        """Engine ids that have a voice editor (mixing or cloning), in
+        registry order: what the Voices tab's Engine combo lists."""
+        out = []
+        for engine_id in engine_registry.list_engines():
+            caps = engine_registry.get_capabilities(engine_id)
+            if getattr(caps, "supports_voice_mixing", False) or getattr(caps, "supports_voice_cloning", False):
+                out.append(engine_id)
+        return out
+
+    def _follow_active_for_voices(self) -> bool:
+        """Grill EN3: the Voices tab follows the active character's engine.
+        An engine with no voice editor (Dummy) leaves the tab where it is,
+        so the tab and its Engine combo stay reachable. True when it moved."""
+        editors = self.voice_editor_engines()
+        target = self.backend.id if self.backend.id in editors else self.voices_engine_id
+        if target is None and editors:
+            target = editors[0]
+        if target == self.voices_engine_id:
+            return False
+        self.voices_engine_id = target
+        return True
+
+    def set_voices_engine(self, engine_id: str) -> None:
+        """The Voices tab's Engine combo: show `engine_id`'s voice editor
+        without touching any character. The next selection change moves it
+        back to the active character's engine."""
+        if engine_id not in self.voice_editor_engines() or engine_id == self.voices_engine_id:
+            return
+        backend = self._backend_for(engine_id)
+        if backend is None:
+            return
+        self.voices_engine_id = engine_id
+        self._sync_mixing_dock()
+        self._sync_voice_clone_dock()
+        dock = self.mixing_dock if backend.capabilities.supports_voice_mixing else self.voice_clone_dock
+        if dock is not None:
+            dock.show()
+            dock.raise_()
+
+    def refresh_voice_choices(self) -> None:
+        """After a voice editor saves or deletes a voice: every voice list
+        that could show it (the Settings form, an open Edit > Characters)."""
+        if self.settings_dock is not None and self.settings_dock.schema_form is not None:
+            self.settings_dock.refresh_voice_choices()
+        if self._characters_dialog is not None:
+            self._characters_dialog.refresh_voices()
 
     @property
     def bridge(self):
         return self._bridges[self.backend.id]
 
     def set_character_engine(self, character, engine_id: str) -> bool:
-        """The Characters dialog's engine picker: `character` generates with
-        `engine_id` from now on. The backend is made resident and its
-        pipeline loads. Refused while a job runs or for an unknown engine."""
+        """The engine pickers (Settings tab, Edit > Characters): `character`
+        generates with `engine_id` from now on. The backend is made resident
+        and its pipeline loads. The voice follows grill EN2
+        (`_voice_after_engine_change`); variants stay. Not undoable. Refused
+        while a job runs or for an unknown engine."""
         if self.is_busy():
             QMessageBox.warning(self, "Busy", "Cancel the current job before changing a character's engine.")
             return False
@@ -585,17 +701,99 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         if backend is None:
             return False
         character.backend_id = engine_id
+        voice = self._voice_after_engine_change(character.preset_data.get("voice"), backend)
+        if voice:
+            character.preset_data["voice"] = voice
+        else:
+            character.preset_data.pop("voice", None)
         self._ensure_backend_ready(backend)
         self._on_active_backend_maybe_changed(force=True)
-        self.on_characters_changed()
+        self.commit_character_edit(character)
         return True
+
+    def _voice_after_engine_change(self, voice, backend):
+        """Grill EN2: `voice` stays when `backend` lists it (in any of its
+        languages); else the engine's schema default when it lists that,
+        else its first voice for its language, else None (Audio8 with no
+        references)."""
+        listed = {v.id for v in backend.get_voices(None)}
+        if voice and voice in listed:
+            return voice
+        field = next((f for f in backend.get_config_schema() if f.key == "voice"), None)
+        if field is not None and field.default and field.default in listed:
+            return field.default
+        voices = self.get_all_voices(backend=backend)
+        return voices[0] if voices else None
+
+    def commit_character_edit(self, character, write_through: bool = True) -> None:
+        """After any edit to a character (Edit > Characters, the Settings
+        tab's character scope, an engine switch): a linked character's
+        voice, FX, color, engine and variants go to its library entry (WF5)
+        or, in a subproject, to the root's project-scope record (NP3); the
+        open documents re-resolve so every record linked to it follows; then
+        the editor, transcript, timeline and autosave refresh.
+        `write_through=False` is for edits that stay in this project (a
+        rename, an add)."""
+        if write_through and character is not None and character.library_id:
+            scope = self.character_scope(character)
+            in_subproject = getattr(self.focus, "parent_id", None) is not None
+            if scope == "global" and character_library.write_through(character, self.character_library):
+                self.resolve_library(refresh=False)
+            elif scope == "project" and in_subproject:
+                root_record = next(c for c in self.root.document.characters
+                                   if c.library_id == character.library_id)
+                for name in character_library.RESOLVED_FIELDS:
+                    setattr(root_record, name, copy.deepcopy(getattr(character, name)))
+                self.resolve_library(refresh=False)
+            elif scope == "project":
+                self.resolve_library(refresh=False)
+        self.on_characters_changed()
+
+    @property
+    def default_engine_id(self) -> str:
+        """The engine new characters get (grill EN1/EN4):
+        `settings["default_engine"]` when it's registered, else the primary
+        engine."""
+        engine_id = self.settings.get("default_engine")
+        return engine_id if engine_id in engine_registry.list_engines() else self._primary_engine_id
+
+    def set_default_engine(self, engine_id: str) -> None:
+        """The Settings tab's project-scope "Engine for new characters"."""
+        if engine_id not in engine_registry.list_engines():
+            return
+        self._set_setting("default_engine", engine_id)
+
+    def engine_choices(self) -> list:
+        """`[(display name, engine id), ...]` in the order every engine
+        picker lists them (the Settings row, Edit > Characters): the
+        installed engines, then one a character in the open document uses
+        that isn't installed, as "<name> (not installed)" (grill EN6)."""
+        choices = [(engine_registry.get_display_name(e), e) for e in engine_registry.list_engines()]
+        known = {e for _label, e in choices}
+        for character in self.document.characters:
+            engine_id = character.backend_id or self._primary_engine_id
+            if engine_id not in known:
+                known.add(engine_id)
+                choices.append((self._missing_backend(engine_id).display_name, engine_id))
+        return choices
+
+    def make_character(self, name: str, highlight_color: str) -> Character:
+        """A new local character on `default_engine_id` with that engine's
+        default voice (grill EN4): Edit > Characters' Add and a new speaker
+        from subtitle import. The engine is made resident and loads."""
+        backend = self._backend_for(self.default_engine_id) or self._backends[self._primary_engine_id]
+        self._ensure_backend_ready(backend)
+        voice = self.default_voice(backend)
+        return Character.from_preset_dict(name, {"voice": voice} if voice else {},
+                                          highlight_color=highlight_color, backend_id=backend.id)
 
     def _on_active_backend_maybe_changed(self, force: bool = False) -> None:
         """The selection moved: when the active engine changed, the
         Settings schema follows (the dock rebuilds on selection anyway),
         and the Voices tab and the JIT action follow here."""
         engine_id = self.backend.id
-        if not force and engine_id == self._last_active_engine_id:
+        voices_moved = self._follow_active_for_voices()
+        if not force and engine_id == self._last_active_engine_id and not voices_moved:
             return
         self._last_active_engine_id = engine_id
         if self.settings_dock is not None and force:
@@ -811,6 +1009,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         for dock in (self.fx_dock, self.lexicon_dock):
             self.addDockWidget(top, dock)
             self.tabifyDockWidget(self.settings_dock, dock)
+        self._follow_active_for_voices()
         self._sync_mixing_dock()
         self._sync_voice_clone_dock()
         for voices_dock in (self.mixing_dock, self.voice_clone_dock):
@@ -900,15 +1099,31 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     # --- voice listing --
 
     def get_all_voices(self, lang_code: str | None = None, backend=None) -> list:
-        """`spec.VOICE_DB` is Kokoro's built-in named-voice table; the
-        backend-provided half comes from `backend.get_voices(...)` (the
-        active backend by default)."""
-        if lang_code is None:
-            lang_code = self.settings.get("lang_code", "a")
+        """The voice names `backend` (the active one by default) lists for
+        `lang_code`, else for that engine's own language setting: built-ins
+        first, then the user's own."""
         backend = backend or self.backend
-        standard = spec.VOICE_DB.get(lang_code, [])
-        custom = [v.id for v in backend.get_voices(lang_code)]
-        return sorted(set(standard + custom))
+        if lang_code is None:
+            lang_code = self.engine_settings(backend.id).get("lang_code")
+        names = []
+        for voice in backend.get_voices(lang_code):
+            if voice.id not in names:
+                names.append(voice.id)
+        return names
+
+    def default_voice(self, backend=None) -> str | None:
+        """The default voice of `backend`'s engine: its stored per-engine
+        `voice` when the engine lists it, else the schema default, else its
+        first voice."""
+        backend = backend or self.backend
+        voices = self.get_all_voices(backend=backend)
+        stored = self.engine_settings(backend.id).get("voice")
+        if stored and stored in voices:
+            return stored
+        field = next((f for f in backend.get_config_schema() if f.key == "voice"), None)
+        if field is not None and field.default:
+            return field.default
+        return voices[0] if voices else stored
 
     # --- settings persistence -
 
@@ -931,7 +1146,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
         if self.settings_dock is not None:
             gen_state = self.settings_dock.get_state()
-            for key in ("lang_code", "voice", "speed", "volume", "pitch", "num_threads",
+            for key in ("speed", "volume", "pitch",
                         "caching", "normalize", "format", *spec.SEGMENTATION_KEYS):
                 if key in gen_state:
                     self.settings[key] = gen_state[key]
@@ -985,11 +1200,13 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def _assemble_config(self) -> dict:
         gen_state = self.settings_dock.get_state()
+        engine = self.engine_settings(self.backend.id)
         export = self._export_values()
         config = {
+            **engine,
             "engine_id": self.backend.id,
-            "lang_code": gen_state["lang_code"],
-            "voice": gen_state["voice"],
+            "lang_code": engine.get("lang_code"),
+            "voice": engine.get("voice"),
             "speed": gen_state["speed"],
             **self._segmentation_config(gen_state),
             # Sanitize the free-text filename field the same way voice/preset
@@ -1003,7 +1220,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             "export_subtitles": export["srt"],
             "caching": gen_state["caching"],
             "time_id": time.strftime(self.timecode_format),
-            "num_threads": gen_state["num_threads"],
+            "num_threads": engine.get("num_threads", 1),
             "volume": gen_state["volume"],
             "pitch": gen_state["pitch"],
             "normalize": gen_state["normalize"],
@@ -1023,8 +1240,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     def _assemble_generation_config(self, clip, project=None) -> dict:
         """Exactly the inputs that decide what a clip's audio *is*: the
         segment key hashes these and nothing else, and `_assemble_clip_config`
-        is built on top. App defaults from the Settings tab, the backend's
-        "Model" schema group (Audio8's sampling knobs), the Lexicon (the
+        is built on top. The project defaults from the Settings tab, the clip's own
+        engine's `lang_code` and "Model" schema group (Audio8's sampling
+        knobs) from `engine_settings`, the Lexicon (the
         key is over the text after substitution), the segmentation settings
         (they decide the pieces), then the clip's
         `effective_config_for_clip` (character preset, then overrides) on
@@ -1036,18 +1254,19 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         project = project or self.project_for(clip)
         gen_state = self.settings_dock.get_state()
         backend = self.backend_for(clip, project)
+        engine = self.engine_settings(backend.id)
         config = {
             "engine_id": backend.id,
-            "lang_code": gen_state["lang_code"],
-            "voice": gen_state["voice"],
+            "lang_code": engine.get("lang_code"),
+            "voice": engine.get("voice"),
             "speed": gen_state["speed"],
             "pitch": gen_state["pitch"],
             "lexicon": dict(self.settings.get("lexicon", {})),
             **self._segmentation_config(gen_state),
         }
         for field in backend.get_config_schema():
-            if field.group == "Model" and field.key in gen_state:
-                config[field.key] = gen_state[field.key]
+            if field.group == "Model":
+                config[field.key] = engine.get(field.key, field.default)
         clip_config = dict(project.document.effective_config_for_clip(clip))
         for key in ("voice", "speed", "pitch", "lang_code"):
             if key in clip_config:
@@ -1086,19 +1305,20 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         gen_state = self.settings_dock.get_state()
         export = self._export_values()
         config = {
+            # The clip's engine's own settings (threads, Audio8's
+            # cache_reference_codes, ...); the generation keys among them
+            # are set again below by _assemble_generation_config.
+            "num_threads": 1,
+            **self.engine_settings(self.backend_for(clip, project).id),
             "format": export["format"],
             "out_dir": export["out_dir"],
             "caching": gen_state["caching"],
             "time_id": time.strftime(self.timecode_format),
-            "num_threads": gen_state["num_threads"],
             "volume": gen_state["volume"],
             "normalize": gen_state["normalize"],
             "trim_silence": gen_state["trim_silence"],
             "filename": os.path.basename(export["filename"]),
         }
-        for key in ("cache_reference_codes",):
-            if key in gen_state:
-                config[key] = gen_state[key]
 
         clip_config = dict(project.document.effective_config_for_clip(clip))
         # ALLOWED_PRESET_KEYS whitelists "trim", but process_audio reads
@@ -1146,6 +1366,11 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
         def key_fn(text, clip, engine_version=None):
             backend = self.backend_for(clip, project)
+            if isinstance(backend, MissingBackend):
+                # No engine to compute a key with (grill EN6): the stored one
+                # stands while the files are there. A clip with no segments
+                # or a missing file is stale anyway (`is_clip_dirty`).
+                return clip.segments[0].cache_key if clip.segments else None
             config = self._assemble_generation_config(clip, project)
             memo_key = (text, json.dumps(config, sort_keys=True, default=str), engine_version)
             name, _fp = caching.normalize_voice(config.get("voice"), backend, config.get("project_dir"))
@@ -1282,11 +1507,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.schedule_save()
         if self.is_busy():
             return
-        lang_code = self.settings_dock.get_state().get("lang_code", "a")
         self.set_status(f"Re-initializing engines on {device}...")
         for engine_id in sorted(self._ready_backends):
-            engine = self._backends[engine_id].engine
-            engine.worker.run_coro(engine.init_pipeline_async(lang_code, device=device))
+            lang_code = self.engine_settings(engine_id).get("lang_code")
+            self._backends[engine_id].ensure_ready(lang_code, device=device)
 
     def set_theme(self, name: str) -> None:
         self.settings["theme"] = name
@@ -1297,28 +1521,43 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.schedule_save()
 
     def _sync_mixing_dock(self) -> None:
-        wants = self.backend.capabilities.supports_voice_mixing
+        wants = self.voices_backend().capabilities.supports_voice_mixing
+        if wants and self.mixing_dock is not None and self.mixing_dock.backend_id != self.voices_backend().id:
+            # Another mixing engine: rebuild the editor for its voices.
+            self._drop_voices_dock(self.mixing_dock)
+            self.mixing_dock = None
         if wants and self.mixing_dock is None:
             self.mixing_dock = MixingDock(self)
             self._place_voices_dock(self.mixing_dock)
         elif not wants and self.mixing_dock is not None:
-            self.removeDockWidget(self.mixing_dock)
-            self.mixing_dock.deleteLater()
+            self._drop_voices_dock(self.mixing_dock)
             self.mixing_dock = None
         elif wants and self.mixing_dock is not None and self.mixing_dock.parent() is None:
             self._place_voices_dock(self.mixing_dock)
 
     def _sync_voice_clone_dock(self) -> None:
-        wants = self.backend.capabilities.supports_voice_cloning
+        wants = self.voices_backend().capabilities.supports_voice_cloning
+        if wants and self.voice_clone_dock is not None and \
+                self.voice_clone_dock.backend_id != self.voices_backend().id:
+            self._drop_voices_dock(self.voice_clone_dock)
+            self.voice_clone_dock = None
         if wants and self.voice_clone_dock is None:
             self.voice_clone_dock = VoiceCloneDock(self)
             self._place_voices_dock(self.voice_clone_dock)
         elif not wants and self.voice_clone_dock is not None:
-            self.removeDockWidget(self.voice_clone_dock)
-            self.voice_clone_dock.deleteLater()
+            self._drop_voices_dock(self.voice_clone_dock)
             self.voice_clone_dock = None
         elif wants and self.voice_clone_dock is not None and self.voice_clone_dock.parent() is None:
             self._place_voices_dock(self.voice_clone_dock)
+
+    def _drop_voices_dock(self, dock) -> None:
+        """Removes a voice editor and unparents it: until the deferred
+        delete runs it would still be a child answering to "dock_voices",
+        and a layout restore could place it instead of the editor now
+        shown."""
+        self.removeDockWidget(dock)
+        dock.setParent(None)
+        dock.deleteLater()
 
     def _place_voices_dock(self, dock) -> None:
         """Both capability-gated voice docks share the "Voices" tab title and
@@ -2047,7 +2286,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         """WF10: prompts "Add to current project" / "New project" unless
         `target` ("add" | "new") is given."""
         try:
-            text = self.engine.extract_text_from_file(path)
+            text = text_extraction.extract_text_from_file(path)
         except Exception as e:
             QMessageBox.critical(self, "Import failed", f"Read failed: {e}")
             return
@@ -2099,8 +2338,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         made the way Edit > Characters' Add makes one. No track until a
         clip uses it (grill PR4)."""
         color = DEFAULT_HIGHLIGHT_PALETTE[index % len(DEFAULT_HIGHLIGHT_PALETTE)]
-        return Character.from_preset_dict(name, {"voice": self.settings.get("voice", "af_heart")},
-                                          highlight_color=color, backend_id=self.backend.id)
+        return self.make_character(name, color)
 
     def import_subtitles(self, path: str) -> list:
         """File > Import Subtitles (phase 5 D2): every cue of an SRT, VTT or
@@ -2477,7 +2715,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         engine_ids = set()
         for project in self.open_projects():
             engine_ids.update(self._document_engine_ids(project.document))
-        rates = [int(getattr(self._backends[eid].engine, "SAMPLE_RATE", 24000) or 24000)
+        rates = [self._backends[eid].sample_rate
                  for eid in engine_ids if eid in self._backends]
         return max(rates, default=24000)
 
@@ -2485,7 +2723,11 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def open_characters_dialog(self) -> None:
         dialog = CharactersDialog(self)
-        dialog.exec()
+        self._characters_dialog = dialog
+        try:
+            dialog.exec()
+        finally:
+            self._characters_dialog = None
 
     def on_characters_changed(self) -> None:
         if self.editor is not None:
@@ -2520,13 +2762,16 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.settings_dock.volume_spin.setEnabled(not is_running)
         self.settings_dock.pitch_spin.setEnabled(not is_running)
         if not is_running:
-            cancelled = any(b.engine.cancel_event.is_set() for b in self._backends.values())
+            cancelled = any(b.was_cancelled() for b in self._backends.values())
             self.transport_dock.set_progress_value(0 if cancelled else 100)
 
     # --- preview -----------------------------------
 
     def preview_conversion(self) -> None:
-        if not self.engine.pipeline:
+        if isinstance(self.backend, MissingBackend):
+            self.set_status(f"{self.backend.message}: nothing to preview with.", "warning")
+            return
+        if not self.backend.is_ready():
             QMessageBox.information(self, "Wait", "Engine is initializing... please wait 2 seconds and try again.")
             return
 
@@ -2541,6 +2786,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         # The active character's voice on its own engine (the selected
         # clip's character, else the first), over the project defaults.
         state = dict(self.settings_dock.get_state())
+        engine = self.engine_settings(self.backend.id)
+        state["lang_code"], state["voice"] = engine.get("lang_code"), engine.get("voice")
         character = self.active_character()
         if character is not None:
             for key in ("voice", "speed", "lang_code"):
@@ -2568,10 +2815,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                 payload = f"Preview error: {e}"
             self.previewFinished.emit(success, payload)
 
-        future = self.engine.worker.run_coro(
-            self.engine.generate_preview(preview_text, state["voice"], state["speed"], tmp_path,
-                                          extra_config, lang_code=state["lang_code"])
-        )
+        future = self.backend.preview(preview_text, state["voice"], state["speed"], tmp_path,
+                                      extra_config, lang_code=state["lang_code"])
         future.add_done_callback(_done)
 
     def _on_preview_finished(self, success: bool, payload: str) -> None:
@@ -2690,7 +2935,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             QMessageBox.warning(self, "Empty", "No text to process.")
             return
 
-        if not self.engine.pipeline:
+        if isinstance(self.backend, MissingBackend):
+            self.set_status(f"{self.backend.message}: can't generate.", "warning")
+            return
+        if not self.backend.is_ready():
             QMessageBox.information(self, "Wait", "Engine is initializing... please wait 2 seconds and try again.")
             return
 
@@ -2699,14 +2947,11 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.set_ui_state(True)
         self.transport_dock.set_progress(0, "")
 
-        if self.jit_enabled and self.backend.capabilities.supports_jit_streaming:
-            self.engine.start_jit_conversion(text_data, config)
-        else:
-            self.engine.start_conversion(text_data, config)
+        self.backend.convert_document(text_data, config, jit=self.jit_enabled)
 
     def cancel_conversion(self) -> None:
         for backend in self._backends.values():
-            backend.engine.cancel()
+            backend.cancel()
         self.set_status("Cancelling... waiting for workers...", "warning")
 
     # --- transport / playhead (section 5) ----------------------------------
@@ -2899,11 +3144,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         Kokoro and Dummy in English (KPipeline's other languages yield no
         tokens), never Audio8."""
         backend = self.backend_for(clip)
-        if not getattr(backend.capabilities, "supports_word_timing", False):
-            return False
-        if backend.id != "kokoro":
-            return True
-        return self._assemble_generation_config(clip).get("lang_code") in ("a", "b")
+        return backend.word_timing_for(self._assemble_generation_config(clip).get("lang_code"))
 
     def schedule_word_alignment(self, clip_ids, force: bool = False) -> bool:
         """Runs Whisper over each listed clip's segments that have no word
@@ -3050,7 +3291,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             if engine_id == self._primary_engine_id:
                 continue
             try:
-                backend.engine.worker.stop()
+                backend.stop()
             except Exception:
                 pass
         super().closeEvent(event)

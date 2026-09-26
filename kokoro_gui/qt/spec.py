@@ -1,5 +1,6 @@
 """Pure-data constants for the Qt frontend's field lists (generation config
-keys, FX preset keys/slider specs, language/voice tables, settings defaults).
+keys, FX preset keys/slider specs, settings defaults). Engine data (voices,
+languages) lives on each backend in `kokoro_gui/engines/`.
 
 This module has no Qt imports so both `kokoro_gui/qt/*` and the test suite can
 import it standalone.
@@ -134,45 +135,9 @@ FX_KEYS_WITHOUT_WIDGET = {"reverb_dry_level", "chorus_mix", "phaser_depth", "pha
 
 FX_GROUP_ORDER = ["Dynamics", "EQ & Filters", "Spatial & Time", "Guitar / Modulation", "Quality / Pitch"]
 
-# --- Voice / language display data ----------------------------------------
-
-LANGUAGES = {
-    "American English": "a",
-    "British English": "b",
-    "Spanish": "e",
-    "French": "f",
-    "Italian": "i",
-    "Portuguese": "p",
-    "Japanese": "j",
-    "Chinese": "z",
-}
-
-VOICE_DB = {
-    "a": ["af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa"],
-    "b": ["bf_alice", "bf_emma", "bf_isabella", "bf_lily", "bm_daniel", "bm_fable", "bm_george", "bm_lewis"],
-    "e": ["ef_dora", "em_alex", "em_santa"],
-    "f": ["ff_siwis"],
-    "i": ["if_sara", "im_nicola"],
-    "p": ["pf_dora", "pm_alex"],
-    "j": ["jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro"],
-    "z": ["zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zm_yunjian"],
-}
-
-MIX_PREVIEW_TEXT = {
-    "f": "Ceci est un aperçu de votre voix personnalisée.",
-    "e": "Esta es una vista previa de su voz personalizada.",
-    "i": "Questa è un'anteprima della tua voce personalizzata.",
-    "p": "Esta é uma prévia da sua voz personalizada.",
-    "j": "これはカスタム合成音声のプレビューです。",
-    "z": "这是您的自定义混合语音预览。",
-}
-MIX_PREVIEW_TEXT_DEFAULT = "This is a preview of your custom mixed voice."
-
 # --- App-settings defaults (config_qt.json) --------------------------------
 
 SETTINGS_DEFAULTS = {
-    "lang_code": "a",
-    "voice": "af_heart",
     "filename": "output",
     "format": "wav",
     "out_dir": "audio_output",
@@ -246,7 +211,12 @@ SETTINGS_DEFAULTS = {
     "gain_db": 0.0,
     "convolution_ir": "",
     "convolution_mix": 0.5,
-    "engine_id": "kokoro",
+    # The engine new characters get (grill EN1/EN4); the Settings tab's
+    # project scope sets it.
+    "default_engine": "kokoro",
+    # Per-engine settings (lang_code, num_threads, a backend's "Model"
+    # group): {engine_id: {key: value}} (grill EN5, `QtTTSApp.engine_settings`).
+    "engines": {},
     "asr_engine": "whisper",
     "lexicon": {},
     # Workspace layouts: {"Advanced": {"state": b64, "geometry": b64}, ...}

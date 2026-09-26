@@ -47,6 +47,10 @@ now:
 -   Music beds with ducking, and editing a recording as text
 -   Convolution reverb, markers, loops, timecode and word-by-word highlighting
 -   Whisper as the default transcriber, and text split at sentence ends near a word count
+-   An Engine row in Settings, a Voices tab for any engine, and each engine's own language and
+    model settings
+-   Kokoro optional: a project whose engine isn't installed opens and plays, and engines can be
+    plugins
 
 The [changes page](docs/changes.html) has the full detail for every version, including what the
 update does to existing projects.
@@ -67,6 +71,9 @@ pip install -r requirements.txt
 `4.0.0-beta.1` is the latest tagged beta. Drop `--branch` for the development branch and the
 unreleased changes above. If `torch` gives you trouble, follow
 [pytorch.org](https://pytorch.org/get-started/locally/) for your OS and GPU.
+
+On the development branch Kokoro is optional. Without the `kokoro` package (and eSpeak NG) the app
+runs Audio8 and the test engine, and a Kokoro project opens and plays but doesn't generate.
 
 Models download from Hugging Face the first time you use them. Whisper, the transcriber, is about
 1.6 GB and the app asks first. For a smaller one, copy `.env.example` to `.env` and set

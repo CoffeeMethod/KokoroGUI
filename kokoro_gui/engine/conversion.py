@@ -2,27 +2,23 @@
 chunked "Standard" batch pipeline (`start_conversion` -> `_process_text_async`),
 and the WAV-segment combiner shared with JIT mode.
 
-`generate_preview` calls `self.get_thread_pipeline(lang_code)` rather than
-`kokoro_engine.get_thread_pipeline` directly - that's the one genuinely
-model-specific piece of this otherwise-generic mixin, and going through
-`self` lets a non-Kokoro backend (kokoro_gui/engines/dummy.py) reuse this
-whole mixin by supplying its own `get_thread_pipeline`. `KokoroEngine.get_thread_pipeline`
-(kokoro_engine.py) itself still calls the module-level thread-local getter by
-name, so `monkeypatch.setattr(kokoro_engine, "get_thread_pipeline", ...)` in
-tests still takes effect.
+`generate_preview` speaks through `self._synthesize` (`EngineRunner`,
+kokoro_gui/engine/runner.py), the one model-specific call, so every backend
+reuses this whole mixin.
 """
 import asyncio
 import concurrent.futures
 import os
+import re
 import threading
 import time
 
 import numpy as np
 import soundfile as sf
-import torch
 from pedalboard.io import AudioFile
 
 from kokoro_gui.engine import stats as generation_stats
+from kokoro_gui.engine.caching import to_numpy
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys, filter_fx_preset_values
 from kokoro_gui.engine.time_utils import format_duration
 
@@ -36,13 +32,7 @@ _OBSERVED_RATE_TRUST_FRACTION = 0.15
 class ConversionMixin:
     async def generate_preview(self, text, voice, speed, output_path, extra_config=None, voice_tensor=None, lang_code='a'):
         def _gen():
-            # Use specific lang code for preview
-            p = self.get_thread_pipeline(lang_code)
-            if not p: return False
-
-            # Kokoro/Dummy both output 24000Hz; a backend whose model outputs a
-            # different rate (e.g. Audio8Engine's 44100Hz) sets an instance
-            # `SAMPLE_RATE` attribute to override this default.
+            # The model's own rate (Audio8 is 44100Hz).
             sr = getattr(self, "SAMPLE_RATE", 24000)
 
             try:
@@ -89,10 +79,13 @@ class ConversionMixin:
                             target_extra['fx_preset'] = fx_name
 
                     # Resolve voice
+                    extra_params = {}
                     if voice_tensor is not None and not speaker_name:
-                        # Only use voice_tensor if no speaker name (direct preview of mix)
+                        # Only use voice_tensor if no speaker name (direct
+                        # preview of a mix): the model registers it under
+                        # this name (Kokoro's `KPipeline.voices`).
                         actual_voice = "_preview_temp"
-                        p.voices[actual_voice] = voice_tensor
+                        extra_params["voice_tensor"] = voice_tensor
                     else:
                         actual_voice = self.resolve_voice_path(target_voice)
 
@@ -103,11 +96,15 @@ class ConversionMixin:
                         factor = 2 ** (pitch_st / 12.0)
                         eff_speed = target_speed / factor
 
-                    # Generate
-                    generator = p(segment_text, voice=actual_voice, speed=eff_speed, split_pattern=r"\n+")
-                    for _, _, audio in generator:
-                        if isinstance(audio, torch.Tensor):
-                            audio = audio.cpu().numpy()
+                    # Generate, a line at a time
+                    lines = [line for line in re.split(r"\n+", segment_text) if line.strip()] or [segment_text]
+                    for line in lines:
+                        synthesis = self._synthesize(line, {"voice": actual_voice, "speed": eff_speed,
+                                                            "lang_code": lang_code, **extra_params},
+                                                     cancellable=False)
+                        audio = to_numpy(synthesis.audio)
+                        if audio is None or not len(audio):
+                            continue
                         # Post Process
                         audio = self.process_audio(audio, sr, target_extra)
                         all_pieces.append(audio)

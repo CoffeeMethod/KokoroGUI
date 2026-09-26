@@ -1,21 +1,21 @@
-"""Custom-voice path resolution and voice-tensor mixing.
+"""Custom-voice path resolution and voice-tensor mixing (Kokoro's `.pt`
+voices).
 
-Reads `kokoro_engine.CUSTOM_VOICES_DIR` and calls `kokoro_engine.get_thread_pipeline`
-qualified, at call time, so tests can keep monkeypatching those names on the
-`kokoro_engine` module (e.g. via the `isolated_dirs` fixture).
+Reads `runtime.CUSTOM_VOICES_DIR` qualified, at call time, so tests can
+monkeypatch it (the `isolated_dirs` fixture). `torch` and `kokoro_engine`
+are imported inside `mix_voices`, so importing this module (the engine
+package does) doesn't need the `kokoro` package; the mixing itself calls
+`kokoro_engine.get_thread_pipeline` by name, which tests patch.
 """
 import asyncio
 import os
 
-import torch
+from kokoro_gui.engine import runtime
+from kokoro_gui.engines.voice_store import EmbeddingStore
 
-import kokoro_engine
-
-
-def project_voice_dir(project_dir):
-    """Where a `.tbaw` project keeps the custom mixes it bundles
-    (`engines/kokoro/voices/`, see Claude/old/PLAN_tbaw_bundle.md section 4)."""
-    return os.path.join(project_dir, "engines", "kokoro", "voices")
+# Kokoro's `.pt` voices: `runtime.CUSTOM_VOICES_DIR` and a project's
+# `engines/kokoro/voices/` (Claude/old/PLAN_tbaw_bundle.md section 4).
+KOKORO_VOICES = EmbeddingStore("kokoro", ".pt")
 
 
 class VoiceMixingMixin:
@@ -28,13 +28,9 @@ class VoiceMixingMixin:
         """
         # Sanitize voice_name to prevent path traversal
         safe_voice_name = os.path.basename(voice_name)
-        search_dirs = [kokoro_engine.CUSTOM_VOICES_DIR]
-        if project_dir:
-            search_dirs.insert(0, project_voice_dir(project_dir))
-        for directory in search_dirs:
-            custom_path = os.path.join(directory, f"{safe_voice_name}.pt")
-            if os.path.exists(custom_path):
-                return os.path.abspath(custom_path)
+        custom_path = KOKORO_VOICES.find(safe_voice_name, project_dir)
+        if custom_path:
+            return custom_path
         # Not a custom voice: return the sanitized name (not the raw
         # `voice_name`) so a preset-supplied path/UNC string can't reach
         # `KPipeline`/torch.load as a literal path (see Claude/SECURITY_AUDIT.md).
@@ -44,6 +40,10 @@ class VoiceMixingMixin:
 
     async def mix_voices(self, v1_name, v2_name, ratio, new_name, op='mix'):
         def _mix():
+            import torch
+
+            import kokoro_engine
+
             try:
                 # Ensure we have a pipeline to load voices
                 # Use 'a' as default for mixing if main pipeline is not ready
@@ -93,7 +93,7 @@ class VoiceMixingMixin:
                 # Save
                 # Sanitize new_name to prevent path traversal
                 safe_new_name = os.path.basename(new_name)
-                out_path = os.path.join(kokoro_engine.CUSTOM_VOICES_DIR, f"{safe_new_name}.pt")
+                out_path = os.path.join(runtime.CUSTOM_VOICES_DIR, f"{safe_new_name}.pt")
                 torch.save(mixed, out_path)
                 return True, out_path, mixed
             except Exception as e:

@@ -43,6 +43,8 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
+
 FALLBACK_CHARS_PER_SECOND = 15.0
 # Two clips closer than this aren't reported as overlapping, and a duration
 # change smaller than this doesn't ripple.
@@ -92,7 +94,7 @@ def recorded_chars_per_second(engine_id: Optional[str]) -> Optional[float]:
     except Exception:
         return None
     try:
-        return estimate_chars_per_sec(engine_id or "kokoro")
+        return estimate_chars_per_sec(engine_id or DEFAULT_ENGINE_ID)
     except Exception:
         return None
 

@@ -16,7 +16,7 @@ with `resolve_voice_file(name, project_dir)`, `cache_key_extra(config)` and
 Two file-naming modes, chosen by `config["segment_naming"]`:
 
 - unset (legacy, the whole-document and JIT paths): the cache is
-  `kokoro_engine.CACHE_DIR` and the output file in `out_dir` is named
+  `runtime.CACHE_DIR` and the output file in `out_dir` is named
   `<filename>_<time_id>_part<index>_<sub_idx>.<fmt>`, post-processed unless
   `config["raw_output"]`.
 - `"cache_key"` (every clip generation, `.tbaw` plan section 3): `out_dir`
@@ -30,27 +30,25 @@ Two file-naming modes, chosen by `config["segment_naming"]`:
   `engine_version` it landed on, so the caller stamps segments from the
   result instead of predicting the key before dispatch.
 
-Reads `kokoro_engine.CACHE_DIR` qualified, at call time, so tests can keep
-monkeypatching it on the `kokoro_engine` module. The synthesis call goes
-through `self.get_thread_pipeline(lang_code)`, the one model-specific piece
-of this otherwise-generic pipeline, so every backend (kokoro_engine.py,
-kokoro_gui/engines/dummy.py, kokoro_gui/engines/audio8_tts.py) reuses this
-mixin by supplying its own pipeline and `SAMPLE_RATE`.
+Reads `runtime.CACHE_DIR` qualified, at call time, so tests can
+monkeypatch it (the `isolated_dirs` fixture). The synthesis call is
+`self._synthesize(piece, config)` (kokoro_gui/engine/runner.py's
+`EngineRunner`, around the backend's `SynthesisModel`), the one
+model-specific piece of this otherwise-generic pipeline.
 """
 import hashlib
-import importlib.metadata
 import os
 import re
 
 import numpy as np
 import soundfile as sf
-import torch
 from pedalboard.io import AudioFile
 
-import kokoro_engine
+from kokoro_gui.engine import runtime
 from kokoro_gui.engine.audio_fx import clamp_pitch_semitones
 from kokoro_gui.engine import segmenting
-from kokoro_gui.engine.wordtiming import silence_bounds, words_from_tokens
+from kokoro_gui.engine.wordtiming import silence_bounds
+from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
 
 # Bump whenever compute_cache_key's composition or logic changes. Old cache
 # entries simply stop matching (new hash algorithm -> new filenames) and
@@ -74,20 +72,18 @@ _voice_fingerprint_cache = {}
 AUDIO_FORMATS = ("wav", "flac", "mp3", "ogg")
 
 
-def get_engine_version(engine_id="kokoro"):
+def get_engine_version(engine_id=DEFAULT_ENGINE_ID):
     """Best-effort version/identity string for `engine_id`, folded into the
     cache key so an upgrade that changes model output invalidates stale
-    entries instead of silently serving old audio under it. The default
-    `engine_version()` hook on every backend calls this; Audio8 overrides
-    it with its model id. "kokoro" answers with the installed `kokoro`
-    package version; any other id falls back to a constant so its entries
-    are at least self-consistent."""
-    if engine_id == "kokoro":
-        try:
-            return importlib.metadata.version("kokoro")
-        except importlib.metadata.PackageNotFoundError:
-            return "unknown"
-    return "unknown"
+    entries instead of silently serving old audio under it. Asks the
+    registered adapter class (`package_version()`, Kokoro's installed
+    package version); an engine without one, or one that isn't installed,
+    gets a constant so its entries are at least self-consistent. The
+    default `engine_version()` hook on every backend calls this; Audio8
+    answers with its model id instead."""
+    from kokoro_gui.engines import registry
+
+    return registry.package_version(engine_id) or "unknown"
 
 
 def voice_fingerprint(voice_ref):
@@ -121,7 +117,7 @@ def voice_fingerprint(voice_ref):
     return fp
 
 
-def compute_cache_key(text, voice, eff_speed, lang_code, engine_id="kokoro", engine_version=None, extra=None,
+def compute_cache_key(text, voice, eff_speed, lang_code, engine_id=DEFAULT_ENGINE_ID, engine_version=None, extra=None,
                       schema_version=None, voice_fingerprint_value=None):
     """The segment-cache hash: schema_version, engine identity/version, text,
     voice name, voice content fingerprint, effective speed, language code,
@@ -239,11 +235,19 @@ def segment_key(text, config, backend, engine_version=None):
         extra["take"] = take
     if engine_version is None:
         engine_version = backend.engine_version()
-    engine_id = config.get("engine_id") or getattr(backend, "id", "kokoro")
+    engine_id = config.get("engine_id") or getattr(backend, "id", DEFAULT_ENGINE_ID)
     return compute_cache_key(
         text, name, effective_speed(config), config["lang_code"], engine_id,
         engine_version=engine_version, extra=extra or None, voice_fingerprint_value=fingerprint,
     )
+
+
+def to_numpy(audio):
+    """A model's audio as a numpy array: a torch tensor (anything with
+    `detach`) is moved to the CPU first, without importing torch here."""
+    if hasattr(audio, "detach"):
+        return audio.detach().cpu().numpy()
+    return audio
 
 
 def _output_format(config):
@@ -272,14 +276,13 @@ def _audio_duration_s(path, sample_rate):
 
 
 class CachingMixin:
-    """Generation-with-cache for any backend that supplies
-    `get_thread_pipeline(lang_code)` (a callable yielding `(graphemes,
-    phonemes, audio)` triples) and optionally `SAMPLE_RATE` (default 24000)
-    and `id`. Also the default implementation of the three `segment_key`
+    """Generation-with-cache for any engine that supplies
+    `_synthesize(piece, config) -> Synthesis` (`EngineRunner`) and
+    optionally `SAMPLE_RATE` (default 24000) and `id`. Also the default implementation of the three `segment_key`
     hooks; a backend overrides what differs (Audio8: `engine_version` and
     `cache_key_extra`)."""
 
-    id = "kokoro"
+    id = DEFAULT_ENGINE_ID
 
     # -- segment_key hooks --------------------------------------------------
 
@@ -287,7 +290,7 @@ class CachingMixin:
         """What goes into the segment key and `manifest.engines[id].version`.
         Looked up through this module's `get_engine_version` by name so a
         test can monkeypatch it."""
-        return get_engine_version(getattr(self, "id", "kokoro"))
+        return get_engine_version(getattr(self, "id", DEFAULT_ENGINE_ID))
 
     def cache_key_extra(self, config):
         """Backend-specific generation inputs folded into `segment_key`.
@@ -362,7 +365,7 @@ class CachingMixin:
                 # which is what a resume of the same inputs should do.
                 break
         elif use_cache:
-            cache_dir = kokoro_engine.CACHE_DIR
+            cache_dir = runtime.CACHE_DIR
             cache_hash = segment_key(text, config, self, engine_version)
             try:
                 if predicted_texts:
@@ -434,42 +437,20 @@ class CachingMixin:
                     chunk_files.append(process_and_save(graphemes, audio))
                     sub_idx += 1
             else:
-                pipeline = self.get_thread_pipeline(lang_code) if lang_code else self.get_thread_pipeline()
-                if not pipeline:
-                    raise RuntimeError(f"Failed to initialize pipeline ({lang_code}) in thread.")
-
+                synth_config = {**config, "voice": config["voice"], "speed": eff_speed, "lang_code": lang_code}
                 for piece in predicted_texts:
                     if self.cancel_event.is_set():
                         break
-                    # One call per piece with the pipeline's own splitting
-                    # off. A pipeline that still yields several results for
-                    # one piece (KPipeline cuts at ~510 phoneme tokens) gets
-                    # them concatenated, so the file count is always the
+                    # One model call per piece. The model concatenates
+                    # whatever it produces for the piece (KPipeline cuts at
+                    # ~510 phoneme tokens), so the file count is always the
                     # predicted count. The result's text is the piece, not
-                    # the pipeline's graphemes, which KPipeline rebuilds
-                    # from its tokens.
-                    # KPipeline's `Result` unpacks as the triple and carries
-                    # `tokens` with times; a result after the first starts
-                    # where the audio so far ends.
-                    arrays = []
-                    words = []
-                    piece_frames = 0
-                    for item in pipeline(piece, voice=config["voice"], speed=eff_speed, split_pattern=None):
-                        if self.cancel_event.is_set():
-                            break
-                        _graphemes, _phonemes, audio = item
-                        if audio is None:
-                            continue
-                        if isinstance(audio, torch.Tensor):
-                            audio = audio.cpu().numpy()
-                        audio = np.asarray(audio, dtype=np.float32).reshape(-1)
-                        words.extend(words_from_tokens(getattr(item, "tokens", None),
-                                                       piece_frames / float(sample_rate)))
-                        arrays.append(audio)
-                        piece_frames += len(audio)
-                    if self.cancel_event.is_set() or not arrays:
+                    # the model's graphemes.
+                    synthesis = self._synthesize(piece, synth_config)
+                    audio = np.asarray(to_numpy(synthesis.audio), dtype=np.float32).reshape(-1)
+                    if self.cancel_event.is_set() or not len(audio):
                         break
-                    audio = arrays[0] if len(arrays) == 1 else np.concatenate(arrays)
+                    words = list(synthesis.words or [])
                     graphemes = piece
                     if progress_callback:
                         progress_callback(len(graphemes), graphemes)

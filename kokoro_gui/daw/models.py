@@ -39,6 +39,7 @@ from typing import Callable, Optional
 
 from kokoro_gui.daw.undo import UndoStack
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys
+from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
 
 # Small fixed palette cycled by migration.py when assigning default
 # highlight colors to characters created from existing presets - not a
@@ -76,7 +77,7 @@ class Character:
     name: str
     preset_data: dict = field(default_factory=dict)
     highlight_color: str = DEFAULT_HIGHLIGHT_PALETTE[0]
-    backend_id: str = "kokoro"
+    backend_id: str = DEFAULT_ENGINE_ID
     # Variant name ("angry", "whisper") -> voice name. For a cloning backend
     # (Audio8) the voice is a reference name, so a clip's
     # `overrides["variant"]` swaps the reference and the segment key follows
@@ -96,7 +97,7 @@ class Character:
     extra: dict = field(default_factory=dict)
 
     @classmethod
-    def from_preset_dict(cls, name, preset_data, highlight_color=None, backend_id="kokoro", id=None,
+    def from_preset_dict(cls, name, preset_data, highlight_color=None, backend_id=DEFAULT_ENGINE_ID, id=None,
                          library_id=None):
         """Wraps a preset dict already loaded via `PresetsMixin.load_preset`
         (or an equivalent plain `json.load`) into a `Character`. Only keys in

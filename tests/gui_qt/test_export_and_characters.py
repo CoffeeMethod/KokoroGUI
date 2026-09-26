@@ -379,3 +379,38 @@ def test_a_character_missing_from_this_library_plays_its_snapshot(qt_app):
     dialog.voice_combo.setCurrentText("am_adam")
     assert orphan.preset_data["voice"] == "am_adam"
     assert qt_app.character_library.get("from-another-machine") is None
+
+
+# -- engine pickers (grill EN1/EN2/EN4) ----------------------------------------
+
+
+def test_add_uses_the_default_engine_not_the_active_characters(qt_app):
+    qt_app.set_default_engine("dummy")
+    assert qt_app.backend.id == "kokoro"
+
+    new = CharactersDialog(qt_app).add_character()
+
+    assert new.backend_id == "dummy"
+    assert new.preset_data["voice"] == "dummy"
+
+
+def test_a_settings_tab_edit_on_a_linked_character_reaches_the_library(qt_app):
+    character = qt_app.document.characters[0]
+    library_id = CharactersDialog(qt_app).promote_current()
+    qt_app.selection.select_character(character.id)
+    assert qt_app.settings_dock._mode == "character"
+
+    qt_app.settings_dock.schema_form.widget_for("speed").setValue(1.4)
+    qt_app.settings_dock.volume_spin.setValue(0.6)
+
+    entry = qt_app.character_library.get(library_id)
+    assert entry.preset_data["speed"] == 1.4
+    assert entry.preset_data["volume"] == 0.6
+
+
+def test_both_pickers_list_the_same_engines_in_the_same_order(qt_app):
+    dialog = CharactersDialog(qt_app)
+    combo = qt_app.settings_dock.engine_combo
+    dialog_ids = [dialog.engine_combo.itemData(i) for i in range(dialog.engine_combo.count())]
+    dock_ids = [combo.itemData(i) for i in range(combo.count())]
+    assert dialog_ids == dock_ids == [engine_id for _label, engine_id in qt_app.engine_choices()]

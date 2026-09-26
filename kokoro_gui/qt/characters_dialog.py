@@ -40,8 +40,8 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.daw import library as library_ops
-from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character
+from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
 from kokoro_gui.qt import theme
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
 
@@ -154,8 +154,8 @@ class CharactersDialog(QDialog):
         # character picks its own; the app keeps every engine in use
         # resident.
         self.engine_combo = QComboBox()
-        for engine_id in engine_registry.list_engines():
-            self.engine_combo.addItem(engine_registry.get_display_name(engine_id), engine_id)
+        for label, engine_id in self.app.engine_choices():
+            self.engine_combo.addItem(label, engine_id)
         self.engine_combo.activated.connect(lambda _i: self._on_engine_picked())
         form.addRow("Engine:", self.engine_combo)
 
@@ -269,7 +269,7 @@ class CharactersDialog(QDialog):
                 return
             self.name_edit.setText(character.name)
             self._set_color_widgets(character.highlight_color)
-            index = self.engine_combo.findData(character.backend_id or "kokoro")
+            index = self.engine_combo.findData(character.backend_id or DEFAULT_ENGINE_ID)
             self.engine_combo.setCurrentIndex(max(0, index))
             self._fill_voices(character)
             voice = character.preset_data.get("voice", "")
@@ -289,7 +289,7 @@ class CharactersDialog(QDialog):
     # -- variants (cloning backends) ---------------------------------------------
 
     def _supports_variants(self, character) -> bool:
-        backend = self.app._backend_for(character.backend_id or "kokoro") if character is not None else None
+        backend = self.app._backend_for(character.backend_id or DEFAULT_ENGINE_ID) if character is not None else None
         return bool(backend is not None and getattr(backend.capabilities, "supports_voice_cloning", False))
 
     def _reference_combo(self, value: str) -> QComboBox:
@@ -409,6 +409,12 @@ class CharactersDialog(QDialog):
             item.setForeground(QColor(color))
         self._changed()
 
+    def refresh_voices(self) -> None:
+        """A voice editor saved or deleted a voice: relist the current
+        character's voices, keeping its choice."""
+        if self._current is not None:
+            self._show(self._current)
+
     def _fill_voices(self, character) -> None:
         """The voice list of the character's own engine."""
         self.voice_combo.clear()
@@ -421,16 +427,14 @@ class CharactersDialog(QDialog):
 
     def set_engine(self, engine_id: str) -> bool:
         """Switches the current character to `engine_id` (and, when linked,
-        its library entry). Refused while a job runs."""
+        its library entry): `app.set_character_engine`, which also picks the
+        voice (grill EN2). Refused while a job runs."""
         character = self._current
-        if character is None or not engine_id or engine_id == (character.backend_id or "kokoro"):
+        if character is None or not engine_id or engine_id == (character.backend_id or DEFAULT_ENGINE_ID):
             return False
-        if not self.app.set_character_engine(character, engine_id):
-            self._show(character)
-            return False
+        ok = self.app.set_character_engine(character, engine_id)
         self._show(character)
-        self._changed()
-        return True
+        return ok
 
     def _on_voice_changed(self, text: str) -> None:
         if self._loading or self._current is None:
@@ -463,8 +467,7 @@ class CharactersDialog(QDialog):
         while name in names:
             name = f"{base} {n}"
             n += 1
-        character = Character.from_preset_dict(name, {"voice": self.app.settings.get("voice", "af_heart")},
-                                               highlight_color=color, backend_id=self.app.backend.id)
+        character = self.app.make_character(name, color)
         doc.characters.append(character)
         self.reload()
         self.list.setCurrentRow(self.list.count() - 1)
@@ -591,22 +594,6 @@ class CharactersDialog(QDialog):
         self._changed(write_through=False)
 
     def _changed(self, write_through: bool = True) -> None:
-        """After an edit: a linked character's voice, FX, color or variants
-        go to its library entry (WF5), then the open document is
-        re-resolved so every record linked to that entry follows."""
-        character = self._current
-        if write_through and character is not None and character.library_id:
-            scope = self.app.character_scope(character)
-            if scope == "global" and library_ops.write_through(character, self.library):
-                self.app.resolve_library(refresh=False)
-            elif scope == "project" and self._in_subproject():
-                # The live link at project scope: the root's record, which
-                # every subproject resolves from.
-                root_record = next(c for c in self.app.root.document.characters
-                                   if c.library_id == character.library_id)
-                for name in library_ops.RESOLVED_FIELDS:
-                    setattr(root_record, name, copy.deepcopy(getattr(character, name)))
-                self.app.resolve_library(refresh=False)
-            elif scope == "project":
-                self.app.resolve_library(refresh=False)
-        self.app.on_characters_changed()
+        """After an edit: `app.commit_character_edit` writes a linked
+        character through to its library entry (WF5) and refreshes."""
+        self.app.commit_character_edit(self._current, write_through=write_through)

@@ -79,7 +79,8 @@
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">Options menu</span>Engines, device, theme</h2>
-        <p><strong>Each character picks its engine</strong> in Edit &gt; Characters, so one project can mix Kokoro and Audio8 voices; every engine a character uses stays loaded. The selected clip's character (or the first character, with nothing selected) decides what the Settings tab's fields look like and what sits behind the Voices tab (Mixing for Kokoro, References for Audio8, nothing for the Dummy engine). Everything below is written per-engine where the two differ.</p>
+        <p><strong>Each character picks its engine</strong>, in the Settings tab's Engine row or in Edit &gt; Characters, so one project can mix Kokoro and Audio8 voices; every engine a character uses stays loaded. The selected clip's character (or the first character, with nothing selected) decides what the Settings tab's fields look like and which editor the Voices tab opens on (Mixing for Kokoro, References for Audio8); the Voices tab's own Engine box opens another engine's editor without changing a character. Everything below is written per-engine where the two differ.</p>
+        <p>Language, the default voice, Parallel threads and an engine's own Model fields are kept per engine, so a Kokoro and an Audio8 character each generate with their own. An engine this install doesn't have shows as "(not installed)": its characters keep it, their clips play and don't generate. Without the <code>kokoro</code> package the app runs Audio8 and Dummy.</p>
         <p><strong>Options &gt; Device</strong> picks CPU / CUDA / Auto for the Kokoro pipeline (the CUDA entry is greyed out when torch reports no device) and re-initializes the engine. <strong>Options &gt; Theme</strong> switches between the dark (default) and light palettes. The three checkable entries under them are whether copying text carries its character and FX along, whether a paste splits off its own run, and <a class="link" href="#jit">JIT streaming</a> for projects with no clips. The welcome dialog's "Show at startup" box is the one launch setting that isn't here; it lives on the dialog itself (File &gt; Welcome…).</p>
       </div>
     </div>
@@ -107,14 +108,15 @@
           <caption>Settings tab scopes</caption>
           <thead><tr><th>Selection</th><th>Values come from</th><th>Edits write to</th></tr></thead>
           <tbody>
-            <tr><td>Nothing selected</td><td>The app's whole-document defaults</td><td>App settings (<code>config_qt.json</code>)</td></tr>
+            <tr><td>Nothing selected</td><td>The app's whole-document defaults, the shown engine's own for the per-engine fields</td><td>App settings (<code>config_qt.json</code>; per-engine fields under <code>engines</code>)</td></tr>
             <tr><td>A clip</td><td>Its character's settings, merged with its own overrides</td><td><code>clip.overrides</code>, never the app defaults</td></tr>
             <tr><td>A character</td><td>That character's settings</td><td>The character directly, so every clip without its own override using it updates live</td></tr>
           </tbody>
         </table>
       </div>
       <p class="dek" style="margin-top:1rem;">Only the fields below can vary per clip or character. Everything else (Language, Parallel threads, Enable segment cache, and any engine's own non-character fields like Audio8's sampling knobs) is shown disabled, not hidden, while a clip or character is selected, since those settings only make sense at the whole-document level.</p>
-      <p class="dek" style="margin-top:1rem;">The fields below are what the two engines declare. Rows marked Audio8 only don't appear for a Kokoro character at all.</p>
+      <p class="dek" style="margin-top:1rem;">Above the fields, the <strong>Engine</strong> row: with a character selected it sets that character's engine (refused while a job runs; the voice stays if the new engine has one by that name, else it becomes the new engine's default); with a clip selected it shows the clip's character's engine, greyed out; with nothing selected it is "Engine for new characters", the engine Add in Edit &gt; Characters and subtitle import give a new character.</p>
+      <p class="dek" style="margin-top:1rem;">The fields below are what the two engines declare. Rows marked Audio8 only don't appear for a Kokoro character at all. Language, Voice (with nothing selected), Parallel threads and the Audio8-only rows are remembered per engine.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Voice &amp; generation fields</caption>
@@ -280,7 +282,7 @@
           <thead><tr><th>Field or button</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td>Name / Color</td><td>The name <code>[Name]:</code> tags match, and the tint its text and clips get. The color picker's presets are the eight default character colors.</td></tr>
-            <tr><td>Engine</td><td>Kokoro or Audio8. One project can mix both. The Settings and Voices tabs follow the selected clip's character.</td></tr>
+            <tr><td>Engine</td><td>Kokoro or Audio8 (and any plugin engine). One project can mix both. The Settings and Voices tabs follow the selected clip's character. A new character gets Settings &gt; "Engine for new characters". An engine that isn't installed shows as "(not installed)".</td></tr>
             <tr><td>Voice / FX</td><td>A Kokoro voice or Mix, or an Audio8 Reference; and the FX every clip of this character plays through unless it has its own.</td></tr>
             <tr><td>Variants <span class="engine-note">Audio8</span></td><td>Named alternative References, such as "angry" or "whisper". The transcript's Variant box picks one per clip.</td></tr>
             <tr><td>Scope</td><td>Global lives in the character library (<code>characters/</code>), and every project that links it follows its voice, FX, color, engine and variants. Project belongs to the top-level project and is shared by its subprojects. Local belongs to this file only. A project always keeps its own copy, so it opens on a machine whose library lacks the character; the dialog then says "Library (not found here)".</td></tr>
@@ -440,6 +442,7 @@
 
   <section class="doc-section" id="mixing">
     <div class="wrap">
+      <p class="dek">The Voices tab's <strong>Engine</strong> box, at the top of either editor, lists the engines that have one. It follows the selected character; pick another to edit that engine's voices without touching a character, and the next selection puts it back. A saved or deleted voice shows up in the Settings tab's and Edit &gt; Characters' voice lists at once.</p>
       <h2><span class="idx">Voices tab · Kokoro</span>Mixing <span class="engine-note">Kokoro characters</span></h2>
       <div class="table-wrap reveal">
         <table class="ref">

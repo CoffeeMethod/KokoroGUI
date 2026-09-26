@@ -22,6 +22,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
+from kokoro_gui.engine import presets
 from kokoro_gui.engine.presets import filter_fx_preset_values
 
 PLACEHOLDER = "Select FX Preset..."
@@ -48,7 +49,7 @@ def load_fx_preset_values(app, name, project=None) -> Optional[dict]:
     if not name:
         return None
     project_dir = project.project_dir if project is not None else getattr(app, "project_dir", None)
-    preset = app.engine.load_fx_preset(name, project_dir)
+    preset = presets.load_fx_preset(name, project_dir)
     if not preset:
         import kokoro_gui.qt.app as qt_app_module
 

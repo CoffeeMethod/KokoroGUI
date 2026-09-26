@@ -37,6 +37,7 @@ from kokoro_gui.daw.models import Segment
 from kokoro_gui.engine import caching
 from kokoro_gui.engine.caching import compute_cache_key, effective_speed
 from kokoro_gui.engine.lexicon import apply_lexicon
+from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
 
 # Compiled lexicon patterns, shared across dirty checks (the engine keeps
 # its own per instance).
@@ -65,7 +66,7 @@ def _key_for_spoken(text, config, engine_version, key_fn, clip):
     if key_fn is not None:
         return key_fn(text, clip, engine_version)
     lang_code = config.get("lang_code", "a")
-    engine_id = config.get("engine_id", "kokoro")
+    engine_id = config.get("engine_id", DEFAULT_ENGINE_ID)
     return compute_cache_key(text, config.get("voice"), effective_speed(config), lang_code, engine_id,
                              engine_version=engine_version)
 

@@ -117,10 +117,27 @@ def test_all_panels_are_docks_in_the_grid(qt_app):
 def test_voices_tab_keeps_its_title_across_engines(qt_app):
     character = qt_app.document.characters[0]
     assert qt_app.set_character_engine(character, "dummy")
-    assert qt_app.mixing_dock is None and qt_app.voice_clone_dock is None
+    # Dummy has no voice editor: the tab stays on the last one (grill EN3),
+    # so its Engine combo stays reachable.
+    assert qt_app.voices_engine_id == "kokoro" and qt_app.mixing_dock is not None
+    qt_app.set_voices_engine("audio8")
+    assert qt_app.mixing_dock is None
+    assert qt_app.voice_clone_dock.windowTitle() == "Voices"
     assert qt_app.set_character_engine(character, "kokoro")
     assert qt_app.mixing_dock.windowTitle() == "Voices"
     assert qt_app.mixing_dock in qt_app.tabifiedDockWidgets(qt_app.settings_dock)
+
+
+def test_a_saved_voices_layout_restores_whichever_editor_is_shown(qt_app):
+    qt_app.save_settings()  # captures the layout with the Mixing editor in it
+    qt_app.set_voices_engine("audio8")
+
+    qt_app.activate_workspace(ADVANCED)
+
+    dock = qt_app.voice_clone_dock
+    assert dock.objectName() == "dock_voices"
+    assert not dock.isFloating()
+    assert dock in qt_app.tabifiedDockWidgets(qt_app.settings_dock)
 
 
 # -- transport dock -----------------------------------------------------------

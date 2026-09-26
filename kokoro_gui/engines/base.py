@@ -28,7 +28,7 @@ walks the document and hands each backend the voice names it uses.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional, Protocol, runtime_checkable
 
@@ -49,11 +49,9 @@ class ConfigField:
     """One entry in a backend's `get_config_schema()`.
 
     `choices`, when set, is a list of `(label, value)` pairs for CHOICE/SLIDER
-    fields with a fixed, known set of options (e.g. split-pattern presets,
-    output format). Fields whose options are only known at runtime by the GUI
-    (e.g. "voice", "lang_code" - today's Kokoro voice catalog is GUI display
-    data, not engine data; see kokoro.py's `get_config_schema` docstring)
-    leave `choices=None` and the GUI resolves them dynamically.
+    fields with a fixed, known set of options (languages, output format).
+    "voice" leaves `choices=None`: its options depend on the language and on
+    the files on disk, so the GUI asks `get_voices(lang_code)`.
     """
     key: str
     label: str
@@ -90,6 +88,22 @@ class EngineCapabilities:
 # the Protocol.
 COMMON_OUTPUT_FORMAT_CHOICES = [("wav", "wav"), ("flac", "flac"), ("mp3", "mp3"), ("ogg", "ogg")]
 
+# Schema keys every engine shares one value for: where text is cut, the
+# output format, caching, the lexicon, and the speed and pitch a character
+# overrides. Every other key in a backend's schema is per engine and lives in
+# `config_qt.json`'s `engines[<id>]` bucket (grill EN5): `lang_code`,
+# `num_threads`, the "Model" group, and the default `voice`, since one
+# engine's voice names mean nothing to another.
+SHARED_CONFIG_KEYS = frozenset({
+    "segment_target_words", "segment_at_paragraphs", "segment_at_sentences", "segment_at_pauses",
+    "format", "caching", "lexicon", "speed", "pitch",
+})
+
+
+def per_engine_fields(schema: list) -> list:
+    """The fields of `schema` whose value is kept per engine."""
+    return [f for f in schema if f.key not in SHARED_CONFIG_KEYS]
+
 
 def segmentation_fields() -> list:
     """The Settings fields for where text is cut before synthesis
@@ -111,6 +125,31 @@ def segmentation_fields() -> list:
     ]
 
 
+def common_fields(speed_range=(0.5, 2.0), max_threads: int = 32, pitch: bool = True,
+                  caching_default: bool = True) -> list:
+    """The fields every backend lists after its own `lang_code` and `voice`:
+    speed, pitch (unless the backend has none), the segmentation fields,
+    output format, parallel threads and the segment cache. A backend
+    appends its own fields after these."""
+    fields = [
+        ConfigField("speed", "Speed", ConfigFieldType.SLIDER,
+                    default=1.0, min=speed_range[0], max=speed_range[1], step=0.1, group="Generation"),
+    ]
+    if pitch:
+        fields.append(ConfigField("pitch", "Pitch", ConfigFieldType.SLIDER,
+                                  default=0.0, min=-12, max=12, step=1, group="Audio"))
+    fields.extend([
+        *segmentation_fields(),
+        ConfigField("format", "Output Format", ConfigFieldType.CHOICE,
+                    default="wav", choices=list(COMMON_OUTPUT_FORMAT_CHOICES), group="Generation"),
+        ConfigField("num_threads", "Parallel Threads", ConfigFieldType.INT,
+                    default=1, min=1, max=max_threads, step=1, group="Advanced"),
+        ConfigField("caching", "Enable Segment Cache", ConfigFieldType.BOOL,
+                    default=caching_default, group="Advanced"),
+    ])
+    return fields
+
+
 @dataclass(frozen=True)
 class VoiceInfo:
     """One selectable voice, as reported by a backend's `get_voices()`."""
@@ -118,6 +157,53 @@ class VoiceInfo:
     display_name: str
     lang_code: Optional[str] = None
     is_custom: bool = False
+
+
+@dataclass
+class Synthesis:
+    """One `SynthesisModel.synthesize` result: `audio` a 1-D float32 array at
+    the model's `sample_rate`, `words` `[text, start_s, end_s]` relative to
+    its start (`[]` for a model with no timings)."""
+    audio: Any
+    words: list = field(default_factory=list)
+
+
+@runtime_checkable
+class SynthesisModel(Protocol):
+    """What an engine is once the shared machinery is taken away: the
+    `EngineRunner` (kokoro_gui/engine/runner.py) supplies the worker, the
+    cancel event, the callbacks, caching, FX, conversion, JIT and SRT around
+    one of these. `ModelBase` in runner.py gives defaults for everything but
+    `synthesize`.
+
+    `concurrency` is "per_thread" (the model keeps one instance per worker
+    thread itself, like Kokoro's thread-local `KPipeline`) or "shared" (one
+    instance; the runner serializes `synthesize` calls through a lock)."""
+
+    engine_id: str
+    sample_rate: int
+    concurrency: str
+
+    def load(self, lang_code: Optional[str], device: Optional[str]) -> Any:
+        """Loads the model for `lang_code` on `device` ("auto"/"cpu"/"cuda");
+        returns a truthy readiness token. May download weights."""
+        ...
+
+    def synthesize(self, text: str, voice: str, speed: float, lang_code: Optional[str],
+                   params: dict) -> Synthesis:
+        """Speaks `text` (one piece, already segmented) with the resolved
+        `voice`. `params` is the generation config plus `cancel_event` (a
+        long synthesis may stop early and return what it has)."""
+        ...
+
+    def engine_version(self) -> str:
+        ...
+
+    def cache_key_extra(self, config: dict) -> dict:
+        ...
+
+    def resolve_voice_path(self, name: str, project_dir: Optional[str] = None) -> str:
+        ...
 
 
 @dataclass(frozen=True)
@@ -137,6 +223,45 @@ class BackendHooksMixin:
     recorded, for listings that should show project-local assets first."""
 
     project_dir: Optional[str] = None
+    # "named" (built into the model), "embedding" (a file per voice) or
+    # "reference" (a wav + transcript per voice); the file kinds set
+    # `voice_store` (kokoro_gui/engines/voice_store.py), which gives
+    # `get_voices` and `collect_project_assets` below their defaults.
+    voice_kind = "named"
+    voice_store = None
+
+    def builtin_voices(self, lang_code: Optional[str] = None) -> list:
+        """The `VoiceInfo`s built into the model for `lang_code` (every
+        language's when None). None by default."""
+        return []
+
+    def get_voices(self, lang_code: Optional[str] = None) -> list:
+        """`builtin_voices(lang_code)`, then the voice store's (the open
+        project's first), each name once."""
+        voices = list(self.builtin_voices(lang_code))
+        seen = {v.id for v in voices}
+        if self.voice_store is not None:
+            for name in self.voice_store.list_voices(self.project_dir):
+                if name not in seen:
+                    seen.add(name)
+                    voices.append(VoiceInfo(id=name, display_name=name, lang_code=None, is_custom=True))
+        return voices
+
+    def get_languages(self) -> list:
+        """`[(label, code), ...]`: the choices of the schema's `lang_code`
+        field, or none when the backend has no such field."""
+        field = next((f for f in self.get_config_schema() if f.key == "lang_code"), None)
+        return list(field.choices or []) if field is not None else []
+
+    def word_timing_for(self, lang_code: Optional[str]) -> bool:
+        """Whether a generate in `lang_code` stamps `Segment.words` itself.
+        Default: the `supports_word_timing` capability; a backend whose
+        timings exist only for some languages narrows it."""
+        return bool(getattr(self.capabilities, "supports_word_timing", False))
+
+    def preview_text(self, lang_code: Optional[str] = None) -> str:
+        """A short sentence to preview a voice with in `lang_code`."""
+        return "This is a preview of your custom voice."
 
     def engine_version(self) -> str:
         """What goes into the segment key and `manifest.engines[id].version`.
@@ -168,14 +293,74 @@ class BackendHooksMixin:
         needed to reproduce the given voice names, plus the opaque `meta`
         dict written to `manifest.engines[id]`. A name that resolves to
         nothing is skipped (the project still saves; the character still
-        names it). Default: no files, empty meta."""
-        return [], {}
+        names it). Default: the voice store's files for each name (none for
+        a "named" engine), empty meta."""
+        if self.voice_store is None:
+            return [], {}
+        assets = []
+        for name in sorted(voice_names):
+            assets.extend(self.voice_store.bundle_assets(name, project_dir))
+        return assets, {}
 
     def on_project_opened(self, project_dir: Optional[str], meta: dict) -> None:
         """Called after a project is opened (or created) with this backend's
         manifest `meta`. Must not load a model: record what to do and do it
         on the first generate. The default remembers the dir for listings."""
         self.project_dir = project_dir
+
+    # -- what the GUI calls (never `backend.engine.*`). Each job returns the
+    # `concurrent.futures.Future` of a coroutine on the engine's worker.
+
+    def run(self, coro):
+        """Schedules `coro` on this engine's worker thread."""
+        return self.engine.worker.run_coro(coro)
+
+    def ensure_ready(self, lang_code: Optional[str], device: Optional[str] = None):
+        """Loads the model (a download on first use) in `lang_code`."""
+        return self.run(self.engine.init_pipeline_async(lang_code, device=device))
+
+    def is_ready(self) -> bool:
+        return bool(getattr(self.engine, "pipeline", None))
+
+    def preview(self, text, voice, speed, output_path, extra_config=None, lang_code=None):
+        """Speaks up to two segments of `text` into `output_path`."""
+        return self.run(self.engine.generate_preview(text, voice, speed, output_path, extra_config,
+                                                     lang_code=lang_code))
+
+    def generate_clip(self, chunk_data):
+        """One clip's `(index, text, config)`; resolves to its result dicts."""
+        return self.run(self.engine.generate_clip_audio(chunk_data))
+
+    def generate_clips(self, items, progress=None):
+        """`[(clip_id, text, config), ...]`; resolves to one outcome per clip."""
+        return self.run(self.engine.generate_dirty_clips(items, progress_callback=progress))
+
+    def convert_document(self, text: str, config: dict, jit: bool = False) -> None:
+        """The whole-document path (no clips yet): batch, or JIT streaming
+        when `jit` and the backend supports it. Reports through the
+        callbacks, not a Future."""
+        if jit and self.capabilities.supports_jit_streaming:
+            self.engine.start_jit_conversion(text, config)
+        else:
+            self.engine.start_conversion(text, config)
+
+    def was_cancelled(self) -> bool:
+        return self.engine.cancel_event.is_set()
+
+    @property
+    def sample_rate(self) -> int:
+        return int(getattr(self.engine, "SAMPLE_RATE", 24000) or 24000)
+
+    def set_callbacks(self, on_status=None, on_progress=None, on_finish=None) -> None:
+        """Where the engine reports status, progress and the end of a
+        whole-document job (the app's signal bridge)."""
+        self.engine.on_status = on_status
+        self.engine.on_progress = on_progress
+        self.engine.on_finish = on_finish
+
+    def stop(self) -> None:
+        """Stops the worker thread (app close)."""
+        self.engine.worker.stop()
 
 
 def bundle_asset_for(name: str, directory: str, extension: str, bundle_dir: str,
@@ -210,7 +395,11 @@ class TTSEngineBackend(Protocol):
 
     def get_voices(self, lang_code: Optional[str] = None) -> list:
         """Return this backend's known `VoiceInfo` list, optionally filtered
-        to a language code."""
+        to a language code: built-in voices first, then the user's own."""
+        ...
+
+    def get_languages(self) -> list:
+        """`[(label, code), ...]` this backend can speak."""
         ...
 
     def cancel(self) -> None:
@@ -246,4 +435,7 @@ class SupportsVoiceMixing(Protocol):
 
     async def mix_voices(self, v1_name: str, v2_name: str, ratio: float,
                           new_name: str, op: str = "mix"):
+        ...
+
+    async def preview_mix(self, tensor, voice_name: str, text: str, output_path: str, lang_code: str):
         ...

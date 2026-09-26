@@ -83,7 +83,36 @@
           <p><strong>Before you open an existing project.</strong> Clips now have a pause between them, so a project that isn't hand-timed gets longer the first time it opens. Set Gap and Paragraph gap to 0 in Settings &gt; Project for the old placement.</p>
           <p>Text now splits into pieces of about 40 words, so clips whose pieces come out different are marked stale. A <code>split_pattern</code> saved in an old <code>presets/*.json</code> file is ignored.</p>
           <p>A project that has takes, subprojects or imported audio needs this version or newer to open.</p>
+          <p>Each engine now keeps its own language. An Audio8 clip generated while the language box held Kokoro's code is marked stale once.</p>
         </div>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Engines</h3>
+        <ul class="change-list">
+          <li>
+            <h4>An Engine row in the Settings tab</h4>
+            <p>The Settings tab starts with an Engine row. With a character selected it sets that character's engine, the same as Edit &gt; Characters. With a clip selected it shows the clip's character's engine, greyed out ("Set on the character"). With nothing selected it is "Engine for new characters": Add in Edit &gt; Characters and a new speaker from subtitle import get that engine (default Kokoro), not the engine of whichever character was selected. An Unknown speaker from a recording import still gets the first engine that clones voices.</p>
+            <p>When a character's engine changes, its voice stays if the new engine has a voice by that name; otherwise it becomes the new engine's default voice, or its first one, or none (Audio8 with no saved references). Variants stay. The switch can't be undone, and it's refused while a job runs.</p>
+            <p>Edits to a library character from the Settings tab now reach its library entry, as edits in Edit &gt; Characters already did.</p>
+          </li>
+          <li>
+            <h4>The Voices tab picks its own engine</h4>
+            <p>An Engine box at the top of the Voices tab lists the engines with a voice editor (Kokoro's Mixing, Audio8's Voice Reference). Pick one to edit its voices without changing any character. Selecting a clip or character puts the tab back on that character's engine. A character on an engine with no voice editor (Dummy) leaves the tab where it was. Saving or deleting a voice updates the Settings tab's and Edit &gt; Characters' voice lists.</p>
+          </li>
+          <li>
+            <h4>Each engine keeps its own settings</h4>
+            <p>Language, default voice, Parallel Threads and an engine's own Model settings (Audio8's temperature, top-p, top-k, max tokens) are stored per engine in <code>config_qt.json</code> (<code>engines</code>). A project with Kokoro and Audio8 characters generates each with its own language and model settings, whatever is selected; before, both used the ones on screen. Speed, pitch, text splitting, output format and caching are still shared. The first launch moves the old single values across: the language to every engine that has it (Kokoro's <code>a</code> never reaches Audio8), the voice to the default engine, the thread count to all.</p>
+          </li>
+          <li>
+            <h4>A project whose engine isn't installed</h4>
+            <p>A character on an engine this install doesn't have keeps it. Its clips play from the audio they have and aren't marked stale while the files are there. They don't generate: Generate skips them and says "&lt;engine&gt; isn't installed: N clip(s) skipped", and the gutter shows no Generate button, with the reason as the tooltip. Edit &gt; Characters and the Settings row show the engine as "(not installed)". Save and Save As keep the character's engine and the engine's files in the <code>.tbaw</code>, so the project comes back whole where the engine is installed. (Save As used to drop entries it didn't recognise; it now copies them from the file the project came from.) Before, such a character silently switched to Kokoro and a Generate replaced its voice.</p>
+          </li>
+          <li>
+            <h4>Kokoro is optional, and engines can be plugins</h4>
+            <p>Without the <code>kokoro</code> package the app still starts, with Audio8 and Dummy; a Kokoro project opens, plays and says Kokoro isn't installed. A separate package can add an engine through the <code>kokorogui.engines</code> entry point. It appears in every engine picker, and one that fails to load is listed as not installed instead of stopping the app. CONTRIBUTING.md, "Adding an engine", has the steps.</p>
+          </li>
+        </ul>
       </div>
 
       <div class="change-group reveal">

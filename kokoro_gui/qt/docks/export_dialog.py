@@ -268,6 +268,6 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
         except Exception as e:  # noqa: BLE001 - surfaced to the status line
             app.exportFinished.emit(False, f"Export failed: {e}")
 
-    future = app.engine.worker.run_coro(_run())
+    future = app.backend.run(_run())
     future.add_done_callback(_done)
     return True

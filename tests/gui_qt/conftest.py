@@ -47,6 +47,7 @@ def _flush_deferred_deletes(qapp):
 
 @pytest.fixture
 def qt_app(tmp_path, monkeypatch, qtbot):
+    import kokoro_engine
     import kokoro_gui.qt.app as qt_app_module
     from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
@@ -55,7 +56,9 @@ def qt_app(tmp_path, monkeypatch, qtbot):
     monkeypatch.setattr(qt_app_module, "PRESETS_DIR", str(tmp_path / "presets"))
     monkeypatch.setattr(qt_app_module, "FX_PRESETS_DIR", str(tmp_path / "presets" / "fx"))
     monkeypatch.setattr(qt_app_module, "DOCUMENT_FILE", str(tmp_path / "document.json"))
-    monkeypatch.setattr(qt_app_module, "KokoroEngine", StubEngine)
+    # The Kokoro adapter builds `kokoro_engine.KokoroEngine()` (read at call
+    # time) when the app makes the engine resident.
+    monkeypatch.setattr(kokoro_engine, "KokoroEngine", StubEngine)
     from kokoro_gui.daw import library as library_module
     monkeypatch.setattr(library_module, "LIBRARY_DIR", str(tmp_path / "characters"))
     (tmp_path / "custom_voices").mkdir(exist_ok=True)
@@ -89,6 +92,14 @@ def qt_app(tmp_path, monkeypatch, qtbot):
 
     app = qt_app_module.QtTTSApp()
     qtbot.addWidget(app)
+    # FX presets and text extraction are module functions the GUI calls
+    # directly; the stub engine's mocks stand in for them, looked up at call
+    # time so a test that replaces `qt_app.engine.load_fx_preset` wins.
+    from kokoro_gui.engine import presets as presets_module, text_extraction
+    stub = app.engine
+    monkeypatch.setattr(presets_module, "load_fx_preset", lambda *a, **k: stub.load_fx_preset(*a, **k))
+    monkeypatch.setattr(text_extraction, "extract_text_from_file",
+                        lambda *a, **k: stub.extract_text_from_file(*a, **k))
     yield app
     app.wait_for_project_io()
     app.close()

@@ -86,3 +86,58 @@ def test_save_then_load_roundtrip(tmp_path):
     loaded = qt_settings.load_settings(cfg)
     assert loaded["voice"] == "af_bella"
     assert loaded["speed"] == 1.3
+
+
+# --- per-engine settings (grill EN5) -----------------------------------------
+
+def test_flat_language_and_threads_move_into_each_engines_bucket():
+    settings = {"lang_code": "b", "num_threads": 3, "voice": "bm_daniel", "engines": {}}
+    qt_settings.migrate_engine_settings(settings, engine_ids=["kokoro", "audio8", "dummy"])
+
+    assert not {"lang_code", "num_threads", "voice"} & set(settings)
+    # "b" is a Kokoro (and Dummy) language, not an Audio8 one; the voice was
+    # the default engine's.
+    assert settings["engines"]["kokoro"] == {"lang_code": "b", "num_threads": 3, "voice": "bm_daniel"}
+    assert settings["engines"]["dummy"] == {"lang_code": "b", "num_threads": 3}
+    assert settings["engines"]["audio8"] == {"num_threads": 3}
+
+
+def test_migration_keeps_a_value_an_engine_already_has():
+    settings = {"lang_code": "a", "engines": {"kokoro": {"lang_code": "j"}}}
+    qt_settings.migrate_engine_settings(settings, engine_ids=["kokoro"])
+    assert settings["engines"]["kokoro"] == {"lang_code": "j"}
+
+
+def test_an_old_config_opens_with_its_language_on_kokoro(tmp_path, monkeypatch, qtbot):
+    import kokoro_gui.qt.app as qt_app_module
+
+    config = tmp_path / "config_qt.json"
+    config.write_text(json.dumps({"lang_code": "b", "num_threads": 2}), encoding="utf-8")
+    monkeypatch.setattr(qt_app_module, "CONFIG_FILE", str(config))
+    settings = qt_settings.load_settings(str(config))
+    qt_settings.migrate_engine_settings(settings)
+
+    assert settings["engines"]["kokoro"]["lang_code"] == "b"
+    assert "lang_code" not in settings["engines"].get("audio8", {})
+
+
+def test_a_per_engine_edit_lands_in_that_engines_bucket(qt_app):
+    import kokoro_gui.qt.app as qt_app_module
+
+    qt_app.selection.clear()
+    qt_app.settings_dock.schema_form.widget_for("num_threads").setValue(4)
+    qt_app.save_settings()
+
+    with open(qt_app_module.CONFIG_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert data["engines"]["kokoro"]["num_threads"] == 4
+    assert "num_threads" not in data and "lang_code" not in data
+    assert qt_app.engine_settings("kokoro")["num_threads"] == 4
+    assert qt_app.engine_settings("audio8")["num_threads"] == 1
+
+
+def test_engine_settings_default_from_the_schema(qt_app):
+    assert qt_app.engine_settings("kokoro") == {"lang_code": "a", "voice": "af_heart", "num_threads": 1}
+    audio8 = qt_app.engine_settings("audio8")
+    assert audio8["lang_code"] == "English" and audio8["temperature"] == 0.8
+    assert audio8["voice"] is None and "caching" not in audio8 and "speed" not in audio8

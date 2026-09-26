@@ -1,9 +1,9 @@
 """Per-engine generation-history tracking that seeds and refines the batch
 conversion ETA in `conversion.py`.
 
-Persisted to `kokoro_engine.STATS_FILE`, read/written qualified through the
-`kokoro_engine` module rather than imported as a bare constant - the same
-convention `caching.py` uses for `kokoro_engine.CACHE_DIR` - so
+Persisted to `runtime.STATS_FILE`, read/written qualified through the
+`runtime` module rather than imported as a bare constant - the same
+convention `caching.py` uses for `runtime.CACHE_DIR` - so
 `tests/conftest.py`'s `isolated_dirs` fixture can monkeypatch it into a
 tmp_path and keep tests from writing a real `generation_stats.json` into the
 repo working directory.
@@ -23,7 +23,7 @@ import os
 import threading
 from typing import Optional
 
-import kokoro_engine
+from kokoro_gui.engine import runtime
 
 HISTORY_LIMIT = 20  # most-recent completed generations kept, per engine
 
@@ -31,7 +31,7 @@ _lock = threading.Lock()
 
 
 def _load_all() -> dict:
-    path = kokoro_engine.STATS_FILE
+    path = runtime.STATS_FILE
     if not os.path.exists(path):
         return {}
     try:
@@ -44,7 +44,7 @@ def _load_all() -> dict:
 
 def _save_all(data: dict) -> None:
     try:
-        with open(kokoro_engine.STATS_FILE, "w", encoding="utf-8") as f:
+        with open(runtime.STATS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
     except Exception as e:
         print(f"Failed to save generation stats: {e}")

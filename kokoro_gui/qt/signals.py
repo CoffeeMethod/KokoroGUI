@@ -34,10 +34,9 @@ class EngineSignalBridge(QObject):
     finished = Signal()
 
 
-def wire_engine(engine, bridge: EngineSignalBridge) -> None:
-    """Point `engine`'s callback attributes at `bridge`'s signals - the Qt
-    equivalent of a plain `engine.on_progress = self.on_engine_progress`
-    wiring, just emitting a signal instead of calling a bound method directly."""
-    engine.on_status = bridge.status.emit
-    engine.on_progress = bridge.progress.emit
-    engine.on_finish = bridge.finished.emit
+def wire_engine(backend, bridge: EngineSignalBridge) -> None:
+    """Point `backend`'s callbacks at `bridge`'s signals - the Qt
+    equivalent of a plain `on_progress = self.on_engine_progress` wiring,
+    just emitting a signal instead of calling a bound method directly."""
+    backend.set_callbacks(on_status=bridge.status.emit, on_progress=bridge.progress.emit,
+                          on_finish=bridge.finished.emit)

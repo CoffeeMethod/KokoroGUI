@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-import kokoro_engine
+from kokoro_gui.engine import runtime
 from kokoro_gui.engine import stats as generation_stats
 
 
@@ -138,7 +138,7 @@ def test_process_text_async_records_generation_stats_under_engine_id(engine, fak
     config = make_config(engine_id="kokoro", filename="run", time_id="1")
     asyncio.run(engine._process_text_async(text, config))
 
-    with open(kokoro_engine.STATS_FILE, "r", encoding="utf-8") as f:
+    with open(runtime.STATS_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
     entry = data["kokoro"][-1]
     assert entry["chars"] == len(text)
@@ -152,7 +152,7 @@ def test_process_text_async_keeps_stats_separate_per_engine_id(engine, fake_pipe
     asyncio.run(engine._process_text_async(text_a, make_config(engine_id="engine-a", time_id="1")))
     asyncio.run(engine._process_text_async(text_b, make_config(engine_id="engine-b", time_id="2")))
 
-    with open(kokoro_engine.STATS_FILE, "r", encoding="utf-8") as f:
+    with open(runtime.STATS_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
     assert data["engine-a"][-1]["chars"] == len(text_a)
     assert data["engine-b"][-1]["chars"] == len(text_b)

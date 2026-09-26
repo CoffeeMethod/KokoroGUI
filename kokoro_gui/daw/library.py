@@ -27,7 +27,7 @@ from kokoro_gui.daw.serialization import character_from_dict, character_to_dict
 
 # `characters/` beside `presets/`, relative to the working directory like
 # the other stores. Read at call time, so tests monkeypatch it the way they
-# do `kokoro_engine.CUSTOM_VOICES_DIR`.
+# do `runtime.CUSTOM_VOICES_DIR`.
 LIBRARY_DIR = "characters"
 
 # What resolution copies from an entry onto a linked record. Never `id`

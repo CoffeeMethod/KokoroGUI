@@ -131,6 +131,27 @@ def list_ir_names(project_dir=None, global_dir=None):
     return sorted(names)
 
 
+def load_fx_preset(name, project_dir=None):
+    """Loads an FX preset: the open project's `fx/<name>.json` first (a
+    `.tbaw` bundles the presets it names), then presets/fx. A module
+    function: it never needed an engine (the GUI calls it without one)."""
+    # Sanitize name to prevent path traversal
+    safe_name = os.path.basename(name)
+    candidates = []
+    if project_dir:
+        candidates.append(os.path.join(project_dir, "fx", f"{safe_name}.json"))
+    candidates.append(os.path.join("presets", "fx", f"{safe_name}.json"))
+    for fx_path in candidates:
+        if os.path.exists(fx_path):
+            try:
+                with open(fx_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"Error loading FX preset {name}: {e}")
+                return None
+    return None
+
+
 class PresetsMixin:
     def load_preset(self, name):
         """Loads a preset from the presets directory."""
@@ -146,20 +167,4 @@ class PresetsMixin:
         return None
 
     def load_fx_preset(self, name, project_dir=None):
-        """Loads an FX preset: the open project's `fx/<name>.json` first
-        (a `.tbaw` bundles the presets it names), then presets/fx."""
-        # Sanitize name to prevent path traversal
-        safe_name = os.path.basename(name)
-        candidates = []
-        if project_dir:
-            candidates.append(os.path.join(project_dir, "fx", f"{safe_name}.json"))
-        candidates.append(os.path.join("presets", "fx", f"{safe_name}.json"))
-        for fx_path in candidates:
-            if os.path.exists(fx_path):
-                try:
-                    with open(fx_path, "r", encoding="utf-8") as f:
-                        return json.load(f)
-                except Exception as e:
-                    print(f"Error loading FX preset {name}: {e}")
-                    return None
-        return None
+        return load_fx_preset(name, project_dir)

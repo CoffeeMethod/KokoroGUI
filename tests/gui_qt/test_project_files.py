@@ -164,6 +164,71 @@ def test_bundle_round_trips_document_settings_audio_and_assets(tmp_path, isolate
     assert loaded.notices == []
 
 
+def test_bundle_layout_per_engine_is_pinned(tmp_path, isolated_dirs, monkeypatch):
+    """ENGINE_AGNOSTIC plan, A2: a Kokoro character on a custom mix and an
+    Audio8 character on a reference save to exactly these entries and
+    `manifest.engines`, and the reopened project saves the same set again.
+    Must never change: an engine refactor that moves a file moves it inside
+    every user's bundle."""
+    import importlib.metadata
+
+    from kokoro_gui.engines import audio8_tts
+    from kokoro_gui.engines.audio8_tts import Audio8BackendAdapter, Audio8Engine
+    from kokoro_gui.engines.kokoro import KokoroBackendAdapter
+    from tests.conftest import StubEngine
+
+    real_version = importlib.metadata.version
+    monkeypatch.setattr(importlib.metadata, "version",
+                        lambda name: "0.9.4" if name == "kokoro" else real_version(name))
+    refs = tmp_path / "audio8_refs"
+    refs.mkdir()
+    monkeypatch.setattr(audio8_tts, "AUDIO8_REFS_DIR", str(refs))
+    (isolated_dirs.custom_voices / "blend.pt").write_bytes(b"mix bytes")
+    (refs / "narrator.wav").write_bytes(b"RIFF reference bytes")
+    (refs / "narrator.txt").write_text("What the reference says.", encoding="utf-8")
+
+    audio8_engine = Audio8Engine()
+    backends = {"kokoro": KokoroBackendAdapter(StubEngine()), "audio8": Audio8BackendAdapter(audio8_engine)}
+    try:
+        project_dir, project_id = project_io.create_project_dir()
+        kokoro_character = Character.from_preset_dict("Kira", {"voice": "blend"})
+        audio8_character = Character.from_preset_dict("Nia", {"voice": "narrator"})
+        audio8_character.backend_id = "audio8"
+        doc = Document(runs=[Run("hello")], clips=[], characters=[kokoro_character, audio8_character])
+        path = str(tmp_path / "proj.tbaw")
+        project_io.save_project(doc, path, {}, project_dir, project_id, backend_for=backends.get,
+                                fx_presets_dir=str(tmp_path / "no_fx"))
+
+        expected = {
+            "manifest.json", "document.json", "project.json",
+            "engines/kokoro/voices/blend.pt",
+            "engines/audio8/refs/narrator.wav", "engines/audio8/refs/narrator.txt",
+        }
+        with zipfile.ZipFile(path) as zf:
+            names = set(zf.namelist())
+            manifest = json.loads(zf.read("manifest.json"))
+        assert names == expected
+        assert manifest["engines"] == {
+            "audio8": {"version": "Audio8/Audio8-TTS-Preview-0.6b", "meta": {}},
+            "kokoro": {"version": "0.9.4", "meta": {}},
+        }
+
+        info = project_io.inspect_bundle(path)
+        other_dir = str(tmp_path / "other")
+        project_io.extract_small(info, other_dir)
+        project_io.extract_audio(info, other_dir)
+        loaded = project_io.finish_open(info, other_dir)
+        assert [c.backend_id for c in loaded.document.characters] == ["kokoro", "audio8"]
+        second = str(tmp_path / "again.tbaw")
+        project_io.save_project(loaded.document, second, {}, other_dir, project_id, backend_for=backends.get,
+                                fx_presets_dir=str(tmp_path / "no_fx"))
+        with zipfile.ZipFile(second) as zf:
+            assert set(zf.namelist()) == expected
+            assert json.loads(zf.read("manifest.json"))["engines"] == manifest["engines"]
+    finally:
+        audio8_engine.worker.stop()
+
+
 def _write_ir(path, value=1.0):
     import numpy as np
     import soundfile as sf
@@ -1544,11 +1609,11 @@ def test_json_project_in_unwritable_dir_falls_through_to_save_as(qt_app, tmp_pat
 
 
 def test_project_local_asset_shadows_the_global_one(qt_app, tmp_path, monkeypatch):
-    import kokoro_engine
+    from kokoro_gui.engine import runtime
 
     global_dir = tmp_path / "custom_voices"
     global_dir.mkdir(exist_ok=True)
-    monkeypatch.setattr(kokoro_engine, "CUSTOM_VOICES_DIR", str(global_dir))
+    monkeypatch.setattr(runtime, "CUSTOM_VOICES_DIR", str(global_dir))
     (global_dir / "Mix.pt").write_bytes(b"global")
     local_dir = os.path.join(qt_app.project_dir, "engines", "kokoro", "voices")
     os.makedirs(local_dir)
@@ -1556,7 +1621,7 @@ def test_project_local_asset_shadows_the_global_one(qt_app, tmp_path, monkeypatc
         f.write(b"project-local")
 
     assert qt_app.backend.resolve_voice_file("Mix", qt_app.project_dir) == os.path.join(local_dir, "Mix.pt")
-    assert [v.id for v in qt_app.backend.get_voices()] == ["Mix"]
+    assert [v.id for v in qt_app.backend.get_voices() if v.is_custom] == ["Mix"]
     assert qt_app.backend.project_dir == qt_app.project_dir
 
     # And a Save bundles the project copy.
@@ -1798,3 +1863,94 @@ def test_used_voice_names_include_every_variant_reference():
     character.variants = {"angry": "angry_ref", "whisper": "soft_ref"}
     doc = Document(characters=[character])
     assert project_io.used_voice_names(doc) == {"audio8": {"calm_ref", "angry_ref", "soft_ref"}}
+
+
+# -- which old bundle Save copies unknown entries from -----------------------------
+
+
+def _bundle_with_unknown_entry(tmp_path, name="first.tbaw", payload=b"from the source"):
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _seg = _document_with_audio(project_dir)
+    path = str(tmp_path / name)
+    project_io.save_project(doc, path, {}, project_dir, project_id, fx_presets_dir=str(tmp_path / "no_fx"))
+    with zipfile.ZipFile(path, "a") as zf:
+        zf.writestr("engines/ghost/voices/boo.bin", payload)
+        zf.writestr("future/thing.json", b"{}")
+    return doc, project_dir, project_id, path
+
+
+def test_save_as_carries_unknown_entries_from_the_source_bundle(tmp_path, isolated_dirs):
+    doc, project_dir, project_id, source = _bundle_with_unknown_entry(tmp_path)
+    copy = str(tmp_path / "copy.tbaw")
+
+    project_io.save_project(doc, copy, {}, project_dir, project_id, fx_presets_dir=str(tmp_path / "no_fx"))
+
+    with zipfile.ZipFile(copy) as zf:
+        assert zf.read("engines/ghost/voices/boo.bin") == b"from the source"
+        assert "future/thing.json" in zf.namelist()
+    # The session now names the copy, so the next Save carries from it.
+    assert project_io.read_session(project_dir)["source_path"] == os.path.abspath(copy)
+
+
+def test_save_as_over_another_projects_file_takes_nothing_from_it(tmp_path, isolated_dirs):
+    doc, project_dir, project_id, _source = _bundle_with_unknown_entry(tmp_path)
+    _other_doc, _other_dir, _other_id, other = _bundle_with_unknown_entry(tmp_path, "other.tbaw",
+                                                                          payload=b"another project")
+    with zipfile.ZipFile(other, "a") as zf:
+        zf.writestr("only/in/other.bin", b"x")
+
+    project_io.save_project(doc, other, {}, project_dir, project_id, fx_presets_dir=str(tmp_path / "no_fx"))
+
+    with zipfile.ZipFile(other) as zf:
+        assert zf.read("engines/ghost/voices/boo.bin") == b"from the source"
+        assert "only/in/other.bin" not in zf.namelist()
+
+
+def test_a_source_replaced_by_another_project_is_not_carried_from(tmp_path, isolated_dirs):
+    doc, project_dir, project_id, source = _bundle_with_unknown_entry(tmp_path)
+    _other_doc, other_dir, other_id, _other = _bundle_with_unknown_entry(tmp_path, "other.tbaw")
+    other_doc, _seg = _document_with_audio(other_dir)
+    project_io.save_project(other_doc, source, {}, other_dir, other_id, fx_presets_dir=str(tmp_path / "no_fx"))
+    session = project_io.read_session(project_dir)
+    session["source_path"] = source  # our working copy still points at it
+    plan, _warnings = project_io.plan_save(doc, {}, str(tmp_path / "copy.tbaw"), project_dir, project_id,
+                                           lambda _id: None, str(tmp_path / "no_fx"), session)
+
+    assert plan.carry_from == os.path.abspath(source)
+    assert project_io._carry_source(plan) is None  # another project's file; nothing at the new path
+
+
+def test_an_embedded_childs_source_is_never_a_carry_file(tmp_path):
+    assert project_io._carry_candidate(str(tmp_path / "child.tbaw"),
+                                       {"source_path": str(tmp_path / "parent.tbaw") + "#abc"}) is None
+    same = str(tmp_path / "same.tbaw")
+    open(same, "wb").close()
+    assert project_io._carry_candidate(same, {"source_path": same}) is None
+
+
+def test_a_carried_entry_is_never_written_twice(tmp_path, isolated_dirs):
+    """The helper passes no known engines, so the source's `engines/` and
+    `fx/` entries are "unknown" to it; the ones this Save writes anyway must
+    not be copied in a second time."""
+    fx_dir = tmp_path / "presets" / "fx"
+    fx_dir.mkdir(parents=True)
+    (fx_dir / "warm.json").write_text('{"gain_db": 2.0}', encoding="utf-8")
+    (isolated_dirs.custom_voices / "blend.pt").write_bytes(b"mix")
+    project_dir, project_id = project_io.create_project_dir()
+    doc, _seg = _document_with_audio(project_dir)
+    doc.characters[0].preset_data["voice"] = "blend"
+    from kokoro_gui.engines.kokoro import KokoroBackendAdapter
+    from tests.conftest import StubEngine
+
+    backend = KokoroBackendAdapter(StubEngine())
+    first = str(tmp_path / "first.tbaw")
+    project_io.save_project(doc, first, {}, project_dir, project_id, backend_for={"kokoro": backend}.get,
+                            fx_presets_dir=str(fx_dir))
+    copy = str(tmp_path / "copy.tbaw")
+    project_io.save_project(doc, copy, {}, project_dir, project_id, backend_for={"kokoro": backend}.get,
+                            fx_presets_dir=str(fx_dir))
+
+    with zipfile.ZipFile(copy) as zf:
+        names = zf.namelist()
+    assert len(names) == len(set(names))
+    assert "engines/kokoro/voices/blend.pt" in names

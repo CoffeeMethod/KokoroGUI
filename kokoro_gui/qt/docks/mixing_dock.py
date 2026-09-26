@@ -1,11 +1,11 @@
-"""Custom Voice (mixing) dock: blends two voice tensors via
-`self.app.engine.mix_voices` and previews/saves the result. Shown only when
-`app.backend.capabilities.supports_voice_mixing` is true - see app.py's
-`_sync_mixing_dock`.
+"""Custom Voice (mixing) dock: blends two voice tensors via the Voices
+tab's engine (`app.voices_backend()`, its `SupportsVoiceMixing.mix_voices`)
+and previews/saves the result. Shown only when that engine has
+`capabilities.supports_voice_mixing` - see app.py's `_sync_mixing_dock`. An
+Engine row on top picks another engine's editor (grill EN3).
 
-Uses the literal relative "custom_voices" path (not
-`kokoro_engine.CUSTOM_VOICES_DIR`) - relies on the process cwd for this,
-which is why the test fixtures `monkeypatch.chdir(tmp_path)`.
+The saved mixes are the engine's `voice_store` (an `EmbeddingStore`, global
+store only here: a project's own copies aren't deleted from this list).
 """
 from __future__ import annotations
 
@@ -21,11 +21,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from kokoro_gui.qt import spec
 from kokoro_gui.qt.docks.scrolling import scrollable
-
-CUSTOM_VOICES_DIR = "custom_voices"
-
+from kokoro_gui.qt.docks.voice_header import engine_header
 
 class MixingDock(QDockWidget):
     previewFinished = Signal(bool, str)
@@ -35,13 +32,18 @@ class MixingDock(QDockWidget):
         super().__init__("Custom Voice", parent)
         self.setObjectName("dock_mixing")
         self.app = app
+        # The engine this editor was built for; app.py rebuilds the dock when
+        # the Voices tab moves to another mixing engine.
+        self.backend_id = app.voices_backend().id
         self.previewFinished.connect(self._on_preview_finished)
         self.mixFinished.connect(self._on_mix_finished)
 
         content = QWidget()
         layout = QVBoxLayout(content)
+        engine_row, self.engine_combo = engine_header(app, self.backend_id)
+        layout.addLayout(engine_row)
 
-        lang_items = list(spec.LANGUAGES.items())
+        lang_items = list(self.backend.get_languages())
 
         sel_grid = QGridLayout()
         sel_grid.addWidget(QLabel("Voice A:"), 0, 0)
@@ -122,6 +124,11 @@ class MixingDock(QDockWidget):
         self.setWidget(scrollable(content))
         self.refresh_voice_lists()
 
+    @property
+    def backend(self):
+        """The engine whose voices this dock mixes: the Voices tab's engine."""
+        return self.app.voices_backend()
+
     def _ratio_value(self) -> float:
         return self.ratio_slider.value() / 100.0
 
@@ -137,7 +144,7 @@ class MixingDock(QDockWidget):
 
     def _refresh_voice_list(self, lang_combo: QComboBox, voice_combo: QComboBox) -> None:
         code = lang_combo.currentData()
-        voices = self.app.get_all_voices(code)
+        voices = self.app.get_all_voices(code, backend=self.backend)
         current = voice_combo.currentText()
         voice_combo.blockSignals(True)
         voice_combo.clear()
@@ -149,8 +156,7 @@ class MixingDock(QDockWidget):
         voice_combo.blockSignals(False)
 
     def refresh_voice_lists(self) -> None:
-        if hasattr(self.app, "settings_dock") and self.app.settings_dock is not None:
-            self.app.settings_dock.refresh_voice_choices()
+        self.app.refresh_voice_choices()
         self._refresh_voice_list(self.lang_a_combo, self.voice_a_combo)
         self._refresh_voice_list(self.lang_b_combo, self.voice_b_combo)
 
@@ -160,9 +166,7 @@ class MixingDock(QDockWidget):
             if w:
                 w.deleteLater()
 
-        custom = []
-        if os.path.exists(CUSTOM_VOICES_DIR):
-            custom = sorted(f[:-3] for f in os.listdir(CUSTOM_VOICES_DIR) if f.endswith(".pt"))
+        custom = sorted(self.backend.voice_store.list_voices())
         if not custom:
             self._list_layout.addWidget(QLabel("No custom voices found."))
         else:
@@ -180,10 +184,8 @@ class MixingDock(QDockWidget):
         if QMessageBox.question(self, "Confirm", f"Delete voice '{name}'?") != QMessageBox.StandardButton.Yes:
             return
         try:
-            path = os.path.join(CUSTOM_VOICES_DIR, f"{name}.pt")
-            if os.path.exists(path):
-                os.remove(path)
-                self.refresh_voice_lists()
+            self.backend.voice_store.delete(name)
+            self.refresh_voice_lists()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to delete: {e}")
 
@@ -194,23 +196,20 @@ class MixingDock(QDockWidget):
         op = self.op_combo.currentText()
         preview_lang = self.preview_lang_combo.currentData()
 
-        preview_text = spec.MIX_PREVIEW_TEXT.get(preview_lang, spec.MIX_PREVIEW_TEXT_DEFAULT)
+        preview_text = self.backend.preview_text(preview_lang)
         tmp_voice_name = "_tmp_mix_preview"
         tmp_audio_path = os.path.join(tempfile.gettempdir(), "kokoro_mix_preview.wav")
 
         self.mix_status_label.setText("Generating preview...")
+        backend = self.backend
 
         async def _run_preview():
-            success, msg, tensor = await self.app.engine.mix_voices(v1, v2, ratio, tmp_voice_name, op=op)
+            success, msg, tensor = await backend.mix_voices(v1, v2, ratio, tmp_voice_name, op=op)
             if not success:
                 return False, msg
-            success = await self.app.engine.generate_preview(
-                preview_text, tmp_voice_name, 1.0, tmp_audio_path, voice_tensor=tensor, lang_code=preview_lang,
-            )
+            success = await backend.preview_mix(tensor, tmp_voice_name, preview_text, tmp_audio_path, preview_lang)
             try:
-                p = os.path.join(CUSTOM_VOICES_DIR, f"{tmp_voice_name}.pt")
-                if os.path.exists(p):
-                    os.remove(p)
+                backend.voice_store.delete(tmp_voice_name)
             except Exception:
                 pass
             return success, ""
@@ -224,7 +223,7 @@ class MixingDock(QDockWidget):
             if success:
                 playback.play(tmp_audio_path)
 
-        future = self.app.engine.worker.run_coro(_run_preview())
+        future = backend.run(_run_preview())
         future.add_done_callback(_done)
 
     def _on_preview_finished(self, success: bool, err: str) -> None:
@@ -246,7 +245,7 @@ class MixingDock(QDockWidget):
         if not re.match(r"^[a-zA-Z0-9_-]+$", name):
             QMessageBox.warning(self, "Error", "Invalid name. Use alphanumeric, _, - only.")
             return
-        if name in self.app.get_all_voices():
+        if name in self.app.get_all_voices(backend=self.backend):
             if QMessageBox.question(self, "Overwrite", f"Voice '{name}' exists. Overwrite?") != QMessageBox.StandardButton.Yes:
                 return
 
@@ -261,7 +260,8 @@ class MixingDock(QDockWidget):
                 success, msg = False, str(e)
             self.mixFinished.emit(success, msg)
 
-        future = self.app.engine.worker.run_coro(self.app.engine.mix_voices(v1, v2, ratio, name, op=op))
+        backend = self.backend
+        future = backend.run(backend.mix_voices(v1, v2, ratio, name, op=op))
         future.add_done_callback(_done)
 
     def _on_mix_finished(self, success: bool, msg: str) -> None:

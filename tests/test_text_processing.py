@@ -4,7 +4,7 @@
 parse_multispeaker_text, used by the Qt transcript editor's highlighter)."""
 import pytest
 
-import kokoro_engine
+from kokoro_gui.engine import text_extraction
 from kokoro_gui.engine.text_extraction import find_character_fx_spans
 
 
@@ -145,7 +145,7 @@ def test_extract_text_from_file_pdf(engine, tmp_path, monkeypatch):
         def __init__(self, path):
             self.pages = [FakePage(), FakePage()]
 
-    monkeypatch.setattr(kokoro_engine.pypdf, "PdfReader", FakeReader)
+    monkeypatch.setattr(text_extraction.pypdf, "PdfReader", FakeReader)
     p = tmp_path / "sample.pdf"
     p.write_bytes(b"%PDF-fake")
 
@@ -156,7 +156,7 @@ def test_extract_text_from_file_pdf(engine, tmp_path, monkeypatch):
 def test_extract_text_from_file_epub(engine, tmp_path, monkeypatch):
     class FakeItem:
         def get_type(self):
-            return kokoro_engine.ebooklib.ITEM_DOCUMENT
+            return text_extraction.ebooklib.ITEM_DOCUMENT
 
         def get_content(self):
             return b"<html><body><p>Chapter text.</p></body></html>"
@@ -165,7 +165,7 @@ def test_extract_text_from_file_epub(engine, tmp_path, monkeypatch):
         def get_items(self):
             return [FakeItem()]
 
-    monkeypatch.setattr(kokoro_engine.epub, "read_epub", lambda path, options=None: FakeBook())
+    monkeypatch.setattr(text_extraction.epub, "read_epub", lambda path, options=None: FakeBook())
     p = tmp_path / "sample.epub"
     p.write_bytes(b"fake-epub")
 
@@ -187,7 +187,7 @@ def _fake_epub(monkeypatch, documents, spine=None):
             self._html = html
 
         def get_type(self):
-            return kokoro_engine.ebooklib.ITEM_DOCUMENT
+            return text_extraction.ebooklib.ITEM_DOCUMENT
 
         def get_content(self):
             return self._html.encode("utf-8")
@@ -202,7 +202,7 @@ def _fake_epub(monkeypatch, documents, spine=None):
         def get_items(self):
             return [FakeItem(i, h) for i, h in documents]
 
-    monkeypatch.setattr(kokoro_engine.epub, "read_epub", lambda path, options=None: FakeBook())
+    monkeypatch.setattr(text_extraction.epub, "read_epub", lambda path, options=None: FakeBook())
 
 
 def test_extract_sections_epub_titles_from_headings_in_spine_order(tmp_path, monkeypatch):
@@ -247,7 +247,7 @@ def test_extract_sections_pdf_by_outline_page_ranges(tmp_path, monkeypatch):
         def get_destination_page_number(self, entry):
             return entry.page
 
-    monkeypatch.setattr(kokoro_engine.pypdf, "PdfReader", Reader)
+    monkeypatch.setattr(text_extraction.pypdf, "PdfReader", Reader)
     p = tmp_path / "book.pdf"
     p.write_bytes(b"%PDF-fake")
 
@@ -266,7 +266,7 @@ def test_extract_sections_pdf_without_outline_and_txt_are_one_section(tmp_path, 
             self.pages = [type("P", (), {"extract_text": lambda self: "All of it."})()]
             self.outline = []
 
-    monkeypatch.setattr(kokoro_engine.pypdf, "PdfReader", Reader)
+    monkeypatch.setattr(text_extraction.pypdf, "PdfReader", Reader)
     pdf = tmp_path / "flat.pdf"
     pdf.write_bytes(b"%PDF-fake")
     assert extract_sections(str(pdf)) == [("flat", "All of it.")]

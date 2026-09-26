@@ -44,11 +44,12 @@ import time
 import zipfile
 from dataclasses import dataclass, field
 
-import kokoro_engine
 from kokoro_gui import APP_VERSION
 from kokoro_gui.daw import serialization
 from kokoro_gui.daw.models import Document
 from kokoro_gui.daw.reference import source_track_settings
+from kokoro_gui.engine import runtime
+from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
 from kokoro_gui.engine.caching import RESERVED_SUFFIX, compute_cache_key, effective_speed
 from kokoro_gui.engine.presets import filter_fx_preset_values, ir_safe_name, resolve_ir
 
@@ -174,11 +175,11 @@ def format_for_path(path: str) -> str:
 
 
 def projects_root() -> str:
-    """`cache/projects/` under `kokoro_engine.CACHE_DIR`, read at call time
+    """`cache/projects/` under `runtime.CACHE_DIR`, read at call time
     so the `isolated_dirs` fixture redirects it. Absolute: every
     `audio_path` is built on it and Save tells project-dir files from
     outside ones by prefix."""
-    return os.path.abspath(os.path.join(kokoro_engine.CACHE_DIR, "projects"))
+    return os.path.abspath(os.path.join(runtime.CACHE_DIR, "projects"))
 
 
 def new_project_id() -> str:
@@ -1181,15 +1182,15 @@ def used_voice_names(document: Document) -> dict:
     for character in document.characters:
         voice = (character.preset_data or {}).get("voice")
         if voice:
-            names.setdefault(character.backend_id or "kokoro", set()).add(str(voice))
+            names.setdefault(character.backend_id or DEFAULT_ENGINE_ID, set()).add(str(voice))
         for variant_voice in (character.variants or {}).values():
             if variant_voice:
-                names.setdefault(character.backend_id or "kokoro", set()).add(str(variant_voice))
+                names.setdefault(character.backend_id or DEFAULT_ENGINE_ID, set()).add(str(variant_voice))
     for clip in document.clips:
         voice = (clip.overrides or {}).get("voice")
         if voice:
             character = document.get_character(clip.character_id)
-            backend_id = (character.backend_id if character else None) or "kokoro"
+            backend_id = (character.backend_id if character else None) or DEFAULT_ENGINE_ID
             names.setdefault(backend_id, set()).add(str(voice))
     return names
 
@@ -1376,6 +1377,11 @@ class SavePlan:
     # The reference video to store under `video/` (`include_video` on), or
     # None. Hashed by `write_bundle`, on the worker thread.
     video_file: str | None = None
+    # The bundle this working copy was opened from or last saved to
+    # (`session.json`'s `source_path`), when that is a file other than
+    # `path`. `write_bundle` copies unknown entries through from it instead
+    # of from the file being overwritten, so Save As keeps them.
+    carry_from: str | None = None
 
 
 def plan_save(document: Document, project_settings: dict, path: str, project_dir: str, project_id: str,
@@ -1468,8 +1474,39 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
         assets=assets, audio_files=audio_files,
         previous_asset_index=dict((previous_session or {}).get("asset_index") or {}),
         dir_digest=document_digest(dir_document, dir_project), video_file=video_file,
+        carry_from=_carry_candidate(path, previous_session),
     )
     return plan, warnings
+
+
+def _carry_candidate(path: str, previous_session: dict | None) -> str | None:
+    """`SavePlan.carry_from`: the session's `source_path` when it names an
+    existing file other than `path`, else None (carry from `path`, as a Save
+    over the same file does). An embedded child's `<parent>#<id>` source is
+    never a file, so a child keeps carrying from its own bundle."""
+    source = (previous_session or {}).get("source_path")
+    if not isinstance(source, str) or not source:
+        return None
+    source = os.path.abspath(source)
+    if source == os.path.abspath(path) or not os.path.isfile(source):
+        return None
+    return source
+
+
+def _carry_source(plan: SavePlan) -> str | None:
+    """The old bundle whose unknown entries `write_bundle` copies through:
+    `plan.carry_from` when it is still a bundle of this project (its
+    manifest's `project_id` matches; anything else, such as a file replaced
+    by another project since, is ignored), else the file being overwritten,
+    else none."""
+    if plan.carry_from and os.path.isfile(plan.carry_from):
+        try:
+            with zipfile.ZipFile(plan.carry_from) as zf:
+                if read_manifest_from(zf).get("project_id") == plan.project_id:
+                    return plan.carry_from
+        except (OSError, zipfile.BadZipFile, ProjectError):
+            pass
+    return plan.path if os.path.isfile(plan.path) else None
 
 
 def _owned_entry(name: str, known_engine_ids) -> bool:
@@ -1521,7 +1558,9 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
     audio stored, unknown entries from the old file copied through), then
     replace. A crash mid-save leaves the old file intact; a replace that
     keeps failing leaves the `.tmp` and says where it is. An entry
-    `_refused_entry` names is left out."""
+    `_refused_entry` names is left out. The old file is `_carry_source`'s:
+    for Save As, the bundle the project came from, not whatever file sits
+    at the new path."""
     assets = [(name, src) for name, src in plan.assets if not _refused_entry(name, src, plan.project_dir)]
     audio_files = [(name, src) for name, src in plan.audio_files
                    if not _refused_entry(name, src, plan.project_dir)]
@@ -1565,13 +1604,17 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
             needed += os.path.getsize(source)
         except OSError:
             pass
-    previous_path = plan.path if os.path.isfile(plan.path) else None
+    previous_path = _carry_source(plan)
     carried = []
+    # Never an entry this Save writes itself (a caller that names no engines
+    # as known would otherwise copy an asset in twice).
+    written = {name.replace("\\", "/") for name, _src in assets + audio_files + ([video] if video else [])}
     if previous_path:
         try:
             with zipfile.ZipFile(previous_path) as old:
                 for info in old.infolist():
-                    if not _owned_entry(info.filename, known_engine_ids):
+                    if not _owned_entry(info.filename, known_engine_ids) \
+                            and info.filename.replace("\\", "/") not in written:
                         carried.append(info.filename)
                         needed += info.file_size
         except (OSError, zipfile.BadZipFile):
@@ -1801,7 +1844,7 @@ def legacy_segment_key(text: str, config: dict) -> str:
     """What `dirty.py` stamped before the schema bump: the voice *name*, no
     extra inputs, `CACHE_SCHEMA_VERSION` 2."""
     return compute_cache_key(text, config.get("voice"), effective_speed(config), config.get("lang_code", "a"),
-                             config.get("engine_id", "kokoro"), schema_version=2)
+                             config.get("engine_id", DEFAULT_ENGINE_ID), schema_version=2)
 
 
 def migrate_segments(document: Document, project_dir: str, generation_config_for, key_fn,

@@ -36,3 +36,12 @@ def test_jit_conversion_leaves_inspectable_output(engine, fake_pipeline, make_co
     asyncio.run(engine._process_jit_async("Hello from the JIT smoke test.", config))
 
     assert (timestamped_output_dir / "jitsmoke_1_jit_output.wav").exists()
+
+
+def test_jit_conversion_plays_each_segment_through_runtime_playback(engine, fake_pipeline, make_config):
+    from kokoro_gui.engine import runtime
+
+    config = make_config(filename="jitrun", time_id="1")
+    asyncio.run(engine._process_jit_async("Hello world. This is JIT.", config))
+
+    assert runtime.playback.play.call_count >= 1

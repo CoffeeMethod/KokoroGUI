@@ -1,34 +1,42 @@
-import os
+"""Kokoro's engine: `KokoroModel` (a thread-local `kokoro.KPipeline` as a
+`SynthesisModel`), `KokoroEngine` (the `EngineRunner` around it, plus voice
+mixing) and the pipeline getter tests patch.
+
+The shared storage dirs, `playback` and `AsyncLoopThread` live in
+`kokoro_gui/engine/runtime.py`, so the other backends import without the
+`kokoro` package. The old names still resolve here (module `__getattr__`),
+read from `runtime` at call time; patch them there.
+"""
+import importlib.metadata
 import threading
-import asyncio
-import time
-import pypdf
-import ebooklib
-from ebooklib import epub
-import warnings
-import playback
 from kokoro import KPipeline
 
-# From the submodules, not the package: kokoro_gui/engine/__init__.py imports
-# this module first, so the package namespace is still empty at this point.
-from kokoro_gui.engine.audio_fx import AudioFXMixin
-from kokoro_gui.engine.caching import CachingMixin
-from kokoro_gui.engine.conversion import ConversionMixin
-from kokoro_gui.engine.jit import JITMixin
-from kokoro_gui.engine.lexicon import LexiconMixin
-from kokoro_gui.engine.presets import PresetsMixin
-from kokoro_gui.engine.srt import SrtMixin
-from kokoro_gui.engine.text_extraction import TextExtractionMixin
+import numpy as np
+
+from kokoro_gui.engine import runtime
+from kokoro_gui.engine.caching import to_numpy
+from kokoro_gui.engine.runner import EngineRunner, ModelBase
+from kokoro_gui.engine.runtime import AsyncLoopThread  # noqa: F401 - old import path
 from kokoro_gui.engine.voices import VoiceMixingMixin
-from kokoro_gui.engine.paths import ensure_private_dir
+from kokoro_gui.engine.wordtiming import words_from_tokens
+from kokoro_gui.engines.base import Synthesis
 
-# Suppress ebooklib warnings
-warnings.filterwarnings("ignore", category=UserWarning, module='ebooklib')
-warnings.filterwarnings("ignore", category=FutureWarning, module='ebooklib')
+_RUNTIME_NAMES = ("CUSTOM_VOICES_DIR", "CACHE_DIR", "STATS_FILE", "playback")
 
-CUSTOM_VOICES_DIR = "custom_voices"
-CACHE_DIR = "cache"
-STATS_FILE = "generation_stats.json"  # per-engine generation-history, see kokoro_gui/engine/stats.py
+
+def __getattr__(name):
+    """The names that moved to `runtime`, read from there at call time."""
+    if name in _RUNTIME_NAMES:
+        return getattr(runtime, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+def kokoro_package_version():
+    """The installed `kokoro` package's version, "unknown" without one."""
+    try:
+        return importlib.metadata.version("kokoro")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
 
 # --- Thread Local Storage ---
 thread_local = threading.local()
@@ -54,101 +62,96 @@ def get_thread_pipeline(lang_code="a"):
             return None
     return thread_local.pipeline
 
-class AsyncLoopThread(threading.Thread):
+class KokoroModel(ModelBase):
+    """Kokoro as a `SynthesisModel`: one `KPipeline` per worker thread and
+    language (`get_thread_pipeline`, called by name so tests can patch it),
+    24000Hz, word timings from the pipeline's tokens."""
+
+    engine_id = "kokoro"
+    sample_rate = 24000
+    concurrency = "per_thread"
+    display_name = "Kokoro"
+
     def __init__(self):
-        super().__init__(daemon=True)
-        self.loop = asyncio.new_event_loop()
-        self.running = True
+        self.loaded_lang = None
 
-    def run(self):
-        asyncio.set_event_loop(self.loop)
-        self.loop.run_forever()
-
-    def stop(self):
-        self.loop.call_soon_threadsafe(self.loop.stop)
-        self.join()
-
-    def run_coro(self, coro):
-        return asyncio.run_coroutine_threadsafe(coro, self.loop)
-
-class KokoroEngine(
-    AudioFXMixin, CachingMixin, ConversionMixin, JITMixin, LexiconMixin,
-    PresetsMixin, SrtMixin, TextExtractionMixin, VoiceMixingMixin,
-):
-    def __init__(self):
-        self.worker = AsyncLoopThread()
-        self.worker.start()
-        self.cancel_event = threading.Event()
-        self.pipeline = None # Main pipeline for single thread check or init
-
-        # Private (0o700) on POSIX; see kokoro_gui/engine/paths.py. A cache
-        # dir owned by another user is swapped for a per-user one, and
-        # everything under it (project dirs included) follows, since every
-        # reader looks `CACHE_DIR` up here at call time. The voices dir
-        # stays put: moving a user's voices would lose them.
-        global CACHE_DIR
-        ensure_private_dir(CUSTOM_VOICES_DIR, fallback=False)
-        CACHE_DIR = ensure_private_dir(CACHE_DIR)
-
-        # Callbacks
-        self.on_progress = None # func(percentage, time_elapsed, eta, detail_text)
-        self.on_status = None   # func(msg, is_error)
-        self.on_finish = None   # func()
-
-        self._lexicon_cache = {} # Cache for compiled regexes
-
-    def get_thread_pipeline(self, lang_code="a"):
-        """Instance-method indirection to the module-level thread-local
-        KPipeline getter, so the generic mixins (caching.py, conversion.py)
-        can call `self.get_thread_pipeline(...)` polymorphically instead of
-        hard-coding `kokoro_engine.get_thread_pipeline` - the one piece of
-        that shared pipeline that's genuinely Kokoro-specific (see
-        kokoro_gui/engines/dummy.py for a from-scratch, non-Kokoro backend
-        built on the same generic mixins). Calls the free function by name
-        (not a direct reference) so `monkeypatch.setattr(kokoro_engine,
-        "get_thread_pipeline", ...)` in tests still takes effect."""
-        return get_thread_pipeline(lang_code)
-
-    async def init_pipeline_async(self, lang_code="a", device=None):
+    def load(self, lang_code, device):
+        """The main pipeline (voice mixing loads tensors through it). A
+        `lang_code` left over from another engine ("English") that KPipeline
+        rejects gets one retry with Kokoro's "a" rather than surfacing
+        KPipeline's raw AssertionError; "a" failing is a real problem and
+        raises."""
         global PIPELINE_DEVICE
         if device is not None:
             PIPELINE_DEVICE = None if device == "auto" else device
+        lang_code = lang_code or "a"
         try:
-            try:
-                self.pipeline = await asyncio.to_thread(KPipeline, lang_code=lang_code, **_pipeline_kwargs())
-            except Exception:
-                if lang_code == "a":
-                    raise
-                # A lang_code value left over from a different engine
-                # backend (e.g. Audio8 stores full language names like
-                # "English", not Kokoro's single-letter codes) can reach
-                # here despite the Settings dock's own combo-fallback
-                # reconciliation (kokoro_gui/qt/docks/settings_dock.py's
-                # SchemaFormWidget._set_combo) - KPipeline itself rejects it
-                # with a raw AssertionError against its own internal
-                # LANG_CODES table. Retry once with Kokoro's own safe
-                # default rather than surface that to the user; if "a"
-                # itself fails (a real problem - missing model, no network,
-                # etc.), let that failure propagate normally below.
-                self.pipeline = await asyncio.to_thread(KPipeline, lang_code="a", **_pipeline_kwargs())
-                lang_code = "a"
-            if self.on_status: self.on_status(f"Pipeline Initialized ({lang_code}).", False)
-            return True
-        except Exception as e:
-            msg = f"Pipeline Init Failed: {e}"
-            err_str = str(e).lower()
-            if lang_code == 'j' and ("fugashi" in err_str or "unidic" in err_str):
-                 msg += "\n(Try: pip install fugashi unidic-lite)"
-            elif lang_code == 'z' and "pypinyin" in err_str:
-                 msg += "\n(Try: pip install pypinyin)"
+            pipeline = KPipeline(lang_code=lang_code, **_pipeline_kwargs())
+        except Exception:
+            if lang_code == "a":
+                raise
+            pipeline = KPipeline(lang_code="a", **_pipeline_kwargs())
+            lang_code = "a"
+        self.loaded_lang = lang_code
+        return pipeline
 
-            if self.on_status: self.on_status(msg, True)
-            return False
+    def ready_message(self, lang_code):
+        return f"Pipeline Initialized ({self.loaded_lang or lang_code})."
+
+    def load_error(self, error, lang_code):
+        msg = f"Pipeline Init Failed: {error}"
+        err_str = str(error).lower()
+        if lang_code == "j" and ("fugashi" in err_str or "unidic" in err_str):
+            msg += "\n(Try: pip install fugashi unidic-lite)"
+        elif lang_code == "z" and "pypinyin" in err_str:
+            msg += "\n(Try: pip install pypinyin)"
+        return msg
+
+    def synthesize(self, text, voice, speed, lang_code, params):
+        """Every result KPipeline yields for `text`, concatenated; a result
+        after the first starts where the audio so far ends, and its tokens'
+        times are offset to match. A `voice_tensor` in `params` (a mix being
+        previewed) is registered under `voice` first."""
+        pipeline = get_thread_pipeline(lang_code) if lang_code else get_thread_pipeline()
+        if not pipeline:
+            raise RuntimeError(f"Failed to initialize pipeline ({lang_code}) in thread.")
+        if params.get("voice_tensor") is not None:
+            pipeline.voices[voice] = params["voice_tensor"]
+        cancel_event = params.get("cancel_event")
+        arrays, words, frames = [], [], 0
+        for item in pipeline(text, voice=voice, speed=speed, split_pattern=None):
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            _graphemes, _phonemes, audio = item
+            if audio is None:
+                continue
+            audio = np.asarray(to_numpy(audio), dtype=np.float32).reshape(-1)
+            words.extend(words_from_tokens(getattr(item, "tokens", None), frames / float(self.sample_rate)))
+            arrays.append(audio)
+            frames += len(audio)
+        if not arrays:
+            return Synthesis(np.zeros(0, dtype=np.float32), [])
+        return Synthesis(arrays[0] if len(arrays) == 1 else np.concatenate(arrays), words)
+
+
+class KokoroEngine(VoiceMixingMixin, EngineRunner):
+    """The runner around `KokoroModel`, plus `.pt` voice mixing and custom
+    voice resolution (`VoiceMixingMixin`)."""
+
+    def __init__(self):
+        # Private (0o700) on POSIX; see runtime.prepare_storage.
+        runtime.prepare_storage()
+        super().__init__(KokoroModel())
+
+    def get_thread_pipeline(self, lang_code="a"):
+        """This thread's KPipeline for `lang_code` (the module function, by
+        name, so a test's patch takes effect)."""
+        return get_thread_pipeline(lang_code)
 
     def cancel(self):
         self.cancel_event.set()
         try:
             # Stop any current playback immediately
-            playback.stop()
+            runtime.playback.stop()
         except Exception:
             pass

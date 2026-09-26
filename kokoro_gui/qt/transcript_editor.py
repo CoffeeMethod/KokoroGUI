@@ -315,6 +315,7 @@ class TranscriptGutter(QWidget):
         self.editor = editor
         self._label_rects: list = []  # [(QRect, line_start, line_end)]
         self._button_rects: list = []  # [(QRect, clip_id)]
+        self._blocked_rects: list = []  # [(QRect, reason)]
         self._play_rects: list = []  # [(QRect, clip_id)]
         self._mark_rects: list = []  # [(QRect, line_start, line_end)]
         self.setMouseTracking(True)
@@ -341,6 +342,7 @@ class TranscriptGutter(QWidget):
         self._button_rects = []
         self._play_rects = []
         self._mark_rects = []
+        self._blocked_rects = []
 
         daw_doc = self.editor.app.document
         qt_doc = self.editor.document()
@@ -421,8 +423,14 @@ class TranscriptGutter(QWidget):
                 labelled_dirty.add(clip.id)
                 btn = QRect(self.width() - GUTTER_BUTTON_PX - 4, top + max(0, (min(line_h, metrics_h) - GUTTER_BUTTON_PX) // 2),
                             GUTTER_BUTTON_PX, GUTTER_BUTTON_PX)
-                self._draw_play_button(painter, btn, pal)
-                self._button_rects.append((btn, clip.id))
+                blocked = self.editor.app.cannot_generate(clip)
+                if blocked:
+                    # Its engine isn't installed (grill EN6): no button, the
+                    # reason as the tooltip over where it would be.
+                    self._blocked_rects.append((btn, blocked))
+                else:
+                    self._draw_play_button(painter, btn, pal)
+                    self._button_rects.append((btn, clip.id))
             elif clip is not None and clip.id in recording_ids and clip.id not in labelled_dirty:
                 labelled_dirty.add(clip.id)
                 btn = QRect(self.width() - GUTTER_BUTTON_PX - 4, top + max(0, (min(line_h, metrics_h) - GUTTER_BUTTON_PX) // 2),
@@ -475,6 +483,11 @@ class TranscriptGutter(QWidget):
         """`(QRect, clip_id)` of each recording clip's play-only button."""
         return list(self._play_rects)
 
+    def blocked_rects(self) -> list:
+        """`(QRect, reason)` where a stale clip's button would be, for a
+        clip whose engine isn't installed."""
+        return list(self._blocked_rects)
+
     def mark_rects(self) -> list:
         """`(QRect, line_start, line_end)` of each "no character" mark."""
         return list(self._mark_rects)
@@ -488,6 +501,9 @@ class TranscriptGutter(QWidget):
         for rect, _clip_id in self._play_rects:
             if rect.contains(pos):
                 return "Play this recording"
+        for rect, reason in self._blocked_rects:
+            if rect.contains(pos):
+                return f"{reason}: this clip can't be generated here."
         for rect, line_start, _line_end in self._label_rects:
             if rect.contains(pos):
                 clip = self.editor.app.document.clip_covering(line_start)

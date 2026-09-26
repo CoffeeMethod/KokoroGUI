@@ -3,65 +3,40 @@ without a real model - PLAN_qt_and_engine_abstraction.md workstream 1, step 5:
 "consider a second backend (even a stub/fake one) to prove the abstraction
 isn't over-fit to Kokoro".
 
-`DummyEngine` reuses every mixin in `kokoro_gui/engine/` that turned out to be
-genuinely model-agnostic (FX, caching, conversion orchestration, JIT
-streaming, lexicon, presets, SRT export, text extraction) unmodified, and
-only supplies its own `get_thread_pipeline` (a fake generator that yields
-short sine-wave tones instead of real speech). `CachingMixin` keys every
-entry on `engine_id`, so a dummy tone can't collide with a Kokoro segment
-for the same text; its schema still defaults `caching` off, since there's
-nothing worth caching.
+`DummyModel` is a `SynthesisModel` (kokoro_gui/engines/base.py) that speaks a
+short sine tone per piece, its pitch taken from the voice name so different
+"voices" are at least audibly different, with evenly spaced word timings.
+`DummyEngine` is the `EngineRunner` around it: every model-agnostic mixin
+(FX, caching, conversion orchestration, JIT streaming, lexicon, presets,
+SRT export, text extraction) unmodified. `CachingMixin` keys every entry on
+`engine_id`, so a dummy tone can't collide with a Kokoro segment for the
+same text; its schema still defaults `caching` off, since there's nothing
+worth caching.
 
-No `VoiceMixingMixin` - `capabilities.supports_voice_mixing=False`, so the
-Mixing dock is not shown while this backend is active (see the Qt frontend's
-`kokoro_gui/qt/app.py`'s `_sync_mixing_dock`), demonstrating that gate
-actually works.
+No voice mixing and no cloning, so the Voices tab has no editor for it (see
+the Qt frontend's `_follow_active_for_voices`).
 """
 from __future__ import annotations
 
-import re
-import threading
-
 import numpy as np
 
-from kokoro_engine import AsyncLoopThread
-from kokoro_gui.engine import (
-    AudioFXMixin, CachingMixin, ConversionMixin, JITMixin, LexiconMixin, PresetsMixin,
-    SrtMixin, TextExtractionMixin,
-)
-from kokoro_gui.engine.wordtiming import TimedResult, even_tokens
+from kokoro_gui.engine.runner import EngineRunner, ModelBase
+from kokoro_gui.engine.wordtiming import even_tokens, words_from_tokens
 from kokoro_gui.engines.base import (
-    BackendHooksMixin, ConfigField, ConfigFieldType, EngineCapabilities, VoiceInfo,
-    COMMON_OUTPUT_FORMAT_CHOICES, segmentation_fields,
+    BackendHooksMixin, ConfigField, ConfigFieldType, EngineCapabilities, Synthesis, VoiceInfo,
+    common_fields,
 )
 from kokoro_gui.engines.registry import register_engine
 
 SAMPLE_RATE = 24000
 
-
-class DummyPipeline:
-    """Fakes `kokoro.KPipeline`'s callable-generator surface closely enough
-    for the generic mixins to drive it: `pipeline(text, voice=, speed=,
-    split_pattern=)` yields `(graphemes, phonemes, audio)` triples (with
-    `tokens`, like KPipeline's `Result`), `audio`
-    a mono float32 ndarray at `SAMPLE_RATE`. No model, no weights, no
-    eSpeak - a short sine tone stands in for speech, its pitch derived from
-    the voice name so different "voices" are at least audibly different."""
-
-    def __init__(self, lang_code="a"):
-        self.lang_code = lang_code
-
-    def __call__(self, text, voice="dummy", speed=1.0, split_pattern=r"\n+"):
-        # `split_pattern=None` means "don't split", as in KPipeline.
-        parts = re.split(split_pattern, text) if split_pattern else [text]
-        segments = [s.strip() for s in parts if s.strip()]
-        if not segments and text.strip():
-            segments = [text.strip()]
-        for seg in segments:
-            tone = _tone_for(seg, speed, voice)
-            # Evenly spaced words over the tone, so word timing has data to
-            # show without a model.
-            yield TimedResult(seg, "", tone, even_tokens(seg, len(tone) / SAMPLE_RATE))
+# Kokoro's language labels and codes, so a test can swap engines without its
+# lang_code going out of range. Its own copy: Dummy must import without the
+# `kokoro` package.
+LANGUAGES = [
+    ("American English", "a"), ("British English", "b"), ("Spanish", "e"), ("French", "f"),
+    ("Italian", "i"), ("Portuguese", "p"), ("Japanese", "j"), ("Chinese", "z"),
+]
 
 
 def _tone_for(text, speed, voice):
@@ -79,46 +54,34 @@ def _tone_for(text, speed, voice):
     return tone
 
 
-class DummyEngine(
-    AudioFXMixin, CachingMixin, ConversionMixin, JITMixin, LexiconMixin, PresetsMixin,
-    SrtMixin, TextExtractionMixin,
-):
-    """KokoroEngine-shaped enough for the GUI to drive directly (same
-    `worker`/`cancel_event`/`pipeline`/`on_progress`/`on_status`/`on_finish`/
-    `start_conversion`/`start_jit_conversion`/`generate_preview`/`cancel`
-    surface), but with no real synthesis underneath."""
+class DummyModel(ModelBase):
+    """No model, no weights, no eSpeak: a tone per piece, ready at once."""
 
-    id = "dummy"
-    SAMPLE_RATE = SAMPLE_RATE
+    engine_id = "dummy"
+    sample_rate = SAMPLE_RATE
+    concurrency = "per_thread"
+    display_name = "Dummy pipeline"
+
+    def synthesize(self, text, voice, speed, lang_code, params):
+        text = (text or "").strip()
+        if not text:
+            return Synthesis(np.zeros(0, dtype=np.float32), [])
+        tone = _tone_for(text, speed, voice)
+        # Evenly spaced words over the tone, so word timing has data to
+        # show without a model.
+        return Synthesis(tone, words_from_tokens(even_tokens(text, len(tone) / SAMPLE_RATE), 0.0))
+
+    def resolve_voice_path(self, name, project_dir=None):
+        # No custom-voice directory: a voice name only picks the tone's pitch.
+        return name
+
+
+class DummyEngine(EngineRunner):
+    """The runner around `DummyModel`, ready without a load."""
 
     def __init__(self):
-        self.worker = AsyncLoopThread()
-        self.worker.start()
-        self.cancel_event = threading.Event()
+        super().__init__(DummyModel())
         self.pipeline = True  # no model to load - "ready" immediately
-
-        self.on_progress = None
-        self.on_status = None
-        self.on_finish = None
-
-        self._lexicon_cache = {}
-
-    async def init_pipeline_async(self, lang_code="a", device=None):
-        self.pipeline = True
-        if self.on_status:
-            self.on_status(f"Dummy pipeline ready ({lang_code}).", False)
-        return True
-
-    def get_thread_pipeline(self, lang_code="a"):
-        return DummyPipeline(lang_code)
-
-    def resolve_voice_path(self, voice_name, project_dir=None):
-        # No custom-voice directory concept for the dummy backend - voice
-        # names are just labels that pick a tone pitch (see _tone_for).
-        return voice_name
-
-    def cancel(self):
-        self.cancel_event.set()
 
 
 class DummyBackendAdapter(BackendHooksMixin):
@@ -143,23 +106,14 @@ class DummyBackendAdapter(BackendHooksMixin):
     def engine(self):
         return self._engine
 
-    def get_config_schema(self) -> list:
+    @classmethod
+    def get_config_schema(cls) -> list:
         return [
             ConfigField("lang_code", "Language", ConfigFieldType.CHOICE,
-                        default="a", group="Generation"),
+                        default="a", choices=list(LANGUAGES), group="Generation"),
             ConfigField("voice", "Voice", ConfigFieldType.CHOICE,
                         default="dummy", group="Generation"),
-            ConfigField("speed", "Speed", ConfigFieldType.SLIDER,
-                        default=1.0, min=0.5, max=2.0, step=0.1, group="Generation"),
-            ConfigField("pitch", "Pitch", ConfigFieldType.SLIDER,
-                        default=0.0, min=-12, max=12, step=1, group="Audio"),
-            *segmentation_fields(),
-            ConfigField("format", "Output Format", ConfigFieldType.CHOICE,
-                        default="wav", choices=list(COMMON_OUTPUT_FORMAT_CHOICES), group="Generation"),
-            ConfigField("num_threads", "Parallel Threads", ConfigFieldType.INT,
-                        default=1, min=1, max=32, step=1, group="Advanced"),
-            ConfigField("caching", "Enable Segment Cache", ConfigFieldType.BOOL,
-                        default=False, group="Advanced"),
+            *common_fields(caching_default=False),
         ]
 
     def get_voices(self, lang_code=None) -> list:

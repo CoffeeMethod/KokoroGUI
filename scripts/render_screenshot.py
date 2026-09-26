@@ -48,6 +48,7 @@ def _write_tone(path: str, seconds: float, freq: float, rate: int = 24000) -> No
 def build_app(workdir: str, theme_name: str, workspace: str, subproject: bool = False):
     from tests.conftest import StubEngine  # noqa: E402
 
+    import kokoro_engine
     import kokoro_gui.qt.app as qt_app_module  # noqa: E402
     from PySide6.QtWidgets import QApplication  # noqa: E402
 
@@ -59,7 +60,7 @@ def build_app(workdir: str, theme_name: str, workspace: str, subproject: bool = 
     qt_app_module.PRESETS_DIR = os.path.join(workdir, "presets")
     qt_app_module.FX_PRESETS_DIR = os.path.join(workdir, "presets", "fx")
     qt_app_module.DOCUMENT_FILE = os.path.join(workdir, "document.json")
-    qt_app_module.KokoroEngine = StubEngine
+    kokoro_engine.KokoroEngine = StubEngine
     # The video dock stays a stub: no QtMultimedia in a headless run.
     from kokoro_gui.qt.docks import video_dock  # noqa: E402
 

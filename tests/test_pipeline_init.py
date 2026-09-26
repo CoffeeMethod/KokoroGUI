@@ -72,3 +72,20 @@ def test_valid_lang_code_succeeds_without_a_retry(engine, monkeypatch):
 
     assert result is True
     assert calls == ["b"]
+
+
+def test_ensure_ready_loads_on_the_engines_worker(engine, monkeypatch):
+    """The adapter's `ensure_ready` (what the GUI calls) runs the load on
+    the engine's own worker and answers `is_ready` afterwards."""
+    from kokoro_gui.engines.kokoro import KokoroBackendAdapter
+
+    calls = []
+    monkeypatch.setattr(kokoro_engine, "PIPELINE_DEVICE", None)
+    monkeypatch.setattr(kokoro_engine, "KPipeline", lambda lang_code="a", **kw: calls.append((lang_code, kw)) or object())
+    backend = KokoroBackendAdapter(engine)
+    assert backend.is_ready() is False
+
+    assert backend.ensure_ready("b", device="cpu").result(timeout=10) is True
+
+    assert calls == [("b", {"device": "cpu"})]
+    assert backend.is_ready() is True
