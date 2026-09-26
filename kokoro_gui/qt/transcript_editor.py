@@ -635,10 +635,13 @@ class TranscriptEditor(QTextEdit):
             return
         new_text = self.toPlainText()
         document = self.app.document
-        if self._joined_edit or document.edit_touches_imported(position, chars_removed):
+        replaying = self.undo_coordinator.replaying
+        if not replaying and (self._joined_edit or document.edit_touches_imported(position, chars_removed)):
             # Imported recording text (phase 5 P3): Qt's native undo would
             # give back the characters but not their word timing, so the
             # edit is also a `TextEditCommand`, joined to the native step.
+            # An undo or redo replaying a native step never pushes one: that
+            # would land on the stack in the middle of the replay.
             self.undo_coordinator.push_joined(TextEditCommand(position, chars_removed, chars_added, new_text))
         else:
             document.replace_text(position, chars_removed, chars_added, new_text)

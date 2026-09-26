@@ -460,6 +460,19 @@ def test_edit_touches_imported_says_which_edits_change_timed_text():
     assert not doc.edit_touches_imported(18, 3)  # untagged text after it
 
 
+def test_deleting_the_text_between_two_halves_of_a_clip_touches_imported():
+    doc, (clip,) = _recording(HELLO)
+    doc.replace_text(11, 0, 2, "Hello there x world")  # " x" splits the clip
+    assert doc.text == "Hello there x world"
+    assert not doc.edit_touches_imported(12, 1)  # the "x" alone: the halves stay apart
+    doc.replace_text(12, 1, 0, "Hello there  world")
+    assert len(doc.clips) == 2
+    # Deleting the last typed character joins the halves: a joined step.
+    assert doc.edit_touches_imported(11, 1)
+    doc.replace_text(11, 1, 0, "Hello there world")
+    assert doc.clips == [clip]
+
+
 def test_deleting_across_the_boundary_of_two_imported_clips_keeps_both():
     doc, (a, b) = _recording(("Hello there", ((0.0, 0.5), (0.5, 1.0))),
                              ("Good morning", ((2.0, 2.4), (2.4, 3.0))))

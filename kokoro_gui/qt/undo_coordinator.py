@@ -29,6 +29,10 @@ of timed text adds its `ApplyWordsCommand` to the same entry. When the
 native text history is wiped (`native_history_cleared`, after the editor
 reloads its text), native entries go and a joined entry keeps only its
 custom half.
+
+While an undo or redo runs (`replaying`), the text changes it makes are
+replays, not edits: the editor applies them to the document and pushes
+nothing, so the stacks and the order log stay as they were.
 """
 from __future__ import annotations
 
@@ -71,6 +75,8 @@ class UndoCoordinator:
         # the text change it belongs to (`edit_seen`): the change got a
         # command of its own instead of merging into the previous one.
         self._fresh_native = False
+        # True while `undo`/`redo` move either stack.
+        self.replaying = False
 
         qt_text_document.undoCommandAdded.connect(self._on_native_command_added)
         daw_undo_stack.on_push = self._on_custom_command_pushed
@@ -143,6 +149,13 @@ class UndoCoordinator:
         """No-op if there's nothing to undo on either side."""
         if not self._order:
             return
+        self.replaying = True
+        try:
+            self._undo()
+        finally:
+            self.replaying = False
+
+    def _undo(self) -> None:
         kind = self._order.pop()
         if kind == NATIVE:
             self._qt_text_document.undo()
@@ -165,6 +178,13 @@ class UndoCoordinator:
         With nothing on the redo log (an undo made outside this class),
         resumes whichever side has redo available - at most one ever does,
         since a fresh push on either stack clears the other's redo."""
+        self.replaying = True
+        try:
+            self._redo()
+        finally:
+            self.replaying = False
+
+    def _redo(self) -> None:
         kind = self._redo_order.pop() if self._redo_order else None
         if isinstance(kind, _Joined):
             def _step():

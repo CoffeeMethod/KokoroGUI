@@ -590,15 +590,23 @@ class Document:
     def edit_touches_imported(self, position: int, chars_removed: int) -> bool:
         """True when a `replace_text` of `[position, position +
         chars_removed)` changes imported recording text: a delete overlapping
-        a recording clip's runs, or an insert strictly inside one (which
-        splits it). Qt's native undo replays only characters, so it can't
-        give dropped words back; the editor can send such an edit through
+        a recording clip's runs, a delete of everything between two halves
+        of a split clip (`replace_text` joins them), or an insert strictly
+        inside one (which splits it). Qt's native undo replays only
+        characters, so it can't give dropped words back or split a joined
+        clip again; the editor can send such an edit through
         `TextEditCommand` instead, whose undo restores the runs."""
         removed_end = position + chars_removed
         if chars_removed > 0:
-            return any(self._recording_clip_of(run) is not None
-                       for run, r_start, r_end in self._iter_runs_with_offsets()
-                       if r_start < removed_end and r_end > position)
+            if any(self._recording_clip_of(run) is not None
+                   for run, r_start, r_end in self._iter_runs_with_offsets()
+                   if r_start < removed_end and r_end > position):
+                return True
+            if position <= 0 or removed_end >= len(self.text):
+                return False
+            left = self._recording_clip_of(self._run_covering(position - 1))
+            right = self._recording_clip_of(self._run_covering(removed_end))
+            return left is not None and right is not None and left is not right and self._continues(left, right)
         left = self._recording_clip_of(self._run_covering(position - 1)) if position > 0 else None
         right = self._run_covering(position)
         return left is not None and right is not None and right.clip_id == left.id
