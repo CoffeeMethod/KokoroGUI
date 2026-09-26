@@ -134,22 +134,25 @@ def document_to_dict(doc: Document) -> dict:
     }
 
 
-def rewrite_audio_paths(data: dict, fn) -> dict:
+def rewrite_audio_paths(data: dict, fn, imported_fn=None) -> dict:
     """Applies `fn(path) -> path` to every `Segment.audio_path`,
     `Clip.original_audio_path` and imported recording source path
     (`settings["sources"][name]["path"]`, phase 5 P3) in a
     `document_to_dict`-shaped dict, in place, skipping `None`. Used in both
     directions by the `.tbaw` bundle (absolute inside the project dir <->
-    bundle-relative)."""
+    bundle-relative). `imported_fn`, when given, replaces `fn` for the
+    imported files (source paths and `original_audio_path`), which the
+    bundle keeps to a narrower folder than segments."""
+    imported_fn = imported_fn or fn
     settings = data.get("settings")
     sources = settings.get(SOURCES_KEY) if isinstance(settings, dict) else None
     if isinstance(sources, dict):
         for entry in sources.values():
             if isinstance(entry, dict) and isinstance(entry.get("path"), str) and entry["path"]:
-                entry["path"] = fn(entry["path"])
+                entry["path"] = imported_fn(entry["path"])
     for clip in data.get("clips", []):
         if clip.get("original_audio_path"):
-            clip["original_audio_path"] = fn(clip["original_audio_path"])
+            clip["original_audio_path"] = imported_fn(clip["original_audio_path"])
         segment_lists = [clip.get("segments", [])]
         takes = clip.get("takes")
         if isinstance(takes, dict):

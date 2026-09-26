@@ -69,6 +69,9 @@ DOCUMENT = "document.json"
 PROJECT_JSON = "project.json"
 SESSION = "session.json"
 LOCK = "lock"
+# Every segment's file lives under `audio/`: generated ones in
+# `audio/generated/`, a recording's or a bed's in `audio/imported/`.
+AUDIO_DIR = "audio"
 AUDIO_GENERATED = "audio/generated"
 AUDIO_IMPORTED = "audio/imported"
 FX_DIR = "fx"
@@ -771,6 +774,31 @@ def _is_imported_path(path: str) -> bool:
     return f"/{AUDIO_IMPORTED}/" in "/" + path.replace("\\", "/")
 
 
+def audio_file_under(project_dir: str | None, path, folder: str = AUDIO_DIR) -> str | None:
+    """The real path of `path` (absolute, or relative to `project_dir`) when
+    it names a file under `<project_dir>/<folder>/`, else None.
+    `document.json` is untrusted input: a segment's file has to be under
+    `audio/` (generated or imported), an imported file (a recording source,
+    a music bed, the source track) under `audio/imported/`. Anything else,
+    including the dir's own `session.json`, `lock` and `document.json`,
+    would otherwise be read back as audio and copied into the next Save."""
+    if not project_dir or not isinstance(path, str) or not path:
+        return None
+    root = os.path.realpath(project_dir)
+    base = os.path.join(root, *folder.split("/"))
+    try:
+        if os.path.isabs(path):
+            candidate = path
+        else:
+            candidate = os.path.join(root, *path.replace("\\", "/").split("/"))
+        real = os.path.realpath(candidate)
+        if real.startswith(base + os.sep) and os.path.isfile(real) and os.path.basename(real) not in _DIR_PRIVATE:
+            return real
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def _load_dir(project_dir: str) -> tuple:
     """`(document, project_settings, notices)` from a project dir's
     `document.json` and `project.json`, audio paths made absolute (a file
@@ -790,29 +818,32 @@ def _load_dir(project_dir: str) -> tuple:
 
     notices = []
     missing = []
-    project_root = os.path.realpath(project_dir)
+    missing_imported = set()
 
-    def to_absolute(rel):
+    def to_absolute(rel, folder=AUDIO_DIR):
         # A bundle names its audio relative to the bundle; the dir's own
-        # autosave names it absolute. Either way the file has to sit inside
-        # the project dir: `document.json` is untrusted input, and a path
+        # autosave names it absolute. Either way the file has to sit under
+        # the project dir's audio folder (`audio_file_under`): a path
         # pointing anywhere else would pull that file into the next Save.
-        if os.path.isabs(rel):
-            candidate = rel
-        else:
-            candidate = os.path.join(project_dir, *rel.replace("\\", "/").split("/"))
-        real = os.path.realpath(candidate)
-        if real.startswith(project_root + os.sep) and os.path.isfile(real):
-            return os.path.abspath(candidate)
+        if audio_file_under(project_dir, rel, folder) is not None:
+            if os.path.isabs(rel):
+                return os.path.abspath(rel)
+            return os.path.abspath(os.path.join(project_dir, *rel.replace("\\", "/").split("/")))
         missing.append(rel)
         return None
 
-    serialization.rewrite_audio_paths(data, to_absolute)
+    def imported_to_absolute(rel):
+        path = to_absolute(rel, AUDIO_IMPORTED)
+        if path is None:
+            missing_imported.add(rel)
+        return path
+
+    serialization.rewrite_audio_paths(data, to_absolute, imported_to_absolute)
     document = serialization.document_from_dict(data)
     # An imported file (a recording, a music bed) can't be regenerated, so
     # it gets its own count; a recording's segments name its file too, so
     # each file counts once.
-    imported_missing = {rel for rel in missing if _is_imported_path(rel)}
+    imported_missing = {rel for rel in missing if _is_imported_path(rel) or rel in missing_imported}
     generated_missing = [rel for rel in missing if rel not in imported_missing]
     if generated_missing:
         notices.append(f"{len(generated_missing)} audio file(s) missing from the bundle; "
@@ -964,17 +995,12 @@ def source_track_path(document: Document, project_dir: str | None) -> str | None
     """The absolute path of the document's source track
     (`kokoro_gui.daw.reference`), or None when none is set, the project has
     no dir, or the file isn't there. `document.json` is untrusted input: the
-    path has to resolve to a file inside the project dir, whatever it says."""
+    path has to resolve to a file under the project dir's `audio/imported/`,
+    whatever it says."""
     block = source_track_settings(document.settings)
     if block is None or not project_dir:
         return None
-    root = os.path.realpath(project_dir)
-    rel = block["path"]
-    candidate = rel if os.path.isabs(rel) else os.path.join(root, *rel.split("/"))
-    real = os.path.realpath(candidate)
-    if real.startswith(root + os.sep) and os.path.isfile(real):
-        return real
-    return None
+    return audio_file_under(project_dir, block["path"], AUDIO_IMPORTED)
 
 
 # --- reference video (phase 5, TB16) -----------------------------------------------
@@ -1368,16 +1394,17 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
     seen = set()
     project_root = os.path.realpath(project_dir) if project_dir else None
 
-    def to_relative(abs_path):
-        # Only a file inside the project dir goes into the bundle. Every
-        # generated or migrated segment lives there; a path anywhere else
-        # can only have come from a hand-edited or crafted document, and
-        # bundling it would ship that file. It's left as written, so Open
-        # reports it missing.
+    def to_relative(abs_path, folder=AUDIO_DIR):
+        # Only a file under the project dir's audio folder goes into the
+        # bundle (`audio_file_under`). Every generated or migrated segment
+        # lives in `audio/generated/`, every imported file in
+        # `audio/imported/`; a path anywhere else can only have come from a
+        # hand-edited or crafted document, and bundling it would ship that
+        # file. It's left as written, so Open reports it missing.
         if not os.path.isabs(abs_path):
             return abs_path.replace("\\", "/")
-        real = os.path.realpath(abs_path)
-        if project_root and real.startswith(project_root + os.sep) and os.path.isfile(real):
+        real = audio_file_under(project_dir, abs_path, folder)
+        if project_root and real is not None:
             rel = os.path.relpath(real, project_root).replace("\\", "/")
             if rel not in seen:
                 seen.add(rel)
@@ -1385,12 +1412,12 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
             return rel
         return abs_path.replace("\\", "/")
 
-    serialization.rewrite_audio_paths(data, to_relative)
+    serialization.rewrite_audio_paths(data, to_relative, lambda path: to_relative(path, AUDIO_IMPORTED))
     # The source track (D5) is already project-relative in the document;
     # its file goes in with the rest of the imported audio.
     source_track = source_track_path(document, project_dir)
     if source_track is not None:
-        to_relative(source_track)
+        to_relative(source_track, AUDIO_IMPORTED)
     # Embedded subprojects: each child's bundle as its parent's project dir
     # holds it (the app writes an open child's bundle there first).
     embedded = []
@@ -1469,16 +1496,39 @@ def _replace_with_retries(src: str, dst: str) -> None:
             time.sleep(0.25)
 
 
+def _refused_entry(bundle_path: str, source: str, project_dir: str | None) -> bool:
+    """True for a file `write_bundle` must not store: an entry named like
+    the project dir's bookkeeping or one of the JSON files Save writes
+    itself, or a source that is the project dir's own `session.json`,
+    `lock`, `document.json` or `project.json`. `plan_save` never lists
+    one (`audio_file_under`); this is the second check."""
+    name = bundle_path.replace("\\", "/")
+    if name in _DIR_PRIVATE or name in _OWNED_FILES:
+        return True
+    if not project_dir:
+        return False
+    try:
+        real = os.path.realpath(source)
+    except (OSError, ValueError):
+        return True
+    root = os.path.realpath(project_dir)
+    return os.path.dirname(real) == root and os.path.basename(real) in _DIR_PRIVATE | _OWNED_FILES
+
+
 def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
     """Steps 1-4 of Save, meant for a worker thread: hash assets not in the
     previous index, check free space, write `<path>.tmp` (JSON deflated,
     audio stored, unknown entries from the old file copied through), then
     replace. A crash mid-save leaves the old file intact; a replace that
-    keeps failing leaves the `.tmp` and says where it is."""
+    keeps failing leaves the `.tmp` and says where it is. An entry
+    `_refused_entry` names is left out."""
+    assets = [(name, src) for name, src in plan.assets if not _refused_entry(name, src, plan.project_dir)]
+    audio_files = [(name, src) for name, src in plan.audio_files
+                   if not _refused_entry(name, src, plan.project_dir)]
     asset_index = {}
     manifest = dict(plan.manifest)
     manifest["assets"] = {}
-    for bundle_path, source in plan.assets:
+    for bundle_path, source in assets:
         try:
             stat = os.stat(source)
         except OSError:
@@ -1495,7 +1545,7 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
     # The reference video: named by its hash, which is only recomputed when
     # the file's size or mtime changed since the last Save.
     video = None
-    if plan.video_file:
+    if plan.video_file and not _refused_entry(VIDEO_DIR + "/", plan.video_file, plan.project_dir):
         try:
             stat = os.stat(plan.video_file)
         except OSError:
@@ -1510,7 +1560,7 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
     manifest["includes"] = dict(manifest.get("includes") or {}, video=video is not None)
 
     needed = len(plan.document_bytes) + len(plan.project_bytes)
-    for _bundle_path, source in plan.assets + plan.audio_files + ([video] if video else []):
+    for _bundle_path, source in assets + audio_files + ([video] if video else []):
         try:
             needed += os.path.getsize(source)
         except OSError:
@@ -1539,11 +1589,11 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
             zf.writestr(MANIFEST, json.dumps(manifest, indent=2))
             zf.writestr(DOCUMENT, plan.document_bytes)
             zf.writestr(PROJECT_JSON, plan.project_bytes)
-            for bundle_path, source in plan.assets:
+            for bundle_path, source in assets:
                 if os.path.isfile(source):
                     zf.write(source, bundle_path, compress_type=zipfile.ZIP_DEFLATED)
                     done += os.path.getsize(source)
-            for bundle_path, source in plan.audio_files + ([video] if video else []):
+            for bundle_path, source in audio_files + ([video] if video else []):
                 if not os.path.isfile(source):
                     continue
                 zf.write(source, bundle_path, compress_type=zipfile.ZIP_STORED)
