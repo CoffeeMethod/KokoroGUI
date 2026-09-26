@@ -142,14 +142,15 @@ def relane_follow_up(document, command):
     switch, or, in the unified layout, after an edit that changed clip order
     or a clip's character; None when nothing would move."""
     from kokoro_gui.daw.undo import (
-        AssignCharacterCommand, ImportCuesCommand, MoveClipBeforeCommand, ReassignTrackCommand, RelaneCommand,
-        ReplaceWithNestedCommand, SetFieldCommand, TextEditCommand,
+        ApplyWordsCommand, AssignCharacterCommand, ImportCuesCommand, ImportRecordingCommand, MoveClipBeforeCommand,
+        ReassignTrackCommand, RelaneCommand, ReplaceWithNestedCommand, SetFieldCommand, TextEditCommand,
     )
 
     switched = (isinstance(command, SetFieldCommand) and command.target_kind == "document"
                 and command.field == "settings" and command.key == "track_layout")
     reordered = isinstance(command, (AssignCharacterCommand, TextEditCommand, MoveClipBeforeCommand,
-                                     ReassignTrackCommand, ReplaceWithNestedCommand, ImportCuesCommand))
+                                     ReassignTrackCommand, ReplaceWithNestedCommand, ImportCuesCommand,
+                                     ImportRecordingCommand, ApplyWordsCommand))
     if not switched and not (reordered and document.track_layout()["mode"] == "unified"):
         return None
     if not plan_relane(document):
