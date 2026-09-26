@@ -92,8 +92,8 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 -   **Convolution reverb.** Audio FX > Spatial & Time > Convolution Reverb puts a clip in a
     recorded space: pick an impulse response and set Mix (default 0.5). "Add..." copies a `.wav`
     into the impulse response library (`presets/fx/ir/`). Save bundles every impulse response the
-    project uses, and a project's own copy wins over the library's. A missing one plays dry and
-    logs a warning.
+    project uses, and a project's own copy wins over the library's. A missing one, or one longer
+    than 30 seconds, plays dry and logs a warning.
 -   **Music beds with ducking.** File > Import Audio... > "Music bed" adds a WAV, FLAC, OGG, MP3 or
     AIFF file as a music bed on a Music track, locked in time at 0:00 or at the playhead, with its
     file name as a read-only line at the end of the transcript. Drag a bed's edges to trim it, and
