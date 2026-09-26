@@ -2,6 +2,7 @@
 1): menu bar, 2x2 dock grid, Transport dock, workspaces, theme, Options."""
 from PySide6.QtCore import Qt
 
+from kokoro_gui.engines import audio8_tts
 from kokoro_gui.qt import theme
 from kokoro_gui.qt.workspace import ADVANCED, SIMPLE
 
@@ -62,6 +63,40 @@ def test_timeline_row_can_be_made_taller(qt_app, qtbot):
     qt_app.resizeDocks([qt_app.transcript_dock, qt_app.timeline_dock], [300, 650], Qt.Orientation.Vertical)
     qtbot.wait(20)
     assert qt_app.timeline_dock.height() > before + 100
+
+
+# A tab group takes the largest minimum of its tabs, hidden ones included,
+# so one tall dock sets how short its whole column can get and with it how
+# tall the timeline can be dragged. 200 px leaves the timeline most of a
+# 1000 px window under any arrangement of the top row.
+MAX_DOCK_MIN_HEIGHT_PX = 200
+
+
+def _tall_docks(app):
+    return {d.objectName(): d.minimumSizeHint().height() for d in app._all_docks()
+            if d.minimumSizeHint().height() > MAX_DOCK_MIN_HEIGHT_PX}
+
+
+def test_no_dock_needs_more_height_than_the_timeline_can_spare(qt_app, monkeypatch):
+    assert qt_app.mixing_dock is not None
+    assert _tall_docks(qt_app) == {}
+
+    monkeypatch.setattr(audio8_tts, "_get_model", lambda: (object(), object()))
+    assert qt_app.set_character_engine(qt_app.document.characters[0], "audio8")
+    assert qt_app.voice_clone_dock is not None
+    assert _tall_docks(qt_app) == {}
+
+
+def test_timeline_can_take_most_of_the_window(qt_app, qtbot):
+    qt_app.resize(1600, 1000)
+    qt_app.show()
+    qtbot.waitExposed(qt_app)
+    qtbot.wait(50)
+    for _ in range(3):
+        qt_app.resizeDocks([qt_app.transcript_dock, qt_app.timeline_dock], [100, 900], Qt.Orientation.Vertical)
+        qt_app.resizeDocks([qt_app.settings_dock, qt_app.timeline_dock], [100, 900], Qt.Orientation.Vertical)
+        qtbot.wait(20)
+    assert qt_app.timeline_dock.height() >= 600
 
 
 def test_all_panels_are_docks_in_the_grid(qt_app):

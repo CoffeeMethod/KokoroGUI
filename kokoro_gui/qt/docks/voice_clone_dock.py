@@ -47,6 +47,7 @@ from kokoro_gui.engine.asr import (
 from kokoro_gui.engines import audio8_tts
 from kokoro_gui.engines.audio8_tts import Audio8ReferenceStore
 from kokoro_gui.qt import asr_prompt
+from kokoro_gui.qt.docks.scrolling import scrollable
 
 
 class VoiceCloneDock(QDockWidget):
@@ -134,14 +135,13 @@ class VoiceCloneDock(QDockWidget):
         layout.addWidget(QLabel("<b>Saved References:</b>"))
         self.list_scroll = QScrollArea()
         self.list_scroll.setWidgetResizable(True)
-        self.list_scroll.setFixedHeight(180)
+        self.list_scroll.setMinimumHeight(120)
         self._list_container = QWidget()
         self._list_layout = QVBoxLayout(self._list_container)
         self.list_scroll.setWidget(self._list_container)
-        layout.addWidget(self.list_scroll)
+        layout.addWidget(self.list_scroll, 1)
 
-        layout.addStretch(1)
-        self.setWidget(content)
+        self.setWidget(scrollable(content))
         self.refresh_list()
 
     # --- reference audio / transcript -----------------------------------

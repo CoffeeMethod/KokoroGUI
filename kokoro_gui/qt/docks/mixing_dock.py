@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.qt import spec
+from kokoro_gui.qt.docks.scrolling import scrollable
 
 CUSTOM_VOICES_DIR = "custom_voices"
 
@@ -112,14 +113,13 @@ class MixingDock(QDockWidget):
         layout.addWidget(QLabel("<b>Custom Voices:</b>"))
         self.list_scroll = QScrollArea()
         self.list_scroll.setWidgetResizable(True)
-        self.list_scroll.setFixedHeight(200)
+        self.list_scroll.setMinimumHeight(120)
         self._list_container = QWidget()
         self._list_layout = QVBoxLayout(self._list_container)
         self.list_scroll.setWidget(self._list_container)
-        layout.addWidget(self.list_scroll)
+        layout.addWidget(self.list_scroll, 1)
 
-        layout.addStretch(1)
-        self.setWidget(content)
+        self.setWidget(scrollable(content))
         self.refresh_voice_lists()
 
     def _ratio_value(self) -> float:
