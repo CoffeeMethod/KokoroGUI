@@ -199,6 +199,40 @@ def test_a_payload_pasted_elsewhere_plays_the_same_audio():
     assert segment.range == [1.3, 1.6] and segment.text == "two"
 
 
+def test_a_paste_relinks_a_source_whose_file_was_missing():
+    from kokoro_gui.daw.undo import ApplyWordsCommand
+
+    doc, clip = _doc("one", [[0, 3, A, 1.0, 1.3]], {A: {"path": None}})
+    doc.runs.append(Run("\n\nLater: "))
+    assert imported.missing_sources(doc) == [A]
+    payload = {"words": [[0, 3, A, 1.3, 1.6]], "sources": {A: SOURCES[A]}}
+    doc.replace_text(len(doc.text), 0, 3, doc.text + "two")
+
+    command = ApplyWordsCommand(len(doc.text) - 3, 3, payload["words"], payload["sources"])
+    doc.undo_stack.push(command)
+
+    assert command.clip_id is not None
+    assert doc.source_path(A) == SOURCES[A]["path"]
+    segment, = doc.get_clip(command.clip_id).segments
+    assert segment.range == [1.3, 1.6] and segment.audio_path == SOURCES[A]["path"]
+    # The clip that was already there plays from the relinked file too.
+    assert [s.audio_path for s in clip.segments] == [SOURCES[A]["path"]]
+
+    doc.undo_stack.undo()
+    assert doc.source_path(A) is None
+    assert imported.missing_sources(doc) == [A]
+
+
+def test_add_sources_keeps_a_known_source_that_has_a_file():
+    doc, _clip = _doc("one", [[0, 3, A, 1.0, 1.3]], {A: {"path": "/p/audio/imported/a.wav"}})
+    assert doc.add_sources({A: {"path": "/elsewhere/a.wav"}, B: SOURCES[B]}) == [B]
+    assert doc.source_path(A) == "/p/audio/imported/a.wav"
+    # Nothing to relink with: an entry without a path.
+    doc.settings["sources"][A] = {"path": None}
+    assert doc.add_sources({A: {"path": None}}) == []
+    assert doc.source_path(A) is None
+
+
 # -- import commit ------------------------------------------------------------------
 
 
