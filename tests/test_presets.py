@@ -6,6 +6,8 @@ instead of the isolated_dirs fixture.
 """
 import json
 
+import pytest
+
 
 def test_load_preset_reads_json(engine, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
@@ -128,3 +130,24 @@ def test_resolve_ir_sanitises_the_name_with_basename(tmp_path, monkeypatch):
 
     assert resolve_ir("../secret") is None
     assert resolve_ir("../../elsewhere/Hall") == os.path.realpath(hall)
+
+
+@pytest.mark.parametrize("name", ["hall\x00x", "Ha\nll", "a\tb", "a?b", "a*b", 'a"b', "a|b", "a<b", "a:b", "."])
+def test_an_ir_name_with_an_unsafe_character_is_rejected(tmp_path, monkeypatch, name):
+    from kokoro_gui.engine.presets import ir_safe_name, list_ir_names, resolve_ir
+
+    monkeypatch.chdir(tmp_path)
+    _wav(tmp_path / "presets" / "fx" / "ir" / "Hall.wav")
+    assert ir_safe_name(name) is None
+    assert resolve_ir(name, str(tmp_path / "project")) is None
+    assert ir_safe_name(" Hall ") == "Hall"
+    assert list_ir_names(None) == ["Hall"]
+
+
+def test_list_ir_names_leaves_out_a_file_whose_name_is_unsafe(tmp_path, monkeypatch):
+    from kokoro_gui.engine.presets import list_ir_names
+
+    monkeypatch.chdir(tmp_path)
+    _wav(tmp_path / "presets" / "fx" / "ir" / "Hall.wav")
+    _wav(tmp_path / "presets" / "fx" / "ir" / "a\tb.wav")
+    assert list_ir_names(None) == ["Hall"]

@@ -97,7 +97,7 @@ def import_ir_file(src_path: str) -> str:
     except Exception as e:  # noqa: BLE001 - soundfile raises several types for a bad file
         raise ValueError(f"not a readable audio file: {e}") from e
     stem = os.path.splitext(os.path.basename(src))[0]
-    base = re.sub(r'[<>:"/\\|?*]', "", stem).strip() or "impulse"
+    base = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "", stem).strip() or "impulse"
     directory = _global_ir_dir()
     os.makedirs(directory, exist_ok=True)
     root = os.path.realpath(directory)

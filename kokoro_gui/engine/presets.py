@@ -74,13 +74,22 @@ def filter_fx_preset_values(preset_dict):
     return out
 
 
+# Characters no IR name may hold: a NUL makes every os.path call raise, and
+# the rest can't be in a file name on Windows, where a bundle made
+# elsewhere may be opened.
+_IR_UNSAFE_CHARS = frozenset('<>:"|?*\\') | frozenset(chr(c) for c in range(32)) | {"\x7f"}
+
+
 def ir_safe_name(name):
     """The file stem an impulse-response name maps to: `os.path.basename` of
-    it, or None for a non-string or empty name."""
+    it, or None for a non-string or empty name, "." or "..", or one holding
+    a control character (NUL included) or one of `<>:"|?*\\`."""
     if not isinstance(name, str):
         return None
     safe = os.path.basename(name.strip())
-    return safe or None
+    if not safe or safe in (".", "..") or any(c in _IR_UNSAFE_CHARS for c in safe):
+        return None
+    return safe
 
 
 def _ir_dirs(project_dir, global_dir):
@@ -100,8 +109,11 @@ def resolve_ir(name, project_dir=None, global_dir=None):
     if safe is None:
         return None
     for directory in _ir_dirs(project_dir, global_dir):
-        root = os.path.realpath(directory)
-        candidate = os.path.realpath(os.path.join(root, f"{safe}.wav"))
+        try:
+            root = os.path.realpath(directory)
+            candidate = os.path.realpath(os.path.join(root, f"{safe}.wav"))
+        except (OSError, ValueError):
+            continue
         if candidate.startswith(root + os.sep) and os.path.isfile(candidate):
             return candidate
     return None
@@ -109,11 +121,13 @@ def resolve_ir(name, project_dir=None, global_dir=None):
 
 def list_ir_names(project_dir=None, global_dir=None):
     """Every impulse response's name (no extension), sorted: the project's
-    `fx/ir/*.wav` plus the global store's, the union."""
+    `fx/ir/*.wav` plus the global store's, the union. A file whose name
+    `ir_safe_name` refuses is left out, since it could never resolve."""
     names = set()
     for directory in _ir_dirs(project_dir, global_dir):
         if os.path.isdir(directory):
-            names.update(f[:-4] for f in os.listdir(directory) if f.endswith(".wav") and len(f) > 4)
+            names.update(f[:-4] for f in os.listdir(directory)
+                         if f.endswith(".wav") and len(f) > 4 and ir_safe_name(f[:-4]) == f[:-4])
     return sorted(names)
 
 

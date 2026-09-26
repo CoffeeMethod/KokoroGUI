@@ -125,6 +125,19 @@ def test_a_segment_outside_audio_or_an_imported_path_outside_audio_imported_is_r
     assert [n for n, _src in plan.audio_files] == ["audio/generated/gen.wav"]
 
 
+def test_plan_save_survives_an_ir_name_with_a_nul(tmp_path, isolated_dirs):
+    project_dir, project_id = project_io.create_project_dir()
+    doc = Document()
+    clip = Clip(fx_override={"convolution_ir": "hall\x00x"})
+    doc.clips.append(clip)
+    doc.runs = [Run(text="hi", clip_id=clip.id, kind="generated")]
+
+    plan, _warnings = project_io.plan_save(doc, {}, str(tmp_path / "out.tbaw"), project_dir, project_id,
+                                           lambda _i: None, str(tmp_path / "fx"), {},
+                                           project_fx={"convolution_ir": "\x00"})
+    assert not any(name.startswith("fx/ir/") for name, _src in plan.assets)
+
+
 def test_write_bundle_refuses_a_private_entry_or_source(tmp_path, isolated_dirs):
     project_dir, project_id = project_io.create_project_dir()
     _victim_session(project_dir)

@@ -320,3 +320,19 @@ def test_loading_a_preset_with_a_non_string_ir_ignores_it(qt_app):
     assert fx.get_state()["convolution_ir"] == ""
     assert fx.get_state()["gain_db"] == 2.0
     assert fx.get_state()["eq_bass"] == 0.0
+
+
+def test_import_ir_file_drops_control_characters_from_the_name(qt_app, tmp_path):
+    import numpy as np
+    import soundfile as sf
+
+    from kokoro_gui.qt import fx_presets
+
+    src = tmp_path / "Big\tHall.wav"
+    sf.write(str(src), np.array([1.0], dtype=np.float32), 24000)
+
+    name = fx_presets.import_ir_file(str(src))
+
+    assert name == "BigHall"
+    assert fx_presets.resolve_ir(name) is not None
+    assert name in fx_presets.list_ir_names()

@@ -31,6 +31,11 @@ def test_post_key_changes_when_any_post_key_changes():
         assert post.post_key(changed) != post.post_key(base), key
 
 
+def test_post_key_survives_an_ir_name_with_a_nul():
+    key = post.post_key({"convolution_ir": "a\x00", "project_dir": "/tmp"})
+    assert key != post.post_key({"convolution_ir": "b"})
+
+
 def test_extract_post_config_keeps_only_post_keys():
     cfg = {"voice": "v", "volume": 2.0, "apply_fx": True, "reverb_wet_level": 0.4, "raw_output": True}
     assert post.extract_post_config(cfg) == {"volume": 2.0, "apply_fx": True, "reverb_wet_level": 0.4}
