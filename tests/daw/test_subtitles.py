@@ -166,6 +166,48 @@ def test_unknown_extension_and_missing_file_are_refused(tmp_path):
         parse_text("", "sub")
 
 
+_GOOD_SRT = "1\n00:00:01,000 --> 00:00:02,000\nHi.\n\n"
+_ASS_HEAD = "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+
+
+@pytest.mark.parametrize("stamp", ["00:00:01," + "5" * 5000, "0" * 5000 + "1:00:01,000", "00:00:01." + "9" * 40,
+                                   "9999999999:00:01,000"],
+                         ids=["long-fraction", "long-hours", "40-digit-fraction", "ten-digit-hours"])
+def test_a_timestamp_with_too_many_digits_is_skipped_not_a_crash(stamp):
+    srt = _GOOD_SRT + f"2\n{stamp} --> 00:00:05,000\nBad.\n"
+    vtt = "WEBVTT\n\n" + f"{stamp} --> 00:00:05.000\nBad.\n\n00:00:01.000 --> 00:00:02.000\nHi.\n"
+    ass = _ASS_HEAD + f"Dialogue: 0,{stamp},0:00:05.00,Default,,0,0,0,,Bad\n" \
+                      "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hi.\n"
+
+    for text, fmt in ((srt, "srt"), (vtt, "vtt"), (ass, "ass")):
+        cues = parse_text(text, fmt)
+        assert [c.text for c in cues] == ["Hi."], fmt
+
+
+def test_a_time_past_48_hours_is_refused():
+    late = _GOOD_SRT + "2\n49:00:00,000 --> 49:00:01,000\nLate.\n"
+    with pytest.raises(SubtitleError, match="48 hours"):
+        parse_text(late, "srt")
+    with pytest.raises(SubtitleError, match="48 hours"):
+        parse_text("WEBVTT\n\n00:00:01.000 --> 999:00:00.000\nLong.\n", "vtt")
+    # An ASS row that can't be read is skipped, as a bad timestamp there
+    # always was.
+    ass = _ASS_HEAD + "Dialogue: 0,49:00:00.00,49:00:01.00,Default,,0,0,0,,Late\n" \
+                      "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hi.\n"
+    assert [c.text for c in parse_text(ass, "ass")] == ["Hi."]
+
+    edge = parse_text("1\n47:59:59,000 --> 48:00:00,000\nLast.\n", "srt")
+    assert _approx(edge[0], 47 * 3600 + 59 * 60 + 59, 48 * 3600)
+
+
+def test_an_unreadable_timestamp_raises_subtitle_error_not_value_error():
+    from kokoro_gui.daw.subtitles import _seconds
+
+    for stamp in ("00:00:01," + "5" * 5000, "1" * 5000 + ":00:00", "x"):
+        with pytest.raises(SubtitleError):
+            _seconds(stamp)
+
+
 def test_cue_is_frozen():
     cue = Cue(1.0, 2.0, "x")
     with pytest.raises(Exception):

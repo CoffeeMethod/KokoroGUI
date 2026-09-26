@@ -40,7 +40,7 @@ MAX_SUBTITLE_BYTES = 32 * 1024 * 1024
 
 class SubtitleError(ValueError):
     """A file that can't be read as subtitles: unknown extension, too big,
-    not a file."""
+    not a file, a cue timed past `MAX_CUE_SECONDS`."""
 
 
 @dataclass(frozen=True)
@@ -120,7 +120,12 @@ def parse_text(text: str, fmt: str) -> list:
 # -- shared helpers ----------------------------------------------------------------
 
 # H:MM:SS with a comma or dot fraction; hours optional (WebVTT allows MM:SS.mmm).
-_TIME = r"(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:[,.](\d+))?"
+# Digit counts are bounded so a crafted field can't reach `int` with
+# thousands of digits; a timing line that doesn't match is skipped.
+_TIME = r"(?:(\d{1,3}):)?(\d{1,2}):(\d{1,2})(?:[,.](\d{1,9}))?"
+# No cue starts or ends later than this: a timestamp past it is a broken
+# file, and the timeline and export would size themselves to it.
+MAX_CUE_SECONDS = 48 * 3600
 _TIME_RE = re.compile(_TIME)
 _TIMING_RE = re.compile(r"^\s*(" + _TIME + r")\s*-->\s*(" + _TIME + r")")
 _BLOCK_SPLIT = re.compile(r"\n[ \t]*\n")
@@ -130,15 +135,23 @@ _ASS_OVERRIDE_RE = re.compile(r"\{[^}]*\}")
 
 def _seconds(stamp: str) -> float:
     """`HH:MM:SS,mmm`, `MM:SS.mmm` or ASS's `H:MM:SS.cc` as seconds. The
-    fraction is read as a decimal fraction, so `.5`, `.50` and `.500` agree."""
+    fraction is read as a decimal fraction, so `.5`, `.50` and `.500` agree.
+    Raises `SubtitleError` for anything else or a time past
+    `MAX_CUE_SECONDS`."""
     match = _TIME_RE.fullmatch(stamp.strip())
     if match is None:
-        raise SubtitleError(f"Bad timestamp: {stamp!r}")
+        raise SubtitleError(f"Bad timestamp: {stamp[:40]!r}")
     hours, minutes, seconds, fraction = match.groups()
-    total = int(hours or 0) * 3600 + int(minutes) * 60 + int(seconds)
-    if fraction:
-        total += int(fraction) / (10 ** len(fraction))
-    return float(total)
+    try:
+        total = int(hours or 0) * 3600 + int(minutes) * 60 + int(seconds)
+        if fraction:
+            total += int(fraction) / (10 ** len(fraction))
+        total = float(total)
+    except (ValueError, OverflowError) as e:
+        raise SubtitleError(f"Bad timestamp: {stamp[:40]!r}") from e
+    if total > MAX_CUE_SECONDS:
+        raise SubtitleError(f"Timestamp {stamp.strip()!r} is past 48 hours.")
+    return total
 
 
 def _cue(start_s: float, end_s: float, lines, speaker: Optional[str]) -> Optional[Cue]:
