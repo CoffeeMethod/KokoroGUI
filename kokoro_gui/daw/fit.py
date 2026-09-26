@@ -109,17 +109,20 @@ def speaking_rates(document) -> dict:
     """Characters per second at speed 1.0, learned from the document's
     generated clips: `{character_id: rate}` plus the whole document under
     None. Generation stats (`arrangement.recorded_chars_per_second`) time
-    the model's work, not the speech, so they can't answer this."""
+    the model's work, not the speech, so they can't answer this. A nested
+    clip or a music bed (a placeholder run naming a file) and an imported
+    recording (a person's pace, not the engine's) are skipped. A clip with
+    no character counts once, under None."""
     totals: dict = {}
     for clip in document.clips:
-        if getattr(clip, "is_nested", False):
+        if clip.has_placeholder or clip.source == "imported":
             continue
         seconds = clip_audio_duration_s(clip)
         chars = len(document.clip_text(clip).strip())
         if not seconds or not chars:
             continue
         speed = _clip_speed(document, clip)
-        for key in (clip.character_id, None):
+        for key in {clip.character_id, None}:
             entry = totals.setdefault(key, [0, 0.0])
             entry[0] += chars
             entry[1] += seconds * speed
