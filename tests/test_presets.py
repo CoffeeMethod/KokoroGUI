@@ -145,9 +145,16 @@ def test_an_ir_name_with_an_unsafe_character_is_rejected(tmp_path, monkeypatch, 
 
 
 def test_list_ir_names_leaves_out_a_file_whose_name_is_unsafe(tmp_path, monkeypatch):
+    import os
+
     from kokoro_gui.engine.presets import list_ir_names
 
     monkeypatch.chdir(tmp_path)
     _wav(tmp_path / "presets" / "fx" / "ir" / "Hall.wav")
-    _wav(tmp_path / "presets" / "fx" / "ir" / "a\tb.wav")
+    if os.name == "nt":
+        # Windows can't create this name, so add it to the listing instead.
+        listdir = os.listdir
+        monkeypatch.setattr(os, "listdir", lambda d: listdir(d) + ["a\tb.wav"])
+    else:
+        _wav(tmp_path / "presets" / "fx" / "ir" / "a\tb.wav")
     assert list_ir_names(None) == ["Hall"]

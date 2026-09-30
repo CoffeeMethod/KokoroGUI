@@ -83,10 +83,15 @@ _IR_UNSAFE_CHARS = frozenset('<>:"|?*\\') | frozenset(chr(c) for c in range(32))
 def ir_safe_name(name):
     """The file stem an impulse-response name maps to: `os.path.basename` of
     it, or None for a non-string or empty name, "." or "..", or one holding
-    a control character (NUL included) or one of `<>:"|?*\\`."""
+    a control character (NUL included) or one of `<>:"|?*\\`. All but `\\`
+    are checked on the whole name, since Windows' basename drops a drive
+    ("a:b" -> "b")."""
     if not isinstance(name, str):
         return None
-    safe = os.path.basename(name.strip())
+    name = name.strip()
+    if any(c in _IR_UNSAFE_CHARS and c != "\\" for c in name):
+        return None
+    safe = os.path.basename(name)
     if not safe or safe in (".", "..") or any(c in _IR_UNSAFE_CHARS for c in safe):
         return None
     return safe
