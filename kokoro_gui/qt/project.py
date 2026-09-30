@@ -91,6 +91,7 @@ VIDEO_TRUST_KEY = "video_trusted"
 # rendered from, its length and rate. Derived data: never bundled, always
 # rebuildable.
 MIXDOWN = "mixdown"
+_MIXDOWN_NAMES = tuple(f"{MIXDOWN}.{fmt}" for fmt in ("wav", "flac", "mp3", "ogg"))
 MIXDOWN_JSON = "mixdown.json"
 # A child project dir's `session.json` names its source as
 # `<parent source>#<child id>`, so `choose_project_dir` and
@@ -655,8 +656,11 @@ def read_mixdown_info(project_dir: str | None) -> dict | None:
         return None
     if not isinstance(info, dict):
         return None
-    name = os.path.basename(str(info.get("file") or ""))
-    if not name.startswith(MIXDOWN + "."):
+    # Only a name this app writes, taken from the constants rather than the
+    # file: a bundle from elsewhere can put anything in mixdown.json.
+    named = str(info.get("file") or "")
+    name = next((n for n in _MIXDOWN_NAMES if n == named), None)
+    if name is None:
         return None
     full = os.path.join(project_dir, name)
     if not os.path.isfile(full):

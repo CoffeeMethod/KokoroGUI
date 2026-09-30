@@ -54,3 +54,15 @@ def test_store_owned_by_another_user_stays_put_with_a_warning(tmp_path, monkeypa
     monkeypatch.setattr(paths.os, "getuid", lambda: os.stat(target).st_uid + 1)
     assert ensure_private_dir(str(target), fallback=False) == str(target)
     assert "another user" in capsys.readouterr().out
+
+
+def test_a_relative_xdg_cache_home_is_ignored(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CACHE_HOME", "relative/cache")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert paths.user_cache_root() == os.path.join(str(tmp_path), ".cache", "kokorogui")
+
+
+def test_the_fallback_is_never_the_cache_root_itself(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    assert paths._fallback_for("/") is None
+    assert paths._fallback_for(str(tmp_path / "cache")) == str(tmp_path / "xdg" / "kokorogui" / "cache")

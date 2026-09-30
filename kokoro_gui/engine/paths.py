@@ -23,13 +23,23 @@ def _warn(message):
 
 
 def user_cache_root():
-    """`$XDG_CACHE_HOME/kokorogui`, else `~/.cache/kokorogui`."""
-    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    """`$XDG_CACHE_HOME/kokorogui`, else `~/.cache/kokorogui`. A relative
+    `XDG_CACHE_HOME` is ignored, as the XDG spec says."""
+    base = os.environ.get("XDG_CACHE_HOME", "")
+    if not os.path.isabs(base):
+        base = os.path.join(os.path.expanduser("~"), ".cache")
     return os.path.join(base, _APP_CACHE_NAME)
 
 
 def _fallback_for(path):
-    return os.path.join(user_cache_root(), os.path.basename(os.path.normpath(path)))
+    """`path`'s last component under `user_cache_root()`, or None when that
+    isn't a directory inside the root (a `path` of "/" would name the root
+    itself)."""
+    root = os.path.normpath(user_cache_root())
+    alt = os.path.normpath(os.path.join(root, os.path.basename(os.path.normpath(path))))
+    if not alt.startswith(root + os.sep):
+        return None
+    return alt
 
 
 def _create_private(path):
@@ -62,6 +72,9 @@ def ensure_private_dir(path, fallback=True):
             _warn(f"{path} belongs to another user; other users may be able to read or change its files.")
             return path
         alt = _fallback_for(path)
+        if alt is None:
+            _warn(f"{path} belongs to another user and has no per-user stand-in; using it as is.")
+            return path
         _warn(f"{path} belongs to another user; using {alt} instead.")
         _create_private(alt)
         _tighten(alt)
