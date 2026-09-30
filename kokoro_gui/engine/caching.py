@@ -92,19 +92,21 @@ def voice_fingerprint(voice_ref):
     absolute file path (a custom `.pt` or a reference wav). Remixing and
     re-saving a `.pt` under the same name changes what the voice sounds like
     without changing its name, and a name-only key can't tell the
-    difference. The content hash is cached per-file-mtime so a batch run
-    doesn't re-read the same file for every chunk, and so the dirty check's
-    per-rehighlight cost is a stat, not a read."""
+    difference. The content hash is cached per file `(mtime_ns, size)` so a
+    batch run doesn't re-read the same file for every chunk, and so the dirty
+    check's per-rehighlight cost is a stat, not a read. Size too, so a
+    rewrite inside one mtime tick (coarse on Windows) still misses."""
     if not voice_ref or not (os.path.isabs(voice_ref) and os.path.isfile(voice_ref)):
         return voice_ref
 
     try:
-        mtime = os.path.getmtime(voice_ref)
+        stat = os.stat(voice_ref)
     except OSError:
         return voice_ref
+    stamp = (stat.st_mtime_ns, stat.st_size)
 
     cached = _voice_fingerprint_cache.get(voice_ref)
-    if cached is not None and cached[0] == mtime:
+    if cached is not None and cached[0] == stamp:
         return cached[1]
 
     try:
@@ -113,7 +115,7 @@ def voice_fingerprint(voice_ref):
     except OSError:
         return voice_ref
 
-    _voice_fingerprint_cache[voice_ref] = (mtime, fp)
+    _voice_fingerprint_cache[voice_ref] = (stamp, fp)
     return fp
 
 
