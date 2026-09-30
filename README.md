@@ -53,6 +53,7 @@ now:
     plugins
 -   Transcript details (Options menu): segment boundaries, lexicon rewrites, gaps, and each clip's
     length and status
+-   Typing, scrolling and timeline updates stay fast in long projects, plus Options > Force refresh
 
 The [changes page](docs/changes.html) has the full detail for every version, including what the
 update does to existing projects.

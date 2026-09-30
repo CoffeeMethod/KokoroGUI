@@ -1418,6 +1418,8 @@ def test_regenerate_save_undo_leaves_clip_dirty_rather_than_silent(qt_app, tmp_p
     assert restored.segments[0].audio_path == old_segment_path
     assert qt_app.document.dirty_clips() == []  # the file is still there
     os.remove(old_segment_path)  # what a close-time GC would have done
+    # Files are re-checked when the window comes back into focus.
+    assert qt_app.recheck_files() is True
     assert [c.id for c in qt_app.document.dirty_clips()] == [clip.id]
 
 

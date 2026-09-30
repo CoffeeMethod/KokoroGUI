@@ -35,6 +35,20 @@ _RUN_TS = time.strftime("%Y%m%d%H%M%S")
 # Engine-level fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True, scope="session")
+def _verify_derived_state():
+    """Verify mode for the whole suite (kokoro_gui/daw/revision.py): every
+    cached index or dirty set is also computed from scratch, and a mismatch
+    raises `derived.StaleCacheError`. Every test that edits a document and
+    then reads a highlight, a stale flag or a placement is also a test that
+    the edit invalidated the caches."""
+    from kokoro_gui.daw import revision
+
+    revision.set_verify(True)
+    yield
+    revision.set_verify(False)
+
+
 @pytest.fixture
 def isolated_dirs(tmp_path, monkeypatch):
     """Redirect the shared storage dirs (`kokoro_gui/engine/runtime.py`) into

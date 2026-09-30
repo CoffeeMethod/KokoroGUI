@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QPushButton, QVBoxLayout, QWidget,
 )
 
-from kokoro_gui.daw import beds, markers as marker_ops
+from kokoro_gui.daw import beds, markers as marker_ops, revision
 from kokoro_gui.daw import fit as fit_ops
 from kokoro_gui.daw.arrangement import OVERLAP_EPSILON_S, plan_ripple
 from kokoro_gui.daw.dirty import build_segments_from_results, carry_segment_timing, take_from_results
@@ -226,11 +226,13 @@ class TimelineDock(QDockWidget):
         self.refresh_breadcrumb()
         # Shown once the timeline has a clip with a target (a subtitle import).
         self.fit_all_button.setVisible(any(fit_ops.TARGET_KEY in (c.overrides or {}) for c in self._doc.clips))
-        arrangement = self.app.build_arrangement()
         level = self.app.level
-        self.timeline_view.render_document(self._doc, arrangement,
-                                           clip_samples=lambda clip: self.app.rendered_clip_samples(clip, level),
-                                           nested_state=lambda clip: self.app.nested_state(clip, level))
+        with self.app.inputs_scope():
+            arrangement = self.app.build_arrangement()
+            self.timeline_view.render_document(self._doc, arrangement,
+                                               clip_samples=lambda clip: self.app.rendered_clip_samples(clip, level),
+                                               nested_state=lambda clip: self.app.nested_state(clip, level),
+                                               clip_render_key=lambda clip: self.app.clip_render_key(clip, level))
 
     # -- seconds-axis drags (UI9) ------------------------------------------------
 
@@ -551,6 +553,8 @@ class TimelineDock(QDockWidget):
         """Stamps `clip.segments` and `clip.overrides["take"]` from what the
         engine reported. A result without a `cache_key` (a hand-built one
         in tests) falls back to the key the app would compute now."""
+        # Generation wrote new segment files (kokoro_gui/daw/revision.py).
+        revision.bump_files()
         project = project or self.app.project_for(clip)
         fallback = None
         if any(not r.get("cache_key") for r in results):

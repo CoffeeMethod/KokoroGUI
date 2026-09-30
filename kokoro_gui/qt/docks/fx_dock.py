@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
 )
 
 import kokoro_gui.qt.app as qt_app_module
+from kokoro_gui.daw import revision
 from kokoro_gui.daw.undo import SetClipFxCommand
 from kokoro_gui.engine.presets import filter_fx_preset_values
 from kokoro_gui.qt import fx_resolve, spec
@@ -421,6 +422,9 @@ class FXDock(QDockWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save FX preset: {e}")
             return False
+        # A clip whose character uses this preset post-processes differently
+        # now; the post config memo keys on `revision.FILES`.
+        revision.bump_files()
         return True
 
     def _save_preset_dialog(self) -> None:

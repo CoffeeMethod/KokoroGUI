@@ -71,6 +71,7 @@
         <a href="#voice-reference">References</a>
         <a href="#presets">Preset files</a>
         <a href="#jit">JIT streaming</a>
+        <a href="#force-refresh">Force refresh</a>
       </div>
     </div>
   </section>
@@ -494,6 +495,16 @@
       <div class="prose reveal">
         <p>"JIT streaming (no-clips fallback only)" plays a project that has no clips yet while it's still generating: one thread fills a queue, another plays from it. That only works when the engine makes audio faster than it plays, with enough margin that playback never catches up.</p>
         <p>Kokoro can. Audio8, one large model generating one piece at a time, can't, so with an Audio8 character selected the entry is greyed out and generation runs normally. Once a project has clips, Generate works clip by clip and the transport plays them, and this setting doesn't apply.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="force-refresh">
+    <div class="wrap">
+      <h2><span class="idx">Options menu</span>Force refresh</h2>
+      <div class="prose reveal">
+        <p>The Transcript and Timeline panels remember what they worked out about each clip (whether it's stale, where it sits, how its audio is post-processed, its waveform) and only work it out again when something that clip depends on changes. Force refresh throws all of that away and rebuilds it from the project and the files on disk.</p>
+        <p>You shouldn't need it. It's there for a panel that looks out of date, and for files changed in another program while KokoroGUI kept focus: a segment file deleted by hand is otherwise noticed when the window becomes active again, or after the next Generate, Open, Save or import.</p>
       </div>
     </div>
   </section>

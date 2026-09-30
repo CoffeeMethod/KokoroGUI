@@ -32,18 +32,20 @@ from __future__ import annotations
 import copy
 import json
 import os
+from contextlib import contextmanager
 import tempfile
 import threading
 import time
 
 import playback
-from PySide6.QtCore import QFileSystemWatcher, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QFileSystemWatcher, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QWidget
 
-from kokoro_gui.daw import library as character_library, wordalign
+from kokoro_gui.daw import library as character_library, revision, wordalign
 from kokoro_gui.daw.migration import import_presets_to_library, link_exact_matches
 from kokoro_gui.daw import fit as fit_ops, segment_view, subtitles
+from kokoro_gui.daw.derived import StaleCacheError
 from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character, Document
 from kokoro_gui.daw.arrangement import compute_arrangement, segment_timeline
 from kokoro_gui.daw.mixplan import clip_mixes
@@ -91,6 +93,8 @@ from kokoro_gui.qt.welcome_dialog import WelcomeDialog  # noqa: E402
 
 APP_NAME = "KokoroGUI"
 SCHEDULE_REBUILD_DEBOUNCE_MS = 100
+# A keystroke's timeline refresh waits this long for the next keystroke.
+TIMELINE_TYPING_DEBOUNCE_MS = 60
 LIBRARY_WATCH_DEBOUNCE_MS = 150
 
 
@@ -172,6 +176,19 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         # once per backend (`_ensure_backend_ready`).
         self._backends: dict = {}
         self._bridges: dict = {}
+        # Schema-derived field lists per engine (`engine_settings`,
+        # `_model_fields`); Options > Force refresh clears it.
+        self._schema_memo: dict = {}
+        # Per-clip post configs, clip durations and arrangements, keyed on
+        # what they're computed from (`post_config_for_clip`,
+        # `clip_duration_s`, `build_arrangement`); `_fingerprint_scope`
+        # holds one app-input fingerprint per project for the length of
+        # an `inputs_scope()`.
+        self._post_config_memo: dict = {}
+        self._duration_memo: dict = {}
+        self._arrangement_memo: dict = {}
+        self._schedule_memo: dict = {}
+        self._fingerprint_scope = None
         self._missing_backends: dict = {}
         self._ready_backends: set = set()
         self._primary_engine_id = engine_registry.DEFAULT_ENGINE_ID
@@ -207,6 +224,13 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self._schedule_timer.setSingleShot(True)
         self._schedule_timer.setInterval(SCHEDULE_REBUILD_DEBOUNCE_MS)
         self._schedule_timer.timeout.connect(self._rebuild_transport_schedule)
+        # Typing asks for a timeline refresh through this timer, so a burst
+        # of keystrokes costs one (`request_timeline_refresh`).
+        self._timeline_timer = QTimer(self)
+        self._timeline_timer.setSingleShot(True)
+        self._timeline_timer.setInterval(TIMELINE_TYPING_DEBOUNCE_MS)
+        # Looked up at fire time, like every other caller of refresh_timeline.
+        self._timeline_timer.timeout.connect(lambda: self.refresh_timeline())
 
         # Another window (or process) editing the library reaches this one:
         # a directory change re-resolves the open document, debounced so
@@ -538,9 +562,23 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         `num_threads`, the "Model" group, ...), overlaid with
         `settings["engines"][engine_id]`. A stored value for a key the
         schema no longer has is dropped."""
-        fields = per_engine_fields(engine_registry.get_config_schema(engine_id))
+        fields = self._schema_memo.get(("per_engine", engine_id))
+        if fields is None:
+            fields = tuple(per_engine_fields(engine_registry.get_config_schema(engine_id)))
+            self._schema_memo[("per_engine", engine_id)] = fields
         stored = (self.settings.get("engines") or {}).get(engine_id) or {}
         return {f.key: stored.get(f.key, f.default) for f in fields}
+
+    def _model_fields(self, backend) -> tuple:
+        """`(key, default)` for each field in the backend's "Model" schema
+        group, memoized per adapter class (every schema is a static list;
+        Options > Force refresh drops the memo)."""
+        memo_key = ("model", type(backend), backend.id)
+        fields = self._schema_memo.get(memo_key)
+        if fields is None:
+            fields = tuple((f.key, f.default) for f in backend.get_config_schema() if f.group == "Model")
+            self._schema_memo[memo_key] = fields
+        return fields
 
     def set_engine_setting(self, engine_id: str, key: str, value) -> None:
         """Stores one per-engine value and schedules the config save."""
@@ -679,7 +717,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def refresh_voice_choices(self) -> None:
         """After a voice editor saves or deletes a voice: every voice list
-        that could show it (the Settings form, an open Edit > Characters)."""
+        that could show it (the Settings form, an open Edit > Characters).
+        A re-saved voice file changes the keys of the clips that use it, so
+        the file checks start over (`revision.FILES`)."""
+        revision.bump_files()
         if self.settings_dock is not None and self.settings_dock.schema_form is not None:
             self.settings_dock.refresh_voice_choices()
         if self._characters_dialog is not None:
@@ -946,6 +987,13 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.options_menu.addAction(self.jit_action)
         self._sync_jit_action_enabled()
 
+        self.options_menu.addSeparator()
+        self.force_refresh_action = QAction("Force refresh", self)
+        self.force_refresh_action.setToolTip("Re-check every clip and file and redraw the transcript and timeline.")
+        self.force_refresh_action.setStatusTip(self.force_refresh_action.toolTip())
+        self.force_refresh_action.triggered.connect(self.force_refresh)
+        self.options_menu.addAction(self.force_refresh_action)
+
         # Workspace
         self.workspace_menu = bar.addMenu("&Workspace")
         self.workspace_group = QActionGroup(self)
@@ -1150,9 +1198,74 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self._save_timer.start(1000)
         self._update_window_title(pending=True)
 
+    def recheck_files(self) -> bool:
+        """Files may have changed on disk behind the app's back (a segment
+        deleted by hand, a voice re-saved in another tool): the remembered
+        existence checks and mtimes start over (`revision.FILES`). Repaints
+        the transcript and the timeline when that changed which clips are
+        stale, and returns whether it did. Runs when the window is
+        re-activated."""
+        before = [project.document.dirty_ids() for project in self.open_projects()]
+        revision.bump_files()
+        after = [project.document.dirty_ids() for project in self.open_projects()]
+        if before == after:
+            return False
+        if self.editor is not None:
+            self.editor.rehighlight()
+        self.refresh_timeline()
+        return True
+
+    def force_refresh(self) -> None:
+        """Options > Force refresh: throws away every cache the views read
+        (Claude/PLAN_performance.md) and rebuilds from scratch. The
+        escape hatch for a cache that missed a change, and for files
+        changed on disk while the app kept focus."""
+        revision.bump_files()
+        revision.bump_text()
+        revision.bump_model()
+        self._schema_memo.clear()
+        self._post_config_memo.clear()
+        self._duration_memo.clear()
+        self._arrangement_memo.clear()
+        self._schedule_memo = {}
+        post.clear_render_cache()
+        for project in self.open_projects():
+            project.document.forget_derived()
+            self._install_segment_key_fn(project)
+        self.invalidate_child_states()
+        self._closed_child_states.clear()
+        self._arrangement = None
+        if self.timeline_dock is not None:
+            self.timeline_dock.timeline_view.forget_rendered()
+        if self.editor is not None:
+            self.editor.rehighlight_all()
+        self.refresh_timeline()
+        self._rebuild_transport_schedule()
+        self.set_status("Refreshed every clip, file and view.", "success")
+
+    def changeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().changeEvent(event)
+        # Back from another window: a file may have been deleted meanwhile.
+        if (event.type() == QEvent.Type.ActivationChange and self.isActiveWindow()
+                and getattr(self, "editor", None) is not None and getattr(self, "timeline_dock", None) is not None):
+            self.recheck_files()
+
+    def request_timeline_refresh(self) -> None:
+        """`refresh_timeline` once typing pauses for
+        `TIMELINE_TYPING_DEBOUNCE_MS`: what a keystroke calls."""
+        self._timeline_timer.start()
+
+    def flush_updates(self) -> None:
+        """Runs a pending `request_timeline_refresh` now. For tests and
+        scripts that type and then read the timeline."""
+        if self._timeline_timer.isActive():
+            self._timeline_timer.stop()
+            self.refresh_timeline()
+
     def refresh_timeline(self) -> None:
         """App-owned cross-dock coordination point: re-render the timeline
         and (debounced) rebuild the transport's schedule."""
+        self._timeline_timer.stop()
         if self.timeline_dock is not None:
             self.timeline_dock.refresh()
         self._schedule_timer.start()
@@ -1282,9 +1395,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             "lexicon": dict(self.settings.get("lexicon", {})),
             **self._segmentation_config(gen_state),
         }
-        for field in backend.get_config_schema():
-            if field.group == "Model":
-                config[field.key] = engine.get(field.key, field.default)
+        for key, default in self._model_fields(backend):
+            config[key] = engine.get(key, default)
         clip_config = dict(project.document.effective_config_for_clip(clip))
         for key in ("voice", "speed", "pitch", "lang_code"):
             if key in clip_config:
@@ -1393,10 +1505,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             memo_key = (text, json.dumps(config, sort_keys=True, default=str), engine_version)
             name, _fp = caching.normalize_voice(config.get("voice"), backend, config.get("project_dir"))
             voice_file = backend.resolve_voice_file(name, config.get("project_dir")) if name else None
-            try:
-                stamp = os.path.getmtime(voice_file) if voice_file else None
-            except OSError:
-                stamp = None
+            # Remembered until `revision.FILES` moves (a voice save, window
+            # activation, Force refresh).
+            stamp = revision.file_mtime(voice_file) if voice_file else None
             extra = backend.cache_key_extra(config)
             hit = memo.get(memo_key)
             if hit is not None and hit[0] == stamp and hit[1] == extra:
@@ -1408,8 +1519,23 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         def config_fn(clip):
             return self._dirty_check_config(clip, project)
 
+        def inputs_fn():
+            return self._generation_inputs_fingerprint(project)
+
         project.document.segment_key_fn = key_fn
         project.document.generation_config_fn = config_fn
+        project.document.inputs_fn = inputs_fn
+
+    def _generation_inputs_fingerprint(self, project):
+        """What `_assemble_generation_config` reads outside the document,
+        as one string: `DirtyTracker` rechecks every clip when it changes.
+        About 15 us, so the tracker asks on every read."""
+        if self.settings_dock is None:
+            return None
+        return json.dumps([self.settings_dock.get_state(), self.settings.get("lexicon"),
+                           self.settings.get("engines"), self.settings.get("default_engine"),
+                           project.project_dir, sorted(self._backends)],
+                          sort_keys=True, default=str)
 
     def _dirty_check_config(self, clip, project=None) -> dict:
         """`Document.generation_config_fn`: `_assemble_generation_config`,
@@ -1431,7 +1557,79 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         for speech."""
         if clip.has_placeholder:
             return self.nested_post_config(clip, project)
-        return post.extract_post_config(self._assemble_clip_config(clip, project))
+        return dict(self._post_entry(clip, project)[1])
+
+    def clip_render_key(self, clip, project=None) -> tuple:
+        """What the clip's rendered audio is made of: its segments and its
+        post config's `post.post_key`. The timeline keeps a waveform while
+        this stays the same."""
+        segments = tuple((s.audio_path, tuple(s.range) if s.range else None) for s in clip.segments)
+        if clip.has_placeholder:
+            return ("placeholder", clip.original_audio_path, segments,
+                    post.post_key(self.post_config_for_clip(clip, project) or {}))
+        return (segments, self._post_entry(clip, project)[2])
+
+    # --- derived-state caches (Claude/PLAN_performance.md) ------------------
+
+    @contextmanager
+    def inputs_scope(self):
+        """Within the block, each project's app-input fingerprint is taken
+        once (a refresh asks for it once per clip)."""
+        outer = self._fingerprint_scope
+        if outer is None:
+            self._fingerprint_scope = {}
+        try:
+            yield
+        finally:
+            if outer is None:
+                self._fingerprint_scope = None
+
+    def _post_inputs_fingerprint(self, project) -> str:
+        """What a clip's post config reads outside the document and the
+        clip: the Settings tab (volume, normalize, trim, pitch), its Apply
+        box, the Audio FX tab's project values and the project dir (for
+        project-local FX presets). Preset files on disk count through
+        `revision.FILES`."""
+        scope = self._fingerprint_scope
+        if scope is not None and id(project) in scope:
+            return scope[id(project)]
+        value = json.dumps([self.settings_dock.get_state(), self.settings_dock.apply_fx_enabled(),
+                            self.fx_dock.project_fx_state(), self.settings.get("fx_preset"),
+                            self.settings.get("engines"), self.settings.get("lexicon"),
+                            project.project_dir, project.project_settings, sorted(self._backends)],
+                           sort_keys=True, default=str)
+        if scope is not None:
+            scope[id(project)] = value
+        return value
+
+    def _clip_token(self, clip, project) -> tuple:
+        character = project.document.get_character(clip.character_id)
+        return (clip.character_id, clip.source, clip.original_audio_path, repr(clip.overrides),
+                repr(clip.fx_override),
+                repr((character.preset_data, character.variants, character.backend_id)) if character else None,
+                revision.FILES)
+
+    def _post_entry(self, clip, project=None) -> tuple:
+        """`(token, post_config, post_key)` for a clip, recomputed only when
+        the clip, its character, the app's post inputs or the files moved.
+        Verify mode recomputes and compares."""
+        project = project or self.project_for(clip)
+        if self.settings_dock is None or self.fx_dock is None:
+            config = post.extract_post_config(self._assemble_clip_config(clip, project))
+            return (None, config, post.post_key(config))
+        token = (self._clip_token(clip, project), self._post_inputs_fingerprint(project))
+        memo_key = (id(project), clip.id)
+        hit = self._post_config_memo.get(memo_key)
+        if hit is not None and hit[0] == token:
+            if revision.VERIFY:
+                fresh = post.extract_post_config(self._assemble_clip_config(clip, project))
+                if fresh != hit[1]:
+                    raise StaleCacheError(f"post config of clip {clip.id} is stale: {hit[1]} != {fresh}")
+            return hit
+        config = post.extract_post_config(self._assemble_clip_config(clip, project))
+        entry = (token, config, post.post_key(config))
+        self._post_config_memo[memo_key] = entry
+        return entry
 
     def clip_duration_s(self, clip, project=None):
         """`compute_arrangement`'s `clip_duration`: the clip's rendered
@@ -1451,6 +1649,21 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             return None
         if self.settings_dock is None or self.fx_dock is None:
             return clip_audio_duration_s(clip)
+        project = project or self.project_for(clip)
+        if not clip.has_placeholder:
+            token, _config, key = self._post_entry(clip, project)
+            memo_token = (token, key, tuple((s.audio_path, s.duration, s.onset_s, s.tail_s,
+                                             tuple(s.range) if s.range else None) for s in segments),
+                          tuple(post.render_count(s.audio_path) for s in segments))
+            hit = self._duration_memo.get((id(project), clip.id))
+            if hit is not None and hit[0] == memo_token:
+                return hit[1]
+            total = self._measure_clip_duration_s(clip, project, segments)
+            self._duration_memo[(id(project), clip.id)] = (memo_token, total)
+            return total
+        return self._measure_clip_duration_s(clip, project, segments)
+
+    def _measure_clip_duration_s(self, clip, project, segments):
         post_config = self.post_config_for_clip(clip, project)
         rate = self.project_sample_rate()
         total = 0.0
@@ -1500,11 +1713,37 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         whether onset alignment applies (trim already cut the silence)."""
         project = project or self.level
         docks_ready = self.settings_dock is not None and self.fx_dock is not None
+        with self.inputs_scope():
+            key = (revision.TEXT, revision.MODEL, revision.FILES, self.backend.id, docks_ready,
+                   self._post_inputs_fingerprint(project) if docks_ready else None,
+                   post.RENDERS, tuple(sorted(self._closed_child_states.items())),
+                   tuple(child.state_cache for child in self.children.values()))
+            hit = self._arrangement_memo.get(id(project))
+            if hit is not None and hit[0] == key:
+                if revision.VERIFY:
+                    self._verify_arrangement(hit[1], self._compute_arrangement(project, docks_ready))
+                return hit[1]
+            arrangement = self._compute_arrangement(project, docks_ready)
+            self._arrangement_memo[id(project)] = (key, arrangement)
+            return arrangement
+
+    def _compute_arrangement(self, project, docks_ready: bool):
         return compute_arrangement(project.document, engine_id=self.backend.id,
                                    clip_duration=lambda clip: self.clip_duration_s(clip, project),
                                    clip_estimate=self.nested_estimate_s,
                                    clip_post_config=(lambda clip: self.post_config_for_clip(clip, project))
                                    if docks_ready else None)
+
+    @staticmethod
+    def _verify_arrangement(cached, fresh) -> None:
+        def shape(arrangement):
+            return [(p.clip.id, p.estimated) for p in arrangement.placed]
+
+        if shape(cached) != shape(fresh) or any(
+                abs(a.start_s - b.start_s) > 1e-6 or abs(a.duration_s - b.duration_s) > 1e-6
+                for a, b in zip(cached.placed, fresh.placed)):
+            raise StaleCacheError("the cached arrangement is stale: the document or a placement input "
+                                  "changed without moving a revision counter")
 
     # --- Options: engine / device / theme ---------------------------------
 
@@ -1793,6 +2032,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         """The root project now holds `document` (New, Open, a migration);
         focus and level go back to it."""
         self.transport.stop()
+        revision.bump_files()
         self.focus = self.level = self.root
         self.root.document = document
         if self._library_link_ids is not None:
@@ -2433,6 +2673,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     def _on_project_io_finished(self, payload) -> None:
         done, result, error = payload
         self._io_thread = None
+        # Open, Save and a subproject render wrote or replaced files.
+        revision.bump_files()
         done(result, error)
 
     def wait_for_project_io(self, timeout_s: float = 60.0) -> None:
@@ -2607,6 +2849,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         caption file naming speakers goes through the speaker mapping. The
         review dialog follows, then one `ImportRecordingCommand`. Returns
         False when nothing was started."""
+        revision.bump_files()  # a file is about to be copied into the project
         import soundfile as sf
 
         from kokoro_gui.daw import imported
@@ -2797,6 +3040,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         transcript (`kokoro_gui.daw.undo.ImportBedCommand`). One undo step.
         Returns the new clip's id, or None when the file can't be read or
         copied."""
+        revision.bump_files()  # a file is about to be copied into the project
         try:
             import soundfile as sf
 
@@ -3141,26 +3385,41 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         recording's ranges crossfade (`imported.segment_plays`, which reads
         `playable_segments`). A clip on a ducked track carries `duck`, and
         speech carries `sidechain`, for the mixer's ducking."""
+        with self.inputs_scope():
+            self._rebuild_transport_schedule_in_scope()
+
+    def _rebuild_transport_schedule_in_scope(self) -> None:
         level = self.level
         self._arrangement = self.build_arrangement(level)
         rate = self.project_sample_rate()
         mixes = clip_mixes(level.document, self._arrangement)
         schedule = []
+        memo = {}
         for placed in self._arrangement.placed:
             mix = mixes.get(placed.clip.id)
             if placed.estimated or mix is None:
                 continue
+            # A clip whose start, segments, post config and mix didn't move
+            # keeps its entries from the last rebuild.
+            entry_key = self._schedule_entry_key(placed, mix, level)
+            hit = self._schedule_memo.get((id(level), placed.clip.id))
+            if entry_key is not None and hit is not None and hit[0] == entry_key:
+                schedule.extend(hit[1])
+                memo[(id(level), placed.clip.id)] = hit
+                continue
+            entries = []
             post_config = self.post_config_for_clip(placed.clip, level)
             if placed.clip.is_nested:
                 # A subproject plays its mixdown (NP2).
                 path = self.nested_audio_path(placed.clip, level)
                 if path:
-                    schedule.append(ScheduledClip(
+                    entries.append(ScheduledClip(
                         clip_id=placed.clip.id, start_s=placed.start_s, path=path, post_config=post_config,
                         gain=mix.gain, pan=mix.pan, automation=mix.automation,
                         fade_in_s=mix.fade_in_s, fade_out_s=mix.fade_out_s,
                         duck=mix.duck, sidechain=mix.sidechain,
                     ))
+                schedule.extend(entries)
                 continue
             # One ScheduledClip per segment so multi-segment clips play
             # back to back at their real (rendered) offsets. An imported
@@ -3168,7 +3427,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             offset = placed.start_s
             for play in segment_plays(placed.clip, mix.fade_in_s, mix.fade_out_s):
                 segment, range_s = play.segment, play.range_s
-                schedule.append(ScheduledClip(
+                entries.append(ScheduledClip(
                     clip_id=placed.clip.id, start_s=offset, path=segment.audio_path, post_config=post_config,
                     gain=mix.gain, pan=mix.pan, automation=mix.automation,
                     fade_in_s=play.fade_in_s, fade_out_s=play.fade_out_s,
@@ -3180,6 +3439,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                                                        range_s=range_s)
                 except Exception:
                     offset += segment.duration or 0.0
+            schedule.extend(entries)
+            if entry_key is not None:
+                memo[(id(level), placed.clip.id)] = (entry_key, entries)
+        self._schedule_memo = memo
         self.transport.load(schedule, sample_rate=self.project_sample_rate(),
                             total_duration_s=self._arrangement.total_duration_s,
                             alt_schedule=self._original_schedule(level, self._arrangement),
@@ -3188,6 +3451,19 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         if self.timeline_dock is not None:
             self.timeline_dock.timeline_view.set_arrangement(self._arrangement)
         self.transport_dock.set_position(self.transport.position(), self.transport.duration())
+
+    def _schedule_entry_key(self, placed, mix, level):
+        """What a clip's transport entries are built from, or None for a
+        subproject or a music bed (few, and read from other files): its
+        start, its post config's memo token and key, its segments and how
+        many renders of each the memo holds, and its mix."""
+        clip = placed.clip
+        if clip.has_placeholder:
+            return None
+        token, _config, key = self._post_entry(clip, level)
+        segments = tuple((s.audio_path, s.duration, s.onset_s, s.tail_s, tuple(s.range) if s.range else None,
+                          post.render_count(s.audio_path)) for s in clip.segments)
+        return (placed.start_s, token, key, segments, mix, self.project_sample_rate())
 
     def _original_schedule(self, level, arrangement) -> list:
         """The transport's alt schedule (phase 5 D5): the level's source
@@ -3296,6 +3572,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         when the clip isn't placed in the level the transport plays."""
         if self.focus is not self.level:
             return False
+        # Typing defers the timeline refresh, which is what starts the
+        # schedule timer: run both so the clip just typed is placed.
+        self.flush_updates()
         if self._schedule_timer.isActive():
             self._schedule_timer.stop()
             self._rebuild_transport_schedule()

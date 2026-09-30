@@ -79,6 +79,7 @@ class UndoStack:
                 command = CompositeCommand([command, extra])
         self._undo.append(command)
         self._redo.clear()
+        self._touch()
         if self.on_push is not None:
             self.on_push()
 
@@ -98,6 +99,7 @@ class UndoStack:
         command = self._undo.pop()
         command.undo(self._document)
         self._redo.append(command)
+        self._touch()
 
     def redo(self) -> None:
         """No-op if there's nothing to redo."""
@@ -106,6 +108,18 @@ class UndoStack:
         command = self._redo.pop()
         command.do(self._document)
         self._undo.append(command)
+        self._touch()
+
+    @staticmethod
+    def _touch() -> None:
+        """A command may edit a list or dict field in place (a
+        `SetFieldCommand` with a `key`), which no attribute set reports, so
+        every push, undo and redo moves the revision counters
+        (kokoro_gui/daw/revision.py)."""
+        from kokoro_gui.daw import revision
+
+        revision.bump_text()
+        revision.bump_model()
 
     def can_undo(self) -> bool:
         return bool(self._undo)

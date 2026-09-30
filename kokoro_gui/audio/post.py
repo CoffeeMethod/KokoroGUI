@@ -32,6 +32,7 @@ from typing import Optional
 
 import numpy as np
 
+from kokoro_gui.daw import revision
 from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, resolve_ir
 
 # Every config key the post stage reads. `pitch` is here (the resample) and
@@ -43,6 +44,11 @@ POST_KEYS = frozenset(ALLOWED_FX_PRESET_KEYS | {"apply_fx", "volume", "pitch", "
                                                 "time_stretch"})
 
 _RENDER_CACHE: dict = {}
+# How many renders went into `_RENDER_CACHE`, in all and per file. A render
+# changes what `rendered_duration_s` answers (exact instead of the hint),
+# so the app's duration and arrangement memos key on these.
+RENDERS = 0
+_RENDERS_BY_PATH: dict = {}
 
 
 def extract_post_config(config: dict) -> dict:
@@ -181,7 +187,19 @@ def render(path: str, post_config: Optional[dict], target_rate: int,
         mono = np.asarray(process_audio(mono, rate, post_config), dtype=np.float32).reshape(-1)
     out = resample(mono, rate, int(target_rate))
     _RENDER_CACHE[key] = out
+    _count_render(key[0])
     return out
+
+
+def _count_render(abs_path: str) -> None:
+    global RENDERS
+    RENDERS += 1
+    _RENDERS_BY_PATH[abs_path] = _RENDERS_BY_PATH.get(abs_path, 0) + 1
+
+
+def render_count(path) -> int:
+    """How many renders of `path` the memo has taken (0 for None)."""
+    return _RENDERS_BY_PATH.get(os.path.abspath(path), 0) if path else 0
 
 
 def render_slice(path: str, start_s: float, end_s: float, post_config: Optional[dict],
@@ -192,11 +210,9 @@ def render_slice(path: str, start_s: float, end_s: float, post_config: Optional[
 
 def _cache_key(path: str, post_config: Optional[dict], target_rate: int,
                range_s: Optional[tuple] = None) -> tuple:
-    try:
-        mtime = os.path.getmtime(path)
-    except OSError:
-        mtime = None
-    return (os.path.abspath(path), mtime, post_key(post_config or {}), int(target_rate), range_s)
+    # Remembered until `revision.FILES` moves: a regenerated segment gets a
+    # new file name (its key), and an import or Generate moves FILES.
+    return (os.path.abspath(path), revision.file_mtime(path), post_key(post_config or {}), int(target_rate), range_s)
 
 
 def duration_hint(segment, post_config: Optional[dict]) -> Optional[float]:
@@ -243,4 +259,7 @@ def rendered_duration_s(path: str, post_config: Optional[dict], target_rate: int
 
 
 def clear_render_cache() -> None:
+    global RENDERS
     _RENDER_CACHE.clear()
+    _RENDERS_BY_PATH.clear()
+    RENDERS += 1

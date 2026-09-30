@@ -34,6 +34,32 @@ class WaveformItem(QGraphicsItem):
         self._peaks = None
         self._path = QPainterPath()
         self._color = WAVEFORM_BRUSH_COLOR
+        # A `() -> peaks | None` that `set_source` stores and the first
+        # paint (or `loaded_peaks`) calls, so a block nobody scrolls to never
+        # decodes its audio.
+        self._loader = None
+
+    def set_source(self, loader, width: float, height: float) -> None:
+        """Peaks come from `loader()` when the item is first painted."""
+        self.prepareGeometryChange()
+        self._loader = loader
+        self._peaks = None
+        self._width = width
+        self._height = height
+        self._path = QPainterPath()
+        self.update()
+
+    def loaded_peaks(self):
+        """The peaks, loading them now if the item hasn't been painted."""
+        if self._loader is not None:
+            loader, self._loader = self._loader, None
+            try:
+                peaks = loader()
+            except Exception:
+                peaks = None
+            self._peaks = peaks
+            self._path = self._build_path(peaks, self._width, self._height)
+        return self._peaks
 
     def set_peaks(self, peaks, width: float, height: float) -> None:
         # prepareGeometryChange() must happen *before* the stored width/
@@ -41,6 +67,7 @@ class WaveformItem(QGraphicsItem):
         # now-stale boundingRect(), a classic source of clipped/ghosted
         # repaints after a resize.
         self.prepareGeometryChange()
+        self._loader = None
         self._peaks = peaks
         self._width = width
         self._height = height
@@ -71,6 +98,8 @@ class WaveformItem(QGraphicsItem):
         self.update()
 
     def paint(self, painter, option, widget=None) -> None:  # noqa: N802 (Qt override)
+        if self._loader is not None:
+            self.loaded_peaks()
         painter.fillPath(self._path, QBrush(QColor(self._color)))
 
 

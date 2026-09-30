@@ -221,6 +221,7 @@ def test_a_missing_engines_clips_do_not_generate(qt_app, monkeypatch):
 
     ghost, clip = _ghost_project(qt_app)
     os.remove(clip.segments[0].audio_path)
+    qt_app.recheck_files()  # what re-activating the window does
     assert clip in qt_app.document.dirty_clips()  # stale, but not generatable
     assert qt_app.cannot_generate(clip) == "ghost isn't installed"
 

@@ -88,7 +88,7 @@ from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QMenu, QTextEdit, QToolTip, QWidget
 
 from kokoro_gui.daw import fit as fit_ops
-from kokoro_gui.daw import imported, segment_view
+from kokoro_gui.daw import derived, imported, segment_view
 from kokoro_gui.daw.auto_split import plan_auto_split_clips
 from kokoro_gui.daw.undo import ApplyWordsCommand, AssignCharacterCommand, TextEditCommand
 from kokoro_gui.engine.segmenting import PAUSE, WORD
@@ -230,7 +230,7 @@ class ClipHighlighter(QSyntaxHighlighter):
         that carry recorded audio, underlined faintly."""
         if self._word_spans is None:
             daw_doc = self._daw_document_provider()
-            self._word_spans = imported.word_spans(daw_doc) if daw_doc is not None else []
+            self._word_spans = derived.cached(daw_doc, "word_spans", imported.word_spans) if daw_doc is not None else []
         return self._word_spans
 
     def untimed_gaps(self) -> list:
@@ -238,7 +238,7 @@ class ClipHighlighter(QSyntaxHighlighter):
         typed into a recording, drawn greyed."""
         if self._untimed_gaps is None:
             daw_doc = self._daw_document_provider()
-            self._untimed_gaps = imported.untimed_gaps(daw_doc) if daw_doc is not None else []
+            self._untimed_gaps = derived.cached(daw_doc, "untimed_gaps", imported.untimed_gaps) if daw_doc is not None else []
         return self._untimed_gaps
 
     def rate_levels(self) -> dict:
@@ -265,7 +265,7 @@ class ClipHighlighter(QSyntaxHighlighter):
         if self._dirty_ids is None:
             daw_doc = self._daw_document_provider()
             try:
-                self._dirty_ids = {c.id for c in daw_doc.dirty_clips()} if daw_doc is not None else set()
+                self._dirty_ids = set(daw_doc.dirty_ids()) if daw_doc is not None else set()
             except Exception:
                 self._dirty_ids = set()
         return self._dirty_ids
@@ -274,23 +274,22 @@ class ClipHighlighter(QSyntaxHighlighter):
         self.invalidate_dirty()
         super().rehighlight()
 
-    def highlightBlock(self, block_text: str) -> None:  # noqa: N802 (Qt override)
+    def block_spec(self, block_start: int, block_end: int) -> Optional[tuple]:
+        """Everything the highlight of the block `[block_start, block_end)`
+        is made of, as a hashable tuple: per tagged run its extent, tint,
+        underline and segment shading; the imported word and untimed spans;
+        the palette colors used. `highlightBlock` paints from it and stores
+        its hash as the block's state, so `TranscriptEditor.rehighlight`
+        can repaint only the blocks whose spec changed."""
         daw_doc = self._daw_document_provider()
         if daw_doc is None:
-            return
-
-        block_start = self.currentBlock().position()
-        block_end = block_start + len(block_text)
+            return None
         dirty = self.dirty_ids()
         rate_levels = self.rate_levels()
         pal = theme.current()
-        underline_color = QColor(pal.dirty_underline)
-
-        pos = 0
-        for run in daw_doc.runs:
-            run_start, run_end = pos, pos + len(run.text)
-            pos = run_end
-            if run.clip_id is None or run_start >= block_end or run_end <= block_start:
+        runs = []
+        for run, run_start, run_end in daw_doc.index().runs_in(block_start, block_end):
+            if run.clip_id is None:
                 continue
             clip = daw_doc.get_clip(run.clip_id)
             character = daw_doc.get_character(clip.character_id) if clip is not None else None
@@ -298,57 +297,90 @@ class ClipHighlighter(QSyntaxHighlighter):
             hi = min(run_end, block_end) - block_start
             if hi <= lo:
                 continue
+            placeholder = run.kind == "placeholder"
+            color = character.highlight_color if character is not None and not placeholder else None
+            underline = None
+            if clip is not None and clip.id in rate_levels:
+                underline = ("wave", rate_levels[clip.id])
+            elif clip is not None and clip.id in dirty:
+                underline = ("dash",)
+            shades = ()
+            if character is not None and clip is not None and not placeholder:
+                shades = self._shade_spans(clip, block_start, block_start + lo, block_start + hi)
+            runs.append((lo, hi, placeholder, color, underline, shades))
+        words = tuple(self._spans_in(self.word_spans(), block_start, block_end))
+        gaps = tuple(self._spans_in(self.untimed_gaps(), block_start, block_end))
+        palette = (pal.dirty_underline, pal.fit_far_over, pal.fit_over, pal.panel_alt, pal.text_muted)
+        return (tuple(runs), words, gaps, palette)
+
+    @staticmethod
+    def spec_state(spec) -> int:
+        """The block state `highlightBlock` stores for `spec` (never -1, the
+        state of a block nothing highlighted yet)."""
+        return hash(spec) & 0x7FFFFFFF
+
+    def highlightBlock(self, block_text: str) -> None:  # noqa: N802 (Qt override)
+        block_start = self.currentBlock().position()
+        spec = self.block_spec(block_start, block_start + len(block_text))
+        if spec is None:
+            return
+        runs, words, gaps, palette = spec
+        dirty_underline, fit_far_over, fit_over, panel_alt, text_muted = palette
+        for lo, hi, placeholder, color, underline, shades in runs:
             fmt = QTextCharFormat()
-            if run.kind == "placeholder":
+            if placeholder:
                 # A subproject's line (phase 4) or a music bed's (phase 5
                 # P2): its title or file name, read-only.
-                fmt.setBackground(QColor(theme.current().panel_alt))
+                fmt.setBackground(QColor(panel_alt))
                 fmt.setFontItalic(True)
-            elif character is not None:
-                tint = QColor(character.highlight_color)
+            elif color is not None:
+                tint = QColor(color)
                 tint.setAlpha(HIGHLIGHT_ALPHA)
                 fmt.setBackground(tint)
-            if clip is not None and clip.id in rate_levels:
+            if underline is not None and underline[0] == "wave":
                 fmt.setUnderlineStyle(QTextCharFormat.UnderlineStyle.WaveUnderline)
-                fmt.setUnderlineColor(QColor(pal.fit_far_over if rate_levels[clip.id] == "far_over"
-                                             else pal.fit_over))
-            elif clip is not None and clip.id in dirty:
+                fmt.setUnderlineColor(QColor(fit_far_over if underline[1] == "far_over" else fit_over))
+            elif underline is not None:
                 fmt.setUnderlineStyle(QTextCharFormat.UnderlineStyle.DashUnderline)
-                fmt.setUnderlineColor(underline_color)
+                fmt.setUnderlineColor(QColor(dirty_underline))
             self.setFormat(lo, hi - lo, fmt)
-            if character is not None and clip is not None and run.kind != "placeholder":
-                self._shade_segments(clip, character, fmt, block_start, block_start + lo, block_start + hi)
+            if shades:
+                # Transcript details: the odd-numbered segments get the
+                # lighter tint.
+                light = QTextCharFormat(fmt)
+                tint = QColor(color)
+                tint.setAlpha(SEGMENT_ALT_ALPHA)
+                light.setBackground(tint)
+                for start, length in shades:
+                    self.setFormat(start, length, light)
 
         # Imported recording text (phase 5 P3): a faint underline under
         # every word that carries audio, and text typed into a recording
         # (no character, no audio) greyed. Both go over the run's format.
-        faint = QColor(pal.text_muted)
+        faint = QColor(text_muted)
         faint.setAlpha(IMPORTED_UNDERLINE_ALPHA)
-        for lo, hi in self._spans_in(self.word_spans(), block_start, block_end):
+        for lo, hi in words:
             fmt = QTextCharFormat(self.format(lo))
             if fmt.underlineStyle() == QTextCharFormat.UnderlineStyle.NoUnderline:
                 fmt.setUnderlineStyle(QTextCharFormat.UnderlineStyle.SingleUnderline)
                 fmt.setUnderlineColor(faint)
                 self.setFormat(lo, hi - lo, fmt)
-        for lo, hi in self._spans_in(self.untimed_gaps(), block_start, block_end):
+        for lo, hi in gaps:
             fmt = QTextCharFormat(self.format(lo))
-            fmt.setForeground(QColor(pal.text_muted))
+            fmt.setForeground(QColor(text_muted))
             self.setFormat(lo, hi - lo, fmt)
+        self.setCurrentBlockState(self.spec_state(spec))
 
-    def _shade_segments(self, clip, character, fmt, block_start: int, lo: int, hi: int) -> None:
-        """Transcript details: the odd-numbered segments of `clip` inside
-        document range `[lo, hi)` get the lighter tint."""
-        light = None
+    def _shade_spans(self, clip, block_start: int, lo: int, hi: int) -> tuple:
+        """Transcript details: `(start, length)` in the block of each
+        odd-numbered segment of `clip` inside document range `[lo, hi)`."""
+        spans = []
         for piece in self.pieces(clip):
             if piece.index % 2 == 0 or piece.end <= lo or piece.start >= hi:
                 continue
-            if light is None:
-                light = QTextCharFormat(fmt)
-                tint = QColor(character.highlight_color)
-                tint.setAlpha(SEGMENT_ALT_ALPHA)
-                light.setBackground(tint)
             start, end = max(piece.start, lo), min(piece.end, hi)
-            self.setFormat(start - block_start, end - start, light)
+            spans.append((start - block_start, end - start))
+        return tuple(spans)
 
     @staticmethod
     def _spans_in(spans: list, block_start: int, block_end: int):
@@ -363,6 +395,19 @@ class ClipHighlighter(QSyntaxHighlighter):
             lo, hi = max(start, block_start) - block_start, min(end, block_end) - block_start
             if hi > lo:
                 yield lo, hi
+
+
+def _between(items: list, lo: int, hi: int) -> list:
+    """The entries of sorted `items` (offsets, or tuples led by one) whose
+    offset is in `[lo, hi]`."""
+    first = bisect.bisect_left(items, (lo,)) if items and isinstance(items[0], tuple) else bisect.bisect_left(items, lo)
+    out = []
+    for item in items[first:]:
+        offset = item[0] if isinstance(item, tuple) else item
+        if offset > hi:
+            break
+        out.append(item)
+    return out
 
 
 def placeholder_label(clip) -> str:
@@ -431,11 +476,16 @@ class TranscriptGutter(QWidget):
         qt_doc = self.editor.document()
         layout = qt_doc.documentLayout()
         scroll = self.editor.verticalScrollBar().value()
-        dirty_ids = {c.id for c in daw_doc.dirty_clips()}
+        dirty_ids = daw_doc.dirty_ids()
         labelled_dirty: set = set()
-        recording_ids = {c.id for c in daw_doc.clips
-                         if imported.is_recording_clip(c) and any(s.audio_path for s in c.segments)}
-        gaps = imported.untimed_gaps(daw_doc)
+        recording: dict = {}
+
+        def is_recording(clip) -> bool:
+            if clip.id not in recording:
+                recording[clip.id] = imported.is_recording_clip(clip) and any(s.audio_path for s in clip.segments)
+            return recording[clip.id]
+
+        gaps = derived.cached(daw_doc, "untimed_gaps", imported.untimed_gaps)
         # Transcript details: a status dot and the clip's length at each
         # clip's first line; the name label moves right for the dot.
         info_on = bool(self.editor._highlighter.details().get("details_clip_info"))
@@ -448,23 +498,35 @@ class TranscriptGutter(QWidget):
         small_font.setPointSizeF(max(6.0, base_font.pointSizeF() - 1.5))
         metrics_h = painter.fontMetrics().height()
 
-        previous_key = None
-        block = qt_doc.begin()
+        # Start at the first visible line rather than the top of the
+        # document: a clip that already had its label, button or info on
+        # a line above the viewport is found from its extent.
+        block = self._first_visible_block(qt_doc, layout, scroll)
+        first_position = block.position() if block.isValid() else 0
+        above = block.previous()
+        previous_key = self._label_key(daw_doc, daw_doc.clip_covering(above.position())) if above.isValid() else None
+        seen: set = set()
         while block.isValid():
             rect = layout.blockBoundingRect(block).translated(0, -scroll)
+            if rect.top() > self.height():
+                break
+            clip_here = daw_doc.clip_covering(block.position())
+            if clip_here is not None and clip_here.id not in seen:
+                seen.add(clip_here.id)
+                if self._starts_a_line_above(qt_doc, daw_doc, clip_here, first_position):
+                    info_done.add(clip_here.id)
+                    if clip_here.id in dirty_ids or is_recording(clip_here):
+                        labelled_dirty.add(clip_here.id)
             if rect.bottom() < 0:
                 # Off the top - still track the key so the first visible
                 # line labels only if it differs from the hidden line above.
-                clip = daw_doc.clip_covering(block.position())
-                previous_key = self._label_key(daw_doc, clip)
-                if clip is not None and (clip.id in dirty_ids or clip.id in recording_ids):
-                    labelled_dirty.add(clip.id)
-                if clip is not None:
-                    info_done.add(clip.id)
+                previous_key = self._label_key(daw_doc, clip_here)
+                if clip_here is not None and (clip_here.id in dirty_ids or is_recording(clip_here)):
+                    labelled_dirty.add(clip_here.id)
+                if clip_here is not None:
+                    info_done.add(clip_here.id)
                 block = block.next()
                 continue
-            if rect.top() > self.height():
-                break
 
             line_start = block.position()
             line_end = line_start + len(block.text())
@@ -530,7 +592,7 @@ class TranscriptGutter(QWidget):
                 else:
                     self._draw_play_button(painter, btn, pal)
                     self._button_rects.append((btn, clip.id))
-            elif clip is not None and clip.id in recording_ids and clip.id not in labelled_dirty:
+            elif clip is not None and is_recording(clip) and clip.id not in labelled_dirty:
                 labelled_dirty.add(clip.id)
                 btn = QRect(self.width() - GUTTER_BUTTON_PX - 4, top + max(0, (min(line_h, metrics_h) - GUTTER_BUTTON_PX) // 2),
                             GUTTER_BUTTON_PX, GUTTER_BUTTON_PX)
@@ -546,6 +608,36 @@ class TranscriptGutter(QWidget):
 
             previous_key = key
             block = block.next()
+
+    @staticmethod
+    def _first_visible_block(qt_doc, layout, scroll: int):
+        """The first block whose bottom is below the viewport's top, found
+        by bisecting block numbers on `blockBoundingRect`."""
+        lo, hi = 0, max(0, qt_doc.blockCount() - 1)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if layout.blockBoundingRect(qt_doc.findBlockByNumber(mid)).bottom() - scroll < 0:
+                lo = mid + 1
+            else:
+                hi = mid
+        return qt_doc.findBlockByNumber(lo)
+
+    @staticmethod
+    def _starts_a_line_above(qt_doc, daw_doc, clip, limit: int) -> bool:
+        """True when a line starting before offset `limit` starts inside
+        `clip`: the clip already got its label, button and info there."""
+        extent = daw_doc.clip_extent(clip.id)
+        if extent is None:
+            return False
+        start, end = extent
+        block = qt_doc.findBlock(start)
+        if block.position() < start:
+            block = block.next()
+        while block.isValid() and block.position() < min(end, limit):
+            if daw_doc.clip_covering(block.position()) is clip:
+                return True
+            block = block.next()
+        return False
 
     def _draw_clip_info(self, painter: QPainter, pal, daw_doc, clip, stale: bool, cache: dict,
                         top: int, line_h: int, font: QFont, right: int) -> int:
@@ -830,7 +922,12 @@ class TranscriptEditor(QTextEdit):
             block = block.next()
         self._split_timer.start()
         self.app.schedule_save()
-        self.app.refresh_timeline()
+        # Deferred: a burst of typing costs one timeline refresh.
+        request = getattr(self.app, "request_timeline_refresh", None)
+        if request is not None:
+            request()
+        else:
+            self.app.refresh_timeline()
 
     def load_text(self, text: str) -> None:
         """Sets the editor's text without treating it as a user edit -
@@ -862,11 +959,31 @@ class TranscriptEditor(QTextEdit):
         self.load_text(self.app.document.text)
 
     def rehighlight(self) -> None:
-        """Repaints every block's highlight (and the gutter's labels) from
-        `app.document.runs` - the one entry point every tagging operation
-        calls after mutating the document, and what a custom-stack
-        undo/redo calls too."""
+        """Brings every block's highlight (and the gutter's labels) up to
+        date with `app.document` - the one entry point every tagging
+        operation calls after mutating the document, and what a
+        custom-stack undo/redo calls too. Only a block whose
+        `ClipHighlighter.block_spec` differs from the one it was painted
+        with is highlighted again, so a change to one clip repaints that
+        clip's lines."""
+        highlighter = self._highlighter
+        highlighter.invalidate_dirty()
+        block = self.document().begin()
+        while block.isValid():
+            start = block.position()
+            spec = highlighter.block_spec(start, start + block.length() - 1)
+            if spec is not None and block.userState() != highlighter.spec_state(spec):
+                highlighter.rehighlightBlock(block)
+            block = block.next()
+        self._after_rehighlight()
+
+    def rehighlight_all(self) -> None:
+        """`rehighlight` of every block, whatever it was painted with
+        (Options > Force refresh)."""
         self._highlighter.rehighlight()
+        self._after_rehighlight()
+
+    def _after_rehighlight(self) -> None:
         self._gutter.update()
         self.refresh_split_rules()
         # The caret strip shows the caret clip's staleness and length.
@@ -1018,56 +1135,78 @@ class TranscriptEditor(QTextEdit):
         pen = QPen(QColor(pal.split_rule), 1, Qt.PenStyle.DashLine)
         painter.setPen(pen)
         width = self.viewport().width()
-        text = self.toPlainText()
-        for offset in self._split_boundaries:
-            rect = self._visible_caret_rect(offset, text)
+        # Only the marks whose offsets fall on screen: each list is sorted,
+        # so a bisect finds them without a caret rect per offset in the
+        # document.
+        lo, hi = self._visible_range()
+        for offset in _between(self._split_boundaries, lo, hi):
+            rect = self._visible_caret_rect(offset)
             if rect is None:
                 continue
-            at_line_start = offset == 0 or text[offset - 1] == "\n"
-            if at_line_start:
+            if self._at_line_start(offset):
                 y = rect.top()
                 painter.drawLine(0, y, width, y)
             else:
                 # Mid-line boundary: a short vertical tick at the caret x.
                 painter.drawLine(rect.left(), rect.top(), rect.left(), rect.bottom())
-        self._paint_segment_marks(painter, pal, text)
-        self._paint_rewrites(painter, pal, text)
-        self._paint_gap_labels(painter, pal, text, width)
+        self._paint_segment_marks(painter, pal, lo, hi)
+        self._paint_rewrites(painter, pal, lo, hi)
+        self._paint_gap_labels(painter, pal, width, lo, hi)
 
-    def _visible_caret_rect(self, offset: int, text: str):
+    def _visible_range(self) -> tuple:
+        """Document offsets of the viewport's top-left and bottom-right,
+        widened by one character each way."""
+        viewport = self.viewport()
+        top = self.cursorForPosition(QPoint(0, 0)).position()
+        bottom = self.cursorForPosition(QPoint(viewport.width(), viewport.height())).position()
+        return max(0, top - 1), bottom + 1
+
+    def _text_length(self) -> int:
+        return max(0, self.document().characterCount() - 1)
+
+    def _at_line_start(self, offset: int) -> bool:
+        # QTextDocument stores a line break as U+2029.
+        return offset == 0 or self.document().characterAt(offset - 1) in ("\n", "\u2029")
+
+    def _visible_caret_rect(self, offset: int):
         """The caret rect at document `offset`, or None when it's scrolled
         out of the viewport."""
         cursor = QTextCursor(self.document())
-        cursor.setPosition(max(0, min(offset, len(text))))
+        cursor.setPosition(max(0, min(offset, self._text_length())))
         rect = self.cursorRect(cursor)
         if rect.bottom() < 0 or rect.top() > self.viewport().height():
             return None
         return rect
 
-    def _paint_segment_marks(self, painter: QPainter, pal, text: str) -> None:
+    def _paint_segment_marks(self, painter: QPainter, pal, lo: int, hi: int) -> None:
         """A bar in the space before a segment that follows a pause cut
         (neutral) or a forced word break (amber)."""
-        for offset, level in self._segment_marks:
-            rect = self._visible_caret_rect(offset, text)
+        for offset, level in _between(self._segment_marks, lo, hi):
+            rect = self._visible_caret_rect(offset)
             if rect is None:
                 continue
             color = QColor(pal.fit_over if level == WORD else pal.segment_mark)
             x = max(0, rect.left() - SEGMENT_MARK_WIDTH_PX - 1)
             painter.fillRect(QRect(x, rect.top(), SEGMENT_MARK_WIDTH_PX, rect.height()), color)
 
-    def _paint_rewrites(self, painter: QPainter, pal, text: str) -> None:
+    def _paint_rewrites(self, painter: QPainter, pal, lo: int, hi: int) -> None:
         """A dotted accent line just inside the top of each rewritten
         stretch, one segment per visual line it wraps across. Painted
         rather than a font overline, which sits on the line's top edge
         where a clip rule would cover it."""
         painter.setPen(QPen(QColor(pal.accent), 1.5, Qt.PenStyle.DotLine))
+        text_length = self._text_length()
         for start, end in self._rewrite_spans:
-            if self._visible_caret_rect(start, text) is None and self._visible_caret_rect(end, text) is None:
+            if end < lo:
+                continue
+            if start > hi:
+                break
+            if self._visible_caret_rect(start) is None and self._visible_caret_rect(end) is None:
                 continue
             line_top, line_left, right = None, None, None
             for offset in range(start, end + 1):
                 cursor = QTextCursor(self.document())
-                cursor.setPosition(max(0, min(offset, len(text))))
+                cursor.setPosition(max(0, min(offset, text_length)))
                 rect = self.cursorRect(cursor)
                 if line_top is not None and rect.top() != line_top:
                     painter.drawLine(line_left, line_top + REWRITE_MARK_INSET_PX, right, line_top + REWRITE_MARK_INSET_PX)
@@ -1078,17 +1217,17 @@ class TranscriptEditor(QTextEdit):
             if line_top is not None and right > line_left:
                 painter.drawLine(line_left, line_top + REWRITE_MARK_INSET_PX, right, line_top + REWRITE_MARK_INSET_PX)
 
-    def _paint_gap_labels(self, painter: QPainter, pal, text: str, width: int) -> None:
+    def _paint_gap_labels(self, painter: QPainter, pal, width: int, lo: int, hi: int) -> None:
         """The gap before a clip that starts a line, small and right-aligned
         on that clip's rule."""
         font = QFont(self.font())
         font.setPointSizeF(max(6.0, font.pointSizeF() - 2))
         painter.setFont(font)
         metrics = painter.fontMetrics()
-        for offset, label in self._gap_labels:
-            if offset > 0 and text[offset - 1] != "\n":
+        for offset, label in _between(self._gap_labels, lo, hi):
+            if not self._at_line_start(offset):
                 continue
-            rect = self._visible_caret_rect(offset, text)
+            rect = self._visible_caret_rect(offset)
             if rect is None:
                 continue
             box = QRect(0, 0, metrics.horizontalAdvance(label) + 8, metrics.height())

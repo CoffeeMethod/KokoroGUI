@@ -267,7 +267,7 @@ def test_clip_with_real_audio_path_renders_waveform(qtbot, tmp_path):
 
     block = _clip_block_items(view)[0]
     assert block._waveform_item is not None
-    assert block._waveform_item._peaks is not None
+    assert block._waveform_item.loaded_peaks() is not None  # decoded on first paint, or on asking
 
 
 def test_clip_with_missing_audio_path_falls_back_to_flat_block(qtbot, tmp_path):

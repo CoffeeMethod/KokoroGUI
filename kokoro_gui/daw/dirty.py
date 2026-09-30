@@ -82,14 +82,17 @@ def _collapse_ws(text) -> str:
     return " ".join((text or "").split())
 
 
-def segment_file_missing(segment) -> bool:
+def segment_file_missing(segment, file_exists=None) -> bool:
     """True when the segment names a file that isn't there. A segment with
     no `audio_path` at all (a test fixture, a pre-audio record) isn't
-    "missing", it's simply not backed by a file."""
-    return bool(segment.audio_path) and not os.path.isfile(segment.audio_path)
+    "missing", it's simply not backed by a file. `file_exists` replaces
+    `os.path.isfile` (the app's dirty tracker passes
+    `revision.file_exists`, which remembers a present file until
+    `revision.FILES` moves)."""
+    return bool(segment.audio_path) and not (file_exists or os.path.isfile)(segment.audio_path)
 
 
-def is_clip_dirty(clip, text: str, config: dict, key_fn=None) -> bool:
+def is_clip_dirty(clip, text: str, config: dict, key_fn=None, file_exists=None) -> bool:
     """True if `clip` needs (re)generation: it has never been generated, or
     its current text/generation inputs no longer match what its stored
     `Segment`s were generated from (Q16: an in-place edit keeps the same
@@ -129,7 +132,7 @@ def is_clip_dirty(clip, text: str, config: dict, key_fn=None) -> bool:
 
     expected_by_version = {}
     for segment in clip.segments:
-        if segment_file_missing(segment):
+        if segment_file_missing(segment, file_exists):
             return True
         # Stored keys win while the file is there (TB9). A missing file has
         # to regenerate with what's installed, and that's the version the

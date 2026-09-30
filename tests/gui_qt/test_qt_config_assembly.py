@@ -105,6 +105,9 @@ def test_segment_key_fn_is_memoized_and_notices_a_rewritten_voice_file(qt_app, t
     mix.write_bytes(b"v2 longer")
     future = os.path.getmtime(mix) + 5
     os.utime(mix, (future, future))
+    # What the Voices tab runs after a save (and window activation after a
+    # save elsewhere): the remembered mtimes start over.
+    qt_app.refresh_voice_choices()
     assert qt_app.document.segment_key_fn(text, clip) != first
     assert len(calls) == 2
 

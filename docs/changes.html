@@ -267,6 +267,24 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Speed</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Typing and scrolling stay fast in long projects</h4>
+            <p>The Transcript and Timeline panels no longer recheck every clip on every keystroke, scroll step or repaint. Each clip's stale flag is remembered and rechecked only when its text, character, overrides, segments or the generation settings change. The timeline updates only the clip blocks that changed, and it waits until you pause typing (60 ms) before updating. A waveform is decoded the first time its block scrolls into view. Measured on a 1,500-clip project (about 43,000 words): a keystroke went from 11 s to 17 ms, a scroll step in the Transcript panel from 1 s to 4 ms, a timeline refresh from 8 s to 23 ms, and redrawing the transcript highlights after a settings change from 1.7 s to 15 ms.</p>
+          </li>
+          <li>
+            <h4>Options &gt; Force refresh</h4>
+            <p>Throws away everything the panels remember (stale flags, clip placement, post-processing settings, decoded waveforms, file checks) and rebuilds it from the project. Use it when a panel looks out of date, or after changing a project's files in another program while KokoroGUI kept focus.</p>
+          </li>
+          <li>
+            <h4>Files deleted outside the app count when you come back to it</h4>
+            <p>A segment file deleted by hand still marks its clip stale, but KokoroGUI now notices when its window becomes active again, after Generate, Open, Save and imports, and on Force refresh, instead of on every repaint. Nothing in the project file changes.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Security</h3>
         <ul class="change-list">
           <li>

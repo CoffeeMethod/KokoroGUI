@@ -28,7 +28,7 @@ in well under a minute. The Qt tests run headless (`tests/gui_qt/conftest.py` se
 `ubuntu-latest` without `tests/gui_qt/` (`pytest --ignore=tests/gui_qt -p no:pytest-qt`), so the
 GUI tests only run on your machine. Run plain `pytest` before you push.
 
-Two conventions the suite enforces, both from `tests/conftest.py`:
+Three conventions the suite enforces, all from `tests/conftest.py`:
 
 - Test configs come from the `make_config` fixture and have `caching: False`. Only
   `tests/test_caching.py` turns caching on; `tests/test_meta_caching_policy.py` fails the run if
@@ -37,10 +37,17 @@ Two conventions the suite enforces, both from `tests/conftest.py`:
   the `isolated_dirs`, `engine` and `fake_pipeline` fixtures rather than patching around them.
   The storage dirs and `playback` live in `kokoro_gui/engine/runtime.py`; patch them there, not on
   `kokoro_engine`.
+- Verify mode is on for every test. The panels cache what they derive from a project (the run
+  index, which clips are stale, clip placement), and in the suite each cached answer is also
+  computed from scratch and compared. If your change edits the model in a way that doesn't
+  reach `kokoro_gui/daw/revision.py`'s counters, a test fails with `StaleCacheError`. Set the
+  attribute instead of mutating a list or dict in place, go through an undo command, or call
+  `document.touch()`.
 
 GUI tests build a real `QtTTSApp` through the `qt_app` fixture in `tests/gui_qt/conftest.py`,
 with the engine replaced by `StubEngine`. Save and Open run on a thread; call
-`qt_app.wait_for_project_io()` before asserting on the result.
+`qt_app.wait_for_project_io()` before asserting on the result. Typing defers the timeline
+refresh; call `qt_app.flush_updates()` before reading the timeline after a keystroke.
 
 The integration suite (`pytest -m integration tests/integration -s`) does real synthesis and is
 opt-in. It isn't run in CI.

@@ -37,6 +37,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from kokoro_gui.daw import derived, revision
+from kokoro_gui.daw.revision import Tracked
 from kokoro_gui.daw.undo import UndoStack
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
@@ -67,7 +69,7 @@ def _new_id() -> str:
 
 
 @dataclass
-class Character:
+class Character(Tracked):
     """A named, reusable voice/settings preset - Q7's "character = a preset
     of settings". Wraps a `presets/*.json`-shaped dict (`preset_data`)
     instead of reinventing preset storage, so
@@ -123,7 +125,7 @@ class Character:
 
 
 @dataclass
-class Track:
+class Track(Tracked):
     """An organizational timeline lane. Not identical to a `Character` (Q8) -
     kept separate so a clip can be dragged onto a track belonging to a
     different character (Q9's reassign-vs-move prompt)."""
@@ -158,7 +160,7 @@ class Track:
 
 
 @dataclass
-class Segment:
+class Segment(Tracked):
     """One engine-level generation unit inside a `Clip` - a persisted record
     of a `(index, text, config)` tuple already handled by
     `CachingMixin.process_chunk_task` (kokoro_gui/engine/caching.py). Not a
@@ -225,7 +227,7 @@ PLACEHOLDER = "placeholder"
 
 
 @dataclass
-class Clip:
+class Clip(Tracked):
     """A user-facing unit of text-anchored audio (Q19: every clip, imported
     or generated, is text-anchored). Unlike the retired offset-based model,
     a `Clip` no longer stores its own extent - that's wherever `Document.runs`
@@ -296,7 +298,7 @@ class Clip:
 
 
 @dataclass
-class Run:
+class Run(Tracked):
     """One contiguous stretch of `Document` text carrying (at most) one
     `Clip.id` - the tagged-run-list replacement for offset-shifted `Clip`
     ranges (Claude/PLAN_text_editor_redesign.md, TE5). Mirrors, at the
@@ -328,6 +330,10 @@ class Run:
     kind: Optional[str] = None
     words: list = field(default_factory=list)
     extra: dict = field(default_factory=dict)  # unknown fields, see Character
+
+    # What the run index reads (kokoro_gui/daw/derived.py): setting one moves
+    # `revision.TEXT`.
+    _TEXT_FIELDS = frozenset({"text", "clip_id", "kind"})
 
 
 # `Run.kind` (and `Clip.source`) of an imported recording's text.
@@ -376,7 +382,7 @@ def _split_words(words, cut: int) -> tuple:
 
 
 @dataclass
-class Document:
+class Document(Tracked):
     """The whole project's source of truth (Q15's closing principle). Owns
     the canonical run list plus the clip/track/character metadata layered on
     top of it. `text` is a computed property (the join of every run's text),
@@ -413,8 +419,18 @@ class Document:
     # mixdown missing or older than its document). Unset, a nested clip
     # counts as stale. Never serialized.
     nested_state_fn: Optional[Callable] = field(default=None, init=False, repr=False)
+    # Runtime-only, set beside `segment_key_fn`: `() -> hashable`, a
+    # fingerprint of the app state the generation config reads (the Settings
+    # tab, the lexicon, the engine settings). `DirtyTracker` reruns when it
+    # changes. Unset, only the document's own changes count. Never serialized.
+    inputs_fn: Optional[Callable] = field(default=None, init=False, repr=False, compare=False)
+
+    # Reassigning one of these changes what the run index holds
+    # (kokoro_gui/daw/revision.py).
+    _TEXT_FIELDS = frozenset({"runs", "clips", "characters"})
 
     def __post_init__(self):
+        object.__setattr__(self, "_dirty_tracker", derived.DirtyTracker())
         self.undo_stack = UndoStack(self)
         # In the unified track layout, an edit that changes clip order or a
         # clip's character re-runs the lane rule in the same undo step.
@@ -461,17 +477,40 @@ class Document:
             pos = end
 
     def _run_covering(self, position: int) -> Optional[Run]:
-        for run, start, end in self._iter_runs_with_offsets():
-            if start <= position < end:
-                return run
-        return None
+        return self.index().run_at(position)
+
+    # -- derived state (kokoro_gui/daw/derived.py) ---------------------------
+
+    def index(self) -> "derived.DocumentIndex":
+        """Offsets and id lookups for the current run list, rebuilt only
+        after the runs, clips or characters changed."""
+        return derived.build_index(self)
+
+    def touch(self) -> None:
+        """Marks the document changed after an in-place edit to a list or
+        dict field made outside an undo command (an attribute set or a
+        command does this by itself)."""
+        revision.bump_text()
+        revision.bump_model()
+
+    def dirty_ids(self) -> frozenset:
+        """The ids of `dirty_clips()`, cached until something they depend on
+        changes (`derived.DirtyTracker`)."""
+        return self.__dict__["_dirty_tracker"].dirty_ids(self)
+
+    def forget_derived(self) -> None:
+        """Drops the cached index and dirty flags, so the next read
+        recomputes everything (Options > Force refresh)."""
+        self.__dict__.pop("_derived_index", None)
+        self.__dict__.pop("_derived_memo", None)
+        self.__dict__["_dirty_tracker"].clear()
 
     # -- lookups -----------------------------------------------------------
 
     def get_character(self, character_id: Optional[str]) -> Optional[Character]:
         if character_id is None:
             return None
-        return next((c for c in self.characters if c.id == character_id), None)
+        return self.index().characters.get(character_id)
 
     def get_character_by_name(self, name: str) -> Optional[Character]:
         """Case-insensitive, whitespace-stripped lookup by `Character.name`
@@ -492,7 +531,7 @@ class Document:
         return next((t for t in self.tracks if t.id == track_id), None)
 
     def get_clip(self, clip_id: str) -> Optional[Clip]:
-        return next((c for c in self.clips if c.id == clip_id), None)
+        return self.index().clips.get(clip_id)
 
     # -- imported recordings (phase 5 P3) -----------------------------------
 
@@ -663,6 +702,7 @@ class Document:
         order = max((t.order_index for t in self.tracks), default=-1) + 1
         track = Track(name=character.name, character_id=character.id, order_index=order)
         self.tracks.append(track)
+        self.touch()
         return track.id
 
     def subprojects_track(self, create: bool = False) -> Optional[str]:
@@ -673,6 +713,7 @@ class Document:
             order = max((t.order_index for t in self.tracks), default=-1) + 1
             track = Track(name="Subprojects", order_index=order, role="subprojects")
             self.tracks.append(track)
+            self.touch()
         return track.id if track is not None else None
 
     def music_track(self) -> Optional[str]:
@@ -702,19 +743,17 @@ class Document:
         run-based replacement for reading `clip.start_offset`/`end_offset`
         directly (timeline positioning, sub-range TTS replacement, etc. all
         go through this now)."""
-        start = end = None
-        for run, r_start, r_end in self._iter_runs_with_offsets():
-            if run.clip_id == clip_id:
-                if start is None:
-                    start = r_start
-                end = r_end
-        return None if start is None else (start, end)
+        return self.index().extent(clip_id)
 
     # -- text/config -------------------------------------------------------
 
     def clip_text(self, clip: Clip) -> str:
         """The clip's current text - every run tagged with `clip.id`,
         concatenated in document order."""
+        return self.index().clip_text(clip.id)
+
+    def _clip_text_walk(self, clip: Clip) -> str:
+        """`clip_text` without the index, for verify mode."""
         return "".join(run.text for run in self.runs if run.clip_id == clip.id)
 
     def effective_config_for_clip(self, clip: Clip) -> dict:
@@ -730,22 +769,12 @@ class Document:
         return config
 
     def dirty_clips(self) -> list:
-        """Every `Clip` that needs (re)generation - see `dirty.is_clip_dirty`
-        for what "dirty" means. Imported lazily to avoid a module-level
-        import cycle (dirty.py has no need to import models.py, but keeping
-        the dependency one-directional and local here is simplest)."""
-        from kokoro_gui.daw.dirty import is_clip_dirty
-
-        config_for = self.generation_config_fn or self.effective_config_for_clip
-        out = []
-        for clip in self.clips:
-            if clip.is_nested:
-                stale = self.nested_state_fn(clip) if self.nested_state_fn is not None else True
-            else:
-                stale = is_clip_dirty(clip, self.clip_text(clip), config_for(clip), key_fn=self.segment_key_fn)
-            if stale:
-                out.append(clip)
-        return out
+        """Every `Clip` that needs (re)generation, in document order - see
+        `dirty.is_clip_dirty` for what "dirty" means. Answered from
+        `derived.DirtyTracker`, so a file deleted behind the app's back
+        counts once `revision.FILES` moves (`revision.bump_files()`)."""
+        dirty = self.dirty_ids()
+        return [clip for clip in self.clips if clip.id in dirty]
 
     def overlaps_nested(self, start: int, end: int) -> bool:
         """True when `[start, end)` touches a placeholder run (a nested
