@@ -129,8 +129,8 @@ MAX_CUE_SECONDS = 48 * 3600
 _TIME_RE = re.compile(_TIME)
 _TIMING_RE = re.compile(r"^\s*(" + _TIME + r")\s*-->\s*(" + _TIME + r")")
 _BLOCK_SPLIT = re.compile(r"\n[ \t]*\n")
-_TAG_RE = re.compile(r"<[^>]*>")
-_ASS_OVERRIDE_RE = re.compile(r"\{[^}]*\}")
+_TAG_RE = re.compile(r"<[^<>]*>")
+_ASS_OVERRIDE_RE = re.compile(r"\{[^{}]*\}")
 
 
 def _seconds(stamp: str) -> float:
@@ -197,7 +197,7 @@ def _parse_srt(text: str) -> list:
 
 # -- WebVTT ---------------------------------------------------------------------------
 
-_VOICE_RE = re.compile(r"<v(?:\.[^\s>]*)?\s+([^>]*)>")
+_VOICE_RE = re.compile(r"<v(?:\.[^\s<>]*)?\s+([^\s<>][^<>]*)>")
 _VTT_SKIPPED_BLOCKS = ("NOTE", "STYLE", "REGION")
 
 
