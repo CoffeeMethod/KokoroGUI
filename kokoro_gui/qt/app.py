@@ -43,7 +43,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBo
 
 from kokoro_gui.daw import library as character_library, wordalign
 from kokoro_gui.daw.migration import import_presets_to_library, link_exact_matches
-from kokoro_gui.daw import subtitles
+from kokoro_gui.daw import fit as fit_ops, segment_view, subtitles
 from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character, Document
 from kokoro_gui.daw.arrangement import compute_arrangement, segment_timeline
 from kokoro_gui.daw.mixplan import clip_mixes
@@ -86,6 +86,7 @@ from kokoro_gui.qt.docks import (  # noqa: E402
     VideoDock, VoiceCloneDock,
 )
 from kokoro_gui.qt.docks.export_dialog import ExportDialog, run_export  # noqa: E402
+from kokoro_gui.qt.timeline_view import STATUS_LABELS  # noqa: E402
 from kokoro_gui.qt.welcome_dialog import WelcomeDialog  # noqa: E402
 
 APP_NAME = "KokoroGUI"
@@ -921,6 +922,23 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.paste_splits_action.toggled.connect(lambda v: self._set_setting("character_fx_paste_splits", v))
         self.options_menu.addAction(self.paste_splits_action)
 
+        self.details_menu = self.options_menu.addMenu("Transcript details")
+        self.details_action = QAction("Show details", self)
+        self.details_action.setCheckable(True)
+        self.details_action.setChecked(bool(self.settings.get("transcript_details", False)))
+        self.details_action.toggled.connect(self.set_transcript_details)
+        self.details_menu.addAction(self.details_action)
+        self.details_menu.addSeparator()
+        self.details_layer_actions: dict = {}
+        for key, label in spec.DETAIL_LAYERS:
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(bool(self.settings.get(key, True)))
+            action.toggled.connect(lambda checked, k=key: self.set_details_layer(k, checked))
+            self.details_menu.addAction(action)
+            self.details_layer_actions[key] = action
+        self._sync_details_actions()
+
         self.jit_action = QAction("JIT streaming (no-clips fallback only)", self)
         self.jit_action.setCheckable(True)
         self.jit_action.setChecked(bool(self.jit_enabled))
@@ -1499,6 +1517,157 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.jit_enabled = checked
         self.settings["jit_enabled"] = checked
         self.schedule_save()
+
+    # --- Options: transcript details ----------------------------------------
+
+    def details_flags(self) -> dict:
+        """Which transcript overlays are on: each `spec.DETAIL_LAYERS` key,
+        True when "Show details" and that layer's toggle both are."""
+        on = bool(self.settings.get("transcript_details", False))
+        return {key: on and bool(self.settings.get(key, True)) for key, _label in spec.DETAIL_LAYERS}
+
+    def set_transcript_details(self, on: bool) -> None:
+        """Options > Transcript details > Show details."""
+        self.settings["transcript_details"] = bool(on)
+        self._sync_details_actions()
+        self._apply_details()
+        self.schedule_save()
+
+    def set_details_layer(self, key: str, on: bool) -> None:
+        """One overlay toggle under Options > Transcript details."""
+        self.settings[key] = bool(on)
+        self._sync_details_actions()
+        self._apply_details()
+        self.schedule_save()
+
+    def _sync_details_actions(self) -> None:
+        on = bool(self.settings.get("transcript_details", False))
+        for action, checked in ((self.details_action, on),
+                                *((self.details_layer_actions[k], bool(self.settings.get(k, True)))
+                                  for k, _label in spec.DETAIL_LAYERS)):
+            if action.isChecked() != checked:
+                action.blockSignals(True)
+                action.setChecked(checked)
+                action.blockSignals(False)
+        for action in self.details_layer_actions.values():
+            action.setEnabled(on)
+
+    def _apply_details(self) -> None:
+        if self.editor is not None:
+            self.editor.rehighlight()
+        if self.transcript_dock is not None:
+            self.transcript_dock.refresh_info_strip()
+
+    def clip_is_stale(self, clip) -> bool:
+        """`dirty.is_clip_dirty` for one clip, with the inputs
+        `Document.dirty_clips` would pass."""
+        from kokoro_gui.daw.dirty import is_clip_dirty
+
+        document = self.project_for(clip).document
+        if clip.is_nested:
+            return bool(document.nested_state_fn(clip)) if document.nested_state_fn is not None else True
+        config_fn = document.generation_config_fn or document.effective_config_for_clip
+        return is_clip_dirty(clip, document.clip_text(clip), config_fn(clip), key_fn=document.segment_key_fn)
+
+    def clip_length_text(self, clip, stale: bool, rates=None):
+        """The gutter's length for a clip: its rendered length, or an
+        estimate while stale; None for a subproject or a music bed."""
+        if clip is None or clip.has_placeholder:
+            return None
+        document = self.project_for(clip).document
+        if stale and segment_view.has_pieces(clip):
+            rates = fit_ops.speaking_rates(document) if rates is None else rates
+            return segment_view.format_length(segment_view.estimated_length_s(document, clip, rates), estimate=True)
+        seconds = self.clip_duration_s(clip)
+        return segment_view.format_length(seconds) if seconds is not None else None
+
+    def gap_labels(self, document=None) -> dict:
+        """`{clip_id: label}` for every clip of `document` (default: the
+        one the transcript shows) that `gap_label` labels, in one pass."""
+        document = document or self.document
+        labels = {}
+        for clip_id, gap in segment_view.gaps_before(document).items():
+            label = self._gap_text(gap)
+            if label:
+                labels[clip_id] = label
+        return labels
+
+    def gap_label(self, clip):
+        """The label on the rule before a clip: the silence the arrangement
+        puts there, or the time it's placed at. None for the first clip."""
+        return self._gap_text(segment_view.gap_before(self.project_for(clip).document, clip))
+
+    @staticmethod
+    def _gap_text(gap):
+        if gap is None or gap[0] == "first":
+            return None
+        kind, seconds = gap
+        if kind == "time":
+            return f"at {segment_view.format_length(seconds)}"
+        text = f"gap {seconds:.2f} s"
+        if kind == "paragraph":
+            text += " ¶"
+        elif kind == "override":
+            text += " (set)"
+        return text
+
+    def _voice_label(self, clip) -> str:
+        voice = self._assemble_generation_config(clip).get("voice") or ""
+        if os.sep in voice or "/" in voice:
+            voice = os.path.splitext(os.path.basename(voice))[0]
+        return voice
+
+    def segment_tooltip(self, clip, piece, stale: bool) -> str:
+        """Hover text over one segment's text in the transcript."""
+        document = self.project_for(clip).document
+        count = len(segment_view.clip_pieces(document, clip))
+        ending = "the end of the clip" if piece.index == count - 1 else segment_view.LEVEL_ENDINGS[piece.level]
+        words = f"{piece.words} word" + ("" if piece.words == 1 else "s")
+        lines = [f"Segment {piece.index + 1} of {count} · {words} · ends at {ending}"]
+        segments = sorted(clip.segments, key=lambda s: s.order_index)
+        if stale:
+            rates = fit_ops.speaking_rates(document)
+            seconds = segment_view.estimated_length_s(document, clip, rates, text=document.text[piece.start:piece.end])
+            lines.append(f"{segment_view.format_length(seconds, estimate=True)} (estimate) · stale")
+        elif piece.index < len(segments):
+            take = int((clip.overrides or {}).get("take", 0) or 0)
+            lines.append(f"{segment_view.format_length(segments[piece.index].duration)} · take {take + 1}")
+        return "\n".join(lines)
+
+    def clip_info_text(self, clip, offset=None) -> str:
+        """The caret strip under the transcript: the clip's character,
+        engine and voice, the segment at `offset`, its length, take, status
+        and the gap before it."""
+        if clip is None:
+            return ""
+        document = self.project_for(clip).document
+        if clip.has_placeholder:
+            return "Audio file" if clip.is_bed else "Subproject"
+        character = document.get_character(clip.character_id)
+        parts = [character.name if character is not None else "No character"]
+        if segment_view.has_pieces(clip):
+            backend = self.backend_for(clip)
+            voice = self._voice_label(clip)
+            parts.append(f"{getattr(backend, 'display_name', backend.id)} {voice}".strip())
+            pieces = segment_view.clip_pieces(document, clip)
+            piece = segment_view.piece_at(pieces, offset) if offset is not None else None
+            if piece is not None:
+                parts.append(f"segment {piece.index + 1}/{len(pieces)}")
+            elif pieces:
+                parts.append(f"{len(pieces)} segment" + ("" if len(pieces) == 1 else "s"))
+        else:
+            parts.append("recording")
+        stale = self.clip_is_stale(clip)
+        length = self.clip_length_text(clip, stale)
+        if length:
+            parts.append(length)
+        if segment_view.has_pieces(clip):
+            parts.append("stale" if stale else f"take {int((clip.overrides or {}).get('take', 0) or 0) + 1}")
+        parts.append(STATUS_LABELS.get(clip.status, clip.status).lower())
+        gap = self.gap_label(clip)
+        if gap:
+            parts.append(gap)
+        return " · ".join(parts)
 
     def set_device(self, device: str) -> None:
         self.settings["device"] = device

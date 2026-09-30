@@ -140,6 +140,12 @@ def _setting_s(document, key: str, default: float) -> float:
         return default
 
 
+def is_paragraph_break(between: str) -> bool:
+    """Whether the text between two clips holds a blank line, which puts
+    the paragraph gap between them rather than the clip gap."""
+    return bool(_PARAGRAPH_BREAK.search(between))
+
+
 def boundary_gap_s(document, text: str, previous_end: Optional[int], clip, extent_start: int) -> float:
     """The silence placed before `clip`: its `gap_before_s` override, else
     the paragraph or clip gap depending on the text between the previous
@@ -152,8 +158,7 @@ def boundary_gap_s(document, text: str, previous_end: Optional[int], clip, exten
             pass
     if previous_end is None:
         return 0.0
-    between = text[previous_end:extent_start]
-    if _PARAGRAPH_BREAK.search(between):
+    if is_paragraph_break(text[previous_end:extent_start]):
         return _setting_s(document, "paragraph_gap_s", DEFAULT_PARAGRAPH_GAP_S)
     return _setting_s(document, "gap_s", DEFAULT_GAP_S)
 

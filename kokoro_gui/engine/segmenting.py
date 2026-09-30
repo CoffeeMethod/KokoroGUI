@@ -24,7 +24,8 @@ when neither band has any enabled boundary does a piece end at a plain
 word break, the one nearest the target. A piece never splits a word.
 
 Pure over its inputs; `caching.split_segments` is the name everything else
-imports.
+imports. `split_spans` gives the same pieces as offsets into the input plus
+the level each one ends at, for the transcript's segment shading.
 """
 import math
 import re
@@ -119,12 +120,14 @@ def _choose_cut(levels, start, n, target):
     return cut
 
 
-def split_text(text, config):
-    """The pieces of `text`, each a run of whole words joined by single
-    spaces. Empty or blank text gives `[]`."""
+def _cuts(text, config):
+    """`(matches, [(first, last, level)])`: the token matches of `text` and,
+    per piece, the indices of its first and last token and the boundary
+    level it ends at. The one cut loop `split_text` and `split_spans` both
+    read, so they can't disagree."""
     matches = list(_TOKEN_RE.finditer(text or ""))
     if not matches:
-        return []
+        return matches, []
     tokens = [m.group() for m in matches]
     n = len(tokens)
     target = target_words(config)
@@ -138,7 +141,7 @@ def split_text(text, config):
         gap = text[matches[i].end():matches[i + 1].start()]
         levels.append(_enabled_level(_natural_level(token, tokens[i + 1], gap), enabled))
 
-    pieces = []
+    cuts = []
     start = 0
     while start < n:
         remaining = n - start
@@ -149,6 +152,23 @@ def split_text(text, config):
             tail = n - 1 - cut
             if 0 < tail < math.ceil(target * _BAND_LOW) and remaining <= math.floor(target * HARD_LIMIT_FACTOR):
                 cut = n - 1  # don't leave a scrap of a few words on its own
-        pieces.append(" ".join(tokens[start:cut + 1]))
+        cuts.append((start, cut, levels[cut]))
         start = cut + 1
-    return pieces
+    return matches, cuts
+
+
+def split_text(text, config):
+    """The pieces of `text`, each a run of whole words joined by single
+    spaces. Empty or blank text gives `[]`."""
+    matches, cuts = _cuts(text, config)
+    return [" ".join(m.group() for m in matches[first:last + 1]) for first, last, _level in cuts]
+
+
+def split_spans(text, config):
+    """`(start, end, level)` per piece of `split_text(text, config)`:
+    character offsets into `text` from the piece's first token's start to
+    its last token's end, and the boundary level the piece ends at
+    (`PARAGRAPH` for the last piece, `WORD` for a cut at a plain word
+    break). `" ".join(text[start:end].split())` is the piece."""
+    matches, cuts = _cuts(text, config)
+    return [(matches[first].start(), matches[last].end(), level) for first, last, level in cuts]

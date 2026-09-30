@@ -51,6 +51,8 @@ now:
     model settings
 -   Kokoro optional: a project whose engine isn't installed opens and plays, and engines can be
     plugins
+-   Transcript details (Options menu): segment boundaries, lexicon rewrites, gaps, and each clip's
+    length and status
 
 The [changes page](docs/changes.html) has the full detail for every version, including what the
 update does to existing projects.

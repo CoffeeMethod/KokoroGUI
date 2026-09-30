@@ -2,7 +2,7 @@
 toggles (paragraph > sentence > pause > word), a hard limit at 2x the
 target (grill PR6)."""
 from kokoro_gui.engine.caching import split_segments
-from kokoro_gui.engine.segmenting import split_text
+from kokoro_gui.engine.segmenting import PARAGRAPH, PAUSE, SENTENCE, WORD, split_spans, split_text
 
 
 def _words(n, start=1, end="."):
@@ -124,3 +124,35 @@ def test_target_is_clamped():
     text = " ".join(f"w{i}" for i in range(1, 21))
     assert _counts(split_text(text, {"segment_target_words": 1})) == [5, 5, 10]  # clamped to 5
     assert split_text(text, {"segment_target_words": "junk"}) == [text]
+
+
+_SPAN_CASES = [
+    (_words(30), {"segment_target_words": 10}),
+    (" ".join(f"w{i}" for i in range(1, 51)), {"segment_target_words": 10}),
+    (_words(10) + " " + _words(3, start=11) + "\n\n" + _words(10, start=14), {"segment_target_words": 10}),
+    ("w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12, w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24.",
+     {"segment_target_words": 10}),
+    (_words(19) + " " + _words(10, start=20), {"segment_target_words": 10}),
+    (_words(5) + "\n\n" + _words(25, start=6), {"segment_target_words": 10, "segment_at_paragraphs": False,
+                                                 "segment_at_sentences": False, "segment_at_pauses": False}),
+    ("  Hello   there,\n\tfriend.  ", {}),
+    ("", {}),
+]
+
+
+def test_split_spans_cover_the_same_pieces_as_split_text():
+    for text, config in _SPAN_CASES:
+        spans = split_spans(text, config)
+        assert [" ".join(text[s:e].split()) for s, e, _level in spans] == split_text(text, config)
+        # Offsets sit on token edges.
+        for start, end, _level in spans:
+            assert not text[start].isspace() and not text[end - 1].isspace()
+
+
+def test_split_spans_report_the_level_each_piece_ends_at():
+    text = " ".join(f"w{i}" for i in range(1, 51))
+    assert [level for *_span, level in split_spans(text, {"segment_target_words": 10})] == [WORD, WORD, WORD, PARAGRAPH]
+    text = "w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12, w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24."
+    assert [level for *_span, level in split_spans(text, {"segment_target_words": 10})] == [PAUSE, PARAGRAPH]
+    text = " ".join(_words(5, start=i) for i in range(1, 60, 5))
+    assert [level for *_span, level in split_spans(text, {"segment_target_words": 20})] == [SENTENCE, SENTENCE, PARAGRAPH]

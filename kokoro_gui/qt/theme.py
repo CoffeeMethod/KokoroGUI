@@ -73,6 +73,10 @@ class Palette:
     # border, so the two read apart on one block.
     fit_over: str
     fit_far_over: str
+    # Transcript details: a segment boundary at a pause, and the dot of an
+    # approved clip in the gutter.
+    segment_mark: str
+    status_approved: str
     accent: str
     accent_hover: str
     border: str
@@ -108,6 +112,8 @@ LIGHT = Palette(
     overlap_border="#e5484d",
     fit_over="#f59e0b",
     fit_far_over="#dc2626",
+    segment_mark="#8b8f96",
+    status_approved="#16a34a",
     accent="#2563eb",
     accent_hover="#1d4fd8",
     border="#d4d4d8",
@@ -139,6 +145,8 @@ DARK = Palette(
     overlap_border="#f0716a",
     fit_over="#fbbf24",
     fit_far_over="#ef4444",
+    segment_mark="#6e737b",
+    status_approved="#4ade80",
     accent="#4c8df6",
     accent_hover="#6ba1f8",
     border="#3a3d42",
@@ -306,6 +314,7 @@ QSlider {{ background: transparent; }}
 QSlider::groove:horizontal {{ height: 4px; background: {pal.border}; border-radius: 2px; }}
 QSlider::sub-page:horizontal {{ background: {pal.accent}; border-radius: 2px; }}
 QSlider[centered="true"]::sub-page:horizontal {{ background: {pal.border}; }}
+QLabel[muted="true"] {{ color: {pal.text_muted}; }}
 QSlider::handle:horizontal {{
     width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
     background: {pal.text}; border: none;

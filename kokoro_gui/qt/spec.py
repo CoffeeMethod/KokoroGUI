@@ -36,6 +36,15 @@ SEGMENTATION_KEYS = (
     "segment_target_words", "segment_at_paragraphs", "segment_at_sentences", "segment_at_pauses",
 )
 
+# Options > Transcript details: the overlay toggles under "Show details"
+# (`transcript_details`), as (settings key, menu label).
+DETAIL_LAYERS = (
+    ("details_segments", "Segment boundaries"),
+    ("details_clip_info", "Clip info"),
+    ("details_lexicon", "Lexicon rewrites"),
+    ("details_gaps", "Gaps"),
+)
+
 # --- FX preset / config-merge keys ----------------------------------------
 
 FX_PRESET_KEYS = [
@@ -158,6 +167,13 @@ SETTINGS_DEFAULTS = {
     "auto_split_by_paragraph": False,
     "character_fx_paste_splits": True,
     "character_fx_copy": True,
+    # Options > Transcript details: the master switch, then one toggle per
+    # overlay (each counts only while the master is on).
+    "transcript_details": False,
+    "details_segments": True,
+    "details_clip_info": True,
+    "details_lexicon": True,
+    "details_gaps": True,
     "theme": "dark",            # Options > Theme: "light" | "dark"
     "device": "auto",           # Options > Device: "auto" | "cpu" | "cuda"
     "last_project": None,       # File menu: the project launch reopens

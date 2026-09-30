@@ -23,7 +23,10 @@ What's left is a header row with two combos above the editor:
 """
 from __future__ import annotations
 
-from PySide6.QtWidgets import QComboBox, QDockWidget, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QComboBox, QDockWidget, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+)
 
 from kokoro_gui.daw.undo import SetClipFxCommand, SetFieldCommand
 from kokoro_gui.engine import presets
@@ -85,6 +88,15 @@ class TranscriptDock(QDockWidget):
 
         self.editor = TranscriptEditor(self.app)
         layout.addWidget(self.editor, 1)
+
+        # Transcript details (grill TE10): one line on the caret's clip,
+        # shown while details and Clip info are on.
+        self.info_strip = QLabel()
+        self.info_strip.setProperty("muted", True)
+        self.info_strip.setTextFormat(Qt.TextFormat.PlainText)
+        self.info_strip.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.info_strip.hide()
+        layout.addWidget(self.info_strip)
         self.setWidget(content)
 
         self.refresh_character_choices()
@@ -160,6 +172,22 @@ class TranscriptDock(QDockWidget):
             self._sync_variants(clip)
         finally:
             self._syncing = False
+        self.refresh_info_strip()
+
+    def refresh_info_strip(self) -> None:
+        """The caret strip: `app.clip_info_text` for the clip under the
+        caret, shown while details and Clip info are on."""
+        flags = self.app.details_flags() if hasattr(self.app, "details_flags") else {}
+        clip = self.editor.current_clip() if flags.get("details_clip_info") else None
+        text = ""
+        if clip is not None:
+            try:
+                text = self.app.clip_info_text(clip, self.editor.textCursor().position())
+            except Exception:
+                text = ""
+        self.info_strip.setText(text)
+        self.info_strip.setToolTip(text)
+        self.info_strip.setVisible(bool(flags.get("details_clip_info")))
 
     def _sync_variants(self, clip) -> None:
         character = self.app.document.get_character(clip.character_id) if clip is not None else None
