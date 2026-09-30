@@ -60,9 +60,17 @@ Revisit once one of the phases below actually needs a build step.
 
 Low effort, no new infrastructure:
 
-- **A real social image.** `index.html` now carries `og:*` and `twitter:card` tags, but
-  `og:image` points at `assets/shell_dark.png`, which is 1600×1000 and relative. Make a dedicated
-  1200×630 image and give it an absolute URL once the Pages hostname is known.
+- **A real social image.** Every page carries `og:*` tags with absolute URLs under
+  `https://coffeemethod.github.io/KokoroGUI/`, but `og:image` is `assets/shell_dark.png`
+  (1600×1000). Make a dedicated 1200×630 image and point the tags at it.
+- **Search setup outside the repo.** Each page has a canonical URL and JSON-LD
+  (`SoftwareApplication`, `WebSite` and `FAQPage` on the index, `BreadcrumbList` elsewhere), and
+  `docs/sitemap.xml` lists the five pages; update its `lastmod` when a page changes. Still to do
+  by hand: verify the site in Google Search Console and Bing Webmaster Tools and submit the
+  sitemap there (a `robots.txt` under `/KokoroGUI/` is never read, only one at the domain root),
+  and set the repo's About homepage to the site and its topics to `kokoro`, `kokoro-tts`,
+  `text-to-speech`, `tts`, `audio-editor`, `voice-cloning`, `audiobook`, `dubbing`. The FAQ's
+  JSON-LD repeats the visible answers; keep the two in step.
 - **Real audio samples.** The page currently only describes the difference between Kokoro and
   Audio8. A handful of short, pre-rendered `.wav`/`.mp3` clips checked into `docs/assets/audio/`,
   the same line read by a Kokoro voice, an Audio8 clone, and both generation modes, would turn the

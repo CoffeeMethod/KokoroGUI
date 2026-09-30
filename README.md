@@ -36,8 +36,7 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 ## What's new
 
-Everything since 4.0.0-beta.1 ships together as the next release. It's on the development branch
-now:
+In 4.0.0-beta.2:
 
 -   Subtitle import, Fit to slot, the original dialogue and a reference video, for dubbing
 -   A mixer: mute, solo, faders, pan, automation, fades and crossfades, in stereo
@@ -63,7 +62,7 @@ update does to existing projects.
 You need Python 3.11+ and [eSpeak NG](https://github.com/espeak-ng/espeak-ng).
 
 ```bash
-git clone --branch 4.0.0-beta.1 --depth 1 https://github.com/CoffeeMethod/KokoroGUI.git
+git clone --branch 4.0.0-beta.2 --depth 1 https://github.com/CoffeeMethod/KokoroGUI.git
 cd KokoroGUI
 python -m venv .venv
 .venv\Scripts\activate          # Windows
@@ -71,11 +70,10 @@ source .venv/bin/activate       # macOS / Linux
 pip install -r requirements.txt
 ```
 
-`4.0.0-beta.1` is the latest tagged beta. Drop `--branch` for the development branch and the
-unreleased changes above. If `torch` gives you trouble, follow
+`4.0.0-beta.2` is the latest tagged beta. Drop `--branch` for the development branch. If `torch` gives you trouble, follow
 [pytorch.org](https://pytorch.org/get-started/locally/) for your OS and GPU.
 
-On the development branch Kokoro is optional. Without the `kokoro` package (and eSpeak NG) the app
+Kokoro is optional. Without the `kokoro` package (and eSpeak NG) the app
 runs Audio8 and the test engine, and a Kokoro project opens and plays but doesn't generate.
 
 Models download from Hugging Face the first time you use them. Whisper, the transcriber, is about

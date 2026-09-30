@@ -3,8 +3,38 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>KokoroGUI · Changes</title>
-<meta name="description" content="Every change to KokoroGUI, version by version, in full: what each feature does, where it lives in the app, and what it means for existing projects." />
+<title>KokoroGUI changelog · Kokoro TTS GUI updates</title>
+<meta name="description" content="Every change to KokoroGUI, the Kokoro TTS GUI and text-based audio editor, version by version: what each feature does, where it lives in the app, and what it means for existing projects." />
+<meta name="robots" content="index, follow, max-image-preview:large" />
+<link rel="canonical" href="https://coffeemethod.github.io/KokoroGUI/changes.html" />
+<meta name="theme-color" content="#1e1f22" />
+<meta property="og:site_name" content="KokoroGUI" />
+<meta property="og:title" content="KokoroGUI changelog · Kokoro TTS GUI updates" />
+<meta property="og:description" content="Every change to KokoroGUI, the Kokoro TTS GUI and text-based audio editor, version by version: what each feature does, where it lives in the app, and what it means for existing projects." />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://coffeemethod.github.io/KokoroGUI/changes.html" />
+<meta property="og:image" content="https://coffeemethod.github.io/KokoroGUI/assets/shell_dark.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "KokoroGUI",
+      "item": "https://coffeemethod.github.io/KokoroGUI/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Changelog",
+      "item": "https://coffeemethod.github.io/KokoroGUI/changes.html"
+    }
+  ]
+}
+</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231e1f22'/%3E%3Crect x='12' y='13' width='40' height='5' rx='2.5' fill='%23868a91'/%3E%3Crect x='12' y='23' width='26' height='5' rx='2.5' fill='%23e3a72f'/%3E%3Cg fill='%234f8fe6'%3E%3Crect x='12' y='41' width='4' height='8' rx='2'/%3E%3Crect x='19' y='36' width='4' height='18' rx='2'/%3E%3Crect x='26' y='39' width='4' height='12' rx='2'/%3E%3C/g%3E%3Cg fill='%23e0655c'%3E%3Crect x='33' y='34' width='4' height='22' rx='2'/%3E%3Crect x='40' y='39' width='4' height='12' rx='2'/%3E%3Crect x='47' y='42' width='4' height='6' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -64,6 +94,7 @@
       <p class="lede">The README keeps one line per feature. This page has the rest: where each feature lives in the app, how it behaves, and what it does to a project you already have. Newest first.</p>
       <div class="toc">
         <a href="#unreleased">Unreleased</a>
+        <a href="#v4-0-0-beta-2">4.0.0-beta.2</a>
         <a href="#v4-0-0-beta-1">4.0.0-beta.1</a>
         <a href="#v3-2-0">3.2.0</a>
         <a href="#v3-1-0">3.1.0</a>
@@ -71,18 +102,27 @@
     </div>
   </section>
 
-  <section class="doc-section" id="unreleased" data-clip="Unreleased" data-cc="c3">
+  <section class="doc-section" id="unreleased" data-clip="Unreleased" data-cc="c4">
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">Development branch</span>Unreleased <span class="ver-badge">NEXT</span></h2>
-        <p>Everything since the 4.0.0-beta.1 tag. It ships as one release. Until then it's on the development branch: clone without <code>--branch</code> to run it.</p>
+        <p>Nothing yet since the 4.0.0-beta.2 tag.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="v4-0-0-beta-2" data-clip="4.0.0-beta.2" data-cc="c3">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">Tag 4.0.0-beta.2</span>4.0.0-beta.2 <span class="ver-badge">LATEST RELEASE</span></h2>
+        <p>The dubbing and mixing release. Subtitles come in as clips locked to their cues, tracks get a mixer, characters move into a library every project shares and each picks its own engine, and long projects stop lagging on every keystroke. A <code>.tbaw</code> from 4.0.0-beta.1 opens in it; read the box below first.</p>
       </div>
       <div class="callout warn reveal" style="max-width:740px; margin-top:1.3rem;">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 2 20h20L12 3Z"/><path d="M12 10v4M12 17h.01"/></svg>
         <div>
           <p><strong>Before you open an existing project.</strong> Clips now have a pause between them, so a project that isn't hand-timed gets longer the first time it opens. Set Gap and Paragraph gap to 0 in Settings &gt; Project for the old placement.</p>
           <p>Text now splits into pieces of about 40 words, so clips whose pieces come out different are marked stale. A <code>split_pattern</code> saved in an old <code>presets/*.json</code> file is ignored.</p>
-          <p>A project that has takes, subprojects or imported audio needs this version or newer to open.</p>
+          <p>A project that has takes, subprojects or imported audio needs 4.0.0-beta.2 or newer to open.</p>
           <p>Each engine now keeps its own language. An Audio8 clip generated while the language box held Kokoro's code is marked stale once.</p>
         </div>
       </div>
@@ -299,7 +339,7 @@
   <section class="doc-section" id="v4-0-0-beta-1" data-clip="4.0.0-beta.1" data-cc="c2">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">Tag 4.0.0-beta.1</span>4.0.0-beta.1 <span class="ver-badge">LATEST RELEASE</span></h2>
+        <h2><span class="idx">Tag 4.0.0-beta.1</span>4.0.0-beta.1</h2>
         <p>The rebuild. 3.2.0 was a CustomTkinter form over one <code>kokoro_engine.py</code>. 4.0.0 is a PySide6 app over a transcript with clips, tracks and characters, pluggable engines with a second real one, and projects that live in one file.</p>
       </div>
 
