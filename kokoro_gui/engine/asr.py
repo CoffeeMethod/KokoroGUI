@@ -286,13 +286,12 @@ def whisper_model_size(name: str | None = None) -> str | None:
 
 def whisper_model_cached(name: str | None = None) -> bool:
     """True when the model's weights are already on disk, so loading it
-    won't download. A `local_files_only` probe of the Hugging Face cache;
-    a path to a local model folder counts as cached when it exists. False
+    won't download. A `local_files_only` probe of the Hugging Face cache.
+    The name comes from `.env`, so it isn't used as a file path here: a
+    local model folder reads as not cached, and only costs a prompt. False
     when faster-whisper isn't installed (loading would fail anyway, and the
     caller's prompt is harmless)."""
     name = name or get_whisper_model_name()
-    if os.path.isdir(name):
-        return True
     try:
         from faster_whisper.utils import download_model
     except ImportError:
