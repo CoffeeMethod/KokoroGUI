@@ -124,6 +124,27 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Interface</h3>
+        <ul class="change-list">
+          <li>
+            <h4>A Settings window for program and project settings</h4>
+            <p><strong>Options &gt; Settings&hellip;</strong> (Ctrl+,) opens a window laid out like OBS's: a page list on the left (General, Generation, Performance, Project, Timeline, Source track), the page on the right, and OK, Cancel and Apply at the bottom. Edits wait for Apply or OK, and Cancel drops them. Apply stays greyed out until a value differs from what the window opened with.</p>
+            <p>The Settings tab used to hold these too. It now keeps only what a voice sounds like: Engine, Language, Voice, Speed, the engine's Model fields, and Audio control. With a clip selected it still shows the clip's own fields (gap, take, status, note, source text, original range, target). What moved:</p>
+            <ul>
+              <li>General: Theme and Device, the same choices as their Options submenus.</li>
+              <li>Generation: Target words per segment, the three Split at toggles, Output format.</li>
+              <li>Performance: Enable segment cache, and per engine Parallel threads and Audio8's Cache reference encoding.</li>
+              <li>Project: the subproject title, Gap and Paragraph gap, Auto-crossfade, Ripple on regenerate, Align locked clips.</li>
+              <li>Timeline: Track layout, Ducking, Timecode.</li>
+              <li>Source track: its offset and Remove. Remove now waits for Apply.</li>
+            </ul>
+            <p>The Engine row stays at the top of the Settings tab so an engine and a voice are picked together. With a clip selected it's no longer greyed out: it switches the clip's character's engine, the same as selecting the character. With nothing selected it's still "Engine for new characters", and the Language and Voice under it now show that engine's defaults (what a new character starts with) instead of the first character's engine.</p>
+            <p>Nothing is stored differently: the app values stay in <code>config_qt.json</code> and the project values in the project's settings, so existing projects and configs open as before. Each project value you change is still its own undo step.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Security</h3>
         <ul class="change-list">
           <li>

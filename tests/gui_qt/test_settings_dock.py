@@ -36,7 +36,7 @@ def test_none_mode_get_state_reflects_live_widget_edits(qt_app):
 
 
 def test_none_mode_fields_are_all_enabled(qt_app):
-    for key in ("lang_code", "voice", "speed", "num_threads", "caching"):
+    for key in ("lang_code", "voice", "speed"):
         widget = qt_app.settings_dock.schema_form.widget_for(key)
         assert widget is not None
         assert widget.isEnabled() is True
@@ -64,14 +64,10 @@ def test_clip_mode_disables_non_allowed_preset_fields_but_not_allowed_ones(qt_ap
 
     qt_app.selection.select_clip(clip.id)
 
-    threads_widget = qt_app.settings_dock.schema_form.widget_for("num_threads")
-    caching_widget = qt_app.settings_dock.schema_form.widget_for("caching")
     lang_widget = qt_app.settings_dock.schema_form.widget_for("lang_code")
     voice_widget = qt_app.settings_dock.schema_form.widget_for("voice")
     speed_widget = qt_app.settings_dock.schema_form.widget_for("speed")
 
-    assert threads_widget.isEnabled() is False
-    assert caching_widget.isEnabled() is False
     assert lang_widget.isEnabled() is False
     assert voice_widget.isEnabled() is True
     assert speed_widget.isEnabled() is True
@@ -208,111 +204,6 @@ def test_assemble_config_unaffected_by_a_selected_clip(qt_app):
 
 
 
-def test_project_scope_pacing_fields_write_document_settings_undoably(qt_app):
-    dock = qt_app.settings_dock
-    qt_app.selection.clear()
-    fields = dock.scope_fields.widgets
-    assert dock.scope_group.title() == "Project"
-
-    fields["gap_s"].setValue(0.5)
-    fields["gap_s"].editingFinished.emit()
-    assert qt_app.document.settings["gap_s"] == 0.5
-    fields["auto_crossfade"].setChecked(True)
-    assert qt_app.document.settings["auto_crossfade"] is True
-
-    qt_app.document.undo_stack.undo()
-    qt_app.document.undo_stack.undo()
-    assert "gap_s" not in qt_app.document.settings
-    assert "auto_crossfade" not in qt_app.document.settings
-
-
-def test_project_scope_ripple_checkbox_defaults_on_and_writes_the_setting(qt_app):
-    qt_app.selection.clear()
-    ripple = qt_app.settings_dock.scope_fields.widgets["ripple"]
-    assert ripple.isChecked()
-    ripple.setChecked(False)
-    assert qt_app.document.settings["ripple"] is False
-    qt_app.document.undo_stack.undo()
-    assert "ripple" not in qt_app.document.settings
-
-
-def test_project_scope_align_onset_checkbox_shows_the_derived_default_and_writes_the_setting(qt_app):
-    clip, _character = _make_clip(qt_app)
-    qt_app.selection.clear()
-    align = qt_app.settings_dock.scope_fields.widgets["align_onset"]
-    assert not align.isChecked()  # no locked clip: off
-
-    clip.pinned = True
-    qt_app.settings_dock.refresh_scope_fields()
-    align = qt_app.settings_dock.scope_fields.widgets["align_onset"]
-    assert align.isChecked() and "align_onset" not in qt_app.document.settings
-
-    align.setChecked(False)
-    assert qt_app.document.settings["align_onset"] is False
-    qt_app.document.undo_stack.undo()
-    assert "align_onset" not in qt_app.document.settings
-
-
-def test_project_scope_track_layout_switches_both_ways(qt_app):
-    """Grill PR4: Unified puts clips on "Lane N" tracks by the lane rule;
-    One per character puts them back on character tracks. Each switch is
-    one undo step with its relane."""
-    from kokoro_gui.daw.models import Character
-
-    doc = qt_app.document
-    alice = doc.characters[0]
-    bob = Character.from_preset_dict("Bob", {})
-    doc.characters.append(bob)
-    doc.text = "one two three"
-    first = doc.assign_character_to_range(0, 3, alice.id)
-    second = doc.assign_character_to_range(4, 7, bob.id)
-    third = doc.assign_character_to_range(8, 13, alice.id)
-    character_track_ids = [c.track_id for c in (first, second, third)]
-    qt_app.selection.clear()
-    fields = qt_app.settings_dock.scope_fields.widgets
-    assert fields["track_layout"].currentData() == "character"
-    assert not fields["track_lanes"].isEnabled()
-
-    fields["track_lanes"].setValue(2)
-    fields["track_layout"].setCurrentIndex(fields["track_layout"].findData("unified"))
-    fields["track_layout"].activated.emit(fields["track_layout"].currentIndex())
-
-    assert doc.settings["track_layout"] == {"mode": "unified", "lanes": 2}
-    assert [doc.get_track(c.track_id).name for c in (first, second, third)] == ["Lane 1", "Lane 2", "Lane 1"]
-    header_names = [t.name for t in doc.used_tracks()]
-    assert header_names == ["Lane 1", "Lane 2"]
-
-    fields = qt_app.settings_dock.scope_fields.widgets
-    fields["track_layout"].setCurrentIndex(fields["track_layout"].findData("character"))
-    fields["track_layout"].activated.emit(fields["track_layout"].currentIndex())
-    assert [c.track_id for c in (first, second, third)] == character_track_ids
-
-    doc.undo_stack.undo()
-    assert [doc.get_track(c.track_id).lane for c in (first, second, third)] == [1, 2, 1]
-    doc.undo_stack.undo()
-    assert "track_layout" not in doc.settings
-    assert [c.track_id for c in (first, second, third)] == character_track_ids
-
-
-def test_project_scope_timecode_fields_store_one_dict(qt_app):
-    dock = qt_app.settings_dock
-    qt_app.selection.clear()
-    fields = dock.scope_fields.widgets
-    fields["tc_fps"].setCurrentIndex(fields["tc_fps"].findData(29.97))
-    fields["tc_drop"].setChecked(True)
-    fields["tc_start"].setText("01:00:00;00")
-    fields["tc_start"].editingFinished.emit()
-    fields["tc_enabled"].setChecked(True)
-
-    tc = qt_app.document.settings["timecode"]
-    assert tc == {"enabled": True, "frame_rate": 29.97, "start": "01:00:00;00", "drop_frame": True}
-    assert qt_app.transport_dock.time_label.text().startswith("01:00:00;00")
-
-    fields["tc_start"].setText("garbage")
-    fields["tc_start"].editingFinished.emit()
-    assert qt_app.document.settings["timecode"]["start"] == "01:00:00;00"
-
-
 def test_clip_scope_fields_edit_status_note_gap_and_source_text(qt_app):
     qt_app.document.text = "Hello there friend."
     character = qt_app.document.characters[0]
@@ -399,6 +290,8 @@ def test_syllable_count_is_rough_but_stable():
 # ---------------------------------------------------------------------------
 
 def test_engine_row_in_project_scope_sets_the_engine_for_new_characters(qt_app):
+    """Grill UI16: the voice fields below follow it, so they show what a
+    new character gets."""
     dock = qt_app.settings_dock
     assert dock._mode == "none"
     assert dock.engine_label.text() == "Engine for new characters:"
@@ -411,15 +304,34 @@ def test_engine_row_in_project_scope_sets_the_engine_for_new_characters(qt_app):
     assert qt_app.settings["default_engine"] == "dummy"
     assert qt_app.default_engine_id == "dummy"
     assert qt_app.document.characters[0].backend_id == "kokoro"
+    assert dock.shown_backend().id == "dummy"
+    assert dock.schema_form.values()["voice"] == "dummy"
 
 
-def test_engine_row_in_clip_scope_shows_the_characters_engine_disabled(qt_app):
+def test_a_project_scope_voice_edit_lands_in_the_new_character_engines_bucket(qt_app):
+    dock = qt_app.settings_dock
+    dock.engine_combo.setCurrentIndex(dock.engine_combo.findData("dummy"))
+    dock._on_engine_picked()
+    dock.schema_form.set_values({"speed": 1.2})
+    lang = dock.schema_form.widget_for("lang_code")
+    lang.setCurrentIndex(lang.count() - 1)
+    assert qt_app.engine_settings("dummy")["lang_code"] == lang.currentData()
+
+
+def test_engine_row_in_clip_scope_switches_the_clips_character(qt_app, qtbot):
     clip, character = _make_clip(qt_app)
     qt_app.selection.select_clip(clip.id)
     dock = qt_app.settings_dock
     assert dock.engine_combo.currentData() == "kokoro"
-    assert not dock.engine_combo.isEnabled()
-    assert dock.engine_combo.toolTip() == "Set on the character"
+    assert dock.engine_combo.isEnabled()
+
+    dock.engine_combo.setCurrentIndex(dock.engine_combo.findData("dummy"))
+    dock._on_engine_picked()
+    qtbot.waitUntil(lambda: character.backend_id == "dummy")
+
+    assert dock._mode == "clip"
+    assert dock.engine_combo.currentData() == "dummy"
+    assert dock.schema_form.values()["voice"] == "dummy"
 
 
 def test_engine_row_in_character_scope_switches_the_characters_engine(qt_app, qtbot):

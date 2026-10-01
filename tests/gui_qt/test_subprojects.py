@@ -242,7 +242,9 @@ def test_selecting_the_nested_block_points_the_docks_at_the_child(qt_app):
     assert not qt_app.transcript_dock.scope_bar.isHidden()
     assert qt_app.fx_dock.scope_label.text().startswith("Subproject: Chapter 1")
     assert qt_app.settings_dock.subproject_label.text() == "Subproject: Chapter 1"
-    assert qt_app.settings_dock.scope_fields.widgets["title"].text() == "Chapter 1"
+    window = qt_app.open_settings_window("Project")
+    assert window.widgets["title"].text() == "Chapter 1"
+    window.reject()
     # The timeline still shows the parent.
     assert chapter.id not in qt_app.timeline_dock.timeline_view._blocks_by_clip_id
     assert child.clip_id in qt_app.timeline_dock.timeline_view._blocks_by_clip_id
@@ -279,9 +281,10 @@ def test_a_selection_inside_the_child_keeps_the_focus_there(qt_app):
 def test_renaming_a_subproject_rewrites_its_placeholder(qt_app):
     _intro, _chapter, child = _book(qt_app)
     qt_app.selection.select_clip(child.clip_id)
-    field = qt_app.settings_dock.scope_fields.widgets["title"]
-    field.setText("The Beginning")
-    field.editingFinished.emit()
+    window = qt_app.open_settings_window("Project")
+    window.widgets["title"].setText("The Beginning")
+    window.apply()
+    window.reject()
     assert child.project_settings["title"] == "The Beginning"
     assert qt_app.root.document.text == "Intro. The Beginning Outro."
     assert qt_app.scope_text() == "Subproject: The Beginning"

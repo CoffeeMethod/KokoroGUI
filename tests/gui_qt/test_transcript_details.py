@@ -39,7 +39,10 @@ def _alpha_at(editor, position):
 
 
 def _target_words(qt_app, value):
-    qt_app.settings_dock.schema_form.widget_for("segment_target_words").setValue(value)
+    window = qt_app.open_settings_window("Generation")
+    window.generation_form.widget_for("segment_target_words").setValue(value)
+    window.apply()
+    window.reject()
 
 
 def _one_clip(qt_app, text=SENTENCES):

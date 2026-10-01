@@ -32,10 +32,10 @@ def test_edit_menu_actions(qt_app):
     assert _action_texts(qt_app.edit_menu) == ["Undo", "Redo", "Cut", "Copy", "Paste", "Characters..."]
 
 
-def test_options_menu_holds_device_theme_and_toggles(qt_app):
+def test_options_menu_holds_settings_device_theme_and_toggles(qt_app):
     # No Engine menu: each character picks its engine (grill V3).
     texts = _action_texts(qt_app.options_menu)
-    assert texts[:2] == ["Device", "Theme"]
+    assert texts[:3] == ["Settings...", "Device", "Theme"]
     assert "Copy carries character/FX" in texts
     assert "Paste splits character/FX" in texts
     assert any(t.startswith("JIT streaming") for t in texts)

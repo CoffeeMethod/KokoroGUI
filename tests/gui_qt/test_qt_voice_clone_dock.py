@@ -85,6 +85,7 @@ def test_save_reference_appears_in_generation_voice_dropdown(qt_app, monkeypatch
 
     assert Audio8ReferenceStore.list_references() == ["Fred"]
 
+    qt_app.selection.select_character(qt_app.document.characters[0].id)
     combo = qt_app.settings_dock.schema_form.widget_for("voice")
     items = [combo.itemData(i) for i in range(combo.count())]
     assert "Fred" in items
@@ -400,6 +401,7 @@ def test_the_audio8_editor_opens_with_only_kokoro_characters(qt_app, monkeypatch
 
     assert qt_app.set_character_engine(character, "audio8")
     assert character.preset_data["voice"] == "Fred"  # the one reference it lists
+    qt_app.selection.select_character(character.id)
     combo = qt_app.settings_dock.schema_form.widget_for("voice")
     assert "Fred" in [combo.itemData(i) for i in range(combo.count())]
 

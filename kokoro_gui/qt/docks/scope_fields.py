@@ -1,17 +1,8 @@
-"""The Settings tab's scope group: project fields while nothing is selected,
-clip fields while a clip is. Rebuilt by `SettingsDock` on every selection
-change, like the schema form.
-
-Project: pacing (`Document.settings["gap_s"]` / `["paragraph_gap_s"]`,
-kokoro_gui/daw/arrangement.py), auto-crossfade (`["auto_crossfade"]`,
-kokoro_gui/daw/mixplan.py), ripple on regenerate (`["ripple"]`, on by
-default, kokoro_gui/daw/arrangement.py), onset alignment of locked clips
-(`["align_onset"]`, derived from the pinned clips while unset,
-`arrangement.align_onset_enabled`), how far ducked tracks go down under
-speech (`["duck_db"]`, kokoro_gui/audio/mixer.py), the track layout
-(`["track_layout"]`, kokoro_gui/daw/lanes.py), timecode (`["timecode"]`,
-kokoro_gui/daw/timecode.py), and the source track's offset or its removal
-(`["source_track"]`, kokoro_gui/daw/reference.py).
+"""The Settings tab's clip fields, shown while a clip is selected. Rebuilt
+by `SettingsDock` on every selection change, like the schema form. The
+project's fields (pacing, crossfade, ripple, onset alignment, ducking,
+track layout, timecode, source track) are in Options > Settings...
+(kokoro_gui/qt/settings_window.py).
 
 Clip: its gap override (blank inherits), take, review status, note,
 source text with a syllable comparison against the clip's text, and the
@@ -24,23 +15,17 @@ document's undo stack, then autosave and a timeline refresh.
 """
 from __future__ import annotations
 
-import os
 import re
 
-from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
-    QPushButton, QSpinBox, QWidget,
+    QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
+    QWidget,
 )
 
-from kokoro_gui.audio.mixer import DEFAULT_DUCK_DB
 from kokoro_gui.daw import fit as fit_ops
-from kokoro_gui.daw.arrangement import DEFAULT_GAP_S, DEFAULT_PARAGRAPH_GAP_S, align_onset_enabled
 from kokoro_gui.daw.models import CLIP_STATUSES
-from kokoro_gui.daw.reference import REFERENCE_RANGE_KEY, SOURCE_TRACK_KEY, reference_range, source_track_settings
-from kokoro_gui.daw.timecode import FRAME_RATES, tc_to_frames, timecode_settings
+from kokoro_gui.daw.reference import REFERENCE_RANGE_KEY, reference_range
 from kokoro_gui.daw.undo import SetActiveTakeCommand, SetFieldCommand
-from kokoro_gui.qt import project as project_io
 
 STATUS_LABELS = {"todo": "To do", "generated": "Generated", "approved": "Approved",
                  "needs_rewrite": "Needs rewrite"}
@@ -105,133 +90,6 @@ class ScopeFields(QWidget):
             self.form.removeRow(0)
         self.widgets = {}
         self.clip_id = None
-
-    def build_project(self) -> None:
-        self.clear()
-        settings = self.app.document.settings
-        focus = getattr(self.app, "focus", None)
-        title = None
-        if focus is not None and focus.parent_id is not None:
-            # A subproject's name, shown by its parent's placeholder line,
-            # the timeline block and the breadcrumb (phase 4).
-            title = QLineEdit(focus.title())
-            title.setToolTip("The subproject's name in its parent.")
-            title.editingFinished.connect(lambda: self.app.rename_subproject(self.app.focus, title.text()))
-            self.form.addRow("Title:", title)
-        gap = _spin(0.0, 10.0, 0.05, float(settings.get("gap_s", DEFAULT_GAP_S)))
-        para = _spin(0.0, 10.0, 0.05, float(settings.get("paragraph_gap_s", DEFAULT_PARAGRAPH_GAP_S)))
-        gap.setToolTip("Silence between clips placed one after another.")
-        para.setToolTip("Silence between clips across a blank line.")
-        gap.editingFinished.connect(lambda: self._set_setting("gap_s", gap.value()))
-        para.editingFinished.connect(lambda: self._set_setting("paragraph_gap_s", para.value()))
-        self.form.addRow("Gap (s):", gap)
-        self.form.addRow("Paragraph gap (s):", para)
-
-        crossfade = QCheckBox("Auto-crossfade overlapping clips")
-        crossfade.setChecked(bool(settings.get("auto_crossfade", False)))
-        crossfade.toggled.connect(lambda on: self._set_setting("auto_crossfade", bool(on)))
-        self.form.addRow("", crossfade)
-
-        ripple = QCheckBox("Ripple on regenerate")
-        ripple.setChecked(bool(settings.get("ripple", True)))
-        ripple.setToolTip("When a regenerated clip changes length, move the clips placed after it by the "
-                          "difference. A clip locked in time stays put.")
-        ripple.toggled.connect(lambda on: self._set_setting("ripple", bool(on)))
-        self.form.addRow("", ripple)
-
-        align = QCheckBox("Align locked clips to their first word")
-        align.setChecked(align_onset_enabled(self.app.document))
-        align.setToolTip("Start each clip locked in time a little early, by the silence before its first "
-                         "word, so the word lands on the clip's time. Skipped for a clip with trim on. "
-                         "On by default when the project has a locked clip.")
-        align.toggled.connect(lambda on: self._set_setting("align_onset", bool(on)))
-        self.form.addRow("", align)
-
-        try:
-            duck_db = float(settings.get("duck_db", DEFAULT_DUCK_DB))
-        except (TypeError, ValueError):
-            duck_db = DEFAULT_DUCK_DB
-        duck = _spin(-40.0, 0.0, 1.0, max(-40.0, min(0.0, duck_db)))
-        duck.setDecimals(1)
-        duck.setSuffix(" dB")
-        duck.setToolTip("How far a track with D (duck) on goes down while other clips play.")
-        duck.editingFinished.connect(lambda: self._set_setting("duck_db", round(duck.value(), 1)))
-        self.form.addRow("Ducking:", duck)
-
-        layout = self.app.document.track_layout()
-        layout_combo = QComboBox()
-        layout_combo.addItem("One per character", "character")
-        layout_combo.addItem("Unified", "unified")
-        layout_combo.setCurrentIndex(max(0, layout_combo.findData(layout["mode"])))
-        layout_combo.setToolTip("Unified puts every clip on a few lanes and moves to the next lane "
-                                "whenever the speaker changes.")
-        lanes = QSpinBox()
-        lanes.setRange(1, 16)
-        lanes.setValue(int(layout.get("lanes", 3)))
-        lanes.setSuffix(" lanes")
-        lanes.setEnabled(layout["mode"] == "unified")
-        layout_row = QWidget()
-        layout_box = QHBoxLayout(layout_row)
-        layout_box.setContentsMargins(0, 0, 0, 0)
-        layout_box.addWidget(layout_combo, 1)
-        layout_box.addWidget(lanes)
-        layout_combo.activated.connect(lambda _i: self._commit_track_layout())
-        lanes.editingFinished.connect(self._commit_track_layout)
-        self.form.addRow("Track layout:", layout_row)
-
-        tc = timecode_settings(settings)
-        enabled = QCheckBox("Show timecode")
-        enabled.setChecked(bool(tc["enabled"]))
-        fps = QComboBox()
-        for rate in FRAME_RATES:
-            fps.addItem(f"{rate:g} fps", rate)
-        index = fps.findData(float(tc["frame_rate"]))
-        fps.setCurrentIndex(index if index >= 0 else FRAME_RATES.index(25.0))
-        start = QLineEdit(str(tc["start"]))
-        start.setToolTip("Timecode of the project's first frame, HH:MM:SS:FF.")
-        drop = QCheckBox("Drop-frame")
-        drop.setChecked(bool(tc["drop_frame"]))
-        drop.setToolTip("29.97 and 59.94 only.")
-        tc_row = QWidget()
-        tc_layout = QHBoxLayout(tc_row)
-        tc_layout.setContentsMargins(0, 0, 0, 0)
-        tc_layout.addWidget(enabled)
-        tc_layout.addWidget(drop)
-        self.form.addRow("Timecode:", tc_row)
-        self.form.addRow("Frame rate:", fps)
-        self.form.addRow("Start:", start)
-        for signal in (enabled.toggled, drop.toggled, fps.currentIndexChanged):
-            signal.connect(lambda *_: self._commit_timecode())
-        start.editingFinished.connect(self._commit_timecode)
-
-        track = source_track_settings(settings)
-        if track is None:
-            track_name = "None (File > Import Source Track)"
-        else:
-            track_name = os.path.basename(track["path"])
-            if project_io.source_track_path(self.app.document, self.app.project_dir) is None:
-                track_name += " (missing)"
-        track_label = QLabel(track_name)
-        track_label.setToolTip("The original dialogue. The transport's Original and Both play it under each "
-                               "clip that has a reference range.")
-        offset = _spin(-3600.0, 3600.0, 0.1, track["offset_s"] if track else 0.0)
-        offset.setDecimals(3)
-        offset.setEnabled(track is not None)
-        offset.setToolTip("Where reference time zero is in the source track, in seconds.")
-        offset.editingFinished.connect(self._commit_source_offset)
-        remove = QPushButton("Remove")
-        remove.setEnabled(track is not None)
-        remove.clicked.connect(self._remove_source_track)
-        track_row = QWidget()
-        track_layout = QHBoxLayout(track_row)
-        track_layout.setContentsMargins(0, 0, 0, 0)
-        track_layout.addWidget(track_label, 1)
-        track_layout.addWidget(remove)
-        self.form.addRow("Source track:", track_row)
-        self.form.addRow("Source offset (s):", offset)
-        self.widgets = {"title": title, "gap_s": gap, "paragraph_gap_s": para, "auto_crossfade": crossfade,
-                        "ripple": ripple, "align_onset": align, "duck_db": duck, "track_layout": layout_combo, "track_lanes": lanes, "tc_enabled": enabled, "tc_fps": fps, "tc_start": start, "tc_drop": drop,
-                        "source_track": track_label, "source_offset": offset, "source_remove": remove}
 
     def build_clip(self, clip) -> None:
         self.clear()
@@ -317,51 +175,6 @@ class ScopeFields(QWidget):
     def _after_edit(self) -> None:
         self.app.schedule_save()
         self.app.refresh_timeline()
-
-    def _set_setting(self, key: str, value) -> None:
-        if self.app.document.settings.get(key) == value:
-            return
-        self.app.document.undo_stack.push(SetFieldCommand("document", None, "settings", value, key=key))
-        self._after_edit()
-
-    def _commit_track_layout(self) -> None:
-        """One undo step: the setting and the relane it triggers
-        (`lanes.relane_follow_up`)."""
-        mode = self.widgets["track_layout"].currentData()
-        lanes = self.widgets["track_lanes"]
-        lanes.setEnabled(mode == "unified")
-        value = {"mode": "unified", "lanes": lanes.value()} if mode == "unified" else {"mode": "character"}
-        if self.app.document.track_layout() == value:
-            return
-        self._set_setting("track_layout", value)
-
-    def _commit_timecode(self) -> None:
-        w = self.widgets
-        start = w["tc_start"].text().strip() or "00:00:00:00"
-        rate = float(w["tc_fps"].currentData())
-        drop = w["tc_drop"].isChecked() and rate in (29.97, 59.94)
-        try:
-            tc_to_frames(start, rate, drop)
-        except ValueError:
-            start = timecode_settings(self.app.document.settings)["start"]
-            w["tc_start"].setText(start)
-        value = {"enabled": w["tc_enabled"].isChecked(), "frame_rate": rate, "start": start, "drop_frame": drop}
-        self._set_setting("timecode", value)
-        self.app.transport_dock.set_position(self.app.transport.position(), self.app.transport.duration())
-
-    def _commit_source_offset(self) -> None:
-        track = source_track_settings(self.app.document.settings)
-        if track is None:
-            return
-        self._set_setting(SOURCE_TRACK_KEY, {**track, "offset_s": round(self.widgets["source_offset"].value(), 3)})
-
-    def _remove_source_track(self) -> None:
-        """Clears the setting; the copy stays in the project dir, so an undo
-        brings the track back. The fields rebuild once the click is done
-        (the button is one of the widgets rebuilt)."""
-        self._set_setting(SOURCE_TRACK_KEY, None)
-        dock = self.app.settings_dock
-        QTimer.singleShot(0, dock, dock.refresh_scope_fields)
 
     def _clip(self):
         return self.app.document.get_clip(self.clip_id) if self.clip_id else None

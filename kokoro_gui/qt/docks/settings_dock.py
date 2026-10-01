@@ -1,15 +1,16 @@
 """Settings dock: item 2 ("Settings panel rescoping") of the DAW-for-text
-redesign's remaining-work roadmap. Renders the schema-driven config fields
-(voice/speed/lang_code/segmentation/format/num_threads/caching, plus any
-backend-specific groups) and the hand-built Audio Control widgets
+redesign's remaining-work roadmap. Renders the schema-driven voice fields
+(voice/speed/lang_code, plus a backend's "Model" group) and the hand-built
+Audio Control widgets
 (volume/pitch/FX-preset-combo/apply_fx/normalize/trim) that used to live in
 `GenerationDock` - now scoped to whatever `self.app.selection` currently
 points at, instead of always editing the whole document's defaults.
 
-The Output / Processing Options groups that used to sit here moved to the
-Export dialog (`kokoro_gui/qt/docks/export_dialog.py`, section 6 of
-Claude/PLAN_ui_shell_redesign.md): they describe the export, not the
-selection.
+Only what shapes a voice lives here. The program fields
+(`spec.is_program_field`: segmentation, output format, every "Advanced"
+field) are in Options > Settings... (kokoro_gui/qt/settings_window.py), and
+so are the project fields. `get_state()`
+reads the shared ones among them from `app.settings`.
 
 Three states, keyed off `SelectionModel.kind`:
 
@@ -26,8 +27,8 @@ Three states, keyed off `SelectionModel.kind`:
 
 Only `ALLOWED_PRESET_KEYS` (kokoro_gui/engine/presets.py) can vary per clip/
 character - that's exactly voice/speed/volume/pitch/normalize/
-trim/format/apply_fx/fx_preset. Every other schema field (lang_code,
-num_threads, caching, a backend's own non-preset fields) is rendered
+trim/format/apply_fx/fx_preset. Every other schema field shown here
+(lang_code, a backend's "Model" group) is rendered
 disabled (not hidden) in clip/character mode, via `SchemaFormWidget.widget_for`
 - its value there is still the project's, since that's what
   `_assemble_clip_config` actually uses for those keys regardless of which
@@ -41,18 +42,19 @@ values come from `app.settings`; per-engine ones from
 writes straight into that engine's bucket (`app.set_engine_setting`).
 `get_state()` carries only the shared keys.
 
-Above the form, an Engine row (grill EN1): in "character" mode it sets the
-character's engine (`app.set_character_engine`, through
-`QTimer.singleShot(0, ...)` since that rebuilds this dock's form); in
-"clip" mode it shows the clip's character's engine, disabled; in "none"
-mode it is "Engine for new characters", `settings["default_engine"]`.
+Above the form, an Engine row (grill EN1, UI16), so an engine and its
+voice are picked in one place. In "character" mode it sets the character's
+engine (`app.set_character_engine`, through `QTimer.singleShot(0, ...)`
+since that rebuilds this dock's form); in "clip" mode it does the same for
+the clip's character. In "none" mode it's "Engine for new characters",
+`settings["default_engine"]`, and the form below shows that engine's
+defaults (`shown_backend()`), which is what a new character gets.
 Character-scope edits go through `app.commit_character_edit`, so a linked
 character reaches its library entry the way Edit > Characters' edits do.
 
 Below Audio Control, `ScopeFields` (kokoro_gui/qt/docks/scope_fields.py)
-shows the project's pacing, crossfade and timecode fields in "none" mode
-and the clip's gap, take, status, note and source text in "clip" mode;
-it's hidden in "character" mode.
+shows the clip's gap, take, status, note and source text in "clip" mode;
+it's hidden in the other two.
 
 `get_state()` deliberately does NOT reflect whatever mode is currently
 rendered: `app.py`'s `_assemble_config`/`_assemble_clip_config` need the
@@ -128,7 +130,7 @@ class SettingsDock(QDockWidget):
         layout.addWidget(self.subproject_label)
 
         # --- Engine (grill EN1) ---
-        engine_row = QWidget()
+        self.engine_row = engine_row = QWidget()
         engine_form = QFormLayout(engine_row)
         engine_form.setContentsMargins(0, 0, 0, 0)
         self.engine_label = QLabel("Engine:")
@@ -177,10 +179,9 @@ class SettingsDock(QDockWidget):
         audio_form.addRow("", toggles_row)
         layout.addWidget(audio_group)
 
-        # Project or clip fields for the current scope (phase 2): pacing,
-        # crossfade and timecode; or the clip's gap, take, status, note and
-        # source text. Hidden in character scope.
-        self.scope_group = QGroupBox("Project")
+        # The clip's gap, take, status, note and source text (phase 2).
+        # Shown in clip scope only.
+        self.scope_group = QGroupBox("Clip")
         scope_layout = QVBoxLayout(self.scope_group)
         self.scope_fields = ScopeFields(self.app)
         scope_layout.addWidget(self.scope_fields)
@@ -241,20 +242,38 @@ class SettingsDock(QDockWidget):
         self.refresh_scope_fields()
         self.refresh_engine_row()
 
-    # --- the Engine row (grill EN1) ------------------------------------------
+    # --- the Engine row (grill EN1, UI16) -------------------------------------
+
+    def _scope_character(self):
+        """The character the Engine row switches: the selected one, or the
+        selected clip's; None in "none" mode or for a clip without one."""
+        if self._mode == "character":
+            return self._target
+        if self._mode == "clip":
+            return self.app.document.get_character(self._target.character_id)
+        return None
+
+    def shown_backend(self):
+        """The engine whose fields the form shows: in "none" mode the engine
+        for new characters (its defaults are what a new character gets),
+        else the active character's."""
+        if self._mode == "none":
+            backend = self.app._backend_for(self.app.default_engine_id)
+            if backend is not None:
+                return backend
+        return self.app.backend
 
     def refresh_engine_row(self) -> None:
         """Shows the engine for the current scope; see the module docstring."""
-        if self._mode == "character":
-            engine_id, label, enabled, tip = (self._target.backend_id or DEFAULT_ENGINE_ID, "Engine:", True,
-                                              "The engine this character speaks with.")
-        elif self._mode == "clip":
-            character = self.app.document.get_character(self._target.character_id)
+        if self._mode in ("character", "clip"):
+            character = self._scope_character()
             engine_id = (character.backend_id if character is not None else None) or DEFAULT_ENGINE_ID
-            label, enabled, tip = "Engine:", False, "Set on the character"
+            label, enabled = "Engine:", character is not None
+            tip = ("The engine this character speaks with." if self._mode == "character"
+                   else "The engine this clip's character speaks with. Every clip of the character follows.")
         else:
             engine_id, label, enabled, tip = (self.app.default_engine_id, "Engine for new characters:", True,
-                                              "The engine a new character gets.")
+                                              "The engine a new character gets. The fields below are its defaults.")
         self.engine_label.setText(label)
         self.engine_combo.setEnabled(enabled)
         self.engine_combo.setToolTip(tip)
@@ -271,11 +290,14 @@ class SettingsDock(QDockWidget):
     def _on_engine_picked(self) -> None:
         engine_id = self.engine_combo.currentData()
         if self._mode == "none":
-            self.app.set_default_engine(engine_id)
-        elif self._mode == "character":
+            if engine_id != self.app.default_engine_id:
+                self.app.set_default_engine(engine_id)
+                self._build_schema_form()
+            return
+        character = self._scope_character()
+        if character is not None:
             # Switching rebuilds this dock's form, so not from inside the
             # combo's own signal.
-            character = self._target
             QTimer.singleShot(0, lambda: self.pick_character_engine(character, engine_id))
 
     def pick_character_engine(self, character, engine_id: str) -> bool:
@@ -288,15 +310,10 @@ class SettingsDock(QDockWidget):
         return ok
 
     def refresh_scope_fields(self) -> None:
-        """Rebuilds the scope group for the current mode. Also called after
-        an undo or a generate, which change what the clip fields show."""
+        """Rebuilds the clip fields in clip scope. Also called after an undo
+        or a generate, which change what they show."""
         if self._mode == "clip":
-            self.scope_group.setTitle("Clip")
             self.scope_fields.build_clip(self._target)
-            self.scope_group.show()
-        elif self._mode == "none":
-            self.scope_group.setTitle("Project")
-            self.scope_fields.build_project()
             self.scope_group.show()
         else:
             self.scope_fields.clear()
@@ -327,7 +344,7 @@ class SettingsDock(QDockWidget):
         clip/character mode, since those keys are always sourced from
         project settings regardless of selection (see
         `app.py`'s `_assemble_clip_config`)."""
-        backend = self.app.backend
+        backend = self.shown_backend()
         return {
             **self.app.engine_settings(backend.id),
             "voice": self.app.default_voice(backend),
@@ -350,7 +367,7 @@ class SettingsDock(QDockWidget):
             self.schema_layout.removeWidget(self.schema_form)
             self.schema_form.deleteLater()
 
-        backend = self.app.backend
+        backend = self.shown_backend()
         schema = backend.get_config_schema()
         lang_code = self.app.engine_settings(backend.id).get("lang_code")
         voice_choices = [(v, v) for v in self.app.get_all_voices(lang_code, backend=backend)]
@@ -371,7 +388,8 @@ class SettingsDock(QDockWidget):
                 # dummy.py) would otherwise render a second, independent
                 # pitch control that fights the hand-built one for the same
                 # ALLOWED_PRESET_KEYS override slot in clip/character mode.
-                skip_keys={"lexicon", "pitch"},
+                # Program fields are in Options > Settings....
+                skip_keys={"lexicon", "pitch", *(f.key for f in schema if spec.is_program_field(f))},
                 on_change=self._on_schema_field_changed,
             )
         finally:
@@ -396,7 +414,7 @@ class SettingsDock(QDockWidget):
 
     def refresh_voice_choices(self) -> None:
         lang_code = self.schema_form.values().get("lang_code")
-        voices = self.app.get_all_voices(lang_code)
+        voices = self.app.get_all_voices(lang_code, backend=self.shown_backend())
         current = self.schema_form.values().get("voice")
         self.schema_form.set_choices("voice", [(v, v) for v in voices], current)
 
@@ -407,14 +425,11 @@ class SettingsDock(QDockWidget):
             self.refresh_voice_choices()
         if self._mode == "none":
             if key not in SHARED_CONFIG_KEYS:
-                self.app.set_engine_setting(self.app.backend.id, key, value)
+                self.app.set_engine_setting(self.shown_backend().id, key, value)
                 if self.app.editor is not None:
                     # A language or model setting is in the key: stale clips show now.
                     self.app.editor.rehighlight()
             self.app.schedule_save()
-            if key in spec.SEGMENTATION_KEYS and self.app.editor is not None:
-                # New pieces can stale clips; show it now, not on the next edit.
-                self.app.editor.rehighlight()
             return
         if key not in ALLOWED_PRESET_KEYS:
             return  # defense in depth - the field is disabled, unreachable via the UI
@@ -516,7 +531,14 @@ class SettingsDock(QDockWidget):
         """Always the project-wide ("none") state's values, regardless of
         what's currently rendered - see this module's docstring."""
         src = self._snapshot_none_values() if self._mode == "none" else self._none_values
-        return {k: v for k, v in src.items() if k in SHARED_CONFIG_KEYS or k in _HAND_BUILT_STATE_KEYS}
+        state = {k: v for k, v in src.items() if k in SHARED_CONFIG_KEYS or k in _HAND_BUILT_STATE_KEYS}
+        state.update(self._program_values())
+        return state
+
+    def _program_values(self) -> dict:
+        """The shared keys Options > Settings... edits, from `app.settings`."""
+        return {key: self.app.settings.get(key, spec.SETTINGS_DEFAULTS[key])
+                for key in (*spec.PROGRAM_SCHEMA_KEYS, "caching")}
 
     def apply_fx_enabled(self) -> bool:
         if self._mode == "none":

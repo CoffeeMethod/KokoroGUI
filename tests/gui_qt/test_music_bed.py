@@ -268,13 +268,12 @@ def test_the_track_duck_toggle_is_one_undoable_field(qt_app, qtbot, tmp_path, mo
 
 
 def test_the_ducking_setting_is_a_project_field(qt_app):
-    qt_app.selection.clear()
-    fields = qt_app.settings_dock.scope_fields
-    fields.build_project()
-    spin = fields.widgets["duck_db"]
+    window = qt_app.open_settings_window("Timeline")
+    spin = window.widgets["duck_db"]
     assert spin.value() == -12.0
     spin.setValue(-18.0)
-    spin.editingFinished.emit()
+    window.apply()
+    window.reject()
     assert qt_app.document.settings["duck_db"] == -18.0
     qt_app.document.undo_stack.undo()
     assert "duck_db" not in qt_app.document.settings

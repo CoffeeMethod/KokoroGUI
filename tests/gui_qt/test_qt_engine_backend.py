@@ -44,7 +44,9 @@ def test_engine_change_rebuilds_schema_form_for_the_characters_backend(qt_app):
     _use_engine(qt_app, "dummy")
     assert qt_app.settings_dock.schema_form is not original_form
 
-    dummy_schema_keys = {f.key for f in qt_app.backend.get_config_schema()}
+    from kokoro_gui.qt import spec
+
+    dummy_schema_keys = {f.key for f in qt_app.backend.get_config_schema() if not spec.is_program_field(f)}
     assert "lexicon" not in dummy_schema_keys  # dummy backend has no lexicon field
     rendered_keys = set(qt_app.settings_dock.schema_form.values().keys())
     # "pitch" is skip_keyed too - SettingsDock renders it via its own

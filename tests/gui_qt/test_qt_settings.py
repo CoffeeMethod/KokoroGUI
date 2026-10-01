@@ -124,8 +124,10 @@ def test_an_old_config_opens_with_its_language_on_kokoro(tmp_path, monkeypatch, 
 def test_a_per_engine_edit_lands_in_that_engines_bucket(qt_app):
     import kokoro_gui.qt.app as qt_app_module
 
-    qt_app.selection.clear()
-    qt_app.settings_dock.schema_form.widget_for("num_threads").setValue(4)
+    window = qt_app.open_settings_window("Performance")
+    window.engine_forms["kokoro"].widget_for("num_threads").setValue(4)
+    window.apply()
+    window.reject()
     qt_app.save_settings()
 
     with open(qt_app_module.CONFIG_FILE, "r", encoding="utf-8") as f:

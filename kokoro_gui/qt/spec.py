@@ -36,6 +36,22 @@ SEGMENTATION_KEYS = (
     "segment_target_words", "segment_at_paragraphs", "segment_at_sentences", "segment_at_pauses",
 )
 
+# Schema fields that belong to the program, not to a voice: Options >
+# Settings... shows them and the Settings tab leaves them out. That's the
+# segmentation keys, the default output format, and every field in a
+# backend's "Advanced" group (threads, the segment cache, Audio8's
+# reference-encoding cache) except the lexicon, which has its own tab.
+PROGRAM_SCHEMA_KEYS = (*SEGMENTATION_KEYS, "format")
+PROGRAM_SCHEMA_GROUP = "Advanced"
+
+
+def is_program_field(field) -> bool:
+    """True for a `ConfigField` the Settings window owns (see above)."""
+    if field.key == "lexicon":
+        return False
+    return field.key in PROGRAM_SCHEMA_KEYS or field.group == PROGRAM_SCHEMA_GROUP
+
+
 # Options > Transcript details: the overlay toggles under "Show details"
 # (`transcript_details`), as (settings key, menu label).
 DETAIL_LAYERS = (

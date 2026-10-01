@@ -41,6 +41,8 @@ Since 4.0.0-beta.2:
 -   A clip made from a `[Speaker:FX]:` line no longer reads the tag aloud, and the tag's FX is
     applied to the clip
 -   On Windows, an impulse response name with a colon is refused instead of loading a different file
+-   Options > Settings... holds the program and project settings in an OBS-style window; the
+    Settings tab keeps only the voice
 
 In 4.0.0-beta.2:
 

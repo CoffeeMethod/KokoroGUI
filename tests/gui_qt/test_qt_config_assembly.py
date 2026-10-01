@@ -209,7 +209,10 @@ def test_changing_the_word_target_restales_clips_whose_pieces_move(qt_app, tmp_p
     clip.segments = build_segments_from_results(key, results)
     assert qt_app.document.dirty_clips() == []
 
-    qt_app.settings_dock.schema_form.widget_for("segment_target_words").setValue(6)
+    window = qt_app.open_settings_window("Generation")
+    window.generation_form.widget_for("segment_target_words").setValue(6)
+    window.apply()
+    window.reject()
 
     assert qt_app.document.dirty_clips() == [clip]
 
@@ -272,7 +275,10 @@ def test_each_clip_generates_with_its_own_engines_language(qt_app, monkeypatch):
 def test_an_engines_model_settings_survive_selecting_another_engines_clip(qt_app, monkeypatch):
     audio8_clip, kokoro_clip = _mixed_engine_project(qt_app, monkeypatch)
     qt_app.selection.clear()
-    assert qt_app.backend.id == "audio8" and qt_app.settings_dock._mode == "none"
+    # With nothing selected the tab shows the engine for new characters (grill UI16).
+    qt_app.set_default_engine("audio8")
+    qt_app.settings_dock.rebuild_schema_form()
+    assert qt_app.settings_dock.shown_backend().id == "audio8" and qt_app.settings_dock._mode == "none"
     qt_app.settings_dock.schema_form.widget_for("temperature").setValue(0.5)
     text = qt_app.document.clip_text(audio8_clip)
     before = qt_app.document.segment_key_fn(text, audio8_clip)
@@ -280,7 +286,7 @@ def test_an_engines_model_settings_survive_selecting_another_engines_clip(qt_app
 
     qt_app.selection.select_clip(kokoro_clip.id)
     qt_app.selection.clear()
-    qt_app.document.characters.reverse()  # Kokoro is now the engine shown with nothing selected
+    qt_app.set_default_engine("kokoro")  # Kokoro is now the engine shown with nothing selected
     qt_app.settings_dock.rebuild_schema_form()
     qt_app.save_settings()
 

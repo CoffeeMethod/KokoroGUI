@@ -51,12 +51,13 @@ def test_the_alt_schedule_slices_the_source_track_under_each_cue(qt_app, tmp_pat
 
 def test_the_offset_shifts_every_slice_into_the_file(qt_app, tmp_path):
     first, _second = _with_cues_and_track(qt_app, tmp_path)
-    qt_app.selection.clear()
-    offset = qt_app.settings_dock.scope_fields.widgets["source_offset"]
+    window = qt_app.open_settings_window("Source track")
+    offset = window.widgets["source_offset"]
     assert offset.isEnabled()
 
     offset.setValue(0.5)
-    offset.editingFinished.emit()
+    window.apply()
+    window.reject()
     qt_app._rebuild_transport_schedule()
 
     assert qt_app.document.settings["source_track"]["offset_s"] == 0.5
@@ -82,14 +83,17 @@ def test_the_toggle_sets_the_transport_monitor_and_is_kept_in_the_session(qt_app
 def test_removing_the_source_track_falls_back_to_dub_and_undo_brings_the_choice_back(qt_app, tmp_path):
     _with_cues_and_track(qt_app, tmp_path)
     qt_app.transport_dock.monitor_buttons["original"].click()
-    qt_app.selection.clear()
+    window = qt_app.open_settings_window("Source track")
 
-    qt_app.settings_dock.scope_fields.widgets["source_remove"].click()
+    window.widgets["source_remove"].click()
+    assert "source_track" in qt_app.document.settings  # staged until Apply
+    window.apply()
     QApplication.processEvents()
     qt_app._rebuild_transport_schedule()
 
     assert "source_track" not in qt_app.document.settings
-    assert not qt_app.settings_dock.scope_fields.widgets["source_remove"].isEnabled()
+    assert not window.widgets["source_remove"].isEnabled()
+    window.reject()
     assert qt_app.transport.monitor == "dub" and qt_app.transport_dock.monitor() == "dub"
     assert qt_app.transport.loaded_alt_clips() == []
     qt_app.undo()

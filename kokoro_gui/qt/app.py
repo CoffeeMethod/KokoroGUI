@@ -801,7 +801,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         return engine_id if engine_id in engine_registry.list_engines() else self._primary_engine_id
 
     def set_default_engine(self, engine_id: str) -> None:
-        """The Settings tab's project-scope "Engine for new characters"."""
+        """The Settings tab's Engine row with nothing selected."""
         if engine_id not in engine_registry.list_engines():
             return
         self._set_setting("default_engine", engine_id)
@@ -921,6 +921,11 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         # No Engine menu: each character picks its engine in Edit >
         # Characters (grill V3).
         self.options_menu = bar.addMenu("&Options")
+        self.settings_window_action = self._action("&Settings...", self.open_settings_window, "Ctrl+,")
+        self.settings_window_action.setToolTip("Program and project settings: generation, performance, "
+                                               "pacing, tracks, timecode.")
+        self.options_menu.addAction(self.settings_window_action)
+        self.options_menu.addSeparator()
         self.device_menu = self.options_menu.addMenu("Device")
         self.device_group = QActionGroup(self)
         self.device_group.setExclusive(True)
@@ -1757,6 +1762,20 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.jit_enabled = checked
         self.settings["jit_enabled"] = checked
         self.schedule_save()
+
+    # --- Options: settings window ---------------------------------------------
+
+    def open_settings_window(self, page: str | None = None):
+        """Options > Settings...: the program and project settings
+        (kokoro_gui/qt/settings_window.py). Window-modal, opened with
+        `open()` so tests can drive it."""
+        from kokoro_gui.qt.settings_window import SettingsWindow
+
+        self.settings_window = SettingsWindow(self)
+        if page:
+            self.settings_window.show_page(page)
+        self.settings_window.open()
+        return self.settings_window
 
     # --- Options: transcript details ----------------------------------------
 
@@ -3170,9 +3189,6 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             # The next stale subproject, once this job's handler is done.
             QTimer.singleShot(0, self._advance_subproject_queue)
         self.transport_dock.set_busy(is_running)
-        threads_widget = self.settings_dock.schema_form.widget_for("num_threads")
-        if threads_widget is not None:
-            threads_widget.setEnabled(not is_running)
         self.settings_dock.volume_spin.setEnabled(not is_running)
         self.settings_dock.pitch_spin.setEnabled(not is_running)
         if not is_running:
