@@ -328,7 +328,8 @@ def test_import_ir_file_drops_control_characters_from_the_name(qt_app, tmp_path)
 
     from kokoro_gui.qt import fx_presets
 
-    src = tmp_path / "Big\tHall.wav"
+    # DEL, not a tab: a Windows file name can hold it.
+    src = tmp_path / "Big\x7fHall.wav"
     sf.write(str(src), np.array([1.0], dtype=np.float32), 24000)
 
     name = fx_presets.import_ir_file(str(src))

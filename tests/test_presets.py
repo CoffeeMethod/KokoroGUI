@@ -149,5 +149,6 @@ def test_list_ir_names_leaves_out_a_file_whose_name_is_unsafe(tmp_path, monkeypa
 
     monkeypatch.chdir(tmp_path)
     _wav(tmp_path / "presets" / "fx" / "ir" / "Hall.wav")
-    _wav(tmp_path / "presets" / "fx" / "ir" / "a\tb.wav")
+    # DEL, not a tab: a Windows file name can hold it.
+    _wav(tmp_path / "presets" / "fx" / "ir" / "a\x7fb.wav")
     assert list_ir_names(None) == ["Hall"]
