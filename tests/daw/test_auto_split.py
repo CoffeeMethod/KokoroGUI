@@ -246,3 +246,37 @@ def test_text_without_pause_markers_plans_as_before():
     triples, _ = plan_auto_split_clips(doc, split_by_paragraph=False)
     assert triples == [(0, len("Plain narration."), alice.id)]
     assert plan_pause_gaps(doc, triples) == {}
+
+
+# ---------------------------------------------------------------------------
+# plan_tag_fx (grill TE12)
+# ---------------------------------------------------------------------------
+
+
+def test_plan_tag_fx_maps_each_triple_inside_a_tagged_span_to_its_fx():
+    from kokoro_gui.daw.auto_split import plan_tag_fx
+
+    alice = Character.from_preset_dict("Alice", {})
+    bob = Character.from_preset_dict("Bob", {})
+    text = "[Alice:Radio]: One.\n\nTwo.\n\n[Bob]: Three."
+    doc = Document.from_plain_text(text, characters=[alice, bob])
+
+    triples, _unmatched = plan_auto_split_clips(doc, split_by_paragraph=True)
+    fx = plan_tag_fx(doc, triples)
+
+    starts = [t[0] for t in triples]
+    assert len(triples) == 3
+    assert fx == {starts[0]: "Radio", starts[1]: "Radio"}
+
+
+def test_assign_character_command_sets_and_undoes_clip_overrides():
+    from kokoro_gui.daw.undo import AssignCharacterCommand
+
+    alice = Character.from_preset_dict("Alice", {})
+    doc = Document.from_plain_text("[Alice:Radio]: Hi.", characters=[alice])
+    doc.undo_stack.push(AssignCharacterCommand(0, len(doc.text), alice.id, clip_overrides={"fx_preset": "Radio"}))
+    assert doc.clips[0].overrides == {"fx_preset": "Radio"}
+    doc.undo_stack.undo()
+    assert doc.clips == []
+    doc.undo_stack.redo()
+    assert doc.clips[0].overrides == {"fx_preset": "Radio"}

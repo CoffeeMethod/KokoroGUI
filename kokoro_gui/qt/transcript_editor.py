@@ -94,6 +94,7 @@ from kokoro_gui.daw.undo import ApplyWordsCommand, AssignCharacterCommand, TextE
 from kokoro_gui.engine.segmenting import PAUSE, WORD
 from kokoro_gui.qt import project as project_io
 from kokoro_gui.qt import theme
+from kokoro_gui.qt.fx_presets import list_fx_preset_names
 from kokoro_gui.qt.undo_coordinator import UndoCoordinator
 
 # Same tag syntax kokoro_gui.engine.text_extraction._SPEAKER_FX_TAG_PATTERN
@@ -1037,7 +1038,7 @@ class TranscriptEditor(QTextEdit):
             suffix += 1
         self.app.document.replace_text(prefix, len(old) - prefix - suffix, len(new) - prefix - suffix, new)
 
-    def _push_assign_character(self, start: int, end: int, character_id) -> None:
+    def _push_assign_character(self, start: int, end: int, character_id, clip_overrides=None) -> None:
         """Shared tail end of every character-assignment authoring path
         (Characters menu, gutter picker, header combo, paste-splitting, the
         `[Speaker:FX]:` shorthand). A range over a placeholder line (a
@@ -1046,7 +1047,8 @@ class TranscriptEditor(QTextEdit):
             self.app.set_status("A subproject's or an audio file's line can't be assigned a character.",
                                 "warning")
             return
-        self.app.document.undo_stack.push(AssignCharacterCommand(start, end, character_id))
+        self.app.document.undo_stack.push(AssignCharacterCommand(start, end, character_id,
+                                                                 clip_overrides=clip_overrides))
         self.rehighlight()
         self.app.schedule_save()
         self.app.refresh_timeline()
@@ -1525,7 +1527,7 @@ class TranscriptEditor(QTextEdit):
         match = _SHORTHAND_LINE_PATTERN.match(line_text)
         if match is None:
             return
-        speaker_name = match.group(1).split(":", 1)[0].strip()
+        speaker_name, _colon, fx_name = (part.strip() for part in match.group(1).partition(":"))
         character = self.app.document.get_character_by_name(speaker_name)
         if character is None:
             return
@@ -1534,7 +1536,15 @@ class TranscriptEditor(QTextEdit):
             return
         if self.app.document.clip_covering(line_start) is not None:
             return  # already tagged - don't reassign on every revisit
-        self._push_assign_character(line_start, line_end, character.id)
+        # The tag's FX name becomes the clip's FX (grill TE12).
+        overrides = None
+        if fx_name:
+            if fx_name in list_fx_preset_names(self.app.project_dir):
+                overrides = {"fx_preset": fx_name}
+            else:
+                self.app.set_status(f"No FX preset named '{fx_name}': the clip uses its character's FX.",
+                                    "warning")
+        self._push_assign_character(line_start, line_end, character.id, clip_overrides=overrides)
 
     # -- Characters menu -----------------------------------------------------
 

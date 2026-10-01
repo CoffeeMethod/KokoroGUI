@@ -94,3 +94,20 @@ def test_generate_clip_audio_reports_words_onset_and_tail(engine, fake_pipeline,
     # threshold is the onset and the audio runs to the end.
     assert results[0]["onset_s"] >= 0.0
     assert results[0]["tail_s"] >= 0.0
+
+
+def test_generate_clip_audio_never_speaks_inline_markup(engine, fake_pipeline, make_config, monkeypatch):
+    seen = []
+    real_call = type(fake_pipeline).__call__
+
+    def spy(self, text, *a, **k):
+        seen.append(text)
+        return real_call(self, text, *a, **k)
+
+    monkeypatch.setattr(type(fake_pipeline), "__call__", spy)
+    config = make_config(segment_target_words=4)
+    text = "[Old Man:Big Hall]: " + " ".join(f"v{i}" for i in range(9)) + "."
+    results = asyncio.run(engine.generate_clip_audio((0, text, config)))
+
+    assert seen == ["v0 v1 v2 v3 v4 v5 v6 v7 v8."]
+    assert [r["text"] for r in results] == seen

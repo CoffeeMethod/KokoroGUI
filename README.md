@@ -36,6 +36,12 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 ## What's new
 
+Since 4.0.0-beta.2:
+
+-   A clip made from a `[Speaker:FX]:` line no longer reads the tag aloud, and the tag's FX is
+    applied to the clip
+-   On Windows, an impulse response name with a colon is refused instead of loading a different file
+
 In 4.0.0-beta.2:
 
 -   Subtitle import, Fit to slot, the original dialogue and a reference video, for dubbing

@@ -740,3 +740,55 @@ def test_dragging_imported_words_inside_the_editor_moves_their_audio(qt_app, tmp
     moved = document.clip_covering(len(document.text) - 1)
     assert [s.range for s in moved.segments][-1] == times
     assert [s.range for s in document.get_clip(first_id).segments] == [[0.0, 0.45], [0.95, 1.5]]
+
+
+def _write_fx_preset(name):
+    import json
+    import os
+
+    import kokoro_gui.qt.app as qt_app_module
+
+    os.makedirs(qt_app_module.FX_PRESETS_DIR, exist_ok=True)
+    with open(os.path.join(qt_app_module.FX_PRESETS_DIR, f"{name}.json"), "w", encoding="utf-8") as f:
+        json.dump({"reverb_room_size": 0.5}, f)
+
+
+def test_shorthand_fx_name_becomes_the_clip_fx_override(qtbot, qt_app):
+    """Grill TE12: `[Alice:Radio]:` sets the new clip's FX preset, in the
+    same undo step as the clip."""
+    _write_fx_preset("Radio")
+    editor = _editor(qt_app)
+    alice = Character.from_preset_dict("Alice", {"voice": "af_bella"})
+    qt_app.document.characters.append(alice)
+
+    _type_line_and_press_enter(qtbot, editor, "[Alice:Radio]: hello there")
+
+    clip = qt_app.document.clip_covering(16)
+    assert clip is not None
+    assert clip.overrides.get("fx_preset") == "Radio"
+
+
+def test_shorthand_with_an_unknown_fx_still_makes_the_clip(qtbot, qt_app):
+    editor = _editor(qt_app)
+    alice = Character.from_preset_dict("Alice", {"voice": "af_bella"})
+    qt_app.document.characters.append(alice)
+
+    _type_line_and_press_enter(qtbot, editor, "[Alice:Nowhere]: hello there")
+
+    clip = qt_app.document.clip_covering(18)
+    assert clip is not None
+    assert "fx_preset" not in clip.overrides
+
+
+def test_a_shorthand_clip_keeps_its_tag_but_never_speaks_it(qtbot, qt_app):
+    """The tag stays in the clip's text but not in what it speaks."""
+    from kokoro_gui.daw.dirty import spoken_text
+
+    editor = _editor(qt_app)
+    alice = Character.from_preset_dict("Alice", {"voice": "af_bella"})
+    qt_app.document.characters.append(alice)
+    _type_line_and_press_enter(qtbot, editor, "[Alice]: hello [pause:1] there")
+
+    clip = qt_app.document.clip_covering(10)
+    assert qt_app.document.clip_text(clip).startswith("[Alice]: ")
+    assert spoken_text(qt_app.document.clip_text(clip), {}).split() == ["hello", "there"]

@@ -274,3 +274,48 @@ def test_extract_sections_pdf_without_outline_and_txt_are_one_section(tmp_path, 
     txt = tmp_path / "notes.txt"
     txt.write_text("Plain words.", encoding="utf-8")
     assert extract_sections(str(txt)) == [("notes", "Plain words.")]
+
+
+# --- strip_markup (grill TE11) ---
+
+
+def test_strip_markup_drops_a_leading_tag_and_its_space():
+    assert text_extraction.strip_markup("[Alice:Radio]: Hello there.") == "Hello there."
+
+
+def test_strip_markup_handles_a_name_with_spaces_and_a_mid_line_tag():
+    text = "[Old Man:Big Hall]: Come in. [Alice]: Thanks."
+    assert text_extraction.strip_markup(text) == "Come in. Thanks."
+
+
+def test_strip_markup_keeps_words_apart_around_a_glued_pause_marker():
+    assert text_extraction.strip_markup("Hello.[pause:1.5]Next.") == "Hello. Next."
+    assert text_extraction.strip_markup("Hello. [pause:1.5] Next.") == "Hello.  Next."
+
+
+def test_strip_markup_leaves_other_brackets_alone():
+    text = "He said [sic] it twice."
+    assert text_extraction.strip_markup(text) == text
+
+
+def test_strip_markup_origin_maps_each_character_back():
+    text = "[Bob]: Hi.[pause:1]Go."
+    stripped, origin = text_extraction.strip_markup(text, with_origin=True)
+    assert stripped == "Hi. Go."
+    assert len(origin) == len(stripped)
+    assert origin[0][:2] == (7, 8)  # the "H" after the tag
+    assert origin[3][:2] == (10, 19)  # the space that stands in for the marker
+    assert text[origin[4][0]] == "G"
+
+
+def test_lexicon_spoken_chains_markup_and_lexicon_spans():
+    from kokoro_gui.engine.lexicon import original_span, spoken
+
+    text = "[Alice:Radio]: Mr Nguyen arrived."
+    out, spans = spoken(text, {"Nguyen": "Win"}, with_spans=True)
+    assert out == "Mr Win arrived."
+    assert spoken(text, {"Nguyen": "Win"}) == out
+    win = out.index("Win")
+    assert text[slice(*original_span(spans, win, win + 3))] == "Nguyen"
+    arrived = out.index("arrived")
+    assert text[slice(*original_span(spans, arrived, arrived + 7))] == "arrived"

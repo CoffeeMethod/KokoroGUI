@@ -131,3 +131,29 @@ def test_auto_split_by_paragraph_checkbox_produces_finer_clips(qt_app):
 
     assert fine_count > coarse_count
     assert fine_count == 3
+
+
+# -- tag FX (grill TE12) ---------------------------------------------------------
+
+
+def test_auto_split_sets_a_tag_fx_as_the_clip_override(qt_app, monkeypatch):
+    import json
+    import os
+
+    import kokoro_gui.qt.app as qt_app_module
+
+    os.makedirs(qt_app_module.FX_PRESETS_DIR, exist_ok=True)
+    with open(os.path.join(qt_app_module.FX_PRESETS_DIR, "Radio.json"), "w", encoding="utf-8") as f:
+        json.dump({"reverb_room_size": 0.5}, f)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: warnings.append(a)))
+    bob = _add_bob(qt_app)
+    qt_app.document.text = "[Default:Radio]: Hello there.\n\n[Bob:Nowhere]: Hi."
+
+    qt_app.auto_split_and_generate()
+
+    by_character = {c.character_id: c for c in qt_app.document.clips}
+    default_clip = by_character[qt_app.document.characters[0].id]
+    assert default_clip.overrides.get("fx_preset") == "Radio"
+    assert "fx_preset" not in by_character[bob.id].overrides
+    assert any("Nowhere" in str(a) for a in warnings)

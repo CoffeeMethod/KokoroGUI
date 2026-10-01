@@ -353,3 +353,21 @@ def test_carry_segment_timing_fills_a_cache_hit_from_the_old_segment():
     carry_segment_timing(new, [[other], [old]])
     assert new[0].words == [["a", 0.0, 0.1]]
     assert (new[0].onset_s, new[0].tail_s) == (0.01, 0.02)
+
+
+# ---------------------------------------------------------------------------
+# inline markup (grill TE11)
+# ---------------------------------------------------------------------------
+
+def test_a_tag_is_never_its_own_predicted_segment():
+    from kokoro_gui.daw.dirty import spoken_text
+
+    text = "[Old Man:Big Hall]: " + " ".join(f"v{i}" for i in range(9)) + "."
+    config = _config(segment_target_words=4)
+    assert predict_segment_texts(spoken_text(text, config), config) == ["v0 v1 v2 v3 v4 v5 v6 v7 v8."]
+
+
+def test_the_segment_key_ignores_inline_markup():
+    config = _config()
+    plain = compute_expected_cache_hash("Hello there. Bye.", config)
+    assert compute_expected_cache_hash("[Alice:Radio]: Hello there.[pause:1] Bye.", config) == plain

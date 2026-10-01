@@ -50,7 +50,7 @@ from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character, Document
 from kokoro_gui.daw.arrangement import compute_arrangement, segment_timeline
 from kokoro_gui.daw.mixplan import clip_mixes
 from kokoro_gui.daw.imported import segment_plays
-from kokoro_gui.daw.auto_split import plan_auto_split_clips, plan_pause_gaps
+from kokoro_gui.daw.auto_split import plan_auto_split_clips, plan_pause_gaps, plan_tag_fx
 from kokoro_gui.daw.beds import playable_segments
 from kokoro_gui.daw.mixdown import duck_db_setting
 from kokoro_gui.daw.reference import SOURCE_TRACK_KEY, reference_slices, source_track_settings
@@ -83,6 +83,7 @@ from kokoro_gui.audio import post  # noqa: E402
 from kokoro_gui.audio.transport import MONITOR_MODES, ScheduledClip, Transport  # noqa: E402
 from kokoro_gui.daw.arrangement import clip_audio_duration_s  # noqa: E402
 from kokoro_gui.qt.characters_dialog import CharactersDialog  # noqa: E402
+from kokoro_gui.qt.fx_presets import list_fx_preset_names  # noqa: E402
 from kokoro_gui.qt.docks import (  # noqa: E402
     FXDock, LexiconDock, MixingDock, SettingsDock, TimelineDock, TranscriptDock, TransportDock,
     VideoDock, VoiceCloneDock,
@@ -3311,7 +3312,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     def auto_split_and_generate(self) -> None:
         """Generate menu > "Auto-split then generate": turns every
         `[Speaker:FX]:`-tagged span (and, with "Split by paragraph" on,
-        each span's paragraphs) into clips, then batch-generates them."""
+        each span's paragraphs) into clips, then batch-generates them. A
+        tag's FX name becomes the clip's `overrides["fx_preset"]` when that
+        preset exists (grill TE12)."""
         if self.is_busy():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before auto-splitting.")
             return
@@ -3332,9 +3335,19 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             return
 
         gaps = plan_pause_gaps(self.document, triples)
+        tag_fx = plan_tag_fx(self.document, triples)
+        known_fx = set(list_fx_preset_names(self.project_dir))
+        missing_fx = sorted({name for name in tag_fx.values() if name not in known_fx})
+        if missing_fx:
+            QMessageBox.warning(
+                self, "Unknown FX presets",
+                f"No FX preset found for: {', '.join(missing_fx)}. Those clips use their character's FX.",
+            )
         for start, end, character_id in triples:
             fields = {"gap_before_s": gaps[start]} if start in gaps else None
-            self.document.undo_stack.push(AssignCharacterCommand(start, end, character_id, clip_fields=fields))
+            overrides = {"fx_preset": tag_fx[start]} if tag_fx.get(start) in known_fx else None
+            self.document.undo_stack.push(AssignCharacterCommand(start, end, character_id, clip_fields=fields,
+                                                                 clip_overrides=overrides))
 
         self.editor.rehighlight()
         self.schedule_save()
@@ -3501,8 +3514,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         """`(start, end)` document offsets of the word the playhead is on
         inside `placed`, or None. Segment by cumulative duration, word by
         time, then the word's offset in the clip's spoken text mapped back
-        through the lexicon (`apply_lexicon(..., with_spans=True)`) to the
-        transcript."""
+        through the lexicon and the stripped markup
+        (`lexicon.spoken(..., with_spans=True)`) to the transcript."""
         for segment, seg_start, scale in segment_timeline(placed):
             words = segment.words or []
             seg_end = seg_start + float(segment.duration or 0.0) * scale
@@ -3519,14 +3532,14 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         """Document offsets of word `word_index` of `segment`: the n-th
         whitespace word of the segment's text, found in the clip's spoken
         text from where the segment's text starts."""
-        from kokoro_gui.engine.lexicon import apply_lexicon, original_span
+        from kokoro_gui.engine.lexicon import original_span, spoken as spoken_with_spans
 
         document = self.level.document
         extent = document.clip_extent(clip.id)
         if extent is None:
             return None
         clip_text = document.clip_text(clip)
-        spoken, spans = apply_lexicon(clip_text, self.settings.get("lexicon", {}), with_spans=True)
+        spoken, spans = spoken_with_spans(clip_text, self.settings.get("lexicon", {}), with_spans=True)
         seg_words = (segment.text or "").split()
         if word_index >= len(seg_words):
             return None

@@ -5,12 +5,15 @@
 `ConversionMixin.generate_clip_audio`), and the dirty check
 (kokoro_gui/daw/dirty.py) calls it before hashing, so a segment key is over
 the text the engine spoke and a lexicon edit stales exactly the clips whose
-text it rewrites."""
+text it rewrites. A clip's text goes through `spoken`, which strips its
+inline tags and pause markers first."""
 import json
 import re
 
+from kokoro_gui.engine.text_extraction import strip_markup
 
-def apply_lexicon(text, lexicon, cache=None, with_spans=False):
+
+def apply_lexicon(text, lexicon, cache=None, with_spans=False, origin=None):
     """Applies a dict of replacements to `text`: case-insensitive literal
     find, the replacement passed to `re.sub` as given. `cache` maps a source string to
     its compiled pattern; pass a dict that outlives the call to skip
@@ -21,14 +24,24 @@ def apply_lexicon(text, lexicon, cache=None, with_spans=False):
     order: an unchanged stretch maps character for character, a
     replacement maps as a whole to the original text it replaced. The
     transcript maps a spoken word's offset back through it
-    (`original_offset`)."""
+    (`original_offset`). `origin` (implies `with_spans`) is where each
+    character of `text` came from in some earlier text, as
+    `text_extraction.strip_markup(..., with_origin=True)` gives it; the
+    spans are then into that earlier text."""
+    if origin is not None:
+        with_spans = True
     if not lexicon:
+        if origin is not None:
+            return text, _collapse_spans(origin)
         return (text, [(0, len(text), 0, len(text))] if text else []) if with_spans else text
     if cache is None:
         cache = {}
     # Per character of the current text: the original span it came from,
     # and which replacement produced it (None for untouched text).
-    origin = [(i, i + 1, None) for i in range(len(text))] if with_spans else None
+    if origin is not None:
+        origin = list(origin)
+    elif with_spans:
+        origin = [(i, i + 1, None) for i in range(len(text))]
     replacements = 0
 
     for src, dest in lexicon.items():
@@ -61,6 +74,16 @@ def apply_lexicon(text, lexicon, cache=None, with_spans=False):
     if with_spans:
         return text, _collapse_spans(origin)
     return text
+
+
+def spoken(text, lexicon, cache=None, with_spans=False):
+    """What a clip speaks: `text` without its markup
+    (`text_extraction.strip_markup`), then the lexicon. With `with_spans`
+    the spans map back to `text` itself, markup included."""
+    if not with_spans:
+        return apply_lexicon(strip_markup(text), lexicon, cache)
+    stripped, origin = strip_markup(text, with_origin=True)
+    return apply_lexicon(stripped, lexicon, cache, origin=origin)
 
 
 def _collapse_spans(origin) -> list:

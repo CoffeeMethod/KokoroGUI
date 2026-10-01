@@ -2,11 +2,13 @@
 the transcript's details overlays (Options > Transcript details).
 
 A clip is generated as the pieces `segmenting.split_text` cuts from its
-text after the lexicon (`dirty.spoken_text`). For a clean clip those pieces
+text without inline tags and pause markers, after the lexicon
+(`dirty.spoken_text`). For a clean clip those pieces
 are the stored `Segment.text`s (that is what clean means), so the same
 prediction is right for every clip, stale or not. `clip_pieces` gives each
 piece as document offsets: `segmenting.split_spans` on the spoken text, each
-span mapped back through the lexicon (`lexicon.original_span`), plus the
+span mapped back through the lexicon and the stripped markup
+(`lexicon.spoken`, `lexicon.original_span`), plus the
 clip's start. Like `QtTTSApp._word_offsets` it takes the clip's runs to be
 contiguous.
 
@@ -18,7 +20,7 @@ from dataclasses import dataclass
 
 from kokoro_gui.daw import arrangement
 from kokoro_gui.engine import segmenting
-from kokoro_gui.engine.lexicon import apply_lexicon, lexicon_signature, original_span
+from kokoro_gui.engine.lexicon import lexicon_signature, original_span, spoken as spoken_with_spans
 
 _MEMO_SIZE = 4096
 _memo: "OrderedDict[tuple, tuple]" = OrderedDict()
@@ -57,13 +59,14 @@ def _analyse(text: str, config: dict) -> tuple:
     if hit is not None:
         _memo.move_to_end(key)
         return hit
-    spoken, spans = apply_lexicon(text, config.get("lexicon") or {}, _lexicon_patterns, with_spans=True)
+    spoken, spans = spoken_with_spans(text, config.get("lexicon") or {}, _lexicon_patterns, with_spans=True)
     pieces = []
     for index, (start, end, level) in enumerate(segmenting.split_spans(spoken, config)):
         o_start, o_end = original_span(spans, start, end)
         pieces.append(PieceSpan(index, o_start, o_end, level, len(spoken[start:end].split())))
+    # A pause marker between two words becomes one space: not a rewrite.
     rewrites = [(o_start, o_end, spoken[n_start:n_end]) for o_start, o_end, n_start, n_end in spans
-                if text[o_start:o_end] != spoken[n_start:n_end]]
+                if text[o_start:o_end] != spoken[n_start:n_end] and spoken[n_start:n_end].strip()]
     result = (tuple(pieces), tuple(rewrites))
     _memo[key] = result
     if len(_memo) > _MEMO_SIZE:

@@ -128,3 +128,14 @@ def test_format_length():
     assert segment_view.format_length(62.3) == "1:02"
     assert segment_view.format_length(3723, estimate=True) == "~1:02:03"
     assert segment_view.format_length(None) == "0.0 s"
+
+
+def test_pieces_start_after_a_tag_inside_the_clip():
+    text = "[Alice:Radio]: " + _sentences(2)
+    doc, alice = _doc(text)
+    clip = doc.assign_character_to_range(0, len(text), alice.id)
+    config = {"segment_target_words": 5}
+    pieces = segment_view.clip_pieces(doc, clip, config)
+    assert [" ".join(doc.text[p.start:p.end].split()) for p in pieces] == ["w1 w2 w3 w4 w5.", "w6 w7 w8 w9 w10."]
+    assert pieces[0].start == len("[Alice:Radio]: ")
+    assert segment_view.lexicon_rewrites(doc, clip, config) == []

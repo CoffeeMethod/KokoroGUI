@@ -36,7 +36,7 @@ import os
 from kokoro_gui.daw.models import Segment
 from kokoro_gui.engine import caching
 from kokoro_gui.engine.caching import compute_cache_key, effective_speed
-from kokoro_gui.engine.lexicon import apply_lexicon
+from kokoro_gui.engine.lexicon import spoken
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
 
 # Compiled lexicon patterns, shared across dirty checks (the engine keeps
@@ -45,9 +45,10 @@ _lexicon_patterns = {}
 
 
 def spoken_text(text: str, config: dict) -> str:
-    """`text` after `config["lexicon"]`: what generation hands the engine,
-    and so what the key and the predicted segment texts are over."""
-    return apply_lexicon(text, config.get("lexicon") or {}, _lexicon_patterns)
+    """`text` without its inline tags and pause markers, after
+    `config["lexicon"]`: what generation hands the engine, and so what the
+    key and the predicted segment texts are over."""
+    return spoken(text, config.get("lexicon") or {}, _lexicon_patterns)
 
 
 def compute_expected_cache_hash(text: str, config: dict, engine_version=None, key_fn=None, clip=None) -> str:

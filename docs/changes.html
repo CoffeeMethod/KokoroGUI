@@ -106,7 +106,31 @@
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">Development branch</span>Unreleased <span class="ver-badge">NEXT</span></h2>
-        <p>Nothing yet since the 4.0.0-beta.2 tag.</p>
+        <p>Changes since the 4.0.0-beta.2 tag.</p>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Text and generation</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Inline tags are no longer spoken</h4>
+            <p>A clip made from a <code>[Speaker]:</code> or <code>[Speaker:FX]:</code> line, by Generate &gt; Auto-split then generate or by typing the line and pressing Enter, covers its tag. Before, the engine read the tag aloud, and the splitter could make the tag a segment on its own (a name with spaces, such as <code>[Old Man:Big Hall]:</code>, always did). Now every clip's text drops its tags and <code>[pause:x]</code> markers before the Lexicon and the splitter run. The tag stays in the transcript and keeps the character's color, and subtitles and the cue sheet leave it out too. Projects don't change, but a clip whose text holds a tag is marked stale once and needs Generate.</p>
+          </li>
+          <li>
+            <h4>A tag's FX applies to its clip</h4>
+            <p>The FX half of <code>[Alice:Radio]:</code> used to be ignored on clips. Auto-split and the typed-line shortcut now set the new clip's FX preset to <code>Radio</code>, the same as picking it in the Transcript panel's FX box, in the same undo step as the clip. Change it in the Audio FX tab afterwards; editing the tag text doesn't change it. If no preset has that name, the clip is still made with its character's FX, and auto-split names the missing presets in a warning (the typed line says so in the status bar).</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Security</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Impulse response names with a colon are refused on Windows</h4>
+            <p>Windows read a convolution reverb name such as <code>a:b</code> (from a project or an FX preset) as a drive-relative path and loaded the impulse response called <code>b</code>. Such a name is now refused there, as it already was elsewhere, and the reverb plays without it.</p>
+          </li>
+        </ul>
       </div>
     </div>
   </section>

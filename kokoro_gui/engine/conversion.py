@@ -19,6 +19,7 @@ from pedalboard.io import AudioFile
 
 from kokoro_gui.engine import stats as generation_stats
 from kokoro_gui.engine.caching import to_numpy
+from kokoro_gui.engine.text_extraction import strip_markup
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys, filter_fx_preset_values
 from kokoro_gui.engine.time_utils import format_duration
 
@@ -157,13 +158,14 @@ class ConversionMixin:
         so an FX change is audible without regenerating. Only the no-clips
         whole-document path still bakes FX into its files.
 
-        Applies `config["lexicon"]` to the text first, so the segment key
-        and `Segment.text` are over what the engine speaks; the dirty check
-        applies the same function before hashing.
+        Strips the clip's inline tags and pause markers and applies
+        `config["lexicon"]` first, so the segment key and `Segment.text` are
+        over what the engine speaks; the dirty check does the same before
+        hashing (`dirty.spoken_text`).
         """
         index, text, config = chunk_data
         config = dict(config)
-        text = self.apply_lexicon(text, config.get("lexicon") or {})
+        text = self.apply_lexicon(strip_markup(text), config.get("lexicon") or {})
         config["voice"] = self.resolve_voice_path(config["voice"])
         config["raw_output"] = True
         os.makedirs(config["out_dir"], exist_ok=True)

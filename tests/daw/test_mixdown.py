@@ -294,3 +294,20 @@ def test_an_imported_clip_crossfade_blends_the_two_sides_of_the_cut(tmp_path):
     # next range fades in.
     ramp = np.arange(xfade) / xfade
     assert np.allclose(data[8000:8000 + xfade], 0.9 * (1 - ramp) - 0.4 * ramp, atol=2e-3)
+
+
+def test_srt_and_cue_sheet_leave_out_inline_markup(tmp_path):
+    from kokoro_gui.daw.mixdown import write_cue_sheet
+
+    alice = Character.from_preset_dict("Alice", {})
+    track = Track(name="A", character_id=alice.id, order_index=0)
+    clip = Clip(character_id=alice.id, track_id=track.id,
+                segments=[Segment(order_index=0, duration=1.0, audio_path=_wav(tmp_path / "a.wav", 0.25, 1.0))])
+    text = "[Alice:Radio]: Hello there."
+    doc = _doc(text, [(0, len(text), clip)], characters=[alice], tracks=[track])
+    arrangement = compute_arrangement(doc)
+
+    srt = open(write_srt(doc, arrangement, str(tmp_path / "a.srt")), encoding="utf-8").read()
+    cues = open(write_cue_sheet(doc, arrangement, str(tmp_path / "a.csv")), encoding="utf-8").read()
+    assert "\nHello there.\n" in srt and "[Alice" not in srt
+    assert "Hello there." in cues and "[Alice" not in cues

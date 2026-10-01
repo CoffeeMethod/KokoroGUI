@@ -160,13 +160,17 @@ class AssignCharacterCommand(Command):
     time - correct across any number of undo/redo cycles.
     """
 
-    def __init__(self, start: int, end: int, character_id, clip_fields: "dict | None" = None):
+    def __init__(self, start: int, end: int, character_id, clip_fields: "dict | None" = None,
+                 clip_overrides: "dict | None" = None):
         self.start = start
         self.end = end
         self.character_id = character_id
         # Set on the new clip after the split, e.g. `{"gap_before_s": 1.5}`
         # from a `[pause:x]` marker, so a redo recreates it too.
         self.clip_fields = dict(clip_fields or {})
+        # Entries merged into the new clip's `overrides`, e.g.
+        # `{"fx_preset": "Radio"}` from a `[Name:Radio]:` tag (grill TE12).
+        self.clip_overrides = dict(clip_overrides or {})
         self._pre_runs: "list | None" = None
         self._pre_clips: "list | None" = None
         self._created_track_ids: list = []
@@ -179,6 +183,8 @@ class AssignCharacterCommand(Command):
         new_clip = document.assign_character_to_range(self.start, self.end, self.character_id)
         for name, value in self.clip_fields.items():
             setattr(new_clip, name, copy.deepcopy(value))
+        for key, value in self.clip_overrides.items():
+            new_clip.overrides[key] = copy.deepcopy(value)
         self.new_clip_id = new_clip.id
         # A character's first use makes its track (grill PR4); undo takes it
         # away again.

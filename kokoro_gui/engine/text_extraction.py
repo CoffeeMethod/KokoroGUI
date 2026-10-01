@@ -30,6 +30,41 @@ _SPEAKER_FX_TAG_PATTERN = r"\[([^\]\n]{1,100})\]:\s*"
 # untagged and gives the next clip `gap_before_s`; the whole-document path
 # strips it so it's never spoken. Not a speaker tag (no trailing colon).
 PAUSE_MARKER_PATTERN = r"\[pause:(\d+(?:\.\d+)?)\]"
+_MARKUP = re.compile(f"{_SPEAKER_FX_TAG_PATTERN}|{PAUSE_MARKER_PATTERN}")
+
+
+def strip_markup(text: str, with_origin: bool = False):
+    """`text` without its `[Name]:`/`[Name:FX]:` tags and `[pause:x]`
+    markers: what a clip speaks (grill TE11). A clip made from a tagged line
+    covers its tag, so every clip path (generation, the dirty check, the
+    segmenter, subtitles) reads its text through this first. A marker goes
+    away entirely when whitespace already sits on either side of it, else it
+    becomes one space so the words around it stay apart.
+
+    `with_origin=True` returns `(text, origin)`: per character of the result,
+    `(orig_start, orig_end, rid)`, the shape `lexicon.apply_lexicon` takes as
+    `origin` to chain its spans onto these (`lexicon.spoken`)."""
+    if "[" not in text:
+        return (text, [(i, i + 1, None) for i in range(len(text))]) if with_origin else text
+    parts, origin, last = [], [], 0
+    for index, match in enumerate(_MARKUP.finditer(text)):
+        start, end = match.span()
+        parts.append(text[last:start])
+        if with_origin:
+            origin.extend((i, i + 1, None) for i in range(last, start))
+        before = text[start - 1] if start else " "
+        after = text[end] if end < len(text) else " "
+        if not (before.isspace() or after.isspace()):
+            parts.append(" ")
+            if with_origin:
+                origin.append((start, end, ("markup", index)))
+        last = end
+    parts.append(text[last:])
+    stripped = "".join(parts)
+    if not with_origin:
+        return stripped
+    origin.extend((i, i + 1, None) for i in range(last, len(text)))
+    return stripped, origin
 
 
 class InlineTagSpan(NamedTuple):

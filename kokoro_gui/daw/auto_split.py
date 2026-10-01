@@ -94,6 +94,20 @@ def plan_pause_gaps(document, triples: list) -> dict:
     return _carve_pauses(document.text, triples)[1]
 
 
+def plan_tag_fx(document, triples: list) -> dict:
+    """`{start: fx_name}` for the planned ranges that sit inside a
+    `[Name:FX]:` span, from `plan_auto_split_clips`'s triples. The caller
+    sets each as the new clip's `overrides["fx_preset"]` (grill TE12)."""
+    spans = [s for s in find_character_fx_spans(document.text) if s.fx_name]
+    fx = {}
+    for start, _end, _character_id in triples:
+        for span in spans:
+            if span.start <= start < span.end:
+                fx[start] = span.fx_name
+                break
+    return fx
+
+
 def _paragraph_ranges(text: str, base_offset: int) -> list:
     """Splits `text` (a substring of the document starting at `base_offset`
     in the document's own coordinates) into `(start, end)` ranges on

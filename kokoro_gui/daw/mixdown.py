@@ -50,6 +50,7 @@ from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement, segment
 from kokoro_gui.daw.imported import segment_plays
 from kokoro_gui.daw.mixplan import ClipMix, clip_mixes
 from kokoro_gui.daw.timecode import format_position
+from kokoro_gui.engine.text_extraction import strip_markup
 
 SOUNDFILE_FORMATS = {"wav", "flac", "ogg"}
 CUE_SHEET_COLUMNS = ("start", "end", "character", "source_text", "text", "status", "note")
@@ -102,7 +103,7 @@ def write_srt(document, arrangement: Arrangement, path: str, granularity: str = 
         for placed in arrangement.placed:
             if placed.estimated or getattr(placed.clip, "is_bed", False):
                 continue
-            text = document.clip_text(placed.clip).strip()
+            text = strip_markup(document.clip_text(placed.clip)).strip()
             if text:
                 spans.append((placed.start_s, placed.end_s, text))
     rows = [
@@ -133,7 +134,7 @@ def write_cue_sheet(document, arrangement: Arrangement, path: str) -> str:
                 _cue_time(document.settings, placed.end_s),
                 character.name if character is not None else "",
                 clip.source_text or "",
-                document.clip_text(clip).strip(),
+                strip_markup(document.clip_text(clip)).strip(),
                 clip.status,
                 clip.note,
             ])
