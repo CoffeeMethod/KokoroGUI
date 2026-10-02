@@ -38,8 +38,8 @@ import threading
 import time
 
 import playback
-from PySide6.QtCore import QEvent, QFileSystemWatcher, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, QFileSystemWatcher, QTimer, QUrl, Qt, Signal
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QWidget
 
 from kokoro_gui.daw import library as character_library, revision, wordalign
@@ -65,6 +65,9 @@ from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spe
 from kokoro_gui.qt import settings as qt_settings
 from kokoro_gui.qt.open_projects import OpenProject
 from kokoro_gui.qt.reveal import reveal
+from kokoro_gui.qt.about_dialog import (
+    SHORTCUT_DESCRIPTION_PROPERTY, AboutDialog, ShortcutsDialog, device_summary,
+)
 from kokoro_gui.qt import recording_import
 from kokoro_gui.qt.subprojects import ParentStore, SubprojectsMixin
 from kokoro_gui.qt.selection import SelectionModel
@@ -75,6 +78,7 @@ from kokoro_gui.qt.signals import EngineSignalBridge, wire_engine
 from kokoro_gui.qt.workspace import ADVANCED, SIMPLE, WorkspaceManager
 
 CONFIG_FILE = "config_qt.json"
+DOCS_URL = "https://coffeemethod.github.io/KokoroGUI/"
 PRESETS_DIR = "presets"
 FX_PRESETS_DIR = os.path.join(PRESETS_DIR, "fx")
 # The project a fresh install (or a config with no last_project) opens.
@@ -310,7 +314,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self._rebuild_transport_schedule()
         self._update_window_title()
 
-        self.set_status("Initializing engine...")
+        self.set_status(self._first_launch_device_notice() or "Initializing engine...")
         # Focus first: a nested block's child becomes the docks' document
         # before the active engine is read.
         self.selection.changed.connect(self._on_selection_for_focus)
@@ -957,6 +961,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.device_group = QActionGroup(self)
         self.device_group.setExclusive(True)
         self.device_actions: dict = {}
+        self.detected_device_action = self.device_menu.addAction(f"Detected: {device_summary()}")
+        self.detected_device_action.setEnabled(False)
+        self.device_menu.addSeparator()
         cuda_ok = self._cuda_available()
         for device_id, label in (("auto", "Auto"), ("cpu", "CPU"), ("cuda", "CUDA")):
             action = QAction(label, self)
@@ -1043,6 +1050,31 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.reset_layout_action = self._action("Reset layout", self.reset_workspace)
         self.workspace_menu.addAction(self.reset_layout_action)
 
+        # Help
+        self.help_menu = bar.addMenu("&Help")
+        self.documentation_action = self._action("&Documentation", self.open_documentation)
+        self.shortcuts_action = self._action("&Keyboard Shortcuts", self.show_shortcuts)
+        self.about_action = self._action("&About KokoroGUI", self.show_about)
+        self.help_menu.addAction(self.documentation_action)
+        self.help_menu.addAction(self.shortcuts_action)
+        self.help_menu.addSeparator()
+        self.help_menu.addAction(self.about_action)
+
+    def open_documentation(self) -> None:
+        QDesktopServices.openUrl(QUrl(DOCS_URL))
+
+    def show_shortcuts(self) -> ShortcutsDialog:
+        dialog = ShortcutsDialog(self)
+        dialog.open()
+        self._shortcuts_dialog = dialog
+        return dialog
+
+    def show_about(self) -> AboutDialog:
+        dialog = AboutDialog(self, CONFIG_FILE)
+        dialog.open()
+        self._about_dialog = dialog
+        return dialog
+
     def _action(self, text: str, slot, shortcut=None) -> QAction:
         action = QAction(text, self)
         if shortcut is not None:
@@ -1058,6 +1090,29 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             return bool(torch.cuda.is_available())
         except Exception:
             return False
+
+    def device_notice(self) -> str:
+        """Which device the engines run on, given what's detected and the
+        Options > Device choice. The engines pick CUDA or the CPU only, so an
+        Apple GPU reads as detected but unused."""
+        detected = device_summary()
+        chosen = self.settings.get("device", "auto")
+        if chosen == "cpu":
+            return f"Engines will run on the CPU (detected: {detected}). Change it in Options > Device."
+        if detected.startswith("MPS"):
+            return (f"Detected {detected}. Engines run on the CPU, since they don't support MPS. "
+                    "Change it in Options > Device.")
+        return f"Engines will run on {detected}. Change it in Options > Device."
+
+    def _first_launch_device_notice(self) -> str | None:
+        """The device line for the status bar, once per install: None after
+        the first launch that showed it."""
+        if self.settings.get("device_notice_shown"):
+            return None
+        # Saved with the next settings write (or on close), not scheduled here:
+        # a scheduled save would put a "*" on a project nobody has touched.
+        self.settings["device_notice_shown"] = True
+        return self.device_notice()
 
     def _build_docks(self) -> None:
         self.transcript_dock = TranscriptDock(self)
@@ -1168,9 +1223,11 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
         self.space_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         self.space_shortcut.activated.connect(self.transport.toggle)
+        self.space_shortcut.setProperty(SHORTCUT_DESCRIPTION_PROPERTY, "Play / pause")
         self.ctrl_space_shortcut = QShortcut(QKeySequence("Ctrl+Space"), self)
         self.ctrl_space_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.ctrl_space_shortcut.activated.connect(self.transport.toggle)
+        self.ctrl_space_shortcut.setProperty(SHORTCUT_DESCRIPTION_PROPERTY, "Play / pause (works in any panel)")
 
     # --- status helpers ---------------------------------------------------
 
