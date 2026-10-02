@@ -35,6 +35,7 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
     and a filename template. Presets for ACX, Apple Podcasts, Spotify and YouTube check each file, and one export can
     write a file per subproject or marker range. Stems come per track or per character, with a dialogue stem for
     dubbing. Transcripts (WebVTT, SRT, Podcasting 2.0 JSON, plain text), a chapters file and show notes can ride along.
+    mp3, flac and ogg files carry a title, artist, show, episode number and cover image, and an mp3 carries its chapters.
     File > Measure Loudness reports the numbers.
 -   **One-file projects.** A `.tbaw` holds the text, the audio and every voice it uses, so it opens
     on another machine.
@@ -61,6 +62,7 @@ Unreleased:
 -   Export can write a stem per track or per character and a dialogue stem without the music, all the length of the mix
 -   Export can write transcripts with speaker names (WebVTT, SRT, Podcasting 2.0 JSON, plain text), a chapters file and show notes
 -   Sliders for compressor and limiter release, compressor attack, reverb dry level, chorus mix and phaser depth and mix
+-   Export writes tags and a cover image into mp3, flac and ogg files, and markers as chapters in an mp3
 
 In 4.0.0-beta.2:
 
