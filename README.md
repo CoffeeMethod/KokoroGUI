@@ -40,6 +40,7 @@ Unreleased:
 
 -   A Help menu with Documentation, Keyboard Shortcuts and About, and File > Show in Folder
 -   A log file, and a dialog with the traceback when something crashes
+-   Importing a big book no longer freezes the window, and an oversized or malformed one is refused with the reason
 
 In 4.0.0-beta.2:
 
