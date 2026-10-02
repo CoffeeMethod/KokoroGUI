@@ -278,6 +278,26 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Lexicon</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Rules can match a whole word or a pattern, and run in order</h4>
+            <p>The Lexicon tab is now a table with Find, Replace, Mode, Match case and a delete button for each rule. <strong>Exact text</strong> matches anywhere, as every rule did before. <strong>Whole word</strong> skips a match inside a longer word, so a rule for "Al" leaves "Also" alone. <strong>Pattern</strong> is a regular expression, and <code></code> in Replace is its first group. A rule ignores case unless Match case is ticked.</p>
+            <p>Rules apply from the top down, so a later rule sees the output of an earlier one. Drag a row number to move a rule, or select it and press Move up or Move down. An invalid pattern, or a Replace that names a group the pattern lacks, is refused and the reason shows under the table. In Exact text and Whole word, Replace is spoken as typed, backslashes included.</p>
+          </li>
+          <li>
+            <h4>Rules you already have speak the same text</h4>
+            <p>The first time the app reads an older <code>config_qt.json</code>, its lexicon (a plain list of finds and replacements) becomes Exact text, case-insensitive rules in the same order. Nothing that gets spoken changes, so no clip turns stale. The file is rewritten in the new shape on the next save, which an older build of the app can't read. The lexicon is still an app setting shared by every project, not part of a <code>.tbaw</code>.</p>
+          </li>
+          <li>
+            <h4>A Test field shows how a sentence will be read</h4>
+            <p>Type a sentence under the table. "After your rules" shows it once the lexicon has run, with tags and <code>[pause:x]</code> markers removed as generation does. For Kokoro, "Kokoro reads" adds each word with the phonemes the model's pronunciation step gives it, so you can see how <code>1999</code>, <code>Dr.</code> or <code>$4.50</code> will be said before you generate. It asks a moment after you stop typing, on the engine's worker thread, and loads the pronunciation step only, never the voice model. Other engines show the first line only.</p>
+            <p>Select text in the transcript and choose "How will this be read?" from the right-click menu to put it in the Test field.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Menus and help</h3>
         <ul class="change-list">
           <li>

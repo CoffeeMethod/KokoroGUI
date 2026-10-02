@@ -535,7 +535,11 @@
           <caption>Lexicon</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Original text / Replacement</td><td>A list of literal find-and-replace rules, applied case-insensitively to every segment's text before generation, on every path: clips, whole document, JIT and Preview. Adding or removing a rule marks the clips whose text it changes as stale, and no others. Useful for acronyms, names, or jargon a voice mispronounces.</td></tr>
+            <tr><td>Find / Replace</td><td>A rule per row, applied to every segment's text before generation, on every path: clips, whole document, JIT and Preview. Adding, editing, reordering or removing a rule marks the clips whose text it changes as stale, and no others. Useful for acronyms, names, or jargon a voice mispronounces. Replace is spoken as typed; in Pattern mode, <code></code> is the pattern's first group.</td></tr>
+            <tr><td>Mode</td><td>Exact text matches anywhere. Whole word skips a match inside a longer word, so a rule for "Al" leaves "Also" alone. Pattern is a regular expression. An invalid one is refused with the reason shown under the table.</td></tr>
+            <tr><td>Match case</td><td>Off by default: the rule matches whatever the casing.</td></tr>
+            <tr><td>Row order</td><td>Rules apply from the top down, and a later rule sees an earlier one's output. Drag a row number, or use Move up and Move down.</td></tr>
+            <tr><td>Test</td><td>Type a sentence to see it after the rules. For Kokoro, a second line shows each word with the phonemes it will be read as, so you can check numbers and abbreviations before generating. Right-click selected transcript text and choose "How will this be read?" to send it here.</td></tr>
           </tbody>
         </table>
       </div>
