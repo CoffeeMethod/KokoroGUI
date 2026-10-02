@@ -58,6 +58,7 @@ Unreleased:
 -   A Zoom to fit button, a timeline that zooms out to ten hours in one screen, and a project that reopens at its
     last playhead, zoom, scroll and selected clip
 -   Export can write a stem per track or per character and a dialogue stem without the music, all the length of the mix
+-   Sliders for compressor and limiter release, compressor attack, reverb dry level, chorus mix and phaser depth and mix
 
 In 4.0.0-beta.2:
 
