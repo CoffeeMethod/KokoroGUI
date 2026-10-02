@@ -67,7 +67,7 @@ from scipy.signal import resample_poly
 
 from kokoro_gui.audio import limiter, loudness as loudness_mod, mixer, post
 from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement, segment_timeline
-from kokoro_gui.daw import markers as marker_ops
+from kokoro_gui.daw import markers as marker_ops, transcripts
 from kokoro_gui.daw.imported import segment_plays
 from kokoro_gui.daw.mixplan import ClipMix, clip_mixes
 from kokoro_gui.daw.timecode import format_position
@@ -113,14 +113,7 @@ class ExportResult:
 
 
 def _format_srt_time(seconds: float) -> str:
-    millis = int(round((seconds - int(seconds)) * 1000))
-    whole = int(seconds)
-    if millis == 1000:
-        whole += 1
-        millis = 0
-    minutes, secs = divmod(whole, 60)
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
+    return transcripts.format_timestamp(seconds)
 
 
 def word_rows(arrangement: Arrangement) -> list:
