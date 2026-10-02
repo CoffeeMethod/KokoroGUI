@@ -453,8 +453,10 @@ def test_whisper_model_cached_probes_without_downloading(monkeypatch):
     assert calls == [("large-v3-turbo", True)]
 
 
-def test_whisper_model_cached_accepts_a_local_model_folder(tmp_path):
-    assert asr.whisper_model_cached(str(tmp_path)) is True
+def test_whisper_model_cached_does_not_treat_the_name_as_a_folder(tmp_path):
+    # WHISPER_MODEL comes from .env and isn't looked up on disk: a folder
+    # reads as not cached, which only shows the download prompt.
+    assert asr.whisper_model_cached(str(tmp_path)) is False
 
 
 def test_get_whisper_model_raises_clear_error_without_faster_whisper(monkeypatch):

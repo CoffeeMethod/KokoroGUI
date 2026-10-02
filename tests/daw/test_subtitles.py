@@ -208,6 +208,22 @@ def test_an_unreadable_timestamp_raises_subtitle_error_not_value_error():
             _seconds(stamp)
 
 
+def test_a_long_line_of_unclosed_tags_parses_in_linear_time():
+    import time
+
+    n = 100_000
+    started = time.monotonic()
+    srt = parse_text("1\n00:00:01,000 --> 00:00:02,000\n" + "<" * n + "Hi{" + "{" * n + "\n", "srt")
+    vtt = parse_text("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<v" + " " * n + "Hi\n\n"
+                     "00:00:03.000 --> 00:00:04.000\n" + "<v." * n + "Hi\n", "vtt")
+    # The old patterns took minutes on these; linear ones take milliseconds.
+    assert time.monotonic() - started < 5
+    assert len(srt) == 1 and srt[0].text.startswith("<")
+    assert [c.speaker for c in vtt] == [None, None]
+    (ann,) = parse_text("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<v   Ann>Hi\n", "vtt")
+    assert (ann.speaker, ann.text) == ("Ann", "Hi")
+
+
 def test_cue_is_frozen():
     cue = Cue(1.0, 2.0, "x")
     with pytest.raises(Exception):
