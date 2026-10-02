@@ -1,13 +1,15 @@
 """Offline export of a clip document (section 6 of
 Claude/PLAN_ui_shell_redesign.md, WF8).
 
-`mixdown()` walks `compute_arrangement` (the same placement the timeline
+`render_mix()` walks `compute_arrangement` (the same placement the timeline
 and transport use), reads every clip's segments through the same read-time
 post-processing the transport plays (`kokoro_gui.audio.post`, via
 `post_config_for_clip`), sums them at their start times with the same
-plain-gain-sum rule the live `Transport` applies (grill Q21), and writes one
-file. SRT rows come straight from each `PlacedClip`'s
-start/duration and the clip's text, replacing `SrtMixin`'s segment-timing
+plain-gain-sum rule the live `Transport` applies (grill Q21), and returns the
+mix as a `MixResult` without writing anything (File > Measure Loudness uses
+it that way). `mixdown()` is `render_mix` plus an optional loudness
+normalize (`kokoro_gui.audio.loudness`) and the writes: one file. SRT rows come
+straight from each `PlacedClip`'s start/duration and the clip's text, replacing `SrtMixin`'s segment-timing
 walk for clip documents (that mixin stays for the no-clips whole-document
 path).
 
@@ -45,7 +47,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from kokoro_gui.audio import mixer, post
+from kokoro_gui.audio import loudness as loudness_mod, mixer, post
 from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement, segment_timeline
 from kokoro_gui.daw.imported import segment_plays
 from kokoro_gui.daw.mixplan import ClipMix, clip_mixes
@@ -65,6 +67,12 @@ class ExportResult:
     duration_s: float = 0.0
     skipped_clip_ids: list = field(default_factory=list)
     cue_sheet_path: Optional[str] = None
+    # Set when `mixdown(loudness=...)` ran: the mix measured before and after
+    # the gain (`audio.loudness.LoudnessReport`), and whether the true-peak
+    # ceiling kept it short of the target.
+    loudness_before: Optional[object] = None
+    loudness_after: Optional[object] = None
+    loudness_limited: bool = False
 
 
 def _format_srt_time(seconds: float) -> str:
@@ -242,16 +250,36 @@ def _in_range(arrangement: Arrangement, range_s: tuple) -> Arrangement:
     return Arrangement(placed=placed, total_duration_s=hi - lo)
 
 
-def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
-            include_srt: bool = False, keep_clip_files: bool = False,
-            arrangement: Optional[Arrangement] = None, engine_id: Optional[str] = None,
-            progress: Optional[Callable[[float, str], None]] = None,
-            post_config_for_clip: Optional[Callable] = None, channels: int = 2,
-            range_s: Optional[tuple] = None, srt_granularity: str = "clip",
-            include_cue_sheet: bool = False, nested_audio_path: Optional[Callable] = None) -> ExportResult:
-    """`post_config_for_clip(clip)` returns the clip's resolved read-time
+@dataclass
+class MixResult:
+    """What `render_mix` hands back: the mix before any write.
+
+    `samples` is `(frames, 2)` float32, or `(frames,)` for mono. `arrangement`
+    is the one the mix was laid out on: shifted to start at 0 when `range_s`
+    was given, which is what the SRT and cue sheet need. `per_clip` holds
+    `(index, PlacedClip, samples)` for each clip that was read, before the
+    track mix."""
+    samples: np.ndarray
+    arrangement: Arrangement
+    per_clip: list
+    skipped: list
+    sample_rate: int
+
+    @property
+    def duration_s(self) -> float:
+        return len(self.samples) / float(self.sample_rate)
+
+
+def render_mix(document, sample_rate: int = 24000, arrangement: Optional[Arrangement] = None,
+               engine_id: Optional[str] = None, progress: Optional[Callable[[float, str], None]] = None,
+               post_config_for_clip: Optional[Callable] = None, channels: int = 2,
+               range_s: Optional[tuple] = None, nested_audio_path: Optional[Callable] = None) -> MixResult:
+    """Reads every audible clip and sums them at their start times, writing
+    nothing. `progress` runs over 0.0 to 0.8; the rest is `mixdown`'s.
+
+    `post_config_for_clip(clip)` returns the clip's resolved read-time
     post-processing config (the app passes `QtTTSApp.post_config_for_clip`);
-    None exports the raw segment files as they are. `nested_audio_path(clip)`
+    None uses the raw segment files as they are. `nested_audio_path(clip)`
     names a subproject's mixdown file (phase 4)."""
     if arrangement is None:
         arrangement = compute_arrangement(document, engine_id=engine_id)
@@ -259,10 +287,6 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
     if range_s is not None:
         arrangement = _in_range(arrangement, range_s)
     sample_rate = int(sample_rate)
-    out_dir = os.path.dirname(out_path) or "."
-    os.makedirs(out_dir, exist_ok=True)
-    base = os.path.splitext(os.path.basename(out_path))[0]
-    ext = (fmt or "wav").lower()
 
     loaded: list = []
     skipped: list = []
@@ -292,14 +316,49 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
         mixer.mix_block(loaded, start, frames, out=mixed[start:start + frames], duck=duck)
     if int(channels) == 1:
         mixed = mixed.mean(axis=1).astype(np.float32)
+    return MixResult(samples=mixed, arrangement=arrangement, per_clip=per_clip, skipped=skipped,
+                     sample_rate=sample_rate)
+
+
+def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
+            include_srt: bool = False, keep_clip_files: bool = False,
+            arrangement: Optional[Arrangement] = None, engine_id: Optional[str] = None,
+            progress: Optional[Callable[[float, str], None]] = None,
+            post_config_for_clip: Optional[Callable] = None, channels: int = 2,
+            range_s: Optional[tuple] = None, srt_granularity: str = "clip",
+            include_cue_sheet: bool = False, nested_audio_path: Optional[Callable] = None,
+            loudness: Optional[dict] = None) -> ExportResult:
+    """`render_mix`, then an optional loudness normalize, then the writes.
+
+    `loudness` is `{"target_lufs": float, "ceiling_dbtp": float}`: the mix
+    gets the gain that reaches the target without its true peak passing the
+    ceiling (`audio.loudness.gain_to_target`; there is no limiter, so a peaky
+    mix can end short of the target, which `ExportResult.loudness_limited`
+    reports). The report before and after lands on the result. None writes
+    the mix as rendered and measures nothing. Per-clip files are never
+    normalized."""
+    sample_rate = int(sample_rate)
+    out_dir = os.path.dirname(out_path) or "."
+    os.makedirs(out_dir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(out_path))[0]
+    ext = (fmt or "wav").lower()
+
+    mix = render_mix(document, sample_rate, arrangement=arrangement, engine_id=engine_id, progress=progress,
+                     post_config_for_clip=post_config_for_clip, channels=channels, range_s=range_s,
+                     nested_audio_path=nested_audio_path)
+    mixed = mix.samples
+    result = ExportResult(audio_path=out_path, duration_s=mix.duration_s, skipped_clip_ids=mix.skipped)
+    if loudness is not None:
+        if progress:
+            progress(0.82, "Measuring loudness")
+        mixed, result.loudness_before, result.loudness_after, result.loudness_limited = _normalized(
+            mixed, sample_rate, loudness)
     if progress:
         progress(0.85, "Writing mixdown")
     write_audio(out_path, mixed, sample_rate, ext)
 
-    result = ExportResult(audio_path=out_path, duration_s=total_frames / float(sample_rate), skipped_clip_ids=skipped)
-
     if keep_clip_files:
-        for index, placed, samples in per_clip:
+        for index, placed, samples in mix.per_clip:
             character = document.get_character(placed.clip.character_id)
             who = _safe_component(character.name if character is not None else "clip")
             clip_path = os.path.join(out_dir, f"{base}_{index + 1:03d}_{who}.{ext}")
@@ -308,14 +367,25 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
 
     if include_srt:
         srt_path = os.path.join(out_dir, f"{base}.srt")
-        result.srt_path = write_srt(document, arrangement, srt_path, granularity=srt_granularity)
+        result.srt_path = write_srt(document, mix.arrangement, srt_path, granularity=srt_granularity)
 
     if include_cue_sheet:
-        result.cue_sheet_path = write_cue_sheet(document, arrangement, os.path.join(out_dir, f"{base}.csv"))
+        result.cue_sheet_path = write_cue_sheet(document, mix.arrangement, os.path.join(out_dir, f"{base}.csv"))
 
     if progress:
         progress(1.0, "Export finished")
     return result
+
+
+def _normalized(samples: np.ndarray, sample_rate: int, options: dict) -> tuple:
+    """`(samples, before, after, limited)` for `mixdown`'s `loudness` option."""
+    before = loudness_mod.measure(samples, sample_rate)
+    gain_db, limited = loudness_mod.gain_to_target(
+        before, float(options["target_lufs"]), float(options.get("ceiling_dbtp", 0.0)))
+    if gain_db == 0.0:
+        return samples, before, before, limited
+    samples = loudness_mod.apply_gain(samples, gain_db)
+    return samples, before, loudness_mod.measure(samples, sample_rate), limited
 
 
 def _loaded(placed, samples: np.ndarray, mix: ClipMix, sample_rate: int, range_s) -> "mixer.LoadedClip":
