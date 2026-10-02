@@ -500,6 +500,109 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
     return result
 
 
+@dataclass(frozen=True)
+class Chapter:
+    """One file of a split export: its base name and the `(start_s, end_s)`
+    of the project it covers."""
+    name: str
+    range_s: tuple
+
+
+@dataclass
+class ChapterPlan:
+    chapters: list
+    warnings: list = field(default_factory=list)
+
+
+SPLIT_NOUNS = {"subprojects": "subproject", "markers": "marker range"}
+MAX_TITLE_CHARS = 100
+
+
+def _chapter_title(text: str) -> str:
+    """A chapter's name as a filename piece: reserved characters out, spaces
+    collapsed, "Untitled" when nothing is left."""
+    title = " ".join(_UNSAFE_NAME_CHARS.sub("", text or "").split()).strip(" .")[:MAX_TITLE_CHARS].strip(" .")
+    return title or "Untitled"
+
+
+def _cut_long(lo: float, hi: float, boundaries: list, max_file_s: Optional[float]) -> list:
+    """`(start, end)` pieces of `[lo, hi]` no longer than `max_file_s`. A
+    piece ends at the clip boundary nearest before `max_file_s` less a minute
+    (119 of 120 minutes), or at that time when no clip boundary falls in
+    reach."""
+    if not max_file_s or hi - lo <= max_file_s:
+        return [(lo, hi)]
+    limit = max_file_s - min(60.0, max_file_s / 120.0)
+    pieces, start = [], lo
+    while hi - start > max_file_s:
+        cut = max((b for b in boundaries if start < b <= start + limit), default=start + limit)
+        pieces.append((start, cut))
+        start = cut
+    return pieces + [(start, hi)]
+
+
+def plan_chapters(document, arrangement: Arrangement, split: str, max_file_s: Optional[float] = None) -> ChapterPlan:
+    """The files a split export writes. `split` is "subprojects" (one per
+    placed nested clip, over its own span, named by its placeholder text) or
+    "markers" (one per consecutive marker pair, named by the first marker).
+    Names are `NN - <title>`, numbered in time order; a chapter longer than
+    `max_file_s` becomes `NN - <title> part 1`, `part 2`... cut at clip
+    boundaries. A warning counts the clips that fall inside no chapter."""
+    if split == "subprojects":
+        spans = [(document.clip_text(p.clip), p.start_s, p.end_s)
+                 for p in sorted(arrangement.placed, key=lambda p: p.start_s) if p.clip.is_nested]
+    elif split == "markers":
+        found = marker_ops.list_markers(document.settings)
+        spans = [(a["name"], a["seconds"], b["seconds"]) for a, b in zip(found, found[1:])]
+    else:
+        raise ValueError(f"unknown split mode {split!r}")
+    spans = [span for span in spans if span[2] > span[1]]
+    boundaries = sorted({t for p in arrangement.placed for t in (p.start_s, p.end_s)})
+    width = max(2, len(str(len(spans))))
+    chapters = []
+    for number, (title, lo, hi) in enumerate(spans, start=1):
+        base = f"{number:0{width}d} - {_chapter_title(title)}"
+        pieces = _cut_long(lo, hi, boundaries, max_file_s)
+        for part, piece in enumerate(pieces, start=1):
+            chapters.append(Chapter(base if len(pieces) == 1 else f"{base} part {part}", piece))
+    outside = sum(1 for p in arrangement.placed
+                  if not any(p.end_s > lo and p.start_s < hi for _t, lo, hi in spans))
+    warnings = []
+    if outside:
+        warnings.append(f"{outside} clip{'s' if outside != 1 else ''} outside any "
+                        f"{SPLIT_NOUNS[split]} weren't exported")
+    return ChapterPlan(chapters, warnings)
+
+
+def mixdown_chapters(document, out_dir: str, plan: ChapterPlan, fmt: str = "wav",
+                     numbered: bool = False, progress: Optional[Callable[[float, str], None]] = None,
+                     **options) -> ExportResult:
+    """`mixdown` once per chapter of `plan`, each file `<chapter name>.<fmt>`
+    in `out_dir` (`numbered` gives each the first free `name (2)`), with its
+    own SRT, cue sheet and per-clip files when `options` ask for them.
+    `options` are `mixdown`'s, minus `out_path` and `range_s`. The result's
+    `files` lists every chapter and `audio_path` is the first."""
+    ext = (fmt or "wav").lower()
+    total = max(1, len(plan.chapters))
+    result = ExportResult(audio_path="", warnings=list(plan.warnings))
+    for index, chapter in enumerate(plan.chapters):
+        path = os.path.join(out_dir, f"{chapter.name}.{ext}")
+        if numbered:
+            path = unused_path(path)
+
+        def _chapter_progress(fraction: float, detail: str, _index=index) -> None:
+            if progress:
+                progress((_index + fraction) / total, f"Chapter {_index + 1}/{total}: {detail}")
+
+        one = mixdown(document, path, fmt=fmt, range_s=chapter.range_s, progress=_chapter_progress, **options)
+        result.files.extend(one.files)
+        result.clip_files.extend(one.clip_files)
+        result.duration_s += one.duration_s
+        result.skipped_clip_ids.extend(c for c in one.skipped_clip_ids if c not in result.skipped_clip_ids)
+        result.audio_path = result.audio_path or one.audio_path
+    return result
+
+
 def _padded(samples: np.ndarray, rate: int, head_s: float, tail_s: float) -> np.ndarray:
     """`samples` with `head_s` of silence before and `tail_s` after."""
     tail_shape = samples.shape[1:]

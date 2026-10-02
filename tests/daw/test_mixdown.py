@@ -7,9 +7,11 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from kokoro_gui.daw import markers as marker_ops
 from kokoro_gui.daw.arrangement import compute_arrangement
 from kokoro_gui.daw.mixdown import (
-    expand_name, mixdown, name_context, render_mix, unused_path, write_audio, write_srt,
+    _chapter_title, _cut_long, expand_name, mixdown, mixdown_chapters, name_context, plan_chapters, render_mix,
+    unused_path, write_audio, write_srt,
 )
 from kokoro_gui.daw.models import Character, Clip, Document, Run, Segment, Track
 
@@ -594,3 +596,168 @@ def test_checks_run_on_the_written_file_and_the_failures_are_listed(tmp_path):
     (entry,) = result.files
     assert entry.path == str(tmp_path / "c.wav") and entry.report is not None
     assert entry.failed == ["Peak -26.0 dBFS, needs at most -60 dBFS"]
+
+
+# -- split exports: one file per subproject or marker range -------------------------------------
+
+RATE = 8000
+
+
+def _book(tmp_path, titles=("Chapter 1", "Chapter: 2/B")):
+    """Intro (1 s of 0.1), one nested clip per title (2 s of 0.2, then 1 s of 0.3...), Outro (0.5 s).
+    Returns `(doc, arrangement, nested_audio_path)`."""
+    narrator = Character.from_preset_dict("Narrator", {})
+    doc = Document.from_plain_text("Intro.\n\nOutro.", characters=[narrator])
+    doc.settings.update({"gap_s": 0.0, "paragraph_gap_s": 0.0})
+    intro = doc.assign_character_to_range(0, 6, narrator.id)
+    outro = doc.assign_character_to_range(8, 14, narrator.id)
+    intro.segments = [Segment(order_index=0, duration=1.0, audio_path=_wav(tmp_path / "intro.wav", 0.1, 1.0, RATE))]
+    outro.segments = [Segment(order_index=0, duration=0.5, audio_path=_wav(tmp_path / "outro.wav", 0.4, 0.5, RATE))]
+    durations, paths, position = {intro.id: 1.0, outro.id: 0.5}, {}, 8
+    for number, title in enumerate(titles, start=1):
+        chapter = doc.insert_nested_clip(position, {"kind": "embedded", "id": f"c{number}"}, title)
+        position = doc.clip_extent(chapter.id)[1]
+        seconds = 3.0 - number
+        durations[chapter.id] = seconds
+        paths[chapter.id] = _wav(tmp_path / f"c{number}.wav", 0.1 * (number + 1), seconds, RATE)
+    arrangement = compute_arrangement(doc, clip_duration=lambda c: durations.get(c.id), chars_per_second=15.0)
+    return doc, arrangement, lambda clip: paths.get(clip.id)
+
+
+def test_plan_chapters_by_subproject_names_and_spans_them(tmp_path):
+    doc, arrangement, _nested = _book(tmp_path)
+
+    plan = plan_chapters(doc, arrangement, "subprojects")
+
+    assert [c.name for c in plan.chapters] == ["01 - Chapter 1", "02 - Chapter 2B"]
+    assert [c.range_s for c in plan.chapters] == [(1.0, 3.0), (3.0, 4.0)]
+    assert plan.warnings == ["2 clips outside any subproject weren't exported"]
+
+
+def test_plan_chapters_by_marker_pairs_names_by_the_first_marker(tmp_path):
+    doc, arrangement, _nested = _book(tmp_path)
+    for seconds, name in ((0.0, "Opening"), (1.0, ""), (4.0, "End")):
+        doc.settings["markers"], _m = marker_ops.add_marker(doc.settings, seconds, name)
+
+    plan = plan_chapters(doc, arrangement, "markers")
+
+    assert [c.name for c in plan.chapters] == ["01 - Opening", "02 - M2"]
+    assert [c.range_s for c in plan.chapters] == [(0.0, 1.0), (1.0, 4.0)]
+    assert plan.warnings == ["1 clip outside any marker range weren't exported"]
+
+
+def test_plan_chapters_with_nothing_to_split_is_empty_and_an_unknown_mode_is_refused(tmp_path):
+    doc, arrangement, _a = _two_generated_clips_arranged(tmp_path)
+
+    assert plan_chapters(doc, arrangement, "subprojects").chapters == []
+    assert plan_chapters(doc, arrangement, "markers").chapters == []
+    with pytest.raises(ValueError):
+        plan_chapters(doc, arrangement, "pages")
+
+
+def _two_generated_clips_arranged(tmp_path):
+    doc, a, b = _two_generated_clips(tmp_path)
+    return doc, compute_arrangement(doc), None
+
+
+def test_a_long_chapter_is_cut_at_the_clip_boundary_nearest_before_the_limit():
+    # limit 10 s -> cuts land at or before 10 - min(60, 10/120) = 9.9167 s past each start
+    boundaries = [0.0, 3.0, 9.0, 9.5, 12.0, 20.0, 30.0]
+    assert _cut_long(0.0, 25.0, boundaries, 10.0) == [(0.0, 9.5), (9.5, 12.0), (12.0, 20.0), (20.0, 25.0)]
+    assert _cut_long(0.0, 8.0, boundaries, 10.0) == [(0.0, 8.0)]
+    assert _cut_long(0.0, 25.0, boundaries, None) == [(0.0, 25.0)]
+    # no boundary in reach: cut at the limit
+    assert _cut_long(0.0, 25.0, [0.0, 30.0], 10.0)[0][1] == pytest.approx(10.0 - 10.0 / 120)
+
+
+def test_plan_chapters_names_the_parts_of_a_long_chapter(tmp_path):
+    doc, arrangement, _nested = _book(tmp_path)
+
+    plan = plan_chapters(doc, arrangement, "subprojects", max_file_s=1.5)
+
+    names = [c.name for c in plan.chapters]
+    assert names[0].startswith("01 - Chapter 1 part ") and names[0].endswith("part 1")
+    assert names[1].endswith("part 2") and names[-1] == "02 - Chapter 2B"
+    assert plan.chapters[0].range_s[0] == 1.0 and plan.chapters[1].range_s[1] == 3.0
+
+
+def test_titles_are_made_safe_for_a_filename():
+    assert _chapter_title('A "bad" <name>: x/y') == "A bad name xy"
+    assert _chapter_title("  ..  ") == "Untitled"
+    assert len(_chapter_title("x" * 300)) == 100
+
+
+def test_mixdown_chapters_writes_one_file_per_subproject_with_their_lengths(tmp_path):
+    doc, arrangement, nested = _book(tmp_path)
+    plan = plan_chapters(doc, arrangement, "subprojects")
+
+    result = mixdown_chapters(doc, str(tmp_path / "out"), plan, fmt="wav", sample_rate=RATE,
+                              arrangement=arrangement, nested_audio_path=nested, include_srt=True)
+
+    first, second = tmp_path / "out" / "01 - Chapter 1.wav", tmp_path / "out" / "02 - Chapter 2B.wav"
+    assert [f.path for f in result.files] == [str(first), str(second)]
+    assert result.audio_path == str(first)
+    a, _ = sf.read(str(first), dtype="float32")
+    b, _ = sf.read(str(second), dtype="float32")
+    assert len(a) == 2 * RATE and np.allclose(a, 0.2, atol=1e-3)
+    assert len(b) == 1 * RATE and np.allclose(b, 0.3, atol=1e-3)
+    assert result.duration_s == pytest.approx(3.0)
+    assert result.warnings == ["2 clips outside any subproject weren't exported"]
+    assert (tmp_path / "out" / "01 - Chapter 1.srt").exists() and (tmp_path / "out" / "02 - Chapter 2B.srt").exists()
+    assert [f.title for f in result.files] == ["01 - Chapter 1", "02 - Chapter 2B"]
+
+
+def test_mixdown_chapters_by_marker_range_reads_the_clips_inside(tmp_path):
+    doc, arrangement, nested = _book(tmp_path)
+    for seconds, name in ((0.0, "Intro"), (1.0, "Rest"), (4.5, "End")):
+        doc.settings["markers"], _m = marker_ops.add_marker(doc.settings, seconds, name)
+    plan = plan_chapters(doc, arrangement, "markers")
+
+    result = mixdown_chapters(doc, str(tmp_path / "m"), plan, fmt="wav", sample_rate=RATE,
+                              arrangement=arrangement, nested_audio_path=nested)
+
+    intro, _ = sf.read(str(tmp_path / "m" / "01 - Intro.wav"), dtype="float32")
+    rest, _ = sf.read(str(tmp_path / "m" / "02 - Rest.wav"), dtype="float32")
+    assert len(intro) == RATE and np.allclose(intro, 0.1, atol=1e-3)
+    assert len(rest) == int(3.5 * RATE) and np.allclose(rest[-4000:], 0.4, atol=1e-3)
+    assert result.warnings == []
+
+
+def test_mixdown_chapters_numbered_keeps_files_that_exist(tmp_path):
+    doc, arrangement, nested = _book(tmp_path)
+    plan = plan_chapters(doc, arrangement, "subprojects")
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "01 - Chapter 1.wav").write_bytes(b"old")
+
+    result = mixdown_chapters(doc, str(tmp_path / "out"), plan, fmt="wav", sample_rate=RATE, numbered=True,
+                              arrangement=arrangement, nested_audio_path=nested)
+
+    assert (tmp_path / "out" / "01 - Chapter 1.wav").read_bytes() == b"old"
+    assert result.files[0].path == str(tmp_path / "out" / "01 - Chapter 1 (2).wav")
+
+
+def test_mixdown_chapters_checks_and_pads_each_file(tmp_path):
+    pytest.importorskip("pyloudnorm")
+    from kokoro_gui.daw.export_presets import Check
+
+    doc, arrangement, nested = _book(tmp_path)
+    plan = plan_chapters(doc, arrangement, "subprojects")
+
+    result = mixdown_chapters(doc, str(tmp_path / "out"), plan, fmt="wav", sample_rate=RATE, head_s=0.5, tail_s=0.5,
+                              arrangement=arrangement, nested_audio_path=nested,
+                              checks=(Check("Length", "duration_min", high=2.5 / 60),))
+
+    assert [round(f.duration_s, 2) for f in result.files] == [3.0, 2.0]
+    assert len(result.files[0].failed) == 1 and result.files[1].failed == []
+    assert all(f.report is not None for f in result.files)
+
+
+def test_mixdown_chapters_reports_a_subproject_without_a_mixdown_as_skipped(tmp_path):
+    doc, arrangement, nested = _book(tmp_path)
+    missing = doc.nested_clips()[1]
+    plan = plan_chapters(doc, arrangement, "subprojects")
+
+    result = mixdown_chapters(doc, str(tmp_path / "out"), plan, fmt="wav", sample_rate=RATE, arrangement=arrangement,
+                              nested_audio_path=lambda clip: None if clip.id == missing.id else nested(clip))
+
+    assert result.skipped_clip_ids == [missing.id]
