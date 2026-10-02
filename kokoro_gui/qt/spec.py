@@ -183,6 +183,7 @@ SETTINGS_DEFAULTS = {
     "auto_split_by_paragraph": False,
     "character_fx_paste_splits": True,
     "character_fx_copy": True,
+    "notify_sound": True,       # Options > Sound when a long job finishes
     # Options > Transcript details: the master switch, then one toggle per
     # overlay (each counts only while the master is on).
     "transcript_details": False,

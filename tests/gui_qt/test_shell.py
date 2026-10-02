@@ -146,7 +146,8 @@ def test_a_saved_voices_layout_restores_whichever_editor_is_shown(qt_app):
 def test_transport_dock_carries_generate_menu_and_status(qt_app):
     dock = qt_app.transport_dock
     assert [a.text() for a in dock.generate_menu.actions() if not a.isSeparator()] == [
-        "Generate dirty clips", "Auto-split then generate", "Split by paragraph",
+        "Generate dirty clips", "Generate stale clips in selection", "Auto-split then generate",
+        "Split by paragraph",
     ]
     dock.set_status("Hello", "error")
     assert dock.status_text() == "Hello"
