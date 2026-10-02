@@ -33,8 +33,35 @@ FRONT_COVER = 3
 _PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
 
 
+# What the Export dialog stores in `project_settings["export"]["tags"]`. The
+# cover is a path; the image itself never goes into the project file.
+DEFAULT_SETTINGS = {"enabled": True, "title": "", "artist": "", "album": "", "track": "", "year": "",
+                    "description": "", "cover": "", "chapters": True}
+MAX_FIELD_CHARS = 500
+MAX_DESCRIPTION_CHARS = 4000
+
+
 class CoverError(ValueError):
     """The cover image can't be used; the message says why."""
+
+
+def clean_settings(value) -> dict:
+    """`value` (a stored `export["tags"]`) as a dict with every key of
+    `DEFAULT_SETTINGS`: text fields as stripped strings under a length cap,
+    flags as bools, anything else (a hand-edited project.json) back to its
+    default."""
+    stored = value if isinstance(value, dict) else {}
+    clean = {}
+    for key, default in DEFAULT_SETTINGS.items():
+        item = stored.get(key, default)
+        if isinstance(default, bool):
+            clean[key] = item if isinstance(item, bool) else default
+            continue
+        if isinstance(item, (int, float)) and not isinstance(item, bool):
+            item = str(int(item))
+        limit = MAX_DESCRIPTION_CHARS if key == "description" else MAX_FIELD_CHARS
+        clean[key] = item.strip()[:limit] if isinstance(item, str) else default
+    return clean
 
 
 def available() -> bool:
