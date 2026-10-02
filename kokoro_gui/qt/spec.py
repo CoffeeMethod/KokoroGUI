@@ -12,10 +12,9 @@ migration (see PLAN_qt_and_engine_abstraction.md, workstream 3a). Now that Tk
 has been removed, this module is simply the canonical source of truth for the
 Qt frontend.
 
-- FX_FIELD_SPECS has no widget for seven FX_PRESET_KEYS fields
-  (reverb_dry_level, chorus_mix, phaser_depth, phaser_mix, comp_attack,
-  comp_release, limiter_release) — a pre-existing gap inherited from Tk, not
-  yet closed (see ROADMAP.md).
+- Every FX_PRESET_KEYS field has a control: a slider in FX_FIELD_SPECS, an
+  enable checkbox, a standalone toggle or a file combo. The assert at the
+  bottom fails when a key is added to FX_PRESET_KEYS with none of those.
 """
 from dataclasses import dataclass
 from typing import Optional
@@ -120,7 +119,10 @@ FX_FIELD_SPECS = [
     # --- Dynamics ---
     FXSliderSpec("comp_threshold", "Threshold", -60, 0, 60, "Dynamics", "Compressor", "comp_enabled", "dB", 1),
     FXSliderSpec("comp_ratio", "Ratio", 1, 20, 19, "Dynamics", "Compressor", "comp_enabled", ":1", 1),
+    FXSliderSpec("comp_attack", "Attack", 0.1, 100, 999, "Dynamics", "Compressor", "comp_enabled", "ms", 1),
+    FXSliderSpec("comp_release", "Release", 10, 1000, 99, "Dynamics", "Compressor", "comp_enabled", "ms", 0),
     FXSliderSpec("limiter_threshold", "Threshold", -12, 0, 24, "Dynamics", "Limiter", "limiter_enabled", "dB", 1),
+    FXSliderSpec("limiter_release", "Release", 10, 1000, 99, "Dynamics", "Limiter", "limiter_enabled", "ms", 0),
     FXSliderSpec("gain_db", "dB", -20, 20, 80, "Dynamics", "Gain", "gain_enabled", "dB", 1),
     # --- EQ & Filters ---
     FXSliderSpec("eq_bass", "Bass (LowShelf)", -20, 20, 40, "EQ & Filters", "EQ", None, "dB", 1),
@@ -130,6 +132,7 @@ FX_FIELD_SPECS = [
     # --- Spatial & Time ---
     FXSliderSpec("reverb_room_size", "Room Size", 0, 1, 100, "Spatial & Time", "Reverb", "reverb_enabled", "", 2),
     FXSliderSpec("reverb_wet_level", "Wet Level", 0, 1, 100, "Spatial & Time", "Reverb", "reverb_enabled", "", 2),
+    FXSliderSpec("reverb_dry_level", "Dry Level", 0, 1, 100, "Spatial & Time", "Reverb", "reverb_enabled", "", 2),
     FXSliderSpec("reverb_damping", "Damping", 0, 1, 100, "Spatial & Time", "Reverb", "reverb_enabled", "", 2),
     FXSliderSpec("reverb_width", "Width", 0, 1, 100, "Spatial & Time", "Reverb", "reverb_enabled", "", 2),
     FXSliderSpec("delay_time", "Time", 0, 2, 100, "Spatial & Time", "Delay", "delay_enabled", "s", 2),
@@ -141,8 +144,11 @@ FX_FIELD_SPECS = [
     # --- Guitar / Modulation ---
     FXSliderSpec("chorus_rate", "Rate", 0.1, 10, 50, "Guitar / Modulation", "Chorus", "chorus_enabled", "Hz", 1),
     FXSliderSpec("chorus_depth", "Depth", 0, 1, 50, "Guitar / Modulation", "Chorus", "chorus_enabled", "", 2),
+    FXSliderSpec("chorus_mix", "Mix", 0, 1, 100, "Guitar / Modulation", "Chorus", "chorus_enabled", "", 2),
     FXSliderSpec("distortion_drive", "Drive", 0, 60, 60, "Guitar / Modulation", "Distortion", "distortion_enabled", "dB", 1),
     FXSliderSpec("phaser_rate", "Rate", 0.1, 10, 50, "Guitar / Modulation", "Phaser", "phaser_enabled", "Hz", 1),
+    FXSliderSpec("phaser_depth", "Depth", 0, 1, 100, "Guitar / Modulation", "Phaser", "phaser_enabled", "", 2),
+    FXSliderSpec("phaser_mix", "Mix", 0, 1, 100, "Guitar / Modulation", "Phaser", "phaser_enabled", "", 2),
     FXSliderSpec("clipping_thresh", "Threshold", -20, 0, 40, "Guitar / Modulation", "Clipping", "clipping_enabled", "dB", 1),
     # --- Quality / Pitch ---
     FXSliderSpec("pitch_shift_semitones", "Semitones", -12, 12, 48, "Quality / Pitch", "Pitch Shift (High Quality)", "pitch_shift_enabled", "st", 1),
@@ -153,10 +159,6 @@ FX_FIELD_SPECS = [
 FX_STANDALONE_TOGGLES = [
     ("gsm_enabled", "GSM Compressor (Phone Quality)", "Quality / Pitch"),
 ]
-
-# FX_PRESET_KEYS entries with no matching widget in either frontend today
-# (see module docstring) - still valid dict keys, just not user-editable.
-FX_KEYS_WITHOUT_WIDGET = {"reverb_dry_level", "chorus_mix", "phaser_depth", "phaser_mix", "comp_attack", "comp_release", "limiter_release"}
 
 FX_GROUP_ORDER = ["Dynamics", "EQ & Filters", "Spatial & Time", "Guitar / Modulation", "Quality / Pitch"]
 
@@ -262,6 +264,6 @@ SETTINGS_DEFAULTS = {
 
 _FX_ENABLED_KEYS = {s.enabled_key for s in FX_FIELD_SPECS if s.enabled_key}
 assert set(FX_PRESET_KEYS) == (
-    {s.key for s in FX_FIELD_SPECS} | FX_KEYS_WITHOUT_WIDGET
+    {s.key for s in FX_FIELD_SPECS}
     | {t[0] for t in FX_STANDALONE_TOGGLES} | _FX_ENABLED_KEYS
 )

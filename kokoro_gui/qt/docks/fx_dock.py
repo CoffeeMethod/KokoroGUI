@@ -25,9 +25,6 @@ the current scope resolves to. Scope resolution is
 FX are read-time post-processing (kokoro_gui/audio/post.py): every edit here
 is audible on the next transport rebuild and never dirties a clip.
 
-Seven FX_PRESET_KEYS fields have no widget here (see spec.py's docstring);
-their values live in `self._hidden_values` and only change via preset load.
-
 A `spec.FXFileSpec` field (the convolution reverb's impulse response) is a
 combo of names from its store, project-local first (`fx_presets.list_ir_names`),
 with a "None" entry that stores "", and an "Add..." button that copies a wav
@@ -68,9 +65,6 @@ class FXDock(QDockWidget):
         self._value_widgets: dict[str, QDoubleSpinBox] = {}
         self._enabled_checks: dict[str, QCheckBox] = {}
         self._file_combos: dict[str, QComboBox] = {}
-        self._hidden_values: dict[str, float] = {
-            k: spec.SETTINGS_DEFAULTS[k] for k in spec.FX_KEYS_WITHOUT_WIDGET
-        }
         self._mode = "none"
         self._target = None
         self._none_values: dict = {k: self.app.settings.get(k, spec.SETTINGS_DEFAULTS[k]) for k in spec.FX_PRESET_KEYS}
@@ -363,7 +357,7 @@ class FXDock(QDockWidget):
     # --- state ---------------------------------------------------------------
 
     def get_state(self) -> dict:
-        state = dict(self._hidden_values)
+        state = {}
         for key, spin in self._value_widgets.items():
             state[key] = spin.value()
         for key, check in self._enabled_checks.items():
@@ -394,9 +388,6 @@ class FXDock(QDockWidget):
             for key, combo in self._file_combos.items():
                 if key in data:
                     self._fill_file_combo(combo, data[key])
-            for key in self._hidden_values:
-                if key in data:
-                    self._hidden_values[key] = data[key]
         finally:
             self._loading = was_loading
 

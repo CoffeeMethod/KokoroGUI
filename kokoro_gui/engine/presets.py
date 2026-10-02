@@ -48,12 +48,15 @@ FX_STRING_KEYS = frozenset({"convolution_ir"})
 # The (min, max) of each FX key that has a slider: mirrors the `minimum` and
 # `maximum` of kokoro_gui/qt/spec.py's `FX_FIELD_SPECS` (duplicated for the
 # same reason as the key set above; tests/test_presets.py pins the two
-# together). A key with no entry has no slider yet and is only checked to be
-# a finite number.
+# together). A numeric key with no entry here is only checked to be a finite
+# number; today every numeric FX key has a slider and so an entry.
 FX_VALUE_RANGES = {
     "comp_threshold": (-60, 0),
     "comp_ratio": (1, 20),
+    "comp_attack": (0.1, 100),
+    "comp_release": (10, 1000),
     "limiter_threshold": (-12, 0),
+    "limiter_release": (10, 1000),
     "gain_db": (-20, 20),
     "eq_bass": (-20, 20),
     "eq_treble": (-20, 20),
@@ -61,6 +64,7 @@ FX_VALUE_RANGES = {
     "lowpass_freq": (1000, 20000),
     "reverb_room_size": (0, 1),
     "reverb_wet_level": (0, 1),
+    "reverb_dry_level": (0, 1),
     "reverb_damping": (0, 1),
     "reverb_width": (0, 1),
     "delay_time": (0, 2),
@@ -69,8 +73,11 @@ FX_VALUE_RANGES = {
     "convolution_mix": (0, 1),
     "chorus_rate": (0.1, 10),
     "chorus_depth": (0, 1),
+    "chorus_mix": (0, 1),
     "distortion_drive": (0, 60),
     "phaser_rate": (0.1, 10),
+    "phaser_depth": (0, 1),
+    "phaser_mix": (0, 1),
     "clipping_thresh": (-20, 0),
     "pitch_shift_semitones": (-12, 12),
     "bitcrush_depth": (2, 16),
