@@ -1064,9 +1064,3 @@ class RelaneCommand(Command):
         created = set(self._created_track_ids)
         if created:
             document.tracks = [t for t in document.tracks if t.id not in created]
-
-
-# The split-or-create primitive item 7 ("Auto-split on generation") and
-# item 9 ("Sub-range TTS replacement") will reuse is exactly
-# `assign_character_to_range` - a plain alias, not a new class.
-SplitClipCommand = AssignCharacterCommand
