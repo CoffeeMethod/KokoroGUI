@@ -247,11 +247,12 @@
                   <tr><td>mp3</td><td>ID3v2.4: title, artist, album, track, year, comment, genre</td><td>front cover (APIC)</td><td>one CHAP frame per chapter under an ordered CTOC</td></tr>
                   <tr><td>flac</td><td>Vorbis comments: TITLE, ARTIST, ALBUM, TRACKNUMBER, TRACKTOTAL, DATE, DESCRIPTION, GENRE</td><td>front cover picture block</td><td>none</td></tr>
                   <tr><td>ogg</td><td>the same Vorbis comments</td><td><code>METADATA_BLOCK_PICTURE</code></td><td>none</td></tr>
+                  <tr><td>m4b</td><td>MP4 atoms through ffmpeg: title, artist, album, track, year, description, genre</td><td>attached picture</td><td>always written (see below)</td></tr>
                   <tr><td>wav</td><td>none; the tab says so</td><td>none</td><td>none</td></tr>
                 </tbody>
               </table>
             </div>
-            <p>The genre comes from the preset: Audiobook for ACX, Podcast for Apple Podcasts and Spotify, none for Custom and YouTube. Tags go into the mixdown only. Stems and per-clip files get none. The tab is greyed out when the <code>mutagen</code> package isn't installed.</p>
+            <p>The genre comes from the preset: Audiobook for ACX, Podcast for Apple Podcasts and Spotify, none for Custom and YouTube. Tags go into the mixdown only. Stems and per-clip files get none. The tab is greyed out when the <code>mutagen</code> package isn't installed, except for an M4B, which ffmpeg tags.</p>
           </li>
           <li>
             <h4>Cover image</h4>
@@ -264,6 +265,29 @@
           <li>
             <h4>Split exports</h4>
             <p>With "Split into" set, each file's title is its chapter's name (without the number) and its track is <code>n/total</code>, so the Title and Episode boxes are greyed out. Artist, album, year, description and cover are the same in every file. An mp3 in a marker split gets one chapter frame, at 0, since a file runs from one marker to the next.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>M4B audiobooks</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Export an audiobook as one M4B</h4>
+            <p>The Export dialog's Format box has an "m4b" entry. It writes AAC audio in an M4B file that Apple Books, Audiobookshelf and most phone players treat as an audiobook, with a chapter list, the tags from the Tags tab and the cover image. A new "M4B bitrate" box offers 64, 96 and 128 kbps, 96 by default; 64 is enough for one speaking voice. The choice is stored per project as <code>export["m4b_bitrate_kbps"]</code>, and older versions ignore it.</p>
+            <p>The app doesn't bundle an encoder. It calls the <code>ffmpeg</code> found on your PATH, and the "m4b" entry only appears while one is found. Install ffmpeg and reopen the dialog to get it. A project saved with M4B opens on WAV when ffmpeg is missing.</p>
+          </li>
+          <li>
+            <h4>Chapters</h4>
+            <p>Each placed subproject becomes a chapter named by its title, and a chapter ends where the next one starts. A project with no subprojects uses its markers instead, and when it has both, the subprojects win. A project with neither gets an M4B with no chapter list. The last chapter ends at the end of the file, including silence at the end. A range export starts its chapters at the range, and silence at the start moves them later. Chapters are always written, even with "Write tags into the file" turned off.</p>
+          </li>
+          <li>
+            <h4>Tags and covers without mutagen</h4>
+            <p>ffmpeg writes an M4B's tags, so the Tags tab works for it even when <code>mutagen</code> isn't installed. The cover goes through the same check as every other format: a JPEG or PNG of at most 5 MB on a local drive. A cover that fails is left out and the export ends with a warning. The "Write chapter markers into MP3" box is greyed out for M4B, and the tab says the chapters are always there.</p>
+          </li>
+          <li>
+            <h4>How it fails</h4>
+            <p>The export writes the mix to a temporary WAV beside the output, runs ffmpeg on it and deletes the temporary files whether ffmpeg succeeds or not. The M4B is written under a temporary name and moved into place at the end, so a failed run leaves an existing file untouched. When ffmpeg exits with an error, the status line says "Export failed" with the last lines it printed. The run is stopped if it takes longer than a minute plus the length of the audio. A split export writes one M4B per subproject or marker range, each with its own chapter. Stems and per-clip files in M4B are encoded one ffmpeg run each and have no chapters.</p>
           </li>
         </ul>
       </div>

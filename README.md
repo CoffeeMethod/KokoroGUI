@@ -30,13 +30,13 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
     to play against.
 -   **Recordings and music.** Edit a recording by editing its transcript, and add music beds that
     duck under speech.
--   **Export.** One file in wav, mp3, flac or ogg, with `.srt` subtitles and a cue sheet, optionally
+-   **Export.** One file in wav, mp3, flac, ogg or (with ffmpeg on PATH) m4b, with `.srt` subtitles and a cue sheet, optionally
     normalized to a LUFS or RMS target under a true-peak ceiling or a peak limiter, with an MP3 bitrate, a sample rate
     and a filename template. Presets for ACX, Apple Podcasts, Spotify and YouTube check each file, and one export can
     write a file per subproject or marker range. Stems come per track or per character, with a dialogue stem for
     dubbing. Transcripts (WebVTT, SRT, Podcasting 2.0 JSON, plain text), a chapters file and show notes can ride along.
     mp3, flac and ogg files carry a title, artist, show, episode number and cover image, and an mp3 carries its chapters.
-    File > Measure Loudness reports the numbers.
+    An M4B audiobook has a chapter per subproject. File > Measure Loudness reports the numbers.
 -   **One-file projects.** A `.tbaw` holds the text, the audio and every voice it uses, so it opens
     on another machine.
 
@@ -63,6 +63,7 @@ Unreleased:
 -   Export can write transcripts with speaker names (WebVTT, SRT, Podcasting 2.0 JSON, plain text), a chapters file and show notes
 -   Sliders for compressor and limiter release, compressor attack, reverb dry level, chorus mix and phaser depth and mix
 -   Export writes tags and a cover image into mp3, flac and ogg files, and markers as chapters in an mp3
+-   Export can write an audiobook as one M4B with a chapter per subproject, the tags and the cover (needs ffmpeg on PATH)
 
 In 4.0.0-beta.2:
 
@@ -94,7 +95,9 @@ update does to existing projects.
 
 ## Install
 
-You need Python 3.11+ and [eSpeak NG](https://github.com/espeak-ng/espeak-ng).
+You need Python 3.11+ and [eSpeak NG](https://github.com/espeak-ng/espeak-ng). To export M4B audiobooks you also
+need [ffmpeg](https://ffmpeg.org/download.html) on your PATH. Without it the M4B format doesn't appear in the
+Export dialog.
 
 ```bash
 git clone --branch 4.0.0-beta.2 --depth 1 https://github.com/CoffeeMethod/KokoroGUI.git
