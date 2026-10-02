@@ -11,9 +11,51 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import math
 import os
 
 from kokoro_gui.qt import spec
+
+
+def _has_default_type(default, value) -> bool:
+    """True when `value` is the kind of thing `default` is. A bool is not an
+    int here, an int is fine for a float default, a float is not for an int
+    default (a spin box raises on it), and a float must be finite. A `None`
+    default (a path that may be unset) takes `None` or a str."""
+    if default is None:
+        return value is None or isinstance(value, str)
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, int):
+        return isinstance(value, int) and not isinstance(value, bool)
+    if isinstance(default, float):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        try:
+            return math.isfinite(value)
+        except OverflowError:
+            return False
+    return isinstance(value, type(default))
+
+
+def clean_loaded_settings(loaded, defaults: dict) -> dict:
+    """`defaults` overlaid with `loaded`, a parsed `config_qt.json`. The file
+    is untrusted: one that isn't a JSON object gives the defaults, and a key
+    whose value has another type than its default's goes back to the
+    default, so a hand-edited or damaged value ("speed": "fast") can't reach
+    a Qt setter and stop the app from starting. Keys the defaults don't
+    list pass through. The reset keys are printed (plan 07 logs them)."""
+    if not isinstance(loaded, dict):
+        print(f"config_qt.json holds {type(loaded).__name__}, not an object; using the defaults.")
+        return defaults
+    merged = {**defaults, **loaded}
+    reset = [key for key, default in defaults.items()
+             if key in loaded and not _has_default_type(default, loaded[key])]
+    for key in reset:
+        merged[key] = defaults[key]
+    if reset:
+        print(f"config_qt.json: reset to the default (wrong type): {', '.join(sorted(reset))}")
+    return merged
 
 
 def load_settings(config_file: str) -> dict:
@@ -25,9 +67,9 @@ def load_settings(config_file: str) -> dict:
     if os.path.exists(config_file):
         try:
             with open(config_file, "r", encoding="utf-8") as f:
-                return {**defaults, **json.load(f)}
-        except Exception:
-            pass
+                return clean_loaded_settings(json.load(f), defaults)
+        except Exception as e:
+            print(f"Couldn't read {config_file}, using the defaults: {e}")
     return defaults
 
 
@@ -72,11 +114,20 @@ def migrate_engine_settings(settings: dict, engine_ids=None) -> dict:
 
 
 def save_settings(config_file: str, settings: dict) -> None:
+    """Writes `config_file` through `config_file + ".tmp"` and `os.replace`,
+    so a crash or a full disk mid-write leaves the old file whole instead of
+    a truncated one that the next launch would read as "no settings"."""
+    tmp = config_file + ".tmp"
     try:
-        with open(config_file, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=4)
+        os.replace(tmp, config_file)
     except Exception as e:
         print(f"Failed to save Qt settings: {e}")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def encode_bytes(qbytearray) -> str:

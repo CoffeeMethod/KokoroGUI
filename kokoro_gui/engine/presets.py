@@ -3,6 +3,7 @@ used by multi-speaker script parsing. Directory names are fixed constants, not
 monkeypatched by any test, so no `import kokoro_engine` qualification is needed here.
 """
 import json
+import math
 import os
 
 # Keys a *speaker* preset (presets/*.json) is allowed to merge into a
@@ -44,6 +45,37 @@ ALLOWED_FX_PRESET_KEYS = frozenset({
 # a bool; `filter_fx_preset_values` drops a value of the wrong kind either way.
 FX_STRING_KEYS = frozenset({"convolution_ir"})
 
+# The (min, max) of each FX key that has a slider: mirrors the `minimum` and
+# `maximum` of kokoro_gui/qt/spec.py's `FX_FIELD_SPECS` (duplicated for the
+# same reason as the key set above; tests/test_presets.py pins the two
+# together). A key with no entry has no slider yet and is only checked to be
+# a finite number.
+FX_VALUE_RANGES = {
+    "comp_threshold": (-60, 0),
+    "comp_ratio": (1, 20),
+    "limiter_threshold": (-12, 0),
+    "gain_db": (-20, 20),
+    "eq_bass": (-20, 20),
+    "eq_treble": (-20, 20),
+    "highpass_freq": (20, 1000),
+    "lowpass_freq": (1000, 20000),
+    "reverb_room_size": (0, 1),
+    "reverb_wet_level": (0, 1),
+    "reverb_damping": (0, 1),
+    "reverb_width": (0, 1),
+    "delay_time": (0, 2),
+    "delay_feedback": (0, 1),
+    "delay_mix": (0, 1),
+    "convolution_mix": (0, 1),
+    "chorus_rate": (0.1, 10),
+    "chorus_depth": (0, 1),
+    "distortion_drive": (0, 60),
+    "phaser_rate": (0.1, 10),
+    "clipping_thresh": (-20, 0),
+    "pitch_shift_semitones": (-12, 12),
+    "bitcrush_depth": (2, 16),
+}
+
 # Global impulse-response store for the convolution reverb (grill Q31). A
 # project dir's `fx/ir/` is looked at first (grill TB3).
 FX_IR_DIR = os.path.join("presets", "fx", "ir")
@@ -58,18 +90,40 @@ def filter_allowed_keys(preset_dict, allowed_keys):
     return {k: v for k, v in preset_dict.items() if k in allowed_keys}
 
 
+def _is_number(value):
+    """An int or float that is not a bool, NaN or infinite (and an int small
+    enough to be a float: `math.isfinite(10**400)` raises)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 def filter_fx_preset_values(preset_dict):
     """`filter_allowed_keys(preset_dict, ALLOWED_FX_PRESET_KEYS)` plus a type
-    check: a `FX_STRING_KEYS` value must be a str, and every other value a
-    number or a bool. A value of the wrong type is dropped, so a crafted
-    preset or `fx_override` can't hand a dict to Pedalboard or a list to the
-    impulse-response resolver."""
+    check: a `FX_STRING_KEYS` value must be a str, a key ending `_enabled` a
+    bool, and every other value a finite number, clamped to its slider's
+    range (`FX_VALUE_RANGES`). A value of the wrong type is dropped, so a
+    crafted preset or `fx_override` can't hand a dict to Pedalboard, a list
+    to the impulse-response resolver or a string to a Qt spin box, and the
+    key falls back to its default. The Audio FX dock and the engine both
+    read presets through this."""
+    if not isinstance(preset_dict, dict):
+        return {}
     out = {}
     for key, value in filter_allowed_keys(preset_dict, ALLOWED_FX_PRESET_KEYS).items():
         if key in FX_STRING_KEYS:
             if isinstance(value, str):
                 out[key] = value
-        elif isinstance(value, (bool, int, float)):
+        elif key.endswith("_enabled"):
+            if isinstance(value, bool):
+                out[key] = value
+        elif _is_number(value):
+            low, high = FX_VALUE_RANGES.get(key, (None, None))
+            if low is not None:
+                value = max(low, min(high, value))
             out[key] = value
     return out
 
@@ -150,10 +204,14 @@ def load_fx_preset(name, project_dir=None):
         if os.path.exists(fx_path):
             try:
                 with open(fx_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
             except Exception as e:
                 print(f"Error loading FX preset {name}: {e}")
                 return None
+            if not isinstance(data, dict):
+                print(f"Error loading FX preset {name}: expected a JSON object")
+                return None
+            return data
     return None
 
 
