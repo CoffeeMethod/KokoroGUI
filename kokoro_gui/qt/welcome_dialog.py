@@ -4,8 +4,8 @@ from text, Open, shown over the main window on launch.
 The window has already loaded the last project by the time this opens, so
 the engine warms up underneath, Escape is a free Resume, and New starts
 with the character library's characters the same way File > New does. New
-from text makes an EPUB (or a PDF with an outline) one subproject per
-chapter when "One subproject per chapter" is ticked (grill NP8). Every
+from text opens the import wizard on the file (grill NP8: it starts on
+one subproject per chapter for an EPUB or a PDF with an outline). Every
 pick is a one-line call into `QtTTSApp` (`open_project`, `new_project`,
 `new_from_ebook`, `open_project_dialog`); nothing here touches the
 document directly.
@@ -90,15 +90,9 @@ class WelcomeDialog(QDialog):
         self.new_btn.clicked.connect(self.new_project)
         self.new_from_text_btn = QPushButton("New from text file...")
         self.new_from_text_btn.clicked.connect(self._new_from_text_dialog)
-        # NP8: an EPUB (or a PDF with an outline) becomes one subproject per
-        # chapter.
-        self.per_chapter_check = QCheckBox("One subproject per chapter")
-        self.per_chapter_check.setChecked(True)
-        self.per_chapter_check.setToolTip("For an EPUB, or a PDF with a table of contents.")
         self.open_other_btn = QPushButton("Open other...")
         self.open_other_btn.clicked.connect(self.open_other)
-        for widget in (self.open_btn, self.new_btn, self.new_from_text_btn, self.per_chapter_check,
-                       self.open_other_btn):
+        for widget in (self.open_btn, self.new_btn, self.new_from_text_btn, self.open_other_btn):
             right.addWidget(widget)
         right.addStretch(1)
         body.addLayout(right, 2)
@@ -214,7 +208,7 @@ class WelcomeDialog(QDialog):
 
     def new_from_text(self, path: str) -> None:
         self.accept()
-        self.app.new_from_ebook(path, per_chapter=self.per_chapter_check.isChecked())
+        self.app.new_from_ebook(path)
 
     def open_other(self) -> None:
         self.accept()

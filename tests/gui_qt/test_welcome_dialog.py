@@ -114,9 +114,13 @@ def test_new_project_starts_with_the_library_characters(qt_app):
     assert qt_app.document.characters[0].library_id == bob.library_id
 
 
-def test_new_from_text_starts_fresh_project_with_the_text(qt_app, tmp_path):
+def test_new_from_text_starts_fresh_project_with_the_text(qt_app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    from kokoro_gui.qt.import_dialog import ImportDialog
+
+    monkeypatch.setattr(ImportDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
     _type(qt_app.editor, "old")
-    qt_app.engine.extract_text_from_file.return_value = "Once upon a time."
     src = tmp_path / "chapter.txt"
     src.write_text("Once upon a time.", encoding="utf-8")
     dialog = qt_app.show_welcome()
