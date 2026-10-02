@@ -146,9 +146,14 @@ def test_dirty_clips_on_many_clips_reads_no_files(qt_app, tmp_path, monkeypatch)
 
 
 def test_generation_config_carries_the_lexicon(qt_app):
-    qt_app.settings["lexicon"] = {"Nguyen": "Win"}
+    rules = [{"find": "Nguyen", "replace": "Win", "mode": "word", "case": False}]
+    qt_app.settings["lexicon"] = rules
     clip = _clip_for(qt_app)
-    assert qt_app._assemble_generation_config(clip)["lexicon"] == {"Nguyen": "Win"}
+    assert qt_app._assemble_generation_config(clip)["lexicon"] == rules
+    # A lexicon still in the old dict shape reaches the engine as rules.
+    qt_app.settings["lexicon"] = {"Nguyen": "Win"}
+    assert qt_app._assemble_generation_config(clip)["lexicon"] == [
+        {"find": "Nguyen", "replace": "Win", "mode": "literal", "case": False}]
 
 
 def test_lexicon_rule_dirties_only_the_clip_it_rewrites(qt_app, tmp_path):
@@ -292,3 +297,34 @@ def test_an_engines_model_settings_survive_selecting_another_engines_clip(qt_app
 
     assert qt_app._assemble_generation_config(audio8_clip)["temperature"] == 0.5
     assert qt_app.document.segment_key_fn(text, audio8_clip) == before
+
+
+def test_migrating_an_old_dict_lexicon_stales_no_clip(qt_app, tmp_path):
+    """The migration to rules must not change one spoken character: a clip
+    generated under the dict is still clean under the migrated list."""
+    from kokoro_gui.daw.dirty import build_segments_from_results, compute_expected_cache_hash, spoken_text
+    from kokoro_gui.qt import settings as qt_settings
+
+    legacy = {"Nguyen": "Win", "Mr": "Mister", "else": "other"}
+    qt_app.settings["lexicon"] = legacy
+    text = "Mr Nguyen arrived. Nobody else."
+    qt_app.document.text = text
+    character = qt_app.document.characters[0]
+    first = qt_app.document.assign_character_to_range(0, 18, character.id)
+    second = qt_app.document.assign_character_to_range(19, len(text), character.id)
+    for i, clip in enumerate((first, second)):
+        path = tmp_path / f"seg{i}.wav"
+        path.write_bytes(b"RIFF")
+        config = qt_app._assemble_generation_config(clip)
+        clip_text = qt_app.document.clip_text(clip)
+        key = compute_expected_cache_hash(clip_text, config, key_fn=qt_app.document.segment_key_fn, clip=clip)
+        clip.segments = build_segments_from_results(key, [{
+            "text": spoken_text(clip_text, config), "path": str(path), "duration": 1.0, "cache_key": key,
+        }])
+    assert qt_app.document.dirty_clips() == []
+
+    migrated = qt_settings.migrate_lexicon({"lexicon": legacy})["lexicon"]
+    assert isinstance(migrated, list)
+    qt_app.settings["lexicon"] = migrated
+
+    assert qt_app.document.dirty_clips() == []

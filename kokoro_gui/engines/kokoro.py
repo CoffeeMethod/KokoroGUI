@@ -110,7 +110,7 @@ class KokoroBackendAdapter(BackendHooksMixin):
                         default="af_heart", group="Generation"),
             *common_fields(),
             ConfigField("lexicon", "Lexicon Substitutions", ConfigFieldType.TEXT,
-                        default={}, group="Advanced"),
+                        default=[], group="Advanced"),
         ]
 
     def builtin_voices(self, lang_code: Optional[str] = None) -> list:

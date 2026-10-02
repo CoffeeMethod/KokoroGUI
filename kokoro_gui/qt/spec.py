@@ -254,7 +254,7 @@ SETTINGS_DEFAULTS = {
     # group): {engine_id: {key: value}} (grill EN5, `QtTTSApp.engine_settings`).
     "engines": {},
     "asr_engine": "whisper",
-    "lexicon": {},
+    "lexicon": [],  # rules: {"find", "replace", "mode", "case"}, in order
     # Workspace layouts: {"Advanced": {"state": b64, "geometry": b64}, ...}
     # (kokoro_gui/qt/workspace.py). The old flat dock_state/geometry keys
     # migrate into workspaces.Advanced on first load.

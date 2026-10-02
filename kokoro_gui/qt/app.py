@@ -61,6 +61,7 @@ from kokoro_gui.daw.undo import (
 )
 from kokoro_gui import logging_setup
 from kokoro_gui.engine import caching, runtime, text_extraction
+from kokoro_gui.engine.lexicon import normalize_rules
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.engines.base import per_engine_fields
 from kokoro_gui.engines.missing import MissingBackend
@@ -1600,7 +1601,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             "voice": engine.get("voice"),
             "speed": gen_state["speed"],
             "pitch": gen_state["pitch"],
-            "lexicon": dict(self.settings.get("lexicon", {})),
+            "lexicon": normalize_rules(self.settings.get("lexicon")),
             **self._segmentation_config(gen_state),
         }
         for key, default in self._model_fields(backend):
