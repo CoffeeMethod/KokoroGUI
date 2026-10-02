@@ -77,6 +77,10 @@ class Palette:
     # approved clip in the gutter.
     segment_mark: str
     status_approved: str
+    # Transport level meter: the bar's zones (below -6 dBFS, up to -1, over).
+    meter_ok: str
+    meter_warn: str
+    meter_clip: str
     accent: str
     accent_hover: str
     border: str
@@ -114,6 +118,9 @@ LIGHT = Palette(
     fit_far_over="#dc2626",
     segment_mark="#8b8f96",
     status_approved="#16a34a",
+    meter_ok="#16a34a",
+    meter_warn="#f59e0b",
+    meter_clip="#dc2626",
     accent="#2563eb",
     accent_hover="#1d4fd8",
     border="#d4d4d8",
@@ -147,6 +154,9 @@ DARK = Palette(
     fit_far_over="#ef4444",
     segment_mark="#6e737b",
     status_approved="#4ade80",
+    meter_ok="#4ade80",
+    meter_warn="#fbbf24",
+    meter_clip="#ef4444",
     accent="#4c8df6",
     accent_hover="#6ba1f8",
     border="#3a3d42",

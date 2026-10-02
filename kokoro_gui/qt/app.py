@@ -1161,6 +1161,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.transport_dock.playRequested.connect(self.transport.play)
         self.transport_dock.pauseRequested.connect(self.transport.pause)
         self.transport_dock.stopRequested.connect(self.transport.stop)
+        self.transport.levelsChanged.connect(self.transport_dock.set_levels)
         self.transport_dock.loopToggled.connect(self._on_loop_toggled)
         self.transport_dock.monitorChanged.connect(self.set_monitor_mode)
 

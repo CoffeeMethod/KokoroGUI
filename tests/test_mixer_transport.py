@@ -649,3 +649,61 @@ def test_mixdown_matches_the_transport_with_a_ducked_bed(tmp_path, make_transpor
     # really was ducked while the speech played.
     assert np.abs(exported[int(1.2 * rate):int(1.4 * rate), 1]).max() < 0.2 * 10 ** (-9 / 20) + 1e-3
     assert np.abs(exported[int(2.5 * rate):, 1]).max() > 0.15
+
+
+# -- level meter signal (plan 12) -------------------------------------------------
+
+
+def test_a_tick_publishes_the_blocks_peak_and_rms_per_channel(tmp_path, make_transport):
+    path = _write(tmp_path / "a.wav", np.full(8000, 0.5), rate=8000)
+    transport = make_transport()
+    transport.load([ScheduledClip("c1", 0.0, path, pan=-1.0)], sample_rate=8000)  # hard left
+    seen = []
+    transport.levelsChanged.connect(lambda *levels: seen.append(levels))
+
+    block = render_block_for_test(transport, 2000)
+    transport.process_pending()
+
+    peak_l, peak_r, rms_l, rms_r = seen[-1]
+    assert peak_l == pytest.approx(float(np.max(np.abs(block[:, 0]))))
+    assert peak_l > 0.5 and peak_r == 0.0 and rms_r == 0.0
+    assert rms_l == pytest.approx(float(np.sqrt(np.mean(block[:, 0] ** 2))), rel=1e-5)
+
+
+def test_the_peak_holds_the_loudest_block_since_the_last_tick(tmp_path, make_transport):
+    samples = np.concatenate([np.full(1000, 0.8), np.full(1000, 0.1)])
+    path = _write(tmp_path / "a.wav", samples, rate=8000)
+    transport = make_transport()
+    transport.load([ScheduledClip("c1", 0.0, path)], sample_rate=8000)
+    seen = []
+    transport.levelsChanged.connect(lambda *levels: seen.append(levels))
+
+    render_block_for_test(transport, 1000)  # the loud half
+    render_block_for_test(transport, 1000)  # the quiet half
+    transport.process_pending()
+    transport.process_pending()  # nothing new played since
+
+    assert seen[0][0] == pytest.approx(0.8, abs=1e-3)  # the peak, not the last block's 0.1
+    assert seen[0][2] == pytest.approx(0.1, abs=1e-3)  # the RMS is the last block's
+    assert seen[1][0] == 0.0
+
+
+def test_pause_stop_and_the_end_send_zeros(tmp_path, make_transport):
+    path = _write(tmp_path / "a.wav", np.ones(800), rate=8000)
+    transport = make_transport()
+    transport.load([ScheduledClip("c1", 0.0, path)], sample_rate=8000)
+    seen = []
+    transport.levelsChanged.connect(lambda *levels: seen.append(levels))
+
+    transport.play()
+    FakeStream.instances[-1].pull(400)
+    transport.pause()
+    assert seen[-1] == (0.0, 0.0, 0.0, 0.0)
+
+    seen.clear()
+    transport.play()
+    FakeStream.instances[-1].pull(1000)
+    transport.process_pending()  # the last block, then the end
+    assert seen[0][0] > 0.0
+    assert seen[-1] == (0.0, 0.0, 0.0, 0.0)
+    assert transport.state == "stopped"

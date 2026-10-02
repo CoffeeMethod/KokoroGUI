@@ -1,5 +1,6 @@
 """Tests for the reshaped shell (Claude/PLAN_ui_shell_redesign.md section
 1): menu bar, 2x2 dock grid, Transport dock, workspaces, theme, Options."""
+import pytest
 from PySide6.QtCore import Qt
 
 from kokoro_gui.engines import audio8_tts
@@ -23,7 +24,7 @@ def test_file_menu_actions(qt_app):
     texts = _action_texts(qt_app.file_menu)
     assert texts == ["New", "New Subproject", "Add Subproject...", "Open...", "Recent", "Welcome...", "Save", "Save As...", "Show in Folder", "Import Text...",
                      "Import Subtitles...", "Import Audio...", "Import Source Track...", "Load Video...", "Export...",
-                     "Quit"]
+                     "Measure Loudness...", "Quit"]
     assert qt_app.import_audio_action.isEnabled() is True
     assert "music bed" in qt_app.import_audio_action.toolTip()
 
@@ -347,3 +348,51 @@ def test_window_title_names_the_project_and_marks_pending_saves(qt_app):
     qt_app.document.text = "an edit"
     qt_app.save_settings()
     assert qt_app.windowTitle() == "Untitled* - KokoroGUI"
+
+
+# -- level meter (plan 12) ----------------------------------------------------
+
+
+def test_the_transport_signal_feeds_the_meter_and_repaints_it(qt_app):
+    from PySide6.QtWidgets import QApplication
+
+    qt_app.show()
+    qt_app.transport_dock.show()
+    meter = qt_app.transport_dock.level_meter
+    QApplication.processEvents()
+    meter.repaint()
+    painted = meter.paint_count
+    assert painted > 0 and meter.isVisible()
+
+    qt_app.transport.levelsChanged.emit(0.5, 1.0, 0.25, 0.0)
+    QApplication.processEvents()
+
+    assert meter.paint_count > painted
+    assert meter.peak_db[0] == pytest.approx(-6.02, abs=0.01) and meter.peak_db[1] == 0.0
+    assert meter.rms_db[0] == pytest.approx(-12.04, abs=0.01) and meter.rms_db[1] == -60.0
+
+
+def test_the_meter_holds_the_peak_for_a_second_and_a_half_then_drops(qt_app):
+    from kokoro_gui.qt.docks.transport_dock import LevelMeter
+
+    now = [100.0]
+    meter = LevelMeter(clock=lambda: now[0])
+    meter.set_levels(1.0, 1.0, 0.5, 0.5)
+    now[0] += 1.0
+    meter.set_levels(0.1, 0.1, 0.05, 0.05)
+    assert meter.hold_db[0] == 0.0 and meter.peak_db[0] == pytest.approx(-20.0)
+    now[0] += 1.0  # 2.0 s after the peak
+    meter.set_levels(0.1, 0.1, 0.05, 0.05)
+    assert meter.hold_db[0] == pytest.approx(-20.0)
+
+
+def test_the_meter_is_empty_when_playback_stops(qt_app):
+    meter = qt_app.transport_dock.level_meter
+    qt_app.transport.levelsChanged.emit(0.5, 0.5, 0.25, 0.25)
+    qt_app.transport_dock.set_playing(False)
+    assert meter.peak_db == [-60.0, -60.0] and meter.hold_db == [-60.0, -60.0] and meter.rms_db == [-60.0, -60.0]
+
+
+def test_the_meter_colors_come_from_both_themes():
+    for pal in (theme.LIGHT, theme.DARK):
+        assert len({pal.meter_ok, pal.meter_warn, pal.meter_clip}) == 3

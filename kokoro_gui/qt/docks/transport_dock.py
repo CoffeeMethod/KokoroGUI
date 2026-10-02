@@ -17,16 +17,22 @@ moved into a dock and reshaped into three rows:
 3. One progress bar carrying the status/detail text via `setFormat`, in
    place of the three separate labels the old central widget had.
 
+Between row 1 and row 2 sits a `LevelMeter`: two horizontal bars (left and
+right, -60 to 0 dBFS) filled to the RMS in `meter_ok` / `meter_warn` /
+`meter_clip` zones, with a peak tick that holds for 1.5 s. The app feeds it
+from `Transport.levelsChanged`; it clears when playback stops.
+
 `set_status`/`set_progress`/`set_busy` are the app's only entry points for
 feedback; `is_busy()` is the one-job-at-a-time guard every generation
 trigger checks (it used to be `app.cancel_btn.isEnabled()`).
 """
 from __future__ import annotations
 
+import math
 import time
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup, QDockWidget, QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QToolButton, QVBoxLayout,
     QWidget,
@@ -42,6 +48,78 @@ MONITOR_TIPS = {
     "original": "Play the original dialogue under each clip, from the source track.",
     "both": "Play the dub and the original together, each 6 dB down.",
 }
+
+
+METER_FLOOR_DB = -60.0
+METER_WARN_DB = -6.0
+METER_CLIP_DB = -1.0
+PEAK_HOLD_S = 1.5
+
+
+def level_db(linear: float) -> float:
+    """`linear` in dBFS, floored at the meter's bottom."""
+    return max(METER_FLOOR_DB, 20.0 * math.log10(linear)) if linear > 0.0 else METER_FLOOR_DB
+
+
+class LevelMeter(QWidget):
+    """Two thin horizontal bars, left over right, from `METER_FLOOR_DB` to
+    0 dBFS. The fill is the block's RMS, split into three colored zones
+    (`theme` tokens `meter_ok`, `meter_warn`, `meter_clip`); a one-pixel-wide
+    tick marks the peak and stays `PEAK_HOLD_S` after the peak that set it.
+    `set_levels` takes the four linear values `Transport.levelsChanged`
+    emits; `clear` zeroes everything (stopped)."""
+
+    def __init__(self, parent=None, clock=time.monotonic):
+        super().__init__(parent)
+        self._clock = clock
+        self.setFixedHeight(18)
+        self.setMinimumWidth(80)
+        self.paint_count = 0
+        self.peak_db = [METER_FLOOR_DB, METER_FLOOR_DB]
+        self.rms_db = [METER_FLOOR_DB, METER_FLOOR_DB]
+        self.hold_db = [METER_FLOOR_DB, METER_FLOOR_DB]
+        self._hold_at = [0.0, 0.0]
+        self.setToolTip("Output level: bar is RMS, tick is the peak (held 1.5 s). Left over right, -60 to 0 dBFS.")
+
+    def set_levels(self, peak_l: float, peak_r: float, rms_l: float, rms_r: float) -> None:
+        now = self._clock()
+        for ch, (peak, rms) in enumerate(((peak_l, rms_l), (peak_r, rms_r))):
+            self.peak_db[ch] = level_db(peak)
+            self.rms_db[ch] = level_db(rms)
+            if self.peak_db[ch] >= self.hold_db[ch] or now - self._hold_at[ch] > PEAK_HOLD_S:
+                self.hold_db[ch] = self.peak_db[ch]
+                self._hold_at[ch] = now
+        self.update()
+
+    def clear(self) -> None:
+        for values in (self.peak_db, self.rms_db, self.hold_db):
+            values[:] = [METER_FLOOR_DB, METER_FLOOR_DB]
+        self.update()
+
+    @staticmethod
+    def _x(db: float, width: float) -> float:
+        return (db - METER_FLOOR_DB) / -METER_FLOOR_DB * width
+
+    def paintEvent(self, _event) -> None:
+        self.paint_count += 1
+        pal = theme.current()
+        painter = QPainter(self)
+        width, bar_h = float(self.width()), (self.height() - 2) / 2.0
+        zones = ((METER_FLOOR_DB, METER_WARN_DB, pal.meter_ok), (METER_WARN_DB, METER_CLIP_DB, pal.meter_warn),
+                 (METER_CLIP_DB, 0.0, pal.meter_clip))
+        for ch in range(2):
+            y = ch * (bar_h + 2)
+            painter.fillRect(QRectF(0, y, width, bar_h), QColor(pal.panel_alt))
+            for lo, hi, color in zones:
+                top = min(hi, self.rms_db[ch])
+                if top > lo:
+                    painter.fillRect(QRectF(self._x(lo, width), y, self._x(top, width) - self._x(lo, width), bar_h),
+                                     QColor(color))
+            if self.hold_db[ch] > METER_FLOOR_DB:
+                hold = self.hold_db[ch]
+                color = pal.meter_clip if hold >= METER_CLIP_DB else pal.meter_warn if hold >= METER_WARN_DB                     else pal.meter_ok
+                painter.fillRect(QRectF(min(width - 1.0, self._x(hold, width)), y, 1.0, bar_h), QColor(color))
+        painter.end()
 
 
 def format_clock(seconds: float) -> str:
@@ -121,6 +199,9 @@ class TransportDock(QDockWidget):
         self.loop_btn.setCheckable(True)
         row1.addWidget(self.loop_btn)
         layout.addLayout(row1)
+
+        self.level_meter = LevelMeter()
+        layout.addWidget(self.level_meter)
 
         self.play_btn.clicked.connect(self.playRequested)
         self.pause_btn.clicked.connect(self.pauseRequested)
@@ -258,6 +339,11 @@ class TransportDock(QDockWidget):
     def set_playing(self, playing: bool) -> None:
         self.play_btn.setEnabled(not playing)
         self.pause_btn.setEnabled(playing)
+        if not playing:
+            self.level_meter.clear()
+
+    def set_levels(self, peak_l: float, peak_r: float, rms_l: float, rms_r: float) -> None:
+        self.level_meter.set_levels(peak_l, peak_r, rms_l, rms_r)
 
     # -- monitor toggle ----------------------------------------------------
 
