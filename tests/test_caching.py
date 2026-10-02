@@ -300,7 +300,7 @@ def test_audio8_process_chunk_task_caching_keys_on_transcript(isolated_dirs, tmp
 
     engine = Audio8Engine()
     try:
-        def _fake_segment(text, ref_wav_path, ref_transcript, speed, lang_code):
+        def _fake_segment(text, ref_wav_path, ref_transcript, speed, lang_code, **kwargs):
             t = np.arange(2200) / 44100
             return (0.1 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
         monkeypatch.setattr(engine, "generate_segment", _fake_segment)
@@ -342,7 +342,7 @@ def test_audio8_process_chunk_task_caching_keys_on_sampling_knobs(isolated_dirs,
 
     engine = Audio8Engine()
     try:
-        def _fake_segment(text, ref_wav_path, ref_transcript, speed, lang_code):
+        def _fake_segment(text, ref_wav_path, ref_transcript, speed, lang_code, **kwargs):
             t = np.arange(2200) / 44100
             return (0.1 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
         monkeypatch.setattr(engine, "generate_segment", _fake_segment)
@@ -383,7 +383,7 @@ def test_audio8_process_chunk_task_caches_every_segment_in_a_multi_segment_chunk
 
     engine = Audio8Engine()
     try:
-        def _fake_segment(text, ref_wav_path, ref_transcript, speed, lang_code):
+        def _fake_segment(text, ref_wav_path, ref_transcript, speed, lang_code, **kwargs):
             t = np.arange(2200) / 44100
             return (0.1 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
         monkeypatch.setattr(engine, "generate_segment", _fake_segment)

@@ -176,7 +176,7 @@ def test_resolve_voice_transcript_empty_when_no_sidecar(audio8_engine, a_wav):
 # --- Audio8Engine.process_chunk_task -----------------------------------------
 
 def _fake_segment(monkeypatch, engine, freq=220.0, sr=44100, n=2200):
-    def _gen(text, ref_wav_path, ref_transcript, speed, lang_code):
+    def _gen(text, ref_wav_path, ref_transcript, speed, lang_code, **kwargs):
         t = np.arange(n) / sr
         return (0.1 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
     monkeypatch.setattr(engine, "generate_segment", _gen)
@@ -337,10 +337,12 @@ def test_process_chunk_task_reads_sampling_knobs_from_config(audio8_engine, isol
     }
     audio8_engine.process_chunk_task((0, "Hello there.", config), None)
 
-    assert audio8_engine.max_new_tokens == 256
-    assert audio8_engine.temperature == 1.1
-    assert audio8_engine.top_p == 0.5
-    assert audio8_engine.top_k == 10
+    # The chunk's values go down as arguments; the engine's own attributes
+    # (the fallback for a direct call) stay at their defaults.
+    assert audio8_engine.max_new_tokens == 1024
+    assert audio8_engine.temperature == 0.8
+    assert audio8_engine.top_p == 0.95
+    assert audio8_engine.top_k == 50
     kwargs = calls["generate_audio"][0]
     assert kwargs["max_new_tokens"] == 256
     assert kwargs["temperature"] == 1.1
@@ -348,9 +350,14 @@ def test_process_chunk_task_reads_sampling_knobs_from_config(audio8_engine, isol
     assert kwargs["top_k"] == 10
 
 
-def test_process_chunk_task_reads_cache_reference_codes_from_config(audio8_engine, isolated_audio8_refs, isolated_dirs, a_wav, monkeypatch):
+def test_process_chunk_task_passes_cache_reference_codes_from_config(audio8_engine, isolated_audio8_refs, isolated_dirs, a_wav, monkeypatch):
     Audio8ReferenceStore.save_reference("Dana", a_wav, "Dana's reference line.")
-    _fake_segment(monkeypatch, audio8_engine)
+    seen = []
+
+    def _gen(text, ref_wav_path, ref_transcript, speed, lang_code, **kwargs):
+        seen.append(kwargs)
+        return np.zeros(2200, dtype=np.float32)
+    monkeypatch.setattr(audio8_engine, "generate_segment", _gen)
     assert audio8_engine.cache_reference_codes is True  # __init__ default
 
     config = {
@@ -360,7 +367,77 @@ def test_process_chunk_task_reads_cache_reference_codes_from_config(audio8_engin
         "apply_fx": False, "cache_reference_codes": False,
     }
     audio8_engine.process_chunk_task((0, "Hello there.", config), None)
-    assert audio8_engine.cache_reference_codes is False
+    assert seen[0]["cache_reference_codes"] is False
+    assert audio8_engine.cache_reference_codes is True
+
+
+def _sampling_config(audio8_engine, isolated_dirs, voice, temperature):
+    return {
+        "lang_code": "English", "voice": voice, "speed": 1.0, "filename": "out",
+        "time_id": "1", "out_dir": str(isolated_dirs.out_dir), "format": "wav",
+        "caching": False, "apply_fx": False, "temperature": temperature,
+    }
+
+
+def test_each_chunk_generates_with_its_own_sampling(audio8_engine, isolated_audio8_refs, isolated_dirs, a_wav, monkeypatch):
+    Audio8ReferenceStore.save_reference("Dana", a_wav, "Dana's reference line.")
+    voice = audio8_engine.resolve_voice_path("Dana")
+    seen = []
+
+    def _gen(text, ref_wav_path, ref_transcript, speed, lang_code, **kwargs):
+        seen.append(kwargs["sampling"]["temperature"])
+        return np.zeros(2200, dtype=np.float32)
+    monkeypatch.setattr(audio8_engine, "generate_segment", _gen)
+
+    for temperature in (0.3, 0.9):
+        audio8_engine.process_chunk_task(
+            (0, "Hello there.", _sampling_config(audio8_engine, isolated_dirs, voice, temperature)), None)
+
+    assert seen == [0.3, 0.9]
+
+
+def test_two_threads_with_different_sampling_do_not_see_each_other(audio8_engine, isolated_audio8_refs, isolated_dirs, a_wav, monkeypatch):
+    import threading
+    import time
+
+    Audio8ReferenceStore.save_reference("Dana", a_wav, "Dana's reference line.")
+    voice = audio8_engine.resolve_voice_path("Dana")
+    seen = {}
+
+    def _gen(text, ref_wav_path, ref_transcript, speed, lang_code, **kwargs):
+        # Sleep so the other thread's chunk starts while this one is mid-call.
+        time.sleep(0.05)
+        seen[text] = kwargs["sampling"]["temperature"]
+        return np.zeros(2200, dtype=np.float32)
+    monkeypatch.setattr(audio8_engine, "generate_segment", _gen)
+
+    def run(text, temperature):
+        config = _sampling_config(audio8_engine, isolated_dirs, voice, temperature)
+        config["filename"] = f"out_{text}"
+        audio8_engine.process_chunk_task((0, text, config), None)
+
+    threads = [threading.Thread(target=run, args=("Alpha.", 0.3)),
+               threading.Thread(target=run, args=("Bravo.", 0.9))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert seen == {"Alpha.": 0.3, "Bravo.": 0.9}
+
+
+def test_reference_codes_write_leaves_no_partial_file_when_the_save_fails(audio8_engine, isolated_audio8_refs, a_wav, monkeypatch):
+    _make_fake_model_and_processor(monkeypatch)
+
+    def _crash(fh, arr, *a, **k):
+        fh.write(b"\x93NUMPY")  # a few bytes, then the process "dies"
+        raise OSError("disk full")
+    monkeypatch.setattr(audio8_tts.np, "save", _crash)
+
+    assert audio8_engine._reference_codes_path(a_wav, "A reference transcript.") is None
+
+    cache_dir = audio8_tts._ref_codes_cache_dir()
+    assert os.listdir(cache_dir) == []  # neither the .npy nor a stray .tmp
 
 
 def test_cancel_sets_cancel_event(audio8_engine):
