@@ -86,6 +86,10 @@ PROJECTS_DIR = "projects"
 VIDEO_DIR = "video"
 # `session.json` key: the reference video the user picked on this machine.
 VIDEO_TRUST_KEY = "video_trusted"
+# `session.json` keys that are the window's runtime state, not the project's
+# (the loop region, the monitor mode, the resume view). Reopening the same
+# file into its own dir keeps them. They are never bundled.
+RUNTIME_STATE_KEYS = ("loop_s", "monitor", "view")
 # A subproject's rendered mix, in its own project dir (phase 4, NP2):
 # `mixdown.<fmt>` plus `mixdown.json` recording the document digest it was
 # rendered from, its length and rate. Derived data: never bundled, always
@@ -907,6 +911,10 @@ def finish_open(info: BundleInfo, project_dir: str, engine_versions: dict | None
         # reopened into its own dir; any other bundle starts untrusted.
         if previous.get(VIDEO_TRUST_KEY) and previous.get("source_path") == session["source_path"]:
             session[VIDEO_TRUST_KEY] = previous[VIDEO_TRUST_KEY]
+        if previous.get("source_path") == session["source_path"]:
+            for key in RUNTIME_STATE_KEYS:
+                if key in previous:
+                    session[key] = previous[key]
         write_session(project_dir, session)
 
     return LoadedProject(document=document, project_settings=project_settings, project_dir=project_dir,
