@@ -2,6 +2,7 @@
 (section 6 of Claude/PLAN_ui_shell_redesign.md). Writes real wav files
 into tmp_path; no engine, no Qt."""
 import datetime
+import os
 
 import numpy as np
 import pytest
@@ -761,3 +762,201 @@ def test_mixdown_chapters_reports_a_subproject_without_a_mixdown_as_skipped(tmp_
                               nested_audio_path=lambda clip: None if clip.id == missing.id else nested(clip))
 
     assert result.skipped_clip_ids == [missing.id]
+
+
+# -- stems (plan 15) ---------------------------------------------------------
+
+
+def _stem_doc(tmp_path, bed=True, rate=8000):
+    """Alice (0.25, 1 s) and Bob (0.5, 1 s, pinned to overlap her second half)
+    on two tracks, and, with `bed`, a 4 s music bed (0.4) on a ducked track."""
+    alice = Character.from_preset_dict("Alice", {})
+    bob = Character.from_preset_dict("Bo b/ok", {})
+    track_a = Track(name="Alice track", character_id=alice.id, order_index=0)
+    track_b = Track(name="Bob track", character_id=bob.id, order_index=1)
+    a = Clip(character_id=alice.id, track_id=track_a.id,
+             segments=[Segment(order_index=0, duration=1.0, audio_path=_wav(tmp_path / "a.wav", 0.25, 1.0, rate))])
+    b = Clip(character_id=bob.id, track_id=track_b.id, timeline_timestamp=0.5,
+             segments=[Segment(order_index=0, duration=1.0, audio_path=_wav(tmp_path / "b.wav", 0.5, 1.0, rate))])
+    tagged = [(0, 12, a), (13, 28, b)]
+    tracks = [track_a, track_b]
+    text = "Hello there. General Kenobi."
+    if bed:
+        track_m = Track(name="Music", order_index=2, role="music", duck=True)
+        music = Clip(source="imported", original_audio_path=_wav(tmp_path / "bed.wav", 0.4, 4.0, rate),
+                     track_id=track_m.id, timeline_timestamp=0.0)
+        text += " Bed"
+        tagged.append((29, 32, music))
+        tracks.append(track_m)
+    doc = _doc(text, tagged, characters=[alice, bob], tracks=tracks)
+    if bed:
+        doc.runs[-1].kind = "placeholder"
+    return doc, a, b
+
+
+def _sum(stems):
+    return np.sum([s.samples for s in stems], axis=0)
+
+
+def test_track_stems_are_the_same_length_and_add_up_to_the_mix(tmp_path):
+    doc, _a, _b = _stem_doc(tmp_path, bed=False)
+
+    mix = render_mix(doc, 8000, stems="track")
+
+    assert [s.name for s in mix.stems] == ["Alice track", "Bob track"]
+    assert all(s.samples.shape == mix.samples.shape for s in mix.stems)
+    assert np.allclose(_sum(mix.stems), mix.samples, atol=1e-6)
+    assert np.allclose(mix.stems[0].samples[:4000], 0.25, atol=1e-3)
+    assert np.allclose(mix.stems[1].samples[:4000], 0.0)  # Bob starts at 0.5 s: the stem is padded to line up
+
+
+def test_character_stems_follow_the_characters_and_keep_beds_apart(tmp_path):
+    doc, a, _b = _stem_doc(tmp_path)
+    a.character_id = None  # no character any more
+
+    mix = render_mix(doc, 8000, stems="character")
+
+    assert [s.name for s in mix.stems] == ["Bo b/ok", "Unassigned", "Music"]
+
+
+def test_a_muted_or_soloed_out_track_has_no_stem_and_a_dead_clip_none_either(tmp_path):
+    doc, a, b = _stem_doc(tmp_path, bed=False)
+    doc.tracks[1].mute = True
+    assert [s.name for s in render_mix(doc, 8000, stems="track").stems] == ["Alice track"]
+    doc.tracks[1].mute = False
+    doc.tracks[0].solo = True
+    assert [s.name for s in render_mix(doc, 8000, stems="character").stems] == ["Alice"]
+    doc.tracks[0].solo = False
+    b.segments = []  # never generated: silent, so no stem
+    assert [s.name for s in render_mix(doc, 8000, stems="track").stems] == ["Alice track"]
+
+
+def test_the_dialogue_stem_leaves_out_the_bed(tmp_path):
+    (tmp_path / "plain").mkdir()
+    doc, _a, _b = _stem_doc(tmp_path)
+    plain, _a, _b = _stem_doc(tmp_path / "plain", bed=False)
+
+    mix = render_mix(doc, 8000, dialogue_stem=True)
+    speech_only = render_mix(plain, 8000)
+
+    assert [s.name for s in mix.stems] == ["Dialogue"]
+    assert len(mix.stems[0].samples) == len(mix.samples) == 32000  # the bed runs to 4 s
+    assert np.allclose(mix.stems[0].samples[:12000], speech_only.samples, atol=1e-6)
+    assert np.allclose(mix.stems[0].samples[12000:], 0.0)
+
+
+def test_stems_add_up_to_the_mix_with_a_ducked_bed(tmp_path):
+    """The bed stem ducks under speech that isn't in it: the sidechain is the
+    full mix's, so the stems still add up to the mix."""
+    doc, _a, _b = _stem_doc(tmp_path)
+
+    mix = render_mix(doc, 8000, stems="track", dialogue_stem=True)
+
+    by_name = {s.name: s.samples for s in mix.stems}
+    music = by_name["Music"]
+    assert music[4000, 0] < 0.4 * 0.5  # down under the speech
+    assert music[31000, 0] == pytest.approx(0.4, rel=0.02)  # and back up once it stops
+    assert np.allclose(by_name["Alice track"] + by_name["Bob track"] + music, mix.samples, atol=1e-6)
+    assert np.allclose(by_name["Dialogue"] + music, mix.samples, atol=1e-6)
+
+
+def test_mono_stems_are_mono(tmp_path):
+    doc, _a, _b = _stem_doc(tmp_path, bed=False)
+    mix = render_mix(doc, 8000, channels=1, stems="track")
+    assert mix.samples.ndim == 1 and all(s.samples.ndim == 1 for s in mix.stems)
+    assert np.allclose(_sum(mix.stems), mix.samples, atol=1e-6)
+
+
+def test_an_unknown_stem_mode_is_refused(tmp_path):
+    doc, _a, _b = _stem_doc(tmp_path, bed=False)
+    with pytest.raises(ValueError):
+        render_mix(doc, 8000, stems="instrument")
+
+
+def test_mixdown_writes_a_file_per_stem_beside_the_mix(tmp_path):
+    doc, _a, _b = _stem_doc(tmp_path)
+    out = tmp_path / "out" / "story.wav"
+
+    result = mixdown(doc, str(out), fmt="wav", sample_rate=8000, stems="character", dialogue_stem=True)
+
+    names = [os.path.basename(p) for p in result.stem_files]
+    assert names == ["story_Alice.wav", "story_Bo_b_ok.wav", "story_Music.wav", "story_Dialogue.wav"]
+    lengths = {sf.info(p).frames for p in result.stem_files} | {sf.info(str(out)).frames}
+    assert lengths == {32000}
+    assert result.audio_path == str(out)
+    assert sorted(os.listdir(out.parent)) == sorted(["story.wav", *names])
+
+
+def test_a_stem_with_the_name_of_another_gets_a_number(tmp_path):
+    doc, _a, _b = _stem_doc(tmp_path, bed=False)
+    doc.tracks[1].name = "Alice track"
+    result = mixdown(doc, str(tmp_path / "s.wav"), fmt="wav", sample_rate=8000, stems="track")
+    assert [os.path.basename(p) for p in result.stem_files] == ["s_Alice_track.wav", "s_Alice_track_2.wav"]
+
+
+def test_stem_names_carry_the_start_timecode_only_when_it_is_on(tmp_path):
+    doc, _a, _b = _stem_doc(tmp_path, bed=False)
+    off = mixdown(doc, str(tmp_path / "off" / "s.wav"), fmt="wav", sample_rate=8000, stems="character")
+    assert [os.path.basename(p) for p in off.stem_files] == ["s_Alice.wav", "s_Bo_b_ok.wav"]
+
+    doc.settings["timecode"] = {"enabled": True, "frame_rate": 25.0, "start": "01:00:00:00"}
+    on = mixdown(doc, str(tmp_path / "on" / "s.wav"), fmt="wav", sample_rate=8000, stems="character")
+    assert [os.path.basename(p) for p in on.stem_files] == ["s_Alice_01000000.wav", "s_Bo_b_ok_01000000.wav"]
+    # The audio still starts at 0 in each file.
+    assert np.allclose(sf.read(on.stem_files[0])[0][:100], 0.25, atol=1e-3)
+
+    doc.settings["timecode"] = {"enabled": True, "frame_rate": 25.0, "start": "01:00:00:00"}
+    ranged = mixdown(doc, str(tmp_path / "range" / "s.wav"), fmt="wav", sample_rate=8000, stems="character",
+                     range_s=(0.4, 1.5))
+    assert os.path.basename(ranged.stem_files[0]) == "s_Alice_01000010.wav"  # the range's start, 10 frames in
+
+
+def test_stems_are_resampled_padded_and_normalized_with_the_mix(tmp_path):
+    pytest.importorskip("pyloudnorm")
+    doc, _a, _b = _stem_doc(tmp_path, bed=False, rate=8000)
+
+    result = mixdown(doc, str(tmp_path / "n.wav"), fmt="wav", sample_rate=8000, out_rate=16000, head_s=0.5,
+                     tail_s=0.25, loudness={"mode": "lufs", "target_lufs": -23.0, "ceiling_dbtp": -1.0},
+                     stems="track")
+
+    mix, rate = sf.read(str(tmp_path / "n.wav"), dtype="float32")
+    stems = [sf.read(p, dtype="float32")[0] for p in result.stem_files]
+    assert rate == 16000 and len(mix) == int(16000 * 2.25)
+    assert all(len(s) == len(mix) for s in stems)
+    assert np.allclose(sum(stems), mix, atol=1e-3)  # 16 bit files: a step is 3e-5 each
+    assert np.allclose(mix[:8000], 0.0)
+
+
+def test_rms_mode_limits_the_stems_with_the_mixs_gain(tmp_path):
+    pytest.importorskip("pyloudnorm")
+    doc = _peaky_doc(tmp_path)
+    # A second character on a second track, so there are two stems to add up.
+    bob = Character.from_preset_dict("Bob", {})
+    track = Track(name="B", character_id=bob.id, order_index=1)
+    quiet = Clip(character_id=bob.id, track_id=track.id, timeline_timestamp=0.0,
+                 segments=[Segment(order_index=0, duration=2.0, audio_path=_wav(tmp_path / "q.wav", 0.02, 2.0))])
+    doc.clips.append(quiet)
+    doc.characters.append(bob)
+    doc.tracks.append(track)
+    doc.runs.append(Run(text="Hi", clip_id=quiet.id, kind=quiet.source))
+
+    result = mixdown(doc, str(tmp_path / "r.wav"), fmt="wav", sample_rate=8000, channels=1,
+                     loudness={"mode": "rms", "target_rms_dbfs": -20.0, "limiter_dbfs": -3.5}, stems="track")
+
+    mix = sf.read(str(tmp_path / "r.wav"), dtype="float32")[0]
+    stems = [sf.read(p, dtype="float32")[0] for p in result.stem_files]
+    assert len(stems) == 2
+    assert np.max(np.abs(mix)) <= 10 ** (-3.5 / 20) + 1e-3
+    assert np.allclose(sum(stems), mix, atol=1e-3)
+
+
+def test_stems_survive_a_split_export(tmp_path):
+    doc, arrangement, nested = _book(tmp_path)
+    plan = plan_chapters(doc, arrangement, "subprojects")
+
+    result = mixdown_chapters(doc, str(tmp_path / "out"), plan, fmt="wav", sample_rate=RATE, arrangement=arrangement,
+                              nested_audio_path=nested, stems="track", dialogue_stem=True)
+
+    names = sorted(os.path.basename(p) for p in result.stem_files)
+    assert names == sorted(f"{chapter.name}_{stem}.wav" for chapter in plan.chapters
+                           for stem in ("Unassigned", "Dialogue"))

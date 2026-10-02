@@ -707,3 +707,25 @@ def test_pause_stop_and_the_end_send_zeros(tmp_path, make_transport):
     assert seen[0][0] > 0.0
     assert seen[-1] == (0.0, 0.0, 0.0, 0.0)
     assert transport.state == "stopped"
+
+
+def test_a_sidechain_only_clip_ducks_the_bed_without_being_heard():
+    """A stem export keeps the speech outside the stem as a sidechain: the bed
+    is ducked as in the full mix, and the speech adds nothing to the output."""
+    rate = DUCK_RATE
+    speech = _speech(np.ones(rate), gain_l=1.0, gain_r=0.0)
+    bed = _bed(np.full(rate, 0.1))
+    full = _blockwise([speech, bed], rate, 512, mixer.DuckState(rate))
+    bed_stem = _blockwise([mixer.LoadedClip(**{**speech.__dict__, "sidechain_only": True}), bed], rate, 512,
+                          mixer.DuckState(rate))
+
+    assert np.allclose(bed_stem[:, 1], full[:, 1], atol=1e-6)  # the right column is the bed alone in both
+    assert np.allclose(bed_stem[:, 0], bed_stem[:, 1])  # and the speech adds nothing on the left
+    assert bed_stem[rate // 2, 1] < 0.05  # and it is ducked
+
+
+def test_a_sidechain_only_clip_is_never_in_the_output():
+    out = mixer.mix_block([_speech(np.ones(100), sidechain_only=True), _speech(np.full(100, 0.25))], 0, 100)
+    assert np.allclose(out, 0.25)
+    out = mixer.mix_block([_speech(np.ones(100), sidechain_only=True)], 0, 100, duck=mixer.DuckState(DUCK_RATE))
+    assert np.allclose(out, 0.0)

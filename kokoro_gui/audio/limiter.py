@@ -29,10 +29,21 @@ _CHUNK = 1 << 21  # frames per pass, so a book-length mix doesn't need a gain ar
 def limit_peaks(samples, rate: int, ceiling_dbfs: float, window_s: float = DEFAULT_WINDOW_S) -> np.ndarray:
     """`samples` (`(frames,)` or `(frames, channels)`) as float32 with no
     sample above `ceiling_dbfs`. Audio already under it comes back unchanged."""
+    return limit_peaks_together(samples, (), rate, ceiling_dbfs, window_s)[0]
+
+
+def limit_peaks_together(samples, companions, rate: int, ceiling_dbfs: float,
+                         window_s: float = DEFAULT_WINDOW_S) -> list:
+    """`[limited samples, *limited companions]`. The gain comes from
+    `samples` alone, and every companion (same length, any channel count) gets
+    that same gain. A stem export uses it so the stems still add up to the
+    limited mix."""
     out = np.array(samples, dtype=np.float32)
+    others = [np.array(c, dtype=np.float32) for c in companions]
     if out.size == 0:
-        return out
+        return [out] + others
     frames = out.reshape(len(out), -1)
+    follow = [c.reshape(len(c), -1) for c in others]
     ceiling = 10.0 ** (float(ceiling_dbfs) / 20.0)
     width = max(1, int(round(float(window_s) * int(rate))))
     size = 2 * width + 1
@@ -46,5 +57,6 @@ def limit_peaks(samples, rate: int, ceiling_dbfs: float, window_s: float = DEFAU
             continue
         need = np.minimum(1.0, ceiling / np.maximum(peak, 1e-12)).astype(np.float32)
         gain = uniform_filter1d(minimum_filter1d(need, size, mode="nearest"), size, mode="nearest")
-        frames[start:end] *= gain[start - lo:end - lo, None]
-    return out
+        for target in [frames] + follow:
+            target[start:end] *= gain[start - lo:end - lo, None]
+    return [out] + others
