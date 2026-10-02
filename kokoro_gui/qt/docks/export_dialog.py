@@ -4,7 +4,8 @@ Four tabs. "Audio" holds a preset (`kokoro_gui/daw/export_presets.py`: ACX,
 Apple Podcasts, Spotify, YouTube; it fills the fields below, and editing one
 puts the combo back on "Custom"), the output folder, base filename (a template:
 `{project}`, `{date}`, `{time}`, `{range}`, see `mixdown.expand_name`, with
-a live preview underneath), format, the mp3 bitrate (shown for mp3 only),
+a live preview underneath), format (M4B joins the list while an ffmpeg is on
+PATH, `kokoro_gui/daw/m4b.py`), the mp3 or M4B bitrate (shown for that format only),
 sample rate, channels (stereo, or mono as the average of the two), "Normalize
 loudness" (by LUFS under a true-peak ceiling, or by RMS under a peak limiter,
 `kokoro_gui.audio.loudness`), silence at the start and end, a range (the whole
@@ -25,7 +26,8 @@ cover image (a path with a 64 px preview; the picture is never copied into the
 project) and "Write chapter markers into MP3". They're stored as the dict
 `export["tags"]` and written into mp3, flac and ogg files after the export; a
 wav has no tags, and a split export titles each file with its chapter. The tab
-is disabled without `mutagen`.
+is disabled without `mutagen`, except for an M4B, whose tags ffmpeg writes (an
+M4B always carries its chapters, one per subproject or else per marker).
 "Project file" holds the bundle options below. A new option goes into the tab
 it belongs to, in the same `values()` and `export_defaults()` pair.
 Values persist per project in
@@ -70,14 +72,17 @@ from kokoro_gui.daw.export_presets import CUSTOM_ID, PRESETS, SPLIT_MODES, get_p
 from kokoro_gui.daw.mixdown import (
     STEM_MODES, expand_name, mixdown, mixdown_chapters, name_context, plan_chapters, render_mix, unused_path,
 )
-from kokoro_gui.daw import tagging
+from kokoro_gui.daw import m4b, tagging
 from kokoro_gui.daw.transcripts import clean_extras
 from kokoro_gui.qt import project as project_io
 
 FORMATS = ("wav", "mp3", "flac", "ogg")
+M4B_TIP = ("An audiobook file: AAC with one chapter per subproject (or per marker when there are no subprojects), "
+           "the tags and the cover. Written by the ffmpeg on your PATH.")
 BUNDLE_AUDIO_FORMATS = ("wav", "flac")
 BITRATES_KBPS = (128, 192, 256, 320)
 DEFAULT_BITRATE_KBPS = 192
+M4B_BITRATES_KBPS = m4b.BITRATES_KBPS
 OUTPUT_RATES = (22050, 24000, 44100, 48000)
 DEFAULT_TARGET_LUFS = -16.0
 DEFAULT_CEILING_DBTP = -1.0
@@ -113,6 +118,18 @@ NAME_TOKEN_HELP = ("Tokens: {project} (the project title), {date} (YYYY-MM-DD), 
                    "{range} (the range below, or \"full\").")
 
 
+def export_formats() -> tuple:
+    """The formats the Format box offers: M4B only while an ffmpeg is on PATH
+    (`m4b.find_ffmpeg`), since the app doesn't ship one."""
+    return FORMATS + ("m4b",) if m4b.find_ffmpeg() else FORMATS
+
+
+def tags_usable(fmt: str) -> bool:
+    """True when the tags can be written into a file of this format: M4B
+    through ffmpeg, the others through `mutagen`."""
+    return fmt == "m4b" or tagging.available()
+
+
 def _choice(value, allowed: tuple, default):
     """`value` when it is one of `allowed`, else `default` (a hand-edited
     project.json)."""
@@ -145,6 +162,7 @@ def export_defaults(app) -> dict:
         "target_lufs": _number(project.get("target_lufs"), DEFAULT_TARGET_LUFS, -30.0, -5.0),
         "ceiling_dbtp": _number(project.get("ceiling_dbtp"), DEFAULT_CEILING_DBTP, -6.0, 0.0),
         "bitrate_kbps": _choice(project.get("bitrate_kbps"), BITRATES_KBPS, DEFAULT_BITRATE_KBPS),
+        "m4b_bitrate_kbps": _choice(project.get("m4b_bitrate_kbps"), M4B_BITRATES_KBPS, m4b.DEFAULT_BITRATE_KBPS),
         "sample_rate": _choice(project.get("sample_rate"), OUTPUT_RATES, None),  # None: the project's rate
         "normalize_mode": _choice(project.get("normalize_mode"), NORMALIZE_MODES, "lufs"),
         "target_rms_dbfs": _number(project.get("target_rms_dbfs"), DEFAULT_RMS_DBFS, -40.0, -6.0),
@@ -217,10 +235,10 @@ def chapter_plan(app, split: str, preset=None, arrangement=None):
 def tag_options(app, values: dict) -> dict | None:
     """`mixdown(tags=...)` for the stored values: the tag fields (the title
     falls back to the project's, the genre comes from the preset), the cover
-    path and the chapter flag. None when tags are switched off or `mutagen`
-    is missing."""
+    path and the chapter flag. None when tags are switched off, or when
+    `mutagen` is missing and the format isn't M4B (ffmpeg writes those)."""
     tags = tagging.clean_settings(values.get("tags"))
-    if not tags["enabled"] or not tagging.available():
+    if not tags["enabled"] or not tags_usable(values.get("format", "wav")):
         return None
     _document, settings = _export_target(app)
     preset = get_preset(values.get("preset"))
@@ -310,8 +328,11 @@ class ExportDialog(QDialog):
         form.addRow("", self.name_preview_label)
 
         self.format_combo = QComboBox()
-        self.format_combo.addItems(FORMATS)
-        self.format_combo.setCurrentText(values["format"] if values["format"] in FORMATS else "wav")
+        formats = export_formats()
+        self.format_combo.addItems(formats)
+        self.format_combo.setCurrentText(values["format"] if values["format"] in formats else "wav")
+        if "m4b" in formats:
+            self.format_combo.setItemData(formats.index("m4b"), M4B_TIP, Qt.ItemDataRole.ToolTipRole)
         form.addRow("Format:", self.format_combo)
 
         self.bitrate_combo = QComboBox()
@@ -321,6 +342,13 @@ class ExportDialog(QDialog):
         self.bitrate_combo.setToolTip("Constant bitrate. At sample rates below 32 kHz, MP3 tops out at 160 kbps, "
                                       "so 192 and up come out at 160 there.")
         form.addRow("MP3 bitrate:", self.bitrate_combo)
+
+        self.m4b_bitrate_combo = QComboBox()
+        for kbps in M4B_BITRATES_KBPS:
+            self.m4b_bitrate_combo.addItem(f"{kbps} kbps", kbps)
+        self.m4b_bitrate_combo.setCurrentIndex(max(0, self.m4b_bitrate_combo.findData(values["m4b_bitrate_kbps"])))
+        self.m4b_bitrate_combo.setToolTip("AAC bitrate. 64 kbps is plenty for one speaking voice; music beds want more.")
+        form.addRow("M4B bitrate:", self.m4b_bitrate_combo)
 
         self.sample_rate_combo = QComboBox()
         self.sample_rate_combo.addItem(f"Project rate ({self.app.project_sample_rate()} Hz)", None)
@@ -514,7 +542,8 @@ class ExportDialog(QDialog):
         cover_layout.setContentsMargins(0, 0, 0, 0)
         self.cover_edit = QLineEdit(tags["cover"])
         self.cover_edit.setPlaceholderText("A JPEG or PNG, up to 5 MB")
-        self.cover_edit.setToolTip("Embedded in mp3, flac and ogg files. The project keeps the path, not the picture.")
+        self.cover_edit.setToolTip("Embedded in mp3, flac, ogg and m4b files. The project keeps the path, not the "
+                                   "picture.")
         self.cover_browse = QPushButton("...")
         self.cover_browse.clicked.connect(self._browse_cover)
         self.cover_preview = QLabel()
@@ -531,18 +560,15 @@ class ExportDialog(QDialog):
         self.tag_chapters_check = QCheckBox("Write chapter markers into MP3")
         self.tag_chapters_check.setChecked(tags["chapters"])
         self.tag_chapters_check.setToolTip("ID3 chapter frames: one per marker, or per subproject when there are "
-                                           "no markers, so podcast apps show a chapter list. mp3 only.")
+                                           "no markers, so podcast apps show a chapter list. mp3 only. An M4B "
+                                           "always carries its chapters.")
         form.addRow("", self.tag_chapters_check)
         self.tags_note_label = QLabel()
         self.tags_note_label.setWordWrap(True)
         form.addRow("", self.tags_note_label)
 
-        if not tagging.available():
-            self.tags_check.setChecked(False)
-            self.tags_check.setEnabled(False)
-            index = self.tabs.indexOf(self.tags_form.parentWidget())
-            self.tabs.setTabEnabled(index, False)
-            self.tabs.setTabToolTip(index, "Tags need the mutagen package (pip install mutagen).")
+        self._tags_tab_index = self.tabs.indexOf(self.tags_form.parentWidget())
+        self.tags_check.toggled.connect(self._remember_tags_enabled)
         for signal in (self.tags_check.toggled, self.format_combo.currentTextChanged,
                        self.split_combo.currentIndexChanged, self.cover_edit.textChanged):
             signal.connect(self._sync_tags)
@@ -554,13 +580,27 @@ class ExportDialog(QDialog):
         if path:
             self.cover_edit.setText(path)
 
+    def _remember_tags_enabled(self, checked: bool) -> None:
+        """Keeps the box's state while the tab is disabled (no `mutagen`, a
+        format that isn't M4B), so the stored choice isn't lost."""
+        self._stored_tags_enabled = bool(checked)
+
     def _sync_tags(self, *_args) -> None:
-        """Greys out what the tags can't use: everything when they're off, the
+        """Greys out what the tags can't use: the whole tab without a writer
+        for the format (`tags_usable`), everything when they're off, the
         title and number in a split export (each file gets its own) and the
         chapter box outside mp3. Shows the cover's preview, or why it won't
         be used."""
-        on = self.tags_check.isChecked()
         fmt = self.format_combo.currentText()
+        usable = tags_usable(fmt)
+        self.tabs.setTabEnabled(self._tags_tab_index, usable)
+        self.tabs.setTabToolTip(self._tags_tab_index, "" if usable else
+                                "Tags need the mutagen package (pip install mutagen), except in an M4B.")
+        self.tags_check.setEnabled(usable)
+        self.tags_check.blockSignals(True)
+        self.tags_check.setChecked(usable and self._stored_tags_enabled)
+        self.tags_check.blockSignals(False)
+        on = self.tags_check.isChecked()
         split = self.split_combo.currentData() is not None
         for widget in (self.tag_artist_edit, self.tag_album_edit, self.tag_year_edit, self.tag_description_edit,
                        self.cover_edit, self.cover_browse):
@@ -588,7 +628,10 @@ class ExportDialog(QDialog):
                         Qt.TransformationMode.SmoothTransformation))
                 else:
                     self.cover_note_label.setText("Qt can't show this image, but it will still be embedded.")
-        if not tagging.supports(fmt):
+        if fmt == "m4b":
+            note = ("An M4B always carries its chapters: one per subproject, or per marker when there are no "
+                    "subprojects.")
+        elif not tagging.supports(fmt):
             note = "WAV files can't carry tags. Pick mp3, flac or ogg to write them."
         elif split:
             note = "Each file is titled with its chapter and numbered n/total; the rest is shared."
@@ -620,7 +663,9 @@ class ExportDialog(QDialog):
         form.addRow("", self.bundle_video_check)
 
     def _sync_bitrate_row(self, *_args) -> None:
-        self.audio_form.setRowVisible(self.bitrate_combo, self.format_combo.currentText() == "mp3")
+        fmt = self.format_combo.currentText()
+        self.audio_form.setRowVisible(self.bitrate_combo, fmt == "mp3")
+        self.audio_form.setRowVisible(self.m4b_bitrate_combo, fmt == "m4b")
 
     def _update_name_preview(self, *_args) -> None:
         fmt = self.format_combo.currentText()
@@ -728,6 +773,7 @@ class ExportDialog(QDialog):
             "target_lufs": self.target_spin.value(),
             "ceiling_dbtp": self.ceiling_spin.value(),
             "bitrate_kbps": self.bitrate_combo.currentData(),
+            "m4b_bitrate_kbps": self.m4b_bitrate_combo.currentData(),
             "sample_rate": self.sample_rate_combo.currentData(),
             "normalize_mode": self.normalize_mode_combo.currentData(),
             "target_rms_dbfs": self.rms_spin.value(),
@@ -748,7 +794,7 @@ class ExportDialog(QDialog):
         an absolute path."""
         cover = self.cover_edit.text().strip()
         return tagging.clean_settings({
-            "enabled": self.tags_check.isChecked() if tagging.available() else self._stored_tags_enabled,
+            "enabled": self._stored_tags_enabled,
             "title": self.tag_title_edit.text(), "artist": self.tag_artist_edit.text(),
             "album": self.tag_album_edit.text(), "track": self.tag_track_edit.text(),
             "year": self.tag_year_edit.text(), "description": self.tag_description_edit.toPlainText(),
@@ -814,6 +860,12 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
         if clicked is None or box.buttonRole(clicked) == QMessageBox.ButtonRole.RejectRole:
             return False
 
+    if values["format"] == "m4b" and m4b.find_ffmpeg() is None:
+        QMessageBox.warning(parent, "ffmpeg not found",
+                            "M4B export needs ffmpeg on your PATH, and none was found. Install it, or pick "
+                            "another format.")
+        return False
+
     # Resolved on the GUI thread (they read dock state); the export thread
     # only applies them.
     inputs = _mix_inputs(app)
@@ -861,7 +913,7 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
         progress=_progress, channels=values.get("channels", 2),
         srt_granularity="word" if values.get("srt_words") else "clip",
         include_cue_sheet=bool(values.get("cue_sheet")), loudness=loudness,
-        bitrate_kbps=values.get("bitrate_kbps"), out_rate=values.get("sample_rate"),
+        bitrate_kbps=values.get("m4b_bitrate_kbps" if values["format"] == "m4b" else "bitrate_kbps"), out_rate=values.get("sample_rate"),
         head_s=values.get("head_s", 0.0), tail_s=values.get("tail_s", 0.0), checks=checks,
         stems=values.get("stems"), dialogue_stem=bool(values.get("dialogue_stem")),
         extras=tuple(clean_extras(values.get("extras"))),

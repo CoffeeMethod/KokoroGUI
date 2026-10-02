@@ -65,8 +65,8 @@ def test_export_dialog_reads_back_sanitized_values(qt_app):
     assert values == {"out_dir": "out", "filename": "evil", "format": "flac", "srt": True, "keep_clip_files": True,
                       "channels": 2, "srt_words": False, "cue_sheet": False,
                       "normalize_loudness": False, "target_lufs": -16.0, "ceiling_dbtp": -1.0,
-                      "bitrate_kbps": 192, "sample_rate": None, "normalize_mode": "lufs", "target_rms_dbfs": -20.0,
-                      "limiter_dbfs": -3.5, "head_s": 0.0, "tail_s": 0.0, "split": None, "preset": "custom",
+                      "bitrate_kbps": 192, "m4b_bitrate_kbps": 96, "sample_rate": None, "normalize_mode": "lufs",
+                      "target_rms_dbfs": -20.0, "limiter_dbfs": -3.5, "head_s": 0.0, "tail_s": 0.0, "split": None, "preset": "custom",
                       "stems": None, "dialogue_stem": False, "extras": [], "transcript_speakers": True,
                       "tags": {"enabled": True, "title": "", "artist": "", "album": "", "track": "", "year": "",
                                "description": "", "cover": "", "chapters": True}}
