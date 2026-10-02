@@ -7,6 +7,8 @@ packaging
 scipy
 # Integrated loudness (LUFS) for export normalize and Measure Loudness; imported lazily.
 pyloudnorm==0.2.0
+# File tags, cover art and ID3 chapter frames for exports; imported lazily.
+mutagen==1.48.1
 # 0.9.24 and 0.9.25 Linux wheels are built with -march=native and die with SIGILL
 # on AMD Zen 3 (GitHub's ubuntu runners): spotify/pedalboard#454. 0.9.23 imports there.
 pedalboard==0.9.23

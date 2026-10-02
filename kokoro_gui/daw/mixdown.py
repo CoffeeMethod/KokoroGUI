@@ -44,6 +44,12 @@ the loudness step, and `bitrate_kbps` sets the mp3 bitrate (`write_audio`).
 named `<base>_<index:03>_<character>.<ext>` (UI14), the character name
 basename-sanitized like every other name-to-path site in this codebase.
 
+`mixdown(tags=...)` writes the file tags (`kokoro_gui.daw.tagging`) into each
+mixdown once it is written: the fields, the cover and, in an mp3, the markers
+(or subprojects) as chapter frames from `transcripts.chapter_rows`. A split
+export titles each file with its chapter and numbers it `n/total`. Stems and
+per-clip files are working files and get no tags.
+
 `write_srt(granularity="word")` writes one subtitle per stored word
 (`Segment.words`) instead of one per clip. `write_cue_sheet` writes a CSV
 row per clip for review and dubbing: timecode (when the document has it
@@ -67,7 +73,7 @@ from scipy.signal import resample_poly
 
 from kokoro_gui.audio import limiter, loudness as loudness_mod, mixer, post
 from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement, segment_timeline
-from kokoro_gui.daw import markers as marker_ops, transcripts
+from kokoro_gui.daw import markers as marker_ops, tagging, transcripts
 from kokoro_gui.daw.imported import segment_plays
 from kokoro_gui.daw.mixplan import ClipMix, clip_mixes
 from kokoro_gui.daw.timecode import format_position
@@ -88,6 +94,7 @@ class ExportFile:
     duration_s: float = 0.0
     report: Optional[object] = None
     failed: list = field(default_factory=list)
+    tagged: bool = False
 
 
 @dataclass
@@ -537,7 +544,7 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
             loudness: Optional[dict] = None, bitrate_kbps: Optional[int] = None,
             out_rate: Optional[int] = None, head_s: float = 0.0, tail_s: float = 0.0,
             checks: tuple = (), stems: Optional[str] = None, dialogue_stem: bool = False,
-            extras: tuple = (), transcript_speakers: bool = True) -> ExportResult:
+            extras: tuple = (), transcript_speakers: bool = True, tags: Optional[dict] = None) -> ExportResult:
     """`render_mix`, then an optional resample, an optional loudness
     normalize, optional head and tail silence, then the writes.
 
@@ -555,6 +562,12 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
     as the SRT, so a range or head padding moves their times the same way.
     `transcript_speakers` puts the character names in the transcripts. The
     paths land in `ExportResult.text_files`.
+
+    `tags` writes file tags into the mixdown (mp3, flac and ogg; wav has none):
+    any of `tagging.META_KEYS`, plus `"cover"` (a path) and `"chapters"` (true
+    writes the markers, else the subprojects, as ID3 chapters in an mp3). A
+    cover that can't be used, a missing `mutagen` or a write that fails adds a
+    warning; the export goes on.
 
     `out_rate` writes the mixdown at that rate instead of `sample_rate`: the
     whole mix is resampled once before the loudness step, so what gets
@@ -618,7 +631,11 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
         progress(0.85, "Writing mixdown")
     write_audio(out_path, mixed, mix_rate, ext, bitrate_kbps=bitrate_kbps)
     failed = [c.describe(report) for c in checks if not c.passed(report)] if checks else []
-    result.files.append(ExportFile(out_path, base, result.duration_s, report, failed))
+    tagged = False
+    if tags and tagging.supports(ext):
+        tagged = _tag_file(out_path, ext, tags, document, arrangement_out, range_s, head_s, result.duration_s,
+                           result.warnings)
+    result.files.append(ExportFile(out_path, base, result.duration_s, report, failed, tagged))
 
     if stem_samples:
         used = {os.path.basename(out_path).lower()}
@@ -656,12 +673,37 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
     return result
 
 
+def _tag_file(path: str, ext: str, tags: dict, document, arrangement: Arrangement, range_s: Optional[tuple],
+              head_s: float, duration_s: float, warnings: list) -> bool:
+    """Writes `mixdown`'s `tags` into the file at `path`; True when it did.
+    Anything that goes wrong lands in `warnings`, since the audio is already
+    on disk."""
+    name = os.path.basename(path)
+    if not tagging.available():
+        warning = "mutagen isn't installed, so the files have no tags (pip install mutagen)"
+        if warning not in warnings:
+            warnings.append(warning)
+        return False
+    chapters = None
+    if tags.get("chapters") and ext == "mp3":
+        chapters = transcripts.chapter_rows(document, arrangement, range_s, head_s) or None
+    try:
+        problems = tagging.write_tags(path, ext, tags, chapters, tags.get("cover"), duration_s=duration_s)
+    except Exception as e:  # noqa: BLE001 - the audio is written; tagging is a courtesy
+        warnings.append(f"Couldn't write the tags into {name}: {e}")
+        return False
+    warnings.extend(problem for problem in problems if problem not in warnings)
+    return True
+
+
 @dataclass(frozen=True)
 class Chapter:
-    """One file of a split export: its base name and the `(start_s, end_s)`
-    of the project it covers."""
+    """One file of a split export: its base name, the `(start_s, end_s)` of
+    the project it covers and the title its tags carry (the base name when
+    empty)."""
     name: str
     range_s: tuple
+    title: str = ""
 
 
 @dataclass
@@ -718,9 +760,13 @@ def plan_chapters(document, arrangement: Arrangement, split: str, max_file_s: Op
     chapters = []
     for number, (title, lo, hi) in enumerate(spans, start=1):
         base = f"{number:0{width}d} - {_chapter_title(title)}"
+        tag_title = " ".join(str(title or "").split()) or "Untitled"
         pieces = _cut_long(lo, hi, boundaries, max_file_s)
         for part, piece in enumerate(pieces, start=1):
-            chapters.append(Chapter(base if len(pieces) == 1 else f"{base} part {part}", piece))
+            if len(pieces) == 1:
+                chapters.append(Chapter(base, piece, tag_title))
+            else:
+                chapters.append(Chapter(f"{base} part {part}", piece, f"{tag_title} part {part}"))
     outside = sum(1 for p in arrangement.placed
                   if not any(p.end_s > lo and p.start_s < hi for _t, lo, hi in spans))
     warnings = []
@@ -735,7 +781,9 @@ def mixdown_chapters(document, out_dir: str, plan: ChapterPlan, fmt: str = "wav"
                      **options) -> ExportResult:
     """`mixdown` once per chapter of `plan`, each file `<chapter name>.<fmt>`
     in `out_dir` (`numbered` gives each the first free `name (2)`), with its
-    own SRT, cue sheet and per-clip files when `options` ask for them.
+    own SRT, cue sheet and per-clip files when `options` ask for them. With
+    `tags` in `options`, each file's title is its chapter's and its track is
+    `n/total`; the other fields are shared.
     `options` are `mixdown`'s, minus `out_path` and `range_s`. The result's
     `files` lists every chapter and `audio_path` is the first."""
     ext = (fmt or "wav").lower()
@@ -750,7 +798,11 @@ def mixdown_chapters(document, out_dir: str, plan: ChapterPlan, fmt: str = "wav"
             if progress:
                 progress((_index + fraction) / total, f"Chapter {_index + 1}/{total}: {detail}")
 
-        one = mixdown(document, path, fmt=fmt, range_s=chapter.range_s, progress=_chapter_progress, **options)
+        file_options = options
+        if options.get("tags"):
+            file_options = {**options, "tags": {**options["tags"], "title": chapter.title or chapter.name,
+                                                 "track": f"{index + 1}/{total}"}}
+        one = mixdown(document, path, fmt=fmt, range_s=chapter.range_s, progress=_chapter_progress, **file_options)
         result.files.extend(one.files)
         result.clip_files.extend(one.clip_files)
         result.stem_files.extend(one.stem_files)

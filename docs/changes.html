@@ -149,7 +149,7 @@
         <ul class="change-list">
           <li>
             <h4>The Export dialog has tabs</h4>
-            <p>The dialog is now three tabs. Audio holds the folder, name, format, MP3 bitrate, sample rate, channels, loudness and range. Extras holds the subtitles, the cue sheet and the per-clip files. Project file holds the four bundle options. Nothing was removed.</p>
+            <p>The dialog is now four tabs. Audio holds the folder, name, format, MP3 bitrate, sample rate, channels, loudness and range. Extras holds the subtitles, the cue sheet and the per-clip files. Tags holds the file tags and cover image (below). Project file holds the four bundle options. Nothing was removed.</p>
           </li>
           <li>
             <h4>MP3 bitrate and sample rate</h4>
@@ -225,11 +225,45 @@
           <li>
             <h4>A chapters file and show notes</h4>
             <p>"Podcasting 2.0 chapters" writes <code>&lt;base&gt;.chapters.json</code>, version 1.2.0, with a <code>startTime</code> and a <code>title</code> per chapter. "Show notes with timestamps" writes <code>&lt;base&gt;.show-notes.md</code>, a Markdown list with one line per chapter, <code>- (01:05) Title</code> (<code>1:02:05</code> from an hour on), and the marker's note indented under it.</p>
-            <p>Chapters are the markers, with the marker's name as the title. A project with no marker inside the export uses its subprojects instead, titled by their name. A project with neither gets an empty chapters list and an empty notes file, and the status line says so. ID3 chapter frames inside the MP3 aren't written yet.</p>
+            <p>Chapters are the markers, with the marker's name as the title. A project with no marker inside the export uses its subprojects instead, titled by their name. A project with neither gets an empty chapters list and an empty notes file, and the status line says so. The MP3 gets the same chapters as ID3 frames (see Tags and cover art).</p>
           </li>
           <li>
             <h4>They follow the export</h4>
             <p>A range export starts the times at the range, and drops the markers outside it. Silence at the start moves every time later. A split export writes the set for each file, named after the file, so <code>01 - Chapter 1.vtt</code> sits next to <code>01 - Chapter 1.wav</code>. The overwrite prompt checks only the main file, as it does for the subtitles. The choices are stored with the project's other export settings.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Tags and cover art</h3>
+        <ul class="change-list">
+          <li>
+            <h4>A Tags tab in the Export dialog</h4>
+            <p>The dialog has a fourth tab, Tags, between Extras and Project file. It holds a "Write tags into the file" checkbox (on by default), Title, Artist, Album / show, Episode / track number, Year, a multi-line Description, a cover image and "Write chapter markers into MP3". An empty Title uses the project's title. The number and year boxes take digits only. The choices are stored per project in <code>export["tags"]</code>, and an older project opens with the defaults.</p>
+            <div class="table-wrap">
+              <table class="ref">
+                <thead><tr><th>Format</th><th>Tags</th><th>Cover</th><th>Chapters</th></tr></thead>
+                <tbody>
+                  <tr><td>mp3</td><td>ID3v2.4: title, artist, album, track, year, comment, genre</td><td>front cover (APIC)</td><td>one CHAP frame per chapter under an ordered CTOC</td></tr>
+                  <tr><td>flac</td><td>Vorbis comments: TITLE, ARTIST, ALBUM, TRACKNUMBER, TRACKTOTAL, DATE, DESCRIPTION, GENRE</td><td>front cover picture block</td><td>none</td></tr>
+                  <tr><td>ogg</td><td>the same Vorbis comments</td><td><code>METADATA_BLOCK_PICTURE</code></td><td>none</td></tr>
+                  <tr><td>wav</td><td>none; the tab says so</td><td>none</td><td>none</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>The genre comes from the preset: Audiobook for ACX, Podcast for Apple Podcasts and Spotify, none for Custom and YouTube. Tags go into the mixdown only. Stems and per-clip files get none. The tab is greyed out when the <code>mutagen</code> package isn't installed.</p>
+          </li>
+          <li>
+            <h4>Cover image</h4>
+            <p>Pick a JPEG or PNG with the ... button, or type its path. A 64 px preview shows under it. The file is checked by its first bytes, not its extension, and must be 5 MB or less and on a local drive; a network path is refused. A cover that fails the check is left out, the preview says why, and the export still writes the other tags and ends with a warning. The project stores the path as an absolute path. The picture is not copied into the <code>.tbaw</code>, so a project opened on another machine needs the image at that path or a new pick.</p>
+          </li>
+          <li>
+            <h4>Chapters in the MP3</h4>
+            <p>The same chapters as the chapters file, one per marker, or per subproject when no marker falls inside the export, become ID3 CHAP frames. Each chapter ends where the next starts, and the last ends at the end of the file, including any silence at the end. A range export starts at the range, and silence at the start moves the chapters later. Podcast apps that read ID3 chapters show them as a list. The checkbox is greyed out outside mp3.</p>
+          </li>
+          <li>
+            <h4>Split exports</h4>
+            <p>With "Split into" set, each file's title is its chapter's name (without the number) and its track is <code>n/total</code>, so the Title and Episode boxes are greyed out. Artist, album, year, description and cover are the same in every file. An mp3 in a marker split gets one chapter frame, at 0, since a file runs from one marker to the next.</p>
           </li>
         </ul>
       </div>

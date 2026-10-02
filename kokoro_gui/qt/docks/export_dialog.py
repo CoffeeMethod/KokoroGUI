@@ -1,6 +1,6 @@
 """File > Export... (section 6 of Claude/PLAN_ui_shell_redesign.md).
 
-Three tabs. "Audio" holds a preset (`kokoro_gui/daw/export_presets.py`: ACX,
+Four tabs. "Audio" holds a preset (`kokoro_gui/daw/export_presets.py`: ACX,
 Apple Podcasts, Spotify, YouTube; it fills the fields below, and editing one
 puts the combo back on "Custom"), the output folder, base filename (a template:
 `{project}`, `{date}`, `{time}`, `{range}`, see `mixdown.expand_name`, with
@@ -19,6 +19,13 @@ music (`render_mix(stems=...)`, named `<base>_<stem>.<ext>`), and the text
 files of `kokoro_gui/daw/transcripts.py` (WebVTT, a speaker SRT, Podcasting 2.0
 transcript and chapters JSON, plain text, show notes; stored as the list
 `export["extras"]`, with `export["transcript_speakers"]` for the names).
+"Tags" holds the file tags (`kokoro_gui/daw/tagging.py`): title (the project's
+when left empty), artist, show, episode or track number, year, description, a
+cover image (a path with a 64 px preview; the picture is never copied into the
+project) and "Write chapter markers into MP3". They're stored as the dict
+`export["tags"]` and written into mp3, flac and ogg files after the export; a
+wav has no tags, and a split export titles each file with its chapter. The tab
+is disabled without `mutagen`.
 "Project file" holds the bundle options below. A new option goes into the tab
 it belongs to, in the same `values()` and `export_defaults()` pair.
 Values persist per project in
@@ -49,10 +56,12 @@ import asyncio
 import math
 import os
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QRegularExpression, Qt, Signal
+from PySide6.QtGui import QPixmap, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
+    QWidget,
 )
 
 from kokoro_gui.audio import loudness as loudness_mod
@@ -61,6 +70,7 @@ from kokoro_gui.daw.export_presets import CUSTOM_ID, PRESETS, SPLIT_MODES, get_p
 from kokoro_gui.daw.mixdown import (
     STEM_MODES, expand_name, mixdown, mixdown_chapters, name_context, plan_chapters, render_mix, unused_path,
 )
+from kokoro_gui.daw import tagging
 from kokoro_gui.daw.transcripts import clean_extras
 from kokoro_gui.qt import project as project_io
 
@@ -95,6 +105,9 @@ EXTRA_TIPS = {
     "show_notes": "A Markdown list, one chapter per line with its time and the marker's note under it. "
                   "Chapters come from the markers, or the subprojects when there are none.",
 }
+# The genre tag a preset implies; a Custom export and YouTube get none.
+PRESET_GENRES = {"acx": "Audiobook", "apple": "Podcast", "apple_mono": "Podcast", "spotify": "Podcast"}
+COVER_PREVIEW_PX = 64
 MAX_PAD_S = 10.0
 NAME_TOKEN_HELP = ("Tokens: {project} (the project title), {date} (YYYY-MM-DD), {time} (HHMMSS), "
                    "{range} (the range below, or \"full\").")
@@ -144,6 +157,7 @@ def export_defaults(app) -> dict:
         "dialogue_stem": bool(project.get("dialogue_stem", False)),
         "extras": clean_extras(project.get("extras")),
         "transcript_speakers": bool(project.get("transcript_speakers", True)),
+        "tags": tagging.clean_settings(project.get("tags")),
     }
 
 
@@ -200,6 +214,24 @@ def chapter_plan(app, split: str, preset=None, arrangement=None):
     return plan_chapters(document, arrangement or app.build_arrangement(), split, max_file_s)
 
 
+def tag_options(app, values: dict) -> dict | None:
+    """`mixdown(tags=...)` for the stored values: the tag fields (the title
+    falls back to the project's, the genre comes from the preset), the cover
+    path and the chapter flag. None when tags are switched off or `mutagen`
+    is missing."""
+    tags = tagging.clean_settings(values.get("tags"))
+    if not tags["enabled"] or not tagging.available():
+        return None
+    _document, settings = _export_target(app)
+    preset = get_preset(values.get("preset"))
+    return {
+        "title": tags["title"] or project_io.display_title(settings, getattr(app, "project_path", None)),
+        "artist": tags["artist"], "album": tags["album"], "track": tags["track"], "year": tags["year"],
+        "description": tags["description"], "genre": PRESET_GENRES.get(preset.id, "") if preset else "",
+        "cover": tags["cover"], "chapters": tags["chapters"],
+    }
+
+
 def _loudness_options(values: dict):
     """`mixdown(loudness=...)` for the stored values, or None when
     "Normalize loudness" is off or pyloudnorm is missing."""
@@ -226,9 +258,11 @@ class ExportDialog(QDialog):
         layout.addWidget(self.tabs)
         self.audio_form = self._add_tab("Audio")
         self.extras_form = self._add_tab("Extras")
+        self.tags_form = self._add_tab("Tags")
         self.project_form = self._add_tab("Project file")
         self._build_audio_tab(self.audio_form, values)
         self._build_extras_tab(self.extras_form, values)
+        self._build_tags_tab(self.tags_form, values["tags"])
         self._build_project_tab(self.project_form)
 
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -238,6 +272,7 @@ class ExportDialog(QDialog):
         layout.addWidget(self.buttons)
         self._sync_bitrate_row()
         self._sync_split()
+        self._sync_tags()
         self._update_name_preview()
 
     def _add_tab(self, title: str) -> QFormLayout:
@@ -450,6 +485,117 @@ class ExportDialog(QDialog):
                                        "transcripts. A [Name:FX]: tag never appears in them either way.")
         form.addRow("", self.speakers_check)
 
+    def _build_tags_tab(self, form: QFormLayout, tags: dict) -> None:
+        self._stored_tags_enabled = tags["enabled"]  # kept as it was while mutagen is missing
+        self.tags_check = QCheckBox("Write tags into the file")
+        self.tags_check.setChecked(tags["enabled"])
+        form.addRow("", self.tags_check)
+
+        _document, settings = _export_target(self.app)
+        self.tag_title_edit = QLineEdit(tags["title"])
+        self.tag_title_edit.setPlaceholderText(project_io.display_title(settings, getattr(self.app, "project_path", None)))
+        form.addRow("Title:", self.tag_title_edit)
+        self.tag_artist_edit = QLineEdit(tags["artist"])
+        form.addRow("Artist:", self.tag_artist_edit)
+        self.tag_album_edit = QLineEdit(tags["album"])
+        form.addRow("Album / show:", self.tag_album_edit)
+        self.tag_track_edit = QLineEdit(tags["track"])
+        self.tag_track_edit.setValidator(QRegularExpressionValidator(QRegularExpression(r"\d{0,4}")))
+        form.addRow("Episode / track number:", self.tag_track_edit)
+        self.tag_year_edit = QLineEdit(tags["year"])
+        self.tag_year_edit.setValidator(QRegularExpressionValidator(QRegularExpression(r"\d{0,4}")))
+        form.addRow("Year:", self.tag_year_edit)
+        self.tag_description_edit = QPlainTextEdit(tags["description"])
+        self.tag_description_edit.setFixedHeight(72)
+        form.addRow("Description:", self.tag_description_edit)
+
+        cover_row = QWidget()
+        cover_layout = QHBoxLayout(cover_row)
+        cover_layout.setContentsMargins(0, 0, 0, 0)
+        self.cover_edit = QLineEdit(tags["cover"])
+        self.cover_edit.setPlaceholderText("A JPEG or PNG, up to 5 MB")
+        self.cover_edit.setToolTip("Embedded in mp3, flac and ogg files. The project keeps the path, not the picture.")
+        self.cover_browse = QPushButton("...")
+        self.cover_browse.clicked.connect(self._browse_cover)
+        self.cover_preview = QLabel()
+        self.cover_preview.setFixedSize(COVER_PREVIEW_PX, COVER_PREVIEW_PX)
+        self.cover_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cover_layout.addWidget(self.cover_edit, 1)
+        cover_layout.addWidget(self.cover_browse)
+        cover_layout.addWidget(self.cover_preview)
+        form.addRow("Cover image:", cover_row)
+        self.cover_note_label = QLabel()
+        self.cover_note_label.setWordWrap(True)
+        form.addRow("", self.cover_note_label)
+
+        self.tag_chapters_check = QCheckBox("Write chapter markers into MP3")
+        self.tag_chapters_check.setChecked(tags["chapters"])
+        self.tag_chapters_check.setToolTip("ID3 chapter frames: one per marker, or per subproject when there are "
+                                           "no markers, so podcast apps show a chapter list. mp3 only.")
+        form.addRow("", self.tag_chapters_check)
+        self.tags_note_label = QLabel()
+        self.tags_note_label.setWordWrap(True)
+        form.addRow("", self.tags_note_label)
+
+        if not tagging.available():
+            self.tags_check.setChecked(False)
+            self.tags_check.setEnabled(False)
+            index = self.tabs.indexOf(self.tags_form.parentWidget())
+            self.tabs.setTabEnabled(index, False)
+            self.tabs.setTabToolTip(index, "Tags need the mutagen package (pip install mutagen).")
+        for signal in (self.tags_check.toggled, self.format_combo.currentTextChanged,
+                       self.split_combo.currentIndexChanged, self.cover_edit.textChanged):
+            signal.connect(self._sync_tags)
+
+    def _browse_cover(self) -> None:
+        start = os.path.dirname(self.cover_edit.text().strip())
+        path, _filter = QFileDialog.getOpenFileName(self, "Select cover image", start,
+                                                    "Images (*.png *.jpg *.jpeg);;All files (*)")
+        if path:
+            self.cover_edit.setText(path)
+
+    def _sync_tags(self, *_args) -> None:
+        """Greys out what the tags can't use: everything when they're off, the
+        title and number in a split export (each file gets its own) and the
+        chapter box outside mp3. Shows the cover's preview, or why it won't
+        be used."""
+        on = self.tags_check.isChecked()
+        fmt = self.format_combo.currentText()
+        split = self.split_combo.currentData() is not None
+        for widget in (self.tag_artist_edit, self.tag_album_edit, self.tag_year_edit, self.tag_description_edit,
+                       self.cover_edit, self.cover_browse):
+            widget.setEnabled(on)
+        split_tip = "A split export titles each file with its chapter and numbers it, so this isn't used."
+        self.tag_title_edit.setEnabled(on and not split)
+        self.tag_title_edit.setToolTip(split_tip if split else "Left empty, the project's title is used.")
+        self.tag_track_edit.setEnabled(on and not split)
+        self.tag_track_edit.setToolTip(split_tip if split else "")
+        self.tag_chapters_check.setEnabled(on and fmt == "mp3")
+        cover = self.cover_edit.text().strip()
+        self.cover_preview.clear()
+        self.cover_note_label.setText("")
+        if cover:
+            try:
+                _real, data, *_rest = tagging.check_cover(cover)
+            except tagging.CoverError as e:
+                reason = str(e)
+                self.cover_note_label.setText(f"{reason[0].upper()}{reason[1:]}; it will be left out.")
+            else:
+                pixmap = QPixmap()
+                if pixmap.loadFromData(data):
+                    self.cover_preview.setPixmap(pixmap.scaled(
+                        COVER_PREVIEW_PX, COVER_PREVIEW_PX, Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation))
+                else:
+                    self.cover_note_label.setText("Qt can't show this image, but it will still be embedded.")
+        if not tagging.supports(fmt):
+            note = "WAV files can't carry tags. Pick mp3, flac or ogg to write them."
+        elif split:
+            note = "Each file is titled with its chapter and numbered n/total; the rest is shared."
+        else:
+            note = ""
+        self.tags_note_label.setText(note)
+
     def _build_project_tab(self, form: QFormLayout) -> None:
         bundle = project_io.bundle_options(_export_target(self.app)[1])
         self.bundle_audio_check = QCheckBox("Bundle generated audio in the project file")
@@ -594,7 +740,21 @@ class ExportDialog(QDialog):
             "dialogue_stem": self.dialogue_stem_check.isChecked(),
             "extras": [key for key, check in self.extra_checks.items() if check.isChecked()],
             "transcript_speakers": self.speakers_check.isChecked(),
+            "tags": self.tag_values(),
         }
+
+    def tag_values(self) -> dict:
+        """The Tags tab as the dict stored in `export["tags"]`; the cover as
+        an absolute path."""
+        cover = self.cover_edit.text().strip()
+        return tagging.clean_settings({
+            "enabled": self.tags_check.isChecked() if tagging.available() else self._stored_tags_enabled,
+            "title": self.tag_title_edit.text(), "artist": self.tag_artist_edit.text(),
+            "album": self.tag_album_edit.text(), "track": self.tag_track_edit.text(),
+            "year": self.tag_year_edit.text(), "description": self.tag_description_edit.toPlainText(),
+            "cover": os.path.abspath(cover) if cover else "",
+            "chapters": self.tag_chapters_check.isChecked(),
+        })
 
     def range_s(self):
         """`(start_s, end_s)` or None for the whole project. Not saved with
@@ -705,7 +865,7 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
         head_s=values.get("head_s", 0.0), tail_s=values.get("tail_s", 0.0), checks=checks,
         stems=values.get("stems"), dialogue_stem=bool(values.get("dialogue_stem")),
         extras=tuple(clean_extras(values.get("extras"))),
-        transcript_speakers=bool(values.get("transcript_speakers", True)), **inputs,
+        transcript_speakers=bool(values.get("transcript_speakers", True)), tags=tag_options(app, values), **inputs,
     )
 
     async def _run():
@@ -728,6 +888,8 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
                 extras.append(f"{len(result.stem_files)} stem{'s' if len(result.stem_files) != 1 else ''}")
             if result.text_files:
                 extras.append(f"{len(result.text_files)} text file{'s' if len(result.text_files) != 1 else ''}")
+            if any(f.tagged for f in result.files):
+                extras.append("tags")
             suffix = f" (+ {', '.join(extras)})" if extras else ""
             if len(result.files) > 1:
                 message = f"Exported {len(result.files)} files to {os.path.dirname(result.audio_path)}{suffix}"

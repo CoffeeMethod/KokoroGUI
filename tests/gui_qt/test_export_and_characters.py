@@ -67,7 +67,9 @@ def test_export_dialog_reads_back_sanitized_values(qt_app):
                       "normalize_loudness": False, "target_lufs": -16.0, "ceiling_dbtp": -1.0,
                       "bitrate_kbps": 192, "sample_rate": None, "normalize_mode": "lufs", "target_rms_dbfs": -20.0,
                       "limiter_dbfs": -3.5, "head_s": 0.0, "tail_s": 0.0, "split": None, "preset": "custom",
-                      "stems": None, "dialogue_stem": False, "extras": [], "transcript_speakers": True}
+                      "stems": None, "dialogue_stem": False, "extras": [], "transcript_speakers": True,
+                      "tags": {"enabled": True, "title": "", "artist": "", "album": "", "track": "", "year": "",
+                               "description": "", "cover": "", "chapters": True}}
 
 
 def test_run_export_refuses_without_clips(qt_app, monkeypatch):
@@ -541,10 +543,10 @@ def test_measure_loudness_shows_numbers_for_two_clips_and_writes_no_file(qt_app,
 # -- export options: tabs, mp3 bitrate, sample rate, name template, existing files ------------
 
 
-def test_export_dialog_has_three_tabs_and_keeps_its_attribute_names(qt_app):
+def test_export_dialog_has_four_tabs_and_keeps_its_attribute_names(qt_app):
     dialog = ExportDialog(qt_app)
 
-    assert [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())] == ["Audio", "Extras", "Project file"]
+    assert [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())] == ["Audio", "Extras", "Tags", "Project file"]
 
     def tab_of(widget):
         page = widget
