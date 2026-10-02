@@ -34,7 +34,8 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
     normalized to a LUFS or RMS target under a true-peak ceiling or a peak limiter, with an MP3 bitrate, a sample rate
     and a filename template. Presets for ACX, Apple Podcasts, Spotify and YouTube check each file, and one export can
     write a file per subproject or marker range. Stems come per track or per character, with a dialogue stem for
-    dubbing. File > Measure Loudness reports the numbers.
+    dubbing. Transcripts (WebVTT, SRT, Podcasting 2.0 JSON, plain text), a chapters file and show notes can ride along.
+    File > Measure Loudness reports the numbers.
 -   **One-file projects.** A `.tbaw` holds the text, the audio and every voice it uses, so it opens
     on another machine.
 
@@ -58,6 +59,7 @@ Unreleased:
 -   A Zoom to fit button, a timeline that zooms out to ten hours in one screen, and a project that reopens at its
     last playhead, zoom, scroll and selected clip
 -   Export can write a stem per track or per character and a dialogue stem without the music, all the length of the mix
+-   Export can write transcripts with speaker names (WebVTT, SRT, Podcasting 2.0 JSON, plain text), a chapters file and show notes
 -   Sliders for compressor and limiter release, compressor attack, reverb dry level, chorus mix and phaser depth and mix
 -   Lexicon rules can match a whole word or a regex pattern and run in an order you set, and a Test field shows a
     sentence after the rules and how Kokoro will read it

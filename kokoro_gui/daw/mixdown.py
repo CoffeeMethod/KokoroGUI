@@ -67,7 +67,7 @@ from scipy.signal import resample_poly
 
 from kokoro_gui.audio import limiter, loudness as loudness_mod, mixer, post
 from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement, segment_timeline
-from kokoro_gui.daw import markers as marker_ops
+from kokoro_gui.daw import markers as marker_ops, transcripts
 from kokoro_gui.daw.imported import segment_plays
 from kokoro_gui.daw.mixplan import ClipMix, clip_mixes
 from kokoro_gui.daw.timecode import format_position
@@ -110,17 +110,12 @@ class ExportResult:
     warnings: list = field(default_factory=list)
     # The stem files written, in the order of `render_mix`'s stems.
     stem_files: list = field(default_factory=list)
+    # The `transcripts.TEXT_EXTRAS` files written, in that order.
+    text_files: list = field(default_factory=list)
 
 
 def _format_srt_time(seconds: float) -> str:
-    millis = int(round((seconds - int(seconds)) * 1000))
-    whole = int(seconds)
-    if millis == 1000:
-        whole += 1
-        millis = 0
-    minutes, secs = divmod(whole, 60)
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
+    return transcripts.format_timestamp(seconds)
 
 
 def word_rows(arrangement: Arrangement) -> list:
@@ -541,7 +536,8 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
             include_cue_sheet: bool = False, nested_audio_path: Optional[Callable] = None,
             loudness: Optional[dict] = None, bitrate_kbps: Optional[int] = None,
             out_rate: Optional[int] = None, head_s: float = 0.0, tail_s: float = 0.0,
-            checks: tuple = (), stems: Optional[str] = None, dialogue_stem: bool = False) -> ExportResult:
+            checks: tuple = (), stems: Optional[str] = None, dialogue_stem: bool = False,
+            extras: tuple = (), transcript_speakers: bool = True) -> ExportResult:
     """`render_mix`, then an optional resample, an optional loudness
     normalize, optional head and tail silence, then the writes.
 
@@ -552,6 +548,13 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
     the mixdown, so every stem starts at the same sample and they sum to it.
     In RMS mode the peak limiter's gain is applied to the stems too. A stem is
     not measured and the preset checks don't run on it.
+
+    `extras` (keys of `transcripts.TEXT_EXTRAS`: "vtt", "srt_speakers",
+    "transcript_json", "txt", "chapters_json", "show_notes") write those text
+    files as `<base><suffix>` beside the mixdown, from the same placed clips
+    as the SRT, so a range or head padding moves their times the same way.
+    `transcript_speakers` puts the character names in the transcripts. The
+    paths land in `ExportResult.text_files`.
 
     `out_rate` writes the mixdown at that rate instead of `sample_rate`: the
     whole mix is resampled once before the loudness step, so what gets
@@ -641,6 +644,12 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
 
     if include_cue_sheet:
         result.cue_sheet_path = write_cue_sheet(document, arrangement_out, os.path.join(out_dir, f"{base}.csv"))
+
+    if extras:
+        result.text_files, text_warnings = transcripts.write_extras(
+            document, arrangement_out, out_dir, base, extras, speakers=transcript_speakers,
+            range_s=range_s, head_s=head_s)
+        result.warnings.extend(text_warnings)
 
     if progress:
         progress(1.0, "Export finished")
@@ -745,6 +754,8 @@ def mixdown_chapters(document, out_dir: str, plan: ChapterPlan, fmt: str = "wav"
         result.files.extend(one.files)
         result.clip_files.extend(one.clip_files)
         result.stem_files.extend(one.stem_files)
+        result.text_files.extend(one.text_files)
+        result.warnings.extend(w for w in one.warnings if w not in result.warnings)
         result.duration_s += one.duration_s
         result.skipped_clip_ids.extend(c for c in one.skipped_clip_ids if c not in result.skipped_clip_ids)
         result.audio_path = result.audio_path or one.audio_path

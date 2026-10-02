@@ -67,7 +67,7 @@ def test_export_dialog_reads_back_sanitized_values(qt_app):
                       "normalize_loudness": False, "target_lufs": -16.0, "ceiling_dbtp": -1.0,
                       "bitrate_kbps": 192, "sample_rate": None, "normalize_mode": "lufs", "target_rms_dbfs": -20.0,
                       "limiter_dbfs": -3.5, "head_s": 0.0, "tail_s": 0.0, "split": None, "preset": "custom",
-                      "stems": None, "dialogue_stem": False}
+                      "stems": None, "dialogue_stem": False, "extras": [], "transcript_speakers": True}
 
 
 def test_run_export_refuses_without_clips(qt_app, monkeypatch):
@@ -782,3 +782,78 @@ def test_a_stem_export_writes_the_expected_files(qt_app, tmp_path, mode, names):
     assert written == sorted(["mix.wav", *stems])
     assert {sf.info(p).frames for p in result.stem_files} == {sf.info(result.audio_path).frames}
     assert f"{len(stems)} stems" in qt_app.transport_dock.status_text()
+
+
+# -- transcripts and chapters (plan 16) -----------------------------------------------------
+
+
+def test_export_dialog_has_the_text_file_checkboxes_on_the_extras_tab_and_remembers_them(qt_app):
+    from kokoro_gui.daw.transcripts import TEXT_EXTRAS
+
+    dialog = ExportDialog(qt_app)
+    assert list(dialog.extra_checks) == list(TEXT_EXTRAS)
+    assert not any(check.isChecked() for check in dialog.extra_checks.values())
+    assert dialog.speakers_check.isChecked()
+    for widget in (*dialog.extra_checks.values(), dialog.speakers_check):
+        page = widget
+        while page is not None and dialog.tabs.indexOf(page) < 0:
+            page = page.parentWidget()
+        assert dialog.tabs.tabText(dialog.tabs.indexOf(page)) == "Extras"
+
+    dialog.extra_checks["show_notes"].setChecked(True)
+    dialog.extra_checks["vtt"].setChecked(True)
+    dialog.speakers_check.setChecked(False)
+    values = dialog.values()
+    assert values["extras"] == ["vtt", "show_notes"] and values["transcript_speakers"] is False
+    qt_app.project_settings["export"] = values
+
+    again = ExportDialog(qt_app)
+    assert [k for k, c in again.extra_checks.items() if c.isChecked()] == ["vtt", "show_notes"]
+    assert not again.speakers_check.isChecked()
+
+
+def test_export_defaults_ignore_a_bad_extras_value(qt_app):
+    qt_app.project_settings["export"] = {"extras": ["vtt", "bogus", 7], "transcript_speakers": 0}
+    values = export_defaults(qt_app)
+    assert values["extras"] == ["vtt"] and values["transcript_speakers"] is False
+    qt_app.project_settings["export"] = {"extras": "vtt"}
+    assert export_defaults(qt_app)["extras"] == []
+
+
+def test_an_export_with_text_extras_writes_them_and_says_so(qt_app, tmp_path):
+    _two_voices(qt_app, tmp_path)
+    from kokoro_gui.daw import markers
+
+    qt_app.document.settings["markers"], _m = markers.add_marker(qt_app.document.settings, 1.0, "Bob speaks",
+                                                                 "Retake the breath.")
+    values = dict(export_defaults(qt_app), out_dir=str(tmp_path / "out"), filename="mix", format="wav",
+                  srt=False, keep_clip_files=False, extras=["vtt", "txt", "chapters_json", "show_notes"])
+
+    assert run_export(qt_app, values) is True
+    assert qt_app.project_settings["export"]["extras"] == ["vtt", "txt", "chapters_json", "show_notes"]
+
+    import asyncio
+
+    result = asyncio.run(qt_app.engine.worker.run_coro.call_args[0][0])
+    qt_app.engine.worker.run_coro.return_value.set_result(result)
+    out = tmp_path / "out"
+    assert sorted(os.listdir(out)) == ["mix.chapters.json", "mix.show-notes.md", "mix.txt", "mix.vtt", "mix.wav"]
+    name = qt_app.document.characters[0].name
+    vtt = (out / "mix.vtt").read_text(encoding="utf-8")
+    assert vtt.startswith("WEBVTT") and f"<v {name}>hello" in vtt and "<v Bob>world" in vtt
+    assert (out / "mix.show-notes.md").read_text(encoding="utf-8") == "- (00:01) Bob speaks\n  Retake the breath.\n"
+    assert "4 text files" in qt_app.transport_dock.status_text()
+
+
+def test_turning_the_speaker_names_off_leaves_them_out_of_the_files(qt_app, tmp_path):
+    _two_voices(qt_app, tmp_path)
+    values = dict(export_defaults(qt_app), out_dir=str(tmp_path / "out"), filename="mix", format="wav",
+                  srt=False, keep_clip_files=False, extras=["txt"], transcript_speakers=False)
+
+    assert run_export(qt_app, values) is True
+
+    import asyncio
+
+    result = asyncio.run(qt_app.engine.worker.run_coro.call_args[0][0])
+    qt_app.engine.worker.run_coro.return_value.set_result(result)
+    assert (tmp_path / "out" / "mix.txt").read_text(encoding="utf-8") == "hello\n\nworld\n"
