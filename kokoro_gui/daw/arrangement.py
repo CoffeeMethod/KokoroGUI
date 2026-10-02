@@ -43,6 +43,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from kokoro_gui.engine.text_extraction import strip_markup
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
 
 FALLBACK_CHARS_PER_SECOND = 15.0
@@ -102,7 +103,7 @@ def recorded_chars_per_second(engine_id: Optional[str]) -> Optional[float]:
 def estimate_duration_s(text: str, speed: float, chars_per_second: Optional[float]) -> float:
     rate = chars_per_second if chars_per_second and chars_per_second > 0 else FALLBACK_CHARS_PER_SECOND
     speed = speed if speed and speed > 0 else 1.0
-    chars = len(text.strip())
+    chars = len(strip_markup(text).strip())
     if chars == 0:
         return 0.0
     return chars / (rate * speed)

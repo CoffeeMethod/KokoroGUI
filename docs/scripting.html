@@ -108,7 +108,7 @@
 <span class="c2">[Marta:Radio]:</span> Marta again, with the FX named Radio.</pre>
       </div>
       <div class="prose reveal" style="margin-top:1.3rem;">
-        <p>The name is a <strong>character</strong>, not a voice ID like <code>af_heart</code>. It's matched against the project's characters (Edit &gt; Characters...) by name, ignoring case. A character carries the voice, the engine and the FX, so one tag picks all three.</p>
+        <p>The name is a <strong>character</strong>, not a voice ID like <code>af_heart</code>. It's matched against the project's characters (Edit &gt; Characters...) by name, ignoring case. A character carries the voice, the engine and the FX, so one tag picks all three. The tag stays in the transcript, but the engine never speaks it, and subtitles and the cue sheet leave it out.</p>
       </div>
     </div>
   </section>
@@ -170,8 +170,9 @@
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">05 · The FX half</span>Where <code>[Name:FX]</code> applies</h2>
-        <p>The part after the second colon names an FX saved from the Audio FX tab with its "Save FX Preset..." button. Today it only takes effect when the project has no clips yet and Generate runs the whole document at once (see <a class="link" href="#whole-document">below</a>). When a tag assigns a clip, by typing or by Auto-split, only the character is used.</p>
-        <p>To give one line an effect in a project with clips, put the caret in the line and pick the FX from the FX box above the transcript. That sets it for that clip alone, and the gutter shows <code>FX: Radio</code> under the speaker's name.</p>
+        <p>The part after the second colon names an FX saved from the Audio FX tab with its "Save FX Preset..." button. When a tag makes a clip, by typing the line and pressing Enter or by Auto-split, the clip gets that FX, the same as picking it in the FX box above the transcript. It's set in the same undo step as the clip, so one undo removes both. The tag text is read once, when the clip is made. Editing it later doesn't change the FX, but the FX box does. If no FX has that name, the clip is still made with its character's FX. Auto-split lists the missing names in a warning and the typed line says so in the status bar.</p>
+        <p>A project with no clips yet reads the FX differently (see <a class="link" href="#whole-document">below</a>).</p>
+        <p>The gutter shows <code>FX: Radio</code> under the speaker's name. To give a line without an FX tag an effect, put the caret in it and pick the FX from the FX box. That sets it for that clip alone.</p>
       </div>
     </div>
   </section>

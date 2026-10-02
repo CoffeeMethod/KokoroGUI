@@ -134,6 +134,10 @@
         <h3>Fixes</h3>
         <ul class="change-list">
           <li>
+            <h4>A tag no longer adds length to a clip's estimate</h4>
+            <p>A clip that isn't generated yet is placed on the timeline by its text length, and Fit to slot learns each character's speaking rate from text length over audio length. Both counted the <code>[Name:FX]:</code> tag and any <code>[pause:x]</code> marker, which the engine never speaks, so a tagged clip looked about 15 characters too long. They now leave the markup out, and so does the dub syllable count in Settings &gt; Clip. Clip audio and cache keys don't change.</p>
+          </li>
+          <li>
             <h4>Two Audio8 presets generating at once keep their own sampling settings</h4>
             <p>Audio8's max new tokens, temperature, top P and top K were stored on the engine and set again for each chunk. Two chunks with different settings, running on two worker threads, could swap them, so a chunk generated at the other chunk's temperature. Each chunk now carries its own values into the model call. A clip's cache key never changed, so no clip goes stale.</p>
           </li>

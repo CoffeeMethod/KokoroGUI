@@ -20,6 +20,7 @@ import math
 from typing import Optional
 
 from kokoro_gui.daw.arrangement import FALLBACK_CHARS_PER_SECOND, clip_audio_duration_s, estimate_duration_s
+from kokoro_gui.engine.text_extraction import strip_markup
 
 TARGET_KEY = "target_duration_s"
 # A fit stops once the clip is within this fraction of its target, and the
@@ -118,7 +119,7 @@ def speaking_rates(document) -> dict:
         if clip.has_placeholder or clip.source == "imported":
             continue
         seconds = clip_audio_duration_s(clip)
-        chars = len(document.clip_text(clip).strip())
+        chars = len(strip_markup(document.clip_text(clip)).strip())
         if not seconds or not chars:
             continue
         speed = _clip_speed(document, clip)

@@ -277,6 +277,13 @@ def test_clip_scope_target_duration_edits_the_override_and_blank_clears_it(qt_ap
     assert "target_duration_s" not in qt_app._assemble_generation_config(clip)
 
 
+def test_syllable_count_of_a_clip_ignores_its_tag():
+    from kokoro_gui.engine.text_extraction import strip_markup
+    from kokoro_gui.qt.docks.scope_fields import syllable_count
+
+    assert syllable_count(strip_markup("[Alice:Radio]: Hello there friend.")) == 5
+
+
 def test_syllable_count_is_rough_but_stable():
     from kokoro_gui.qt.docks.scope_fields import syllable_count
 
