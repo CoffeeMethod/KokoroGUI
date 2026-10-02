@@ -417,17 +417,19 @@
   <section class="doc-section" id="processing">
     <div class="wrap">
       <h2><span class="idx">File &gt; Export</span>Export</h2>
-      <p class="dek">Generate only fills the per-clip cache. Export is what produces a deliverable: every clip mixed down at its timeline position into one file, using the same summing rule the transport plays. It refuses with a count when clips are stale and offers to generate first.</p>
+      <p class="dek">Generate only fills the per-clip cache. Export is what produces a deliverable: every clip mixed down at its timeline position into one file, using the same summing rule the transport plays. It refuses with a count when clips are stale and offers to generate first. The dialog has three tabs: Audio (folder, name, format, bitrate, rate, channels, loudness, range), Extras (subtitles, cue sheet, per-clip files) and Project file (the bundle options).</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Export dialog</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Output folder / Base filename</td><td>Where the exported file is written and what it's called. Remembered per project.</td></tr>
+            <tr><td>Output folder / Base filename</td><td>Where the exported file is written and what it's called. The name is a template: <code>{project}</code> is the project title, <code>{date}</code> is YYYY-MM-DD, <code>{time}</code> is HHMMSS and <code>{range}</code> is the Range choice, or "full" for the whole project. A token it doesn't know stays as typed, and characters a filename can't hold are dropped. The line under the field shows the resulting name. When that file already exists, Export asks Replace, Add number (<code>name (2).wav</code>) or Cancel. Remembered per project.</td></tr>
             <tr><td>Project: bundle generated audio / Bundle audio format</td><td>Whether Save puts generated segments into the <code>.tbaw</code> (off gives a small file whose clips regenerate on open) and whether new segments are written as wav or flac. Remembered per project.</td></tr>
             <tr><td>Bundle the reference video in the project file</td><td>Off by default. On, Save stores the reference video under <code>video/</code> in the <code>.tbaw</code>, uncompressed; off keeps only its path. Opening the project where the video already is at that path doesn't extract the bundled copy. Save only reads a video you picked with Load Video on this machine; a project someone sent you keeps the copy it came with.</td></tr>
             <tr><td>Bundle imported audio in the project file</td><td>On by default. Music beds, the source track and imported recordings go under <code>audio/imported/</code> in the <code>.tbaw</code>. Off leaves them out; a copy opened elsewhere plays without them.</td></tr>
             <tr><td>Format</td><td>wav, mp3, flac or ogg.</td></tr>
+            <tr><td>MP3 bitrate</td><td>Shown for mp3 only: 128, 192, 256 or 320 kbps constant bitrate, default 192. MP3 stops at 160 kbps below a 32 kHz sample rate, so at 24000 Hz the choices from 192 up all come out at 160. Remembered per project.</td></tr>
+            <tr><td>Sample rate</td><td>"Project rate" (the default, no resampling), 22050, 24000, 44100 or 48000 Hz. Another rate resamples the finished mix once before it is written, and loudness is measured at that rate. Per-clip files keep the project rate. Remembered per project.</td></tr>
             <tr><td>Channels</td><td>Stereo, or mono (the average of the two channels). Muted and soloed-out tracks are left out either way.</td></tr>
             <tr><td>Normalize loudness / Target (LUFS) / True peak ceiling (dBTP)</td><td>Off by default. On, the export gets one gain that brings its integrated loudness to the target (-30 to -5, default -16) without the true peak passing the ceiling (-6 to 0, default -1). There is no limiter, so a peaky mix can end short of the target; the status line says "target not reached: peak-limited" then. Per-clip files aren't normalized. Remembered per project. Needs <code>pyloudnorm</code>.</td></tr>
             <tr><td>Range</td><td>The whole project, the stretch between any two neighbouring markers, or the loop region.</td></tr>

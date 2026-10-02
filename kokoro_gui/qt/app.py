@@ -1520,6 +1520,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     def _assemble_config(self) -> dict:
         gen_state = self.settings_dock.get_state()
         engine = self.engine_settings(self.backend.id)
+        from kokoro_gui.qt.docks.export_dialog import output_name
+
         export = self._export_values()
         config = {
             **engine,
@@ -1531,7 +1533,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             # Sanitize the free-text filename field the same way voice/preset
             # names are sanitized elsewhere - it flows unvalidated into an
             # os.path.join sink in caching.py otherwise.
-            "filename": os.path.basename(export["filename"]),
+            "filename": output_name(self, export["filename"]),
             "format": export["format"],
             "out_dir": export["out_dir"],
             "separate": export["keep_clip_files"],
@@ -1621,6 +1623,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         resolver the Audio FX tab renders."""
         project = project or self.project_for(clip)
         gen_state = self.settings_dock.get_state()
+        from kokoro_gui.qt.docks.export_dialog import output_name
+
         export = self._export_values()
         config = {
             # The clip's engine's own settings (threads, Audio8's
@@ -1635,7 +1639,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             "volume": gen_state["volume"],
             "normalize": gen_state["normalize"],
             "trim_silence": gen_state["trim_silence"],
-            "filename": os.path.basename(export["filename"]),
+            "filename": output_name(self, export["filename"]),
         }
 
         clip_config = dict(project.document.effective_config_for_clip(clip))
@@ -3468,7 +3472,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         dialog = ExportDialog(self)
         if dialog.exec() != ExportDialog.DialogCode.Accepted:
             return
-        run_export(self, dialog.values(), parent=self, bundle=dialog.bundle_values(), range_s=dialog.range_s())
+        run_export(self, dialog.values(), parent=self, bundle=dialog.bundle_values(), range_s=dialog.range_s(),
+                   range_label=dialog.range_label())
 
     def measure_loudness(self) -> None:
         run_measure_loudness(self, parent=self)

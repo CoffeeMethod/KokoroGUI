@@ -199,7 +199,7 @@
           <caption>project.json</caption>
           <thead><tr><th>Key</th><th>Contents</th></tr></thead>
           <tbody>
-            <tr><td>export</td><td>The Export dialog's remembered values: output folder, base filename, format, whether to write an <code>.srt</code> and per-clip files, and the loudness target and ceiling when "Normalize loudness" is on.</td></tr>
+            <tr><td>export</td><td>The Export dialog's remembered values: output folder, base filename, format, whether to write an <code>.srt</code> and per-clip files, the MP3 bitrate (<code>bitrate_kbps</code>), the output rate (<code>sample_rate</code>, absent or null for the project rate), and the loudness target and ceiling when "Normalize loudness" is on. The base filename is stored as typed, with its <code>{project}</code>, <code>{date}</code>, <code>{time}</code> and <code>{range}</code> tokens.</td></tr>
             <tr><td>bundle</td><td><code>{"include_generated_audio": true, "include_imported_audio": true, "include_video": false, "audio_format": "wav"}</code> by default. What Save puts in the zip and how new segments are encoded. Editable from the Export dialog, which always sets <code>include_imported_audio</code>.</td></tr>
             <tr><td>video</td><td>Optional, top-level project only. <code>{"path": str, "offset_s": float}</code>: the reference video, relative to the <code>.tbaw</code>'s folder when both are on the same drive, else absolute, and the video time at the timeline's 0.</td></tr>
             <tr><td>workspace</td><td>Optional. A workspace name that overrides the app-level one when this project opens.</td></tr>

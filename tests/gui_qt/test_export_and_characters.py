@@ -64,7 +64,8 @@ def test_export_dialog_reads_back_sanitized_values(qt_app):
 
     assert values == {"out_dir": "out", "filename": "evil", "format": "flac", "srt": True, "keep_clip_files": True,
                       "channels": 2, "srt_words": False, "cue_sheet": False,
-                      "normalize_loudness": False, "target_lufs": -16.0, "ceiling_dbtp": -1.0}
+                      "normalize_loudness": False, "target_lufs": -16.0, "ceiling_dbtp": -1.0,
+                      "bitrate_kbps": 192, "sample_rate": None}
 
 
 def test_run_export_refuses_without_clips(qt_app, monkeypatch):
@@ -533,3 +534,182 @@ def test_measure_loudness_shows_numbers_for_two_clips_and_writes_no_file(qt_app,
     assert "dBTP" in dialog.value_labels["true_peak"].text()
     assert sorted(p.name for p in tmp_path.rglob("*")) == before
     dialog.close()
+
+
+# -- export options: tabs, mp3 bitrate, sample rate, name template, existing files ------------
+
+
+def test_export_dialog_has_three_tabs_and_keeps_its_attribute_names(qt_app):
+    dialog = ExportDialog(qt_app)
+
+    assert [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())] == ["Audio", "Extras", "Project file"]
+
+    def tab_of(widget):
+        page = widget
+        while page is not None and dialog.tabs.indexOf(page) < 0:
+            page = page.parentWidget()
+        return dialog.tabs.tabText(dialog.tabs.indexOf(page))
+
+    for name in ("out_dir_edit", "filename_edit", "format_combo", "bitrate_combo", "sample_rate_combo",
+                 "channels_combo", "normalize_check", "target_spin", "ceiling_spin", "range_combo"):
+        assert tab_of(getattr(dialog, name)) == "Audio", name
+    for name in ("srt_check", "srt_words_check", "cue_sheet_check", "keep_clips_check"):
+        assert tab_of(getattr(dialog, name)) == "Extras", name
+    for name in ("bundle_audio_check", "bundle_imported_check", "bundle_format_combo", "bundle_video_check"):
+        assert tab_of(getattr(dialog, name)) == "Project file", name
+
+
+def test_export_dialog_shows_the_bitrate_only_for_mp3(qt_app):
+    dialog = ExportDialog(qt_app)
+    assert dialog.format_combo.currentText() == "wav" and dialog.bitrate_combo.isHidden()
+
+    dialog.format_combo.setCurrentText("mp3")
+    assert not dialog.bitrate_combo.isHidden()
+    assert [dialog.bitrate_combo.itemData(i) for i in range(dialog.bitrate_combo.count())] == [128, 192, 256, 320]
+    assert dialog.bitrate_combo.currentData() == 192
+
+    dialog.format_combo.setCurrentText("flac")
+    assert dialog.bitrate_combo.isHidden()
+
+    qt_app.project_settings["export"] = {"format": "mp3"}
+    assert not ExportDialog(qt_app).bitrate_combo.isHidden()
+
+
+def test_export_dialog_remembers_bitrate_and_sample_rate_per_project(qt_app):
+    dialog = ExportDialog(qt_app)
+    assert dialog.sample_rate_combo.currentData() is None
+    assert dialog.sample_rate_combo.itemText(0) == f"Project rate ({qt_app.project_sample_rate()} Hz)"
+    assert [dialog.sample_rate_combo.itemData(i) for i in range(1, dialog.sample_rate_combo.count())] == [
+        22050, 24000, 44100, 48000]
+
+    dialog.format_combo.setCurrentText("mp3")
+    dialog.bitrate_combo.setCurrentIndex(dialog.bitrate_combo.findData(320))
+    dialog.sample_rate_combo.setCurrentIndex(dialog.sample_rate_combo.findData(44100))
+    values = dialog.values()
+    assert values["bitrate_kbps"] == 320 and values["sample_rate"] == 44100
+    qt_app.project_settings["export"] = values
+
+    again = ExportDialog(qt_app)
+    assert again.bitrate_combo.currentData() == 320 and again.sample_rate_combo.currentData() == 44100
+
+
+def test_export_defaults_ignore_a_bad_bitrate_or_rate(qt_app):
+    qt_app.project_settings["export"] = {"bitrate_kbps": 999, "sample_rate": "fast"}
+    values = export_defaults(qt_app)
+    assert values["bitrate_kbps"] == 192 and values["sample_rate"] is None
+    qt_app.project_settings["export"] = {"bitrate_kbps": True, "sample_rate": 12345}
+    values = export_defaults(qt_app)
+    assert values["bitrate_kbps"] == 192 and values["sample_rate"] is None
+
+
+def test_export_dialog_previews_the_expanded_filename(qt_app):
+    dialog = ExportDialog(qt_app)
+    dialog.filename_edit.setText("{project}-{date}")
+    shown = dialog.name_preview_label.text()
+    assert shown.startswith("Writes Untitled-") and shown.endswith(".wav")
+    assert "{" not in shown
+
+    dialog.format_combo.setCurrentText("flac")
+    dialog.filename_edit.setText("take-{range}-{nope}")
+    assert dialog.name_preview_label.text() == "Writes take-full-{nope}.flac"
+    assert dialog.values()["filename"] == "take-{range}-{nope}"  # the template is what gets stored
+
+
+def _one_clip(qt_app, tmp_path):
+    qt_app.document.settings["gap_s"] = 0.0
+    _type(qt_app.editor, "hello world")
+    _generated_clip(qt_app, tmp_path, 0, 5, seconds=1.0, name="a")
+
+
+def _scheduled_result(qt_app):
+    import asyncio
+
+    coro = qt_app.engine.worker.run_coro.call_args[0][0]
+    result = asyncio.run(coro)
+    qt_app.engine.worker.run_coro.return_value.set_result(result)
+    return result
+
+
+def test_run_export_expands_the_filename_template(qt_app, tmp_path):
+    _one_clip(qt_app, tmp_path)
+    values = {"out_dir": str(tmp_path / "out"), "filename": "{project}_{range}", "format": "wav",
+              "srt": False, "keep_clip_files": False}
+
+    assert run_export(qt_app, values, range_label="Intro to Ch1") is True
+
+    result = _scheduled_result(qt_app)
+    assert os.path.basename(result.audio_path) == "Untitled_Intro to Ch1.wav"
+    assert qt_app.project_settings["export"]["filename"] == "{project}_{range}"
+
+
+def test_run_export_passes_the_output_rate_to_the_mixdown(qt_app, tmp_path):
+    _one_clip(qt_app, tmp_path)
+    values = {"out_dir": str(tmp_path / "out"), "filename": "mix", "format": "wav", "sample_rate": 48000,
+              "srt": False, "keep_clip_files": False}
+
+    assert run_export(qt_app, values) is True
+
+    result = _scheduled_result(qt_app)
+    assert sf.info(result.audio_path).samplerate == 48000
+    assert result.duration_s == pytest.approx(1.0, abs=0.01)
+
+
+def _existing_mix(tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "mix.wav").write_bytes(b"old")
+    return out
+
+
+def test_run_export_asks_before_overwriting_and_can_cancel(qt_app, tmp_path, monkeypatch):
+    from kokoro_gui.qt.docks import export_dialog
+
+    _one_clip(qt_app, tmp_path)
+    out = _existing_mix(tmp_path)
+    asked = []
+    monkeypatch.setattr(export_dialog, "_ask_existing", lambda parent, path: asked.append(path) or None)
+
+    assert run_export(qt_app, {"out_dir": str(out), "filename": "mix", "format": "wav",
+                                  "srt": False, "keep_clip_files": False}) is False
+
+    assert [os.path.basename(p) for p in asked] == ["mix.wav"]
+    assert (out / "mix.wav").read_bytes() == b"old"
+    assert not qt_app.is_busy()
+
+
+def test_run_export_replace_overwrites_the_file(qt_app, tmp_path, monkeypatch):
+    from kokoro_gui.qt.docks import export_dialog
+
+    _one_clip(qt_app, tmp_path)
+    out = _existing_mix(tmp_path)
+    monkeypatch.setattr(export_dialog, "_ask_existing", lambda parent, path: "replace")
+
+    assert run_export(qt_app, {"out_dir": str(out), "filename": "mix", "format": "wav",
+                                  "srt": False, "keep_clip_files": False}) is True
+
+    result = _scheduled_result(qt_app)
+    assert result.audio_path == str(out / "mix.wav")
+    assert sf.info(result.audio_path).frames > 0
+
+
+def test_run_export_add_number_keeps_the_old_file_and_numbers_the_extras(qt_app, tmp_path, monkeypatch):
+    from kokoro_gui.qt.docks import export_dialog
+
+    _one_clip(qt_app, tmp_path)
+    out = _existing_mix(tmp_path)
+    (out / "mix (2).wav").write_bytes(b"older")
+    monkeypatch.setattr(export_dialog, "_ask_existing", lambda parent, path: "number")
+
+    assert run_export(qt_app, {"out_dir": str(out), "filename": "mix", "format": "wav", "srt": True,
+                                  "keep_clip_files": False}) is True
+
+    result = _scheduled_result(qt_app)
+    assert os.path.basename(result.audio_path) == "mix (3).wav"
+    assert os.path.basename(result.srt_path) == "mix (3).srt"
+    assert (out / "mix.wav").read_bytes() == b"old" and (out / "mix (2).wav").read_bytes() == b"older"
+    assert qt_app.project_settings["export"]["filename"] == "mix"
+
+
+def test_a_filename_template_reaches_the_engine_config_expanded(qt_app):
+    qt_app.project_settings["export"] = {"filename": "{project}-{range}"}
+    assert qt_app._assemble_config()["filename"] == "Untitled-full"

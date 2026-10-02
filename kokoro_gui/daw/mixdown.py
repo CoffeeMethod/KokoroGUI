@@ -25,6 +25,12 @@ averages the two channels. `range_s` renders only a region (between two
 markers): clips outside it are skipped, and the output, SRT and cue sheet
 start at the region's start.
 
+`mixdown(out_rate=...)` resamples the whole mix once (`resample_mix`) before
+the loudness step, and `bitrate_kbps` sets the mp3 bitrate (`write_audio`).
+`expand_name` turns the dialog's file-name template (`{project}`, `{date}`,
+`{time}`, `{range}`) into a safe base name and `unused_path` finds the
+`name (2).ext` the dialog offers instead of overwriting.
+
 "Keep per-clip files" writes one mono file per clip next to the mixdown,
 named `<base>_<index:03>_<character>.<ext>` (UI14), the character name
 basename-sanitized like every other name-to-path site in this codebase.
@@ -40,12 +46,15 @@ the whole thing is testable headlessly with a stub document.
 from __future__ import annotations
 
 import csv
+import datetime
+import math
 import os
 import re
 from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 
 import numpy as np
+from scipy.signal import resample_poly
 
 from kokoro_gui.audio import loudness as loudness_mod, mixer, post
 from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement, segment_timeline
@@ -149,11 +158,64 @@ def write_cue_sheet(document, arrangement: Arrangement, path: str) -> str:
     return path
 
 
+_UNSAFE_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
+NAME_TOKENS = ("project", "date", "time", "range")
+
+
+def name_context(project: str = "Untitled", range_label: Optional[str] = None,
+                 now: Optional[datetime.datetime] = None, **extra) -> dict:
+    """The values `expand_name` fills tokens from: `project`, `date`
+    (YYYY-MM-DD), `time` (HHMMSS) and `range` ("full" for the whole project).
+    Later export features pass their own tokens through `extra`."""
+    now = now or datetime.datetime.now()
+    return {"project": project or "Untitled", "date": now.strftime("%Y-%m-%d"), "time": now.strftime("%H%M%S"),
+            "range": range_label or "full", **extra}
+
+
+def expand_name(template: str, context: dict) -> str:
+    """A base filename from `template`: `{token}` is replaced by
+    `context[token]`, an unknown token stays as typed. The template goes
+    through `os.path.basename()` first (the guard every name-to-path site
+    uses), then every substituted value loses the characters a filename
+    can't hold, so a project called "a/b" can't add a folder. The result is
+    never empty and never ends in a dot or a space."""
+    template = os.path.basename((template or "").strip())
+
+    def _fill(match):
+        value = context.get(match.group(1))
+        return match.group(0) if value is None else _UNSAFE_NAME_CHARS.sub("", str(value))
+
+    name = _UNSAFE_NAME_CHARS.sub("", re.sub(r"\{(\w+)\}", _fill, template)).strip(" .")
+    return name or "output"
+
+
+def unused_path(path: str) -> str:
+    """`path`, or `<base> (2).<ext>`, `<base> (3).<ext>`... for the first
+    name that doesn't exist yet."""
+    if not os.path.exists(path):
+        return path
+    root, ext = os.path.splitext(path)
+    number = 2
+    while os.path.exists(f"{root} ({number}){ext}"):
+        number += 1
+    return f"{root} ({number}){ext}"
+
+
+def resample_mix(samples: np.ndarray, from_rate: int, to_rate: int) -> np.ndarray:
+    """`samples` (`(frames,)` or `(frames, channels)`) at `to_rate`, one
+    polyphase pass over the whole mix."""
+    from_rate, to_rate = int(from_rate), int(to_rate)
+    if from_rate == to_rate or len(samples) == 0:
+        return samples
+    divisor = math.gcd(from_rate, to_rate)
+    return resample_poly(samples, to_rate // divisor, from_rate // divisor, axis=0).astype(np.float32)
+
+
 def _safe_component(name: str) -> str:
     """A character name as a filename piece: separators and other unsafe
     characters become "_" first (so "Bo b/ok" keeps both halves), then the
     same `os.path.basename()` guard every other name-to-path site uses."""
-    name = re.sub(r'[<>:"/\\|?*\s]+', "_", (name or "").strip())
+    name = re.sub(r'[<>:"/\|?*\\|?*\s]+', "_", (name or "").strip())
     name = os.path.basename(name)
     return name or "clip"
 
@@ -225,8 +287,10 @@ def _crossfaded_samples(plays: list, sample_rate: int, post_config: Optional[dic
     return out[:total]
 
 
-def write_audio(path: str, samples: np.ndarray, sample_rate: int, fmt: str) -> None:
-    """`samples` is `(frames,)` mono or `(frames, channels)`."""
+def write_audio(path: str, samples: np.ndarray, sample_rate: int, fmt: str,
+                bitrate_kbps: Optional[int] = None) -> None:
+    """`samples` is `(frames,)` mono or `(frames, channels)`. `bitrate_kbps`
+    only applies to mp3."""
     fmt = (fmt or "wav").lower()
     if fmt in SOUNDFILE_FORMATS:
         import soundfile as sf
@@ -238,7 +302,12 @@ def write_audio(path: str, samples: np.ndarray, sample_rate: int, fmt: str) -> N
     from pedalboard.io import AudioFile
 
     channels = 1 if samples.ndim == 1 else samples.shape[1]
-    with AudioFile(path, "w", samplerate=sample_rate, num_channels=channels) as out_f:
+    # pedalboard 0.9.23: `quality` takes an int of kilobits per second (a
+    # string like "320" or "192k" works too) and encodes constant bitrate. With
+    # none given the encoder writes 320. Below 32 kHz (MPEG-2) LAME stops at
+    # 160 kbps, so 192 and up come out at 160 there.
+    with AudioFile(path, "w", samplerate=sample_rate, num_channels=channels,
+                   quality=bitrate_kbps) as out_f:
         out_f.write(samples.reshape(1, -1) if samples.ndim == 1 else samples.T)
 
 
@@ -327,8 +396,16 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
             post_config_for_clip: Optional[Callable] = None, channels: int = 2,
             range_s: Optional[tuple] = None, srt_granularity: str = "clip",
             include_cue_sheet: bool = False, nested_audio_path: Optional[Callable] = None,
-            loudness: Optional[dict] = None) -> ExportResult:
-    """`render_mix`, then an optional loudness normalize, then the writes.
+            loudness: Optional[dict] = None, bitrate_kbps: Optional[int] = None,
+            out_rate: Optional[int] = None) -> ExportResult:
+    """`render_mix`, then an optional resample, an optional loudness
+    normalize, then the writes.
+
+    `out_rate` writes the mixdown at that rate instead of `sample_rate`: the
+    whole mix is resampled once before the loudness step, so what gets
+    measured is what gets written. Per-clip files stay at `sample_rate`, and
+    SRT and cue sheet times don't depend on the rate. `bitrate_kbps` is the
+    mp3 bitrate (`write_audio`).
 
     `loudness` is `{"target_lufs": float, "ceiling_dbtp": float}`: the mix
     gets the gain that reaches the target without its true peak passing the
@@ -347,22 +424,28 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
                      post_config_for_clip=post_config_for_clip, channels=channels, range_s=range_s,
                      nested_audio_path=nested_audio_path)
     mixed = mix.samples
-    result = ExportResult(audio_path=out_path, duration_s=mix.duration_s, skipped_clip_ids=mix.skipped)
+    mix_rate = int(out_rate) if out_rate else sample_rate
+    if mix_rate != sample_rate:
+        if progress:
+            progress(0.81, f"Resampling to {mix_rate} Hz")
+        mixed = resample_mix(mixed, sample_rate, mix_rate)
+    result = ExportResult(audio_path=out_path, duration_s=len(mixed) / float(mix_rate),
+                          skipped_clip_ids=mix.skipped)
     if loudness is not None:
         if progress:
             progress(0.82, "Measuring loudness")
         mixed, result.loudness_before, result.loudness_after, result.loudness_limited = _normalized(
-            mixed, sample_rate, loudness)
+            mixed, mix_rate, loudness)
     if progress:
         progress(0.85, "Writing mixdown")
-    write_audio(out_path, mixed, sample_rate, ext)
+    write_audio(out_path, mixed, mix_rate, ext, bitrate_kbps=bitrate_kbps)
 
     if keep_clip_files:
         for index, placed, samples in mix.per_clip:
             character = document.get_character(placed.clip.character_id)
             who = _safe_component(character.name if character is not None else "clip")
             clip_path = os.path.join(out_dir, f"{base}_{index + 1:03d}_{who}.{ext}")
-            write_audio(clip_path, samples, sample_rate, ext)
+            write_audio(clip_path, samples, sample_rate, ext, bitrate_kbps=bitrate_kbps)
             result.clip_files.append(clip_path)
 
     if include_srt:
