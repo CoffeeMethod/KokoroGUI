@@ -56,8 +56,9 @@ from typing import Callable, Optional
 import numpy as np
 from scipy.signal import resample_poly
 
-from kokoro_gui.audio import loudness as loudness_mod, mixer, post
+from kokoro_gui.audio import limiter, loudness as loudness_mod, mixer, post
 from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement, segment_timeline
+from kokoro_gui.daw import markers as marker_ops
 from kokoro_gui.daw.imported import segment_plays
 from kokoro_gui.daw.mixplan import ClipMix, clip_mixes
 from kokoro_gui.daw.timecode import format_position
@@ -66,6 +67,18 @@ from kokoro_gui.engine.text_extraction import strip_markup
 SOUNDFILE_FORMATS = {"wav", "flac", "ogg"}
 CUE_SHEET_COLUMNS = ("start", "end", "character", "source_text", "text", "status", "note")
 EXPORT_BLOCK_FRAMES = 1 << 16
+
+
+@dataclass
+class ExportFile:
+    """One written mixdown: the report from measuring it (None when nothing
+    measured it), the `describe` of every preset check it failed, and the
+    name its chapter has (the file's base name for a single export)."""
+    path: str
+    title: str = ""
+    duration_s: float = 0.0
+    report: Optional[object] = None
+    failed: list = field(default_factory=list)
 
 
 @dataclass
@@ -82,6 +95,10 @@ class ExportResult:
     loudness_before: Optional[object] = None
     loudness_after: Optional[object] = None
     loudness_limited: bool = False
+    # One entry per mixdown written (a split export has several, and
+    # `audio_path` is the first); `warnings` are sentences for the status line.
+    files: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
 
 
 def _format_srt_time(seconds: float) -> str:
@@ -397,9 +414,10 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
             range_s: Optional[tuple] = None, srt_granularity: str = "clip",
             include_cue_sheet: bool = False, nested_audio_path: Optional[Callable] = None,
             loudness: Optional[dict] = None, bitrate_kbps: Optional[int] = None,
-            out_rate: Optional[int] = None) -> ExportResult:
+            out_rate: Optional[int] = None, head_s: float = 0.0, tail_s: float = 0.0,
+            checks: tuple = ()) -> ExportResult:
     """`render_mix`, then an optional resample, an optional loudness
-    normalize, then the writes.
+    normalize, optional head and tail silence, then the writes.
 
     `out_rate` writes the mixdown at that rate instead of `sample_rate`: the
     whole mix is resampled once before the loudness step, so what gets
@@ -407,13 +425,22 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
     SRT and cue sheet times don't depend on the rate. `bitrate_kbps` is the
     mp3 bitrate (`write_audio`).
 
-    `loudness` is `{"target_lufs": float, "ceiling_dbtp": float}`: the mix
-    gets the gain that reaches the target without its true peak passing the
-    ceiling (`audio.loudness.gain_to_target`; there is no limiter, so a peaky
-    mix can end short of the target, which `ExportResult.loudness_limited`
-    reports). The report before and after lands on the result. None writes
-    the mix as rendered and measures nothing. Per-clip files are never
-    normalized."""
+    `loudness` is one of
+    `{"mode": "lufs", "target_lufs": float, "ceiling_dbtp": float}` (no mode
+    means this one): the mix gets the gain that reaches the target without its
+    true peak passing the ceiling (`audio.loudness.gain_to_target`; there is
+    no limiter, so a peaky mix can end short of the target, which
+    `ExportResult.loudness_limited` reports); or
+    `{"mode": "rms", "target_rms_dbfs": float, "limiter_dbfs": float}`: the
+    gain that reaches the RMS target, then `audio.limiter.limit_peaks` holds
+    every sample under `limiter_dbfs`. The report before and after lands on
+    the result. None writes the mix as rendered and measures nothing. Per-clip
+    files are never normalized.
+
+    `head_s` and `tail_s` pad the mixdown with silence after the loudness
+    step, and the SRT and cue sheet move later by `head_s`. `checks`
+    (`export_presets.Check`) run on the file as written; each file's report
+    and failed checks are in `ExportResult.files`."""
     sample_rate = int(sample_rate)
     out_dir = os.path.dirname(out_path) or "."
     os.makedirs(out_dir, exist_ok=True)
@@ -429,16 +456,29 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
         if progress:
             progress(0.81, f"Resampling to {mix_rate} Hz")
         mixed = resample_mix(mixed, sample_rate, mix_rate)
-    result = ExportResult(audio_path=out_path, duration_s=len(mixed) / float(mix_rate),
-                          skipped_clip_ids=mix.skipped)
+    result = ExportResult(audio_path=out_path, skipped_clip_ids=mix.skipped)
     if loudness is not None:
         if progress:
             progress(0.82, "Measuring loudness")
         mixed, result.loudness_before, result.loudness_after, result.loudness_limited = _normalized(
             mixed, mix_rate, loudness)
+    head_s, tail_s = max(0.0, float(head_s or 0.0)), max(0.0, float(tail_s or 0.0))
+    arrangement_out = mix.arrangement
+    report = result.loudness_after
+    if head_s or tail_s:
+        mixed = _padded(mixed, mix_rate, head_s, tail_s)
+        arrangement_out = replace(arrangement_out, placed=[
+            replace(p, start_s=p.start_s + head_s) for p in arrangement_out.placed])
+        if loudness is not None or checks:
+            report = result.loudness_after = loudness_mod.measure(mixed, mix_rate)
+    elif checks and report is None:
+        report = loudness_mod.measure(mixed, mix_rate)
+    result.duration_s = len(mixed) / float(mix_rate)
     if progress:
         progress(0.85, "Writing mixdown")
     write_audio(out_path, mixed, mix_rate, ext, bitrate_kbps=bitrate_kbps)
+    failed = [c.describe(report) for c in checks if not c.passed(report)] if checks else []
+    result.files.append(ExportFile(out_path, base, result.duration_s, report, failed))
 
     if keep_clip_files:
         for index, placed, samples in mix.per_clip:
@@ -450,18 +490,135 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
 
     if include_srt:
         srt_path = os.path.join(out_dir, f"{base}.srt")
-        result.srt_path = write_srt(document, mix.arrangement, srt_path, granularity=srt_granularity)
+        result.srt_path = write_srt(document, arrangement_out, srt_path, granularity=srt_granularity)
 
     if include_cue_sheet:
-        result.cue_sheet_path = write_cue_sheet(document, mix.arrangement, os.path.join(out_dir, f"{base}.csv"))
+        result.cue_sheet_path = write_cue_sheet(document, arrangement_out, os.path.join(out_dir, f"{base}.csv"))
 
     if progress:
         progress(1.0, "Export finished")
     return result
 
 
+@dataclass(frozen=True)
+class Chapter:
+    """One file of a split export: its base name and the `(start_s, end_s)`
+    of the project it covers."""
+    name: str
+    range_s: tuple
+
+
+@dataclass
+class ChapterPlan:
+    chapters: list
+    warnings: list = field(default_factory=list)
+
+
+SPLIT_NOUNS = {"subprojects": "subproject", "markers": "marker range"}
+MAX_TITLE_CHARS = 100
+
+
+def _chapter_title(text: str) -> str:
+    """A chapter's name as a filename piece: reserved characters out, spaces
+    collapsed, "Untitled" when nothing is left."""
+    title = " ".join(_UNSAFE_NAME_CHARS.sub("", text or "").split()).strip(" .")[:MAX_TITLE_CHARS].strip(" .")
+    return title or "Untitled"
+
+
+def _cut_long(lo: float, hi: float, boundaries: list, max_file_s: Optional[float]) -> list:
+    """`(start, end)` pieces of `[lo, hi]` no longer than `max_file_s`. A
+    piece ends at the clip boundary nearest before `max_file_s` less a minute
+    (119 of 120 minutes), or at that time when no clip boundary falls in
+    reach."""
+    if not max_file_s or hi - lo <= max_file_s:
+        return [(lo, hi)]
+    limit = max_file_s - min(60.0, max_file_s / 120.0)
+    pieces, start = [], lo
+    while hi - start > max_file_s:
+        cut = max((b for b in boundaries if start < b <= start + limit), default=start + limit)
+        pieces.append((start, cut))
+        start = cut
+    return pieces + [(start, hi)]
+
+
+def plan_chapters(document, arrangement: Arrangement, split: str, max_file_s: Optional[float] = None) -> ChapterPlan:
+    """The files a split export writes. `split` is "subprojects" (one per
+    placed nested clip, over its own span, named by its placeholder text) or
+    "markers" (one per consecutive marker pair, named by the first marker).
+    Names are `NN - <title>`, numbered in time order; a chapter longer than
+    `max_file_s` becomes `NN - <title> part 1`, `part 2`... cut at clip
+    boundaries. A warning counts the clips that fall inside no chapter."""
+    if split == "subprojects":
+        spans = [(document.clip_text(p.clip), p.start_s, p.end_s)
+                 for p in sorted(arrangement.placed, key=lambda p: p.start_s) if p.clip.is_nested]
+    elif split == "markers":
+        found = marker_ops.list_markers(document.settings)
+        spans = [(a["name"], a["seconds"], b["seconds"]) for a, b in zip(found, found[1:])]
+    else:
+        raise ValueError(f"unknown split mode {split!r}")
+    spans = [span for span in spans if span[2] > span[1]]
+    boundaries = sorted({t for p in arrangement.placed for t in (p.start_s, p.end_s)})
+    width = max(2, len(str(len(spans))))
+    chapters = []
+    for number, (title, lo, hi) in enumerate(spans, start=1):
+        base = f"{number:0{width}d} - {_chapter_title(title)}"
+        pieces = _cut_long(lo, hi, boundaries, max_file_s)
+        for part, piece in enumerate(pieces, start=1):
+            chapters.append(Chapter(base if len(pieces) == 1 else f"{base} part {part}", piece))
+    outside = sum(1 for p in arrangement.placed
+                  if not any(p.end_s > lo and p.start_s < hi for _t, lo, hi in spans))
+    warnings = []
+    if outside:
+        warnings.append(f"{outside} clip{'s' if outside != 1 else ''} outside any "
+                        f"{SPLIT_NOUNS[split]} weren't exported")
+    return ChapterPlan(chapters, warnings)
+
+
+def mixdown_chapters(document, out_dir: str, plan: ChapterPlan, fmt: str = "wav",
+                     numbered: bool = False, progress: Optional[Callable[[float, str], None]] = None,
+                     **options) -> ExportResult:
+    """`mixdown` once per chapter of `plan`, each file `<chapter name>.<fmt>`
+    in `out_dir` (`numbered` gives each the first free `name (2)`), with its
+    own SRT, cue sheet and per-clip files when `options` ask for them.
+    `options` are `mixdown`'s, minus `out_path` and `range_s`. The result's
+    `files` lists every chapter and `audio_path` is the first."""
+    ext = (fmt or "wav").lower()
+    total = max(1, len(plan.chapters))
+    result = ExportResult(audio_path="", warnings=list(plan.warnings))
+    for index, chapter in enumerate(plan.chapters):
+        path = os.path.join(out_dir, f"{chapter.name}.{ext}")
+        if numbered:
+            path = unused_path(path)
+
+        def _chapter_progress(fraction: float, detail: str, _index=index) -> None:
+            if progress:
+                progress((_index + fraction) / total, f"Chapter {_index + 1}/{total}: {detail}")
+
+        one = mixdown(document, path, fmt=fmt, range_s=chapter.range_s, progress=_chapter_progress, **options)
+        result.files.extend(one.files)
+        result.clip_files.extend(one.clip_files)
+        result.duration_s += one.duration_s
+        result.skipped_clip_ids.extend(c for c in one.skipped_clip_ids if c not in result.skipped_clip_ids)
+        result.audio_path = result.audio_path or one.audio_path
+    return result
+
+
+def _padded(samples: np.ndarray, rate: int, head_s: float, tail_s: float) -> np.ndarray:
+    """`samples` with `head_s` of silence before and `tail_s` after."""
+    tail_shape = samples.shape[1:]
+    head = np.zeros((int(round(head_s * rate)),) + tail_shape, dtype=samples.dtype)
+    tail = np.zeros((int(round(tail_s * rate)),) + tail_shape, dtype=samples.dtype)
+    return np.concatenate([head, samples, tail])
+
+
+# RMS mode calls the target missed when the limiter took this much off the level.
+RMS_TOLERANCE_DB = 0.5
+
+
 def _normalized(samples: np.ndarray, sample_rate: int, options: dict) -> tuple:
     """`(samples, before, after, limited)` for `mixdown`'s `loudness` option."""
+    if options.get("mode", "lufs") == "rms":
+        return _normalized_rms(samples, sample_rate, options)
     before = loudness_mod.measure(samples, sample_rate)
     gain_db, limited = loudness_mod.gain_to_target(
         before, float(options["target_lufs"]), float(options.get("ceiling_dbtp", 0.0)))
@@ -469,6 +626,21 @@ def _normalized(samples: np.ndarray, sample_rate: int, options: dict) -> tuple:
         return samples, before, before, limited
     samples = loudness_mod.apply_gain(samples, gain_db)
     return samples, before, loudness_mod.measure(samples, sample_rate), limited
+
+
+def _normalized_rms(samples: np.ndarray, sample_rate: int, options: dict) -> tuple:
+    """RMS mode: the gain that brings the whole-file RMS to `target_rms_dbfs`,
+    then the peak limiter at `limiter_dbfs` (none when it's absent). `limited`
+    is True when the limiter left the RMS more than `RMS_TOLERANCE_DB` short."""
+    before = loudness_mod.measure(samples, sample_rate)
+    if not math.isfinite(before.rms_dbfs):
+        return samples, before, before, False
+    target = float(options["target_rms_dbfs"])
+    samples = loudness_mod.apply_gain(samples, target - before.rms_dbfs)
+    if options.get("limiter_dbfs") is not None:
+        samples = limiter.limit_peaks(samples, sample_rate, float(options["limiter_dbfs"]))
+    after = loudness_mod.measure(samples, sample_rate)
+    return samples, before, after, after.rms_dbfs < target - RMS_TOLERANCE_DB
 
 
 def _loaded(placed, samples: np.ndarray, mix: ClipMix, sample_rate: int, range_s) -> "mixer.LoadedClip":

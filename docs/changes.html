@@ -167,6 +167,42 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Export presets and chapters</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Presets for ACX and the podcast platforms</h4>
+            <p>The Audio tab starts with a Preset box: Custom, ACX (Audible), Apple Podcasts, Apple Podcasts (mono), Spotify and YouTube. Picking one fills the format, bitrate, sample rate, channels, normalize mode and targets, head and tail silence and split choice. Changing any of those fields afterwards puts the box back on Custom. After the export, each file is measured and checked against the preset:</p>
+            <div class="table-wrap">
+              <table class="ref">
+                <thead><tr><th>Preset</th><th>Fills in</th><th>Checks</th></tr></thead>
+                <tbody>
+                  <tr><td>ACX (Audible)</td><td>mp3, 192 kbps, 44100 Hz, mono, RMS -20 dBFS with a limiter at -3.5 dBFS, 1 s head, 2 s tail, one file per subproject</td><td>RMS -23 to -18 dBFS; peak at most -3 dBFS; noise floor at most -60 dBFS; length at most 120 min</td></tr>
+                  <tr><td>Apple Podcasts</td><td>mp3, 128 kbps, 44100 Hz, stereo, -16 LUFS, -1 dBTP</td><td>Loudness -17 to -15 LUFS; true peak at most -1 dBTP</td></tr>
+                  <tr><td>Apple Podcasts (mono)</td><td>the same as mono, -19 LUFS</td><td>Loudness -20 to -18 LUFS; true peak at most -1 dBTP</td></tr>
+                  <tr><td>Spotify</td><td>mp3, 128 kbps, 44100 Hz, stereo, -14 LUFS, -1 dBTP</td><td>Loudness -15 to -13 LUFS; true peak at most -1 dBTP</td></tr>
+                  <tr><td>YouTube</td><td>wav, 48000 Hz, stereo, -14 LUFS, -1 dBTP</td><td>Loudness -15 to -13 LUFS; true peak at most -1 dBTP</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>RMS is the whole file's RMS, peak is the largest sample, true peak is the 4x oversampled peak, and the noise floor is the quietest tenth of the 50 ms windows. The numbers come from ACX's audio submission requirements and Apple's audio requirements. A failed check is named with the value and what it needed, for example "Noise floor -52.1 dBFS, needs at most -60 dBFS". Steady noise or a tone with no pauses has no quiet stretch and fails the noise floor check. The status line says "Passed the ACX (Audible) checks", or counts the failures and points to the report. Presets are greyed out without the <code>pyloudnorm</code> package. The chosen preset and the new fields below are kept per project in <code>project.json</code>, which older versions ignore.</p>
+          </li>
+          <li>
+            <h4>Normalize by RMS, a peak limiter, and head and tail silence</h4>
+            <p>A "Normalize by" box next to the loudness fields switches between Loudness (LUFS), as before, and RMS level, with a peak limiter. RMS mode applies the gain that brings the whole file's RMS to "Target RMS" (-40 to -6 dBFS, default -20), then the limiter holds every sample under "Peak limiter" (-12 to 0 dBFS, default -3.5). The limiter looks 10 ms ahead and dips the gain around a peak instead of clipping it, with one gain for both channels, and adds no delay. If the limiter leaves the RMS more than 0.5 dB under the target, the status line says "target not reached: peak-limited". "Silence at start" and "Silence at end" (0 to 10 s) pad the written file after the loudness step. Subtitles and the cue sheet move later by the start silence, per-clip files are untouched, and the measurement is of the padded file, so a very short file reads a little quieter than its target. The padding is digital silence, not room tone.</p>
+          </li>
+          <li>
+            <h4>One file per subproject or marker range</h4>
+            <p>"Split into" on the Audio tab offers One file, One file per subproject and One file per marker range. A choice is greyed out when the project has no subproject, or fewer than two markers. Each file covers one subproject's span, or the time between two neighbouring markers, and is named <code>NN - title.ext</code> in the output folder: the number is the position in time order, the title is the subproject's name or the first marker's name with characters a filename can't hold removed. The base filename and the Range choice aren't used. Each file gets its own subtitles, cue sheet and per-clip files when those are ticked. A clip that falls inside no subproject or marker range isn't exported, and the status line and report say how many. If any of the files already exist, one prompt covers all of them: Replace, or Add number to give each file the first free " (2)" name.</p>
+            <p>With the ACX preset, a chapter longer than 120 minutes is cut into <code>NN - title part 1</code>, <code>part 2</code> and so on, each at the clip boundary nearest before 119 minutes, or at 119 minutes when no clip boundary is near. A single file with the ACX preset isn't cut, and fails the Length check when it runs over.</p>
+          </li>
+          <li>
+            <h4>An export report</h4>
+            <p>After a split export, a failed check, or a warning, a report window lists every file written with its length, loudness, true peak, RMS, noise floor and the checks it failed. The window doesn't block the main one. A single file that passes its checks gets only the status line.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Editing</h3>
         <ul class="change-list">
           <li>

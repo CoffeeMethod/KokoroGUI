@@ -1,11 +1,17 @@
 """File > Export... (section 6 of Claude/PLAN_ui_shell_redesign.md).
 
-Three tabs. "Audio" holds the output folder, base filename (a template:
+Three tabs. "Audio" holds a preset (`kokoro_gui/daw/export_presets.py`: ACX,
+Apple Podcasts, Spotify, YouTube; it fills the fields below, and editing one
+puts the combo back on "Custom"), the output folder, base filename (a template:
 `{project}`, `{date}`, `{time}`, `{range}`, see `mixdown.expand_name`, with
 a live preview underneath), format, the mp3 bitrate (shown for mp3 only),
 sample rate, channels (stereo, or mono as the average of the two), "Normalize
-loudness" (a LUFS target under a true-peak ceiling, `kokoro_gui.audio.loudness`)
-and a range (the whole project or between two markers). "Extras" holds "also
+loudness" (by LUFS under a true-peak ceiling, or by RMS under a peak limiter,
+`kokoro_gui.audio.loudness`), silence at the start and end, a range (the whole
+project or between two markers) and "Split into" (one file, or one per
+subproject or marker range, named `NN - <title>`; the range is ignored then).
+After an export that split, failed a preset check or warned, the report dialog
+lists every file. "Extras" holds "also
 write .srt" (per clip or per word), "also write a cue sheet (.csv)"
 (kokoro_gui/daw/mixdown.py's `write_cue_sheet`) and "keep per-clip files".
 "Project file" holds the bundle options below. A new option goes into the tab
@@ -41,12 +47,15 @@ import os
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QTabWidget, QVBoxLayout, QWidget,
+    QLineEdit, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from kokoro_gui.audio import loudness as loudness_mod
 from kokoro_gui.daw import markers as marker_ops
-from kokoro_gui.daw.mixdown import expand_name, mixdown, name_context, render_mix, unused_path
+from kokoro_gui.daw.export_presets import CUSTOM_ID, PRESETS, SPLIT_MODES, get_preset, preset_ids
+from kokoro_gui.daw.mixdown import (
+    expand_name, mixdown, mixdown_chapters, name_context, plan_chapters, render_mix, unused_path,
+)
 from kokoro_gui.qt import project as project_io
 
 FORMATS = ("wav", "mp3", "flac", "ogg")
@@ -56,6 +65,11 @@ DEFAULT_BITRATE_KBPS = 192
 OUTPUT_RATES = (22050, 24000, 44100, 48000)
 DEFAULT_TARGET_LUFS = -16.0
 DEFAULT_CEILING_DBTP = -1.0
+DEFAULT_RMS_DBFS = -20.0
+DEFAULT_LIMITER_DBFS = -3.5
+NORMALIZE_MODES = ("lufs", "rms")
+SPLIT_LABELS = {None: "One file", "subprojects": "One file per subproject", "markers": "One file per marker range"}
+MAX_PAD_S = 10.0
 NAME_TOKEN_HELP = ("Tokens: {project} (the project title), {date} (YYYY-MM-DD), {time} (HHMMSS), "
                    "{range} (the range below, or \"full\").")
 
@@ -93,6 +107,13 @@ def export_defaults(app) -> dict:
         "ceiling_dbtp": _number(project.get("ceiling_dbtp"), DEFAULT_CEILING_DBTP, -6.0, 0.0),
         "bitrate_kbps": _choice(project.get("bitrate_kbps"), BITRATES_KBPS, DEFAULT_BITRATE_KBPS),
         "sample_rate": _choice(project.get("sample_rate"), OUTPUT_RATES, None),  # None: the project's rate
+        "normalize_mode": _choice(project.get("normalize_mode"), NORMALIZE_MODES, "lufs"),
+        "target_rms_dbfs": _number(project.get("target_rms_dbfs"), DEFAULT_RMS_DBFS, -40.0, -6.0),
+        "limiter_dbfs": _number(project.get("limiter_dbfs"), DEFAULT_LIMITER_DBFS, -12.0, 0.0),
+        "head_s": _number(project.get("head_s"), 0.0, 0.0, MAX_PAD_S),
+        "tail_s": _number(project.get("tail_s"), 0.0, 0.0, MAX_PAD_S),
+        "split": _choice(project.get("split"), SPLIT_MODES, None),
+        "preset": _choice(project.get("preset"), preset_ids(), CUSTOM_ID),
     }
 
 
@@ -140,6 +161,27 @@ def _mix_inputs(app) -> dict:
     }
 
 
+def chapter_plan(app, split: str, preset=None, arrangement=None):
+    """The files a split export writes for the project the timeline shows
+    (`mixdown.plan_chapters`); `preset` supplies the length limit a chapter
+    is cut at."""
+    document, _settings = _export_target(app)
+    max_file_s = preset.max_minutes * 60.0 if preset is not None and preset.max_minutes else None
+    return plan_chapters(document, arrangement or app.build_arrangement(), split, max_file_s)
+
+
+def _loudness_options(values: dict):
+    """`mixdown(loudness=...)` for the stored values, or None when
+    "Normalize loudness" is off or pyloudnorm is missing."""
+    if not values.get("normalize_loudness") or not loudness_mod.available():
+        return None
+    if values.get("normalize_mode") == "rms":
+        return {"mode": "rms", "target_rms_dbfs": values.get("target_rms_dbfs", DEFAULT_RMS_DBFS),
+                "limiter_dbfs": values.get("limiter_dbfs", DEFAULT_LIMITER_DBFS)}
+    return {"mode": "lufs", "target_lufs": values.get("target_lufs", DEFAULT_TARGET_LUFS),
+            "ceiling_dbtp": values.get("ceiling_dbtp", DEFAULT_CEILING_DBTP)}
+
+
 class ExportDialog(QDialog):
     exportFinished = Signal(bool, str)
 
@@ -165,6 +207,7 @@ class ExportDialog(QDialog):
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
         self._sync_bitrate_row()
+        self._sync_split()
         self._update_name_preview()
 
     def _add_tab(self, title: str) -> QFormLayout:
@@ -174,6 +217,16 @@ class ExportDialog(QDialog):
         return form
 
     def _build_audio_tab(self, form: QFormLayout, values: dict) -> None:
+        self._applying = False  # True while a preset fills the fields, so that doesn't read as an edit
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItem("Custom", CUSTOM_ID)
+        for preset in PRESETS:
+            self.preset_combo.addItem(preset.label, preset.id)
+        self.preset_combo.setToolTip("Fills the format, loudness, silence and split fields below with what the "
+                                     "platform asks for, and checks each file after the export. Changing a field "
+                                     "afterwards goes back to Custom.")
+        form.addRow("Preset:", self.preset_combo)
+
         dir_row = QWidget()
         dir_layout = QHBoxLayout(dir_row)
         dir_layout.setContentsMargins(0, 0, 0, 0)
@@ -238,12 +291,43 @@ class ExportDialog(QDialog):
         self.ceiling_spin.setToolTip("The gain stops short of the target rather than push the true peak past "
                                      "this. There is no limiter.")
         form.addRow("True peak ceiling (dBTP):", self.ceiling_spin)
+        self.normalize_mode_combo = QComboBox()
+        self.normalize_mode_combo.addItem("Loudness (LUFS)", "lufs")
+        self.normalize_mode_combo.addItem("RMS level, with a peak limiter", "rms")
+        self.normalize_mode_combo.setCurrentIndex(self.normalize_mode_combo.findData(values["normalize_mode"]))
+        self.normalize_mode_combo.setToolTip("ACX measures RMS and peaks; the podcast platforms measure LUFS.")
+        form.addRow("Normalize by:", self.normalize_mode_combo)
+        self.rms_spin = QDoubleSpinBox()
+        self.rms_spin.setRange(-40.0, -6.0)
+        self.rms_spin.setDecimals(1)
+        self.rms_spin.setSingleStep(0.5)
+        self.rms_spin.setValue(values["target_rms_dbfs"])
+        self.rms_spin.setToolTip("RMS level of the whole file the mix is brought to.")
+        form.addRow("Target RMS (dBFS):", self.rms_spin)
+        self.limiter_spin = QDoubleSpinBox()
+        self.limiter_spin.setRange(-12.0, 0.0)
+        self.limiter_spin.setDecimals(1)
+        self.limiter_spin.setSingleStep(0.5)
+        self.limiter_spin.setValue(values["limiter_dbfs"])
+        self.limiter_spin.setToolTip("No sample goes above this. The limiter dips the gain around a peak "
+                                     "instead of clipping it.")
+        form.addRow("Peak limiter (dBFS):", self.limiter_spin)
         self.normalize_check.toggled.connect(self._sync_loudness_rows)
+        self.normalize_mode_combo.currentIndexChanged.connect(self._sync_loudness_rows)
         if not loudness_mod.available():
             self.normalize_check.setChecked(False)
             self.normalize_check.setEnabled(False)
             self.normalize_check.setToolTip("Needs the pyloudnorm package (pip install pyloudnorm).")
+            for row in range(1, self.preset_combo.count()):
+                self.preset_combo.model().item(row).setEnabled(False)
+            self.preset_combo.setToolTip("Presets check the loudness, which needs the pyloudnorm package "
+                                         "(pip install pyloudnorm).")
         self._sync_loudness_rows()
+
+        self.head_spin = self._seconds_spin(values["head_s"], "Silence added before the first sample.")
+        form.addRow("Silence at start (s):", self.head_spin)
+        self.tail_spin = self._seconds_spin(values["tail_s"], "Silence added after the last sample.")
+        form.addRow("Silence at end (s):", self.tail_spin)
 
         # Whole project, or between two markers (kokoro_gui/daw/markers.py).
         self.range_combo = QComboBox()
@@ -256,6 +340,38 @@ class ExportDialog(QDialog):
             self.range_combo.addItem("Loop region", loop)
         self.range_combo.setEnabled(self.range_combo.count() > 1)
         form.addRow("Range:", self.range_combo)
+
+        # One file, or one per subproject or marker range (`mixdown.plan_chapters`).
+        self.split_combo = QComboBox()
+        for mode in SPLIT_MODES:
+            self.split_combo.addItem(SPLIT_LABELS[mode], mode)
+        document = _export_target(self.app)[0]
+        available = {None: True, "subprojects": bool(document.nested_clips()),
+                     "markers": len(marker_ops.list_markers(document.settings)) >= 2}
+        for row, mode in enumerate(SPLIT_MODES):
+            self.split_combo.model().item(row).setEnabled(available[mode])
+        stored = max(0, self.split_combo.findData(values["split"]))
+        self.split_combo.setCurrentIndex(stored if self.split_combo.model().item(stored).isEnabled() else 0)
+        self.split_combo.setToolTip("Subprojects and marker ranges each become a file named NN - <title>, in "
+                                    "the output folder. The base filename and the range are not used.")
+        form.addRow("Split into:", self.split_combo)
+
+        self.preset_combo.setCurrentIndex(max(0, self.preset_combo.findData(values["preset"])))
+        if not self.preset_combo.model().item(self.preset_combo.currentIndex()).isEnabled():
+            self.preset_combo.setCurrentIndex(0)
+        self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
+        for signal in (
+            self.format_combo.currentIndexChanged, self.bitrate_combo.currentIndexChanged,
+            self.sample_rate_combo.currentIndexChanged, self.channels_combo.currentIndexChanged,
+            self.normalize_check.toggled, self.normalize_mode_combo.currentIndexChanged,
+            self.target_spin.valueChanged, self.ceiling_spin.valueChanged, self.rms_spin.valueChanged,
+            self.limiter_spin.valueChanged, self.head_spin.valueChanged, self.tail_spin.valueChanged,
+            self.split_combo.currentIndexChanged,
+        ):
+            signal.connect(self._mark_custom)
+        self.split_combo.currentIndexChanged.connect(self._sync_split)
+        self.split_combo.currentIndexChanged.connect(self._update_name_preview)
+        self.preset_combo.currentIndexChanged.connect(self._update_name_preview)
 
         self.filename_edit.textChanged.connect(self._update_name_preview)
         self.format_combo.currentTextChanged.connect(self._update_name_preview)
@@ -306,17 +422,80 @@ class ExportDialog(QDialog):
         self.audio_form.setRowVisible(self.bitrate_combo, self.format_combo.currentText() == "mp3")
 
     def _update_name_preview(self, *_args) -> None:
+        fmt = self.format_combo.currentText()
+        split = self.split_combo.currentData()
+        if split:
+            chapters = chapter_plan(self.app, split, self.preset()).chapters
+            if chapters:
+                more = f" and {len(chapters) - 1} more" if len(chapters) > 1 else ""
+                self.name_preview_label.setText(f"Writes {chapters[0].name}.{fmt}{more}")
+            else:
+                self.name_preview_label.setText("Nothing to split: no chapters found")
+            return
         name = output_name(self.app, self.filename_edit.text(), self.range_label())
-        self.name_preview_label.setText(f"Writes {name}.{self.format_combo.currentText()}")
+        self.name_preview_label.setText(f"Writes {name}.{fmt}")
+
+    def preset(self):
+        """The chosen `ExportPreset`, or None for Custom."""
+        return get_preset(self.preset_combo.currentData())
+
+    def _seconds_spin(self, value: float, tip: str) -> QDoubleSpinBox:
+        spin = QDoubleSpinBox()
+        spin.setRange(0.0, MAX_PAD_S)
+        spin.setDecimals(2)
+        spin.setSingleStep(0.25)
+        spin.setValue(value)
+        spin.setToolTip(tip)
+        return spin
+
+    def _on_preset_changed(self, *_args) -> None:
+        """Fills the fields from the chosen preset (`ExportPreset.values`)."""
+        preset = self.preset()
+        if preset is None:
+            return
+        v = preset.values
+        self._applying = True
+        try:
+            self.format_combo.setCurrentText(v["format"])
+            self.bitrate_combo.setCurrentIndex(max(0, self.bitrate_combo.findData(v["bitrate_kbps"])))
+            self.sample_rate_combo.setCurrentIndex(max(0, self.sample_rate_combo.findData(v["sample_rate"])))
+            self.channels_combo.setCurrentIndex(max(0, self.channels_combo.findData(v["channels"])))
+            self.normalize_check.setChecked(v["normalize_loudness"])
+            self.normalize_mode_combo.setCurrentIndex(max(0, self.normalize_mode_combo.findData(v["normalize_mode"])))
+            self.target_spin.setValue(v["target_lufs"])
+            self.ceiling_spin.setValue(v["ceiling_dbtp"])
+            self.rms_spin.setValue(v["target_rms_dbfs"])
+            self.limiter_spin.setValue(v["limiter_dbfs"])
+            self.head_spin.setValue(v["head_s"])
+            self.tail_spin.setValue(v["tail_s"])
+            row = max(0, self.split_combo.findData(v["split"]))
+            self.split_combo.setCurrentIndex(row if self.split_combo.model().item(row).isEnabled() else 0)
+        finally:
+            self._applying = False
+        self._sync_loudness_rows()
+
+    def _mark_custom(self, *_args) -> None:
+        if not self._applying and self.preset_combo.currentData() != CUSTOM_ID:
+            self.preset_combo.setCurrentIndex(0)
+
+    def _sync_split(self, *_args) -> None:
+        """The range doesn't apply to a split export."""
+        self.range_combo.setEnabled(self.split_combo.currentData() is None and self.range_combo.count() > 1)
 
     def range_label(self) -> str | None:
         """The range combo's text for `{range}`, None (so "full") for the whole project."""
         return None if self.range_combo.currentData() is None else self.range_combo.currentText()
 
-    def _sync_loudness_rows(self) -> None:
+    def _sync_loudness_rows(self, *_args) -> None:
         on = self.normalize_check.isChecked()
-        self.target_spin.setEnabled(on)
-        self.ceiling_spin.setEnabled(on)
+        rms = self.normalize_mode_combo.currentData() == "rms"
+        self.normalize_mode_combo.setEnabled(on)
+        for lufs_row in (self.target_spin, self.ceiling_spin):
+            lufs_row.setEnabled(on)
+            self.audio_form.setRowVisible(lufs_row, not rms)
+        for rms_row in (self.rms_spin, self.limiter_spin):
+            rms_row.setEnabled(on)
+            self.audio_form.setRowVisible(rms_row, rms)
 
     def _browse_dir(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "Select output folder", self.out_dir_edit.text())
@@ -349,6 +528,13 @@ class ExportDialog(QDialog):
             "ceiling_dbtp": self.ceiling_spin.value(),
             "bitrate_kbps": self.bitrate_combo.currentData(),
             "sample_rate": self.sample_rate_combo.currentData(),
+            "normalize_mode": self.normalize_mode_combo.currentData(),
+            "target_rms_dbfs": self.rms_spin.value(),
+            "limiter_dbfs": self.limiter_spin.value(),
+            "head_s": self.head_spin.value(),
+            "tail_s": self.tail_spin.value(),
+            "split": self.split_combo.currentData(),
+            "preset": self.preset_combo.currentData(),
         }
 
     def range_s(self):
@@ -358,11 +544,13 @@ class ExportDialog(QDialog):
         return tuple(data) if data else None
 
 
-def _ask_existing(parent, path: str) -> str | None:
-    """"replace", "number" or None (cancel) for an output file that already exists."""
+def _ask_existing(parent, path: str, more: int = 0) -> str | None:
+    """"replace", "number" or None (cancel) for an output file that already
+    exists. `more` is how many other files of a split export exist too."""
     box = QMessageBox(parent)
     box.setWindowTitle("File exists")
-    box.setText(f"{os.path.basename(path)} already exists in {os.path.dirname(path) or '.'}.")
+    also = f" ({more} more of the files already exist)" if more else ""
+    box.setText(f"{os.path.basename(path)} already exists in {os.path.dirname(path) or '.'}{also}.")
     replace_btn = box.addButton("Replace", QMessageBox.ButtonRole.DestructiveRole)
     number_btn = box.addButton("Add number", QMessageBox.ButtonRole.AcceptRole)
     box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
@@ -407,25 +595,40 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
         if clicked is None or box.buttonRole(clicked) == QMessageBox.ButtonRole.RejectRole:
             return False
 
-    # The stored filename is the template; the file gets the expanded name.
-    name = output_name(app, values["filename"], range_label)
-    out_path = os.path.join(values["out_dir"], f"{name}.{values['format']}")
-    if os.path.exists(out_path):
-        choice = _ask_existing(parent, out_path)
+    # Resolved on the GUI thread (they read dock state); the export thread
+    # only applies them.
+    inputs = _mix_inputs(app)
+    preset = get_preset(values.get("preset"))
+    split = values.get("split")
+    plan = None
+    if split:
+        plan = chapter_plan(app, split, preset, inputs["arrangement"])
+        if not plan.chapters:
+            QMessageBox.information(parent, "Nothing to split",
+                                    "There are no subprojects or marker pairs to split the export by. "
+                                    "Pick \"One file\" instead.")
+            return False
+        targets = [os.path.join(values["out_dir"], f"{c.name}.{values['format']}") for c in plan.chapters]
+    else:
+        # The stored filename is the template; the file gets the expanded name.
+        name = output_name(app, values["filename"], range_label)
+        targets = [os.path.join(values["out_dir"], f"{name}.{values['format']}")]
+    existing = [t for t in targets if os.path.exists(t)]
+    numbered = False
+    if existing:
+        choice = _ask_existing(parent, existing[0], len(existing) - 1) if len(existing) > 1 \
+            else _ask_existing(parent, existing[0])
         if choice is None:
             return False
-        if choice == "number":
-            out_path = unused_path(out_path)
+        numbered = choice == "number"
+    out_path = unused_path(targets[0]) if numbered else targets[0]
 
     project_settings["export"] = dict(values)
     app.schedule_save()
 
-    # Resolved on the GUI thread (they read dock state); the export thread
-    # only applies them.
-    inputs = _mix_inputs(app)
-    loudness = {"target_lufs": values.get("target_lufs", DEFAULT_TARGET_LUFS),
-                "ceiling_dbtp": values.get("ceiling_dbtp", DEFAULT_CEILING_DBTP)} \
-        if values.get("normalize_loudness") and loudness_mod.available() else None
+    loudness = _loudness_options(values)
+    # The checks read the loudness measurement, which needs pyloudnorm.
+    checks = preset.checks if preset is not None and loudness_mod.available() else ()
 
     app.transport_dock.set_busy(True)
     app.transport_dock.set_status("Exporting...", "busy")
@@ -434,38 +637,118 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
     def _progress(fraction: float, detail: str) -> None:
         app.exportProgress.emit(fraction * 100.0, detail)
 
+    options = dict(
+        fmt=values["format"], include_srt=values["srt"], keep_clip_files=values["keep_clip_files"],
+        progress=_progress, channels=values.get("channels", 2),
+        srt_granularity="word" if values.get("srt_words") else "clip",
+        include_cue_sheet=bool(values.get("cue_sheet")), loudness=loudness,
+        bitrate_kbps=values.get("bitrate_kbps"), out_rate=values.get("sample_rate"),
+        head_s=values.get("head_s", 0.0), tail_s=values.get("tail_s", 0.0), checks=checks, **inputs,
+    )
+
     async def _run():
-        return await asyncio.to_thread(
-            mixdown, document, out_path, fmt=values["format"], include_srt=values["srt"],
-            keep_clip_files=values["keep_clip_files"], progress=_progress, channels=values.get("channels", 2),
-            range_s=range_s, srt_granularity="word" if values.get("srt_words") else "clip",
-            include_cue_sheet=bool(values.get("cue_sheet")), loudness=loudness,
-            bitrate_kbps=values.get("bitrate_kbps"), out_rate=values.get("sample_rate"), **inputs,
-        )
+        if plan is not None:
+            return await asyncio.to_thread(mixdown_chapters, document, values["out_dir"], plan, numbered=numbered,
+                                           **options)
+        return await asyncio.to_thread(mixdown, document, out_path, range_s=range_s, **options)
 
     def _done(future):
         try:
             result = future.result()
             extras = []
-            if result.srt_path:
+            if values["srt"]:
                 extras.append("srt")
             if result.clip_files:
                 extras.append(f"{len(result.clip_files)} clip files")
-            if result.cue_sheet_path:
+            if values.get("cue_sheet"):
                 extras.append("cue sheet")
             suffix = f" (+ {', '.join(extras)})" if extras else ""
-            if result.loudness_after is not None:
-                suffix += f". Measured {format_levels(result.loudness_after)}"
-                if result.loudness_limited:
-                    suffix += "; target not reached: peak-limited"
+            if len(result.files) > 1:
+                message = f"Exported {len(result.files)} files to {os.path.dirname(result.audio_path)}{suffix}"
+            else:
+                message = f"Exported {result.audio_path}{suffix}"
+                if result.loudness_after is not None:
+                    message += f". Measured {format_levels(result.loudness_after)}"
+                    if result.loudness_limited:
+                        message += "; target not reached: peak-limited"
+            failed = [f for f in result.files if f.failed]
+            if checks:
+                if not failed:
+                    message += f". Passed the {preset.label} checks"
+                elif len(result.files) > 1:
+                    message += f"; {len(failed)} failed the {preset.label} checks (see report)"
+                else:
+                    message += f". Failed {len(failed[0].failed)} of the {preset.label} checks (see report)"
+            for warning in result.warnings:
+                message += f". {warning[0].upper()}{warning[1:]}"
             app.exportWrote.emit(result.audio_path)
-            app.exportFinished.emit(True, f"Exported {result.audio_path}{suffix}")
+            if len(result.files) > 1 or failed or result.warnings:
+                app.exportReport.emit(result, preset.label if checks else "")
+            app.exportFinished.emit(True, message)
         except Exception as e:  # noqa: BLE001 - surfaced to the status line
             app.exportFinished.emit(False, f"Export failed: {e}")
 
     future = app.backend.run(_run())
     future.add_done_callback(_done)
     return True
+
+
+class ExportReportDialog(QDialog):
+    """What a finished export wrote: one row per file with its measurements
+    and, when a preset ran its checks, which of them it failed."""
+    COLUMNS = ("File", "Length", "Loudness", "True peak", "RMS", "Noise floor", "Checks")
+
+    def __init__(self, result, preset_label: str = "", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Export report")
+        self.resize(900, 360)
+        layout = QVBoxLayout(self)
+        self.table = QTableWidget(len(result.files), len(self.COLUMNS))
+        self.table.setHorizontalHeaderLabels(self.COLUMNS)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        for row, entry in enumerate(result.files):
+            report = entry.report
+            if not preset_label:
+                verdict = ""
+            else:
+                verdict = "Failed: " + "; ".join(entry.failed) if entry.failed else "Passed"
+            cells = [
+                os.path.basename(entry.path), _duration(entry.duration_s),
+                _level(report.integrated_lufs, "LUFS") if report else "",
+                _level(report.true_peak_dbtp, "dBTP") if report else "",
+                _level(report.rms_dbfs, "dBFS") if report else "",
+                _level(report.noise_floor_dbfs, "dBFS") if report else "",
+                verdict,
+            ]
+            for column, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                item.setToolTip(entry.path if column == 0 else verdict)
+                self.table.setItem(row, column, item)
+        self.table.resizeColumnsToContents()
+        layout.addWidget(self.table)
+        self.summary_label = QLabel(self._summary(result, preset_label))
+        self.summary_label.setWordWrap(True)
+        layout.addWidget(self.summary_label)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    @staticmethod
+    def _summary(result, preset_label: str) -> str:
+        lines = []
+        if preset_label:
+            failed = sum(1 for f in result.files if f.failed)
+            lines.append(f"{len(result.files) - failed} of {len(result.files)} files passed the "
+                         f"{preset_label} checks.")
+        lines.extend(f"{w[0].upper()}{w[1:]}." for w in result.warnings)
+        return " ".join(lines)
+
+
+def _duration(seconds: float) -> str:
+    minutes, secs = divmod(int(round(seconds)), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02}:{secs:02}"
 
 
 class LoudnessDialog(QDialog):

@@ -31,8 +31,9 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 -   **Recordings and music.** Edit a recording by editing its transcript, and add music beds that
     duck under speech.
 -   **Export.** One file in wav, mp3, flac or ogg, with `.srt` subtitles and a cue sheet, optionally
-    normalized to a LUFS target under a true-peak ceiling, with an MP3 bitrate, a sample rate and a filename template.
-    File > Measure Loudness reports the numbers.
+    normalized to a LUFS or RMS target under a true-peak ceiling or a peak limiter, with an MP3 bitrate, a sample rate
+    and a filename template. Presets for ACX, Apple Podcasts, Spotify and YouTube check each file, and one export can
+    write a file per subproject or marker range. File > Measure Loudness reports the numbers.
 -   **One-file projects.** A `.tbaw` holds the text, the audio and every voice it uses, so it opens
     on another machine.
 
@@ -48,6 +49,8 @@ Unreleased:
 -   Split a clip in two at the playhead and join two clips back, from Edit, the block menu or `S`
 -   Export can normalize to a LUFS target, File > Measure Loudness reports a mix, and the transport has a level meter
 -   The Export dialog has tabs, an MP3 bitrate, a sample rate and a filename template, and asks before it overwrites a file
+-   Export presets for ACX, Apple Podcasts, Spotify and YouTube that check each file, an RMS mode with a peak limiter,
+    head and tail silence, and one file per subproject or marker range
 -   An Outline tab that lists a book's chapters with a status and a length, and proofs one in a click
 -   Importing a book opens a wizard: tick the sections to keep, pick cleanup rules for page numbers, split words
     and scene breaks, and check the result before it lands in the project
