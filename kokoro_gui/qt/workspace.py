@@ -11,7 +11,9 @@ b64}}` plus `"active_workspace"`. Two names have programmatic defaults:
   same Generate behavior (UI8).
 
 Choosing a workspace restores its saved state if the user has ever dragged
-something while it was active, else the programmatic default. Reset
+something while it was active, else the programmatic default. A saved blob
+is checked (size, and the leading bytes `saveState()` writes on this Qt)
+before it reaches `restoreState`; one that fails gets the default. Reset
 rebuilds the default for the active one and forgets the saved edits. The
 app's existing debounced autosave calls `capture()` so drag edits land in
 the active entry.
@@ -23,6 +25,13 @@ from __future__ import annotations
 
 from kokoro_gui.qt import settings as qt_settings
 
+# A saved blob outside these bounds is not something `saveState()` or
+# `saveGeometry()` wrote. Qt's restore functions parse it natively, and a
+# crafted blob in `config_qt.json` can crash them where `try/except` can't help.
+MIN_BLOB_BYTES = 8
+MAX_BLOB_BYTES = 1024 * 1024
+PREFIX_BYTES = 4
+
 ADVANCED = "Advanced"
 SIMPLE = "Simple"
 WORKSPACE_NAMES = (ADVANCED, SIMPLE)
@@ -32,6 +41,7 @@ class WorkspaceManager:
     def __init__(self, window, settings: dict):
         self._window = window
         self._settings = settings
+        self._prefixes: dict[str, bytes] = {}
         self._migrate_legacy_keys()
         self._settings.setdefault("workspaces", {})
         if self._settings.get("active_workspace") not in WORKSPACE_NAMES:
@@ -58,15 +68,35 @@ class WorkspaceManager:
 
     # -- apply / capture ---------------------------------------------------
 
+    def _checked_blob(self, kind: str, encoded) -> object | None:
+        """The decoded `state` or `geometry` blob when it plausibly came from
+        this Qt's `saveState()`/`saveGeometry()`, else None. The expected
+        leading bytes are read from the live window once, not hard-coded."""
+        try:
+            blob = qt_settings.decode_bytes(encoded)
+            size = blob.size()
+            if not MIN_BLOB_BYTES <= size <= MAX_BLOB_BYTES:
+                return None
+            if kind not in self._prefixes:
+                made = self._window.saveState() if kind == "state" else self._window.saveGeometry()
+                self._prefixes[kind] = bytes(made[:PREFIX_BYTES])
+            if bytes(blob[:PREFIX_BYTES]) != self._prefixes[kind]:
+                return None
+            return blob
+        except Exception:
+            return None
+
     def restore_on_launch(self) -> None:
         """Called once after the docks exist: geometry from the active
         entry, then the layout (saved or default)."""
         entry = self.saved(self.active)
         if entry and entry.get("geometry"):
-            try:
-                self._window.restoreGeometry(qt_settings.decode_bytes(entry["geometry"]))
-            except Exception:
-                pass
+            blob = self._checked_blob("geometry", entry["geometry"])
+            if blob is not None:
+                try:
+                    self._window.restoreGeometry(blob)
+                except Exception:
+                    pass
         self.activate(self.active, save_outgoing=False)
 
     def activate(self, name: str, save_outgoing: bool = True) -> None:
@@ -77,9 +107,10 @@ class WorkspaceManager:
         self._settings["active_workspace"] = name
         entry = self.saved(name)
         restored = False
-        if entry and entry.get("state"):
+        blob = self._checked_blob("state", entry["state"]) if entry and entry.get("state") else None
+        if blob is not None:
             try:
-                restored = bool(self._window.restoreState(qt_settings.decode_bytes(entry["state"])))
+                restored = bool(self._window.restoreState(blob))
             except Exception:
                 restored = False
         if not restored:

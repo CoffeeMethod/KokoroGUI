@@ -260,6 +260,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.fx_dock: FXDock | None = None
         self.lexicon_dock: LexiconDock | None = None
         self.mixing_dock: MixingDock | None = None
+        self._preview_path: str | None = None
         self.voice_clone_dock: VoiceCloneDock | None = None
         self.timeline_dock: TimelineDock | None = None
         self.transport_dock: TransportDock | None = None
@@ -2078,6 +2079,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         delete runs it would still be a child answering to "dock_voices",
         and a layout restore could place it instead of the editor now
         shown."""
+        dock.retire()
         self.removeDockWidget(dock)
         dock.setParent(None)
         dock.deleteLater()
@@ -3328,7 +3330,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         if self.settings_dock.apply_fx_enabled():
             extra_config.update(self.fx_dock.project_fx_state())
 
-        tmp_path = os.path.join(tempfile.gettempdir(), "kokoro_preview.wav")
+        self._remove_preview_file()
+        fd, tmp_path = tempfile.mkstemp(suffix=".wav", prefix="kokorogui-preview-")
+        os.close(fd)
+        self._preview_path = tmp_path
         self.set_status("Generating preview...", "busy")
 
         def _done(future):
@@ -3343,6 +3348,17 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         future = self.backend.preview(preview_text, state["voice"], state["speed"], tmp_path,
                                       extra_config, lang_code=state["lang_code"])
         future.add_done_callback(_done)
+
+    def _remove_preview_file(self) -> None:
+        """Deletes the last preview's temp file. The next preview and
+        `closeEvent` call it; `playback.play` returns before the sound
+        ends, so nothing deletes the file right after playing it."""
+        path, self._preview_path = self._preview_path, None
+        if path:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     def _on_preview_finished(self, success: bool, payload: str) -> None:
         if success:
@@ -3872,6 +3888,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             pass
         qt_settings.save_settings(CONFIG_FILE, self.settings)
         self._closed = True
+        self._remove_preview_file()
+        if self.mixing_dock is not None:
+            self.mixing_dock.remove_preview_file()
         for engine_id, backend in self._backends.items():
             if engine_id == self._primary_engine_id:
                 continue

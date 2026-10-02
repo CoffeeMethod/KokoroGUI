@@ -2,6 +2,7 @@
 Saves eagerly (bypasses the debounced autosave every other field uses)."""
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDockWidget, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPushButton, QScrollArea, QVBoxLayout, QWidget,
@@ -85,9 +86,13 @@ class LexiconDock(QDockWidget):
         for orig, rep in lexicon.items():
             row = QFrame()
             row_layout = QHBoxLayout(row)
-            row_layout.addWidget(QLabel(orig))
+            # User strings: a rule like `<img src=...>` must show as text, not render.
+            orig_label, rep_label = QLabel(orig), QLabel(rep)
+            orig_label.setTextFormat(Qt.TextFormat.PlainText)
+            rep_label.setTextFormat(Qt.TextFormat.PlainText)
+            row_layout.addWidget(orig_label)
             row_layout.addWidget(QLabel("->"))
-            row_layout.addWidget(QLabel(rep))
+            row_layout.addWidget(rep_label)
             row_layout.addStretch(1)
             del_btn = QPushButton("X")
             del_btn.clicked.connect(lambda _c=False, k=orig: self.delete_rule(k))

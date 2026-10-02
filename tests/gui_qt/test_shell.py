@@ -219,6 +219,54 @@ def test_legacy_dock_state_keys_migrate_into_advanced(qt_app):
     assert settings["active_workspace"] == ADVANCED
 
 
+def _bad_blobs(qt_app):
+    """Blobs `saveState()` could never have written, plus two that start
+    right but fall outside the size bounds."""
+    import base64
+    import os
+
+    def _b64(raw):
+        return base64.b64encode(raw).decode("ascii")
+
+    good = bytes(qt_app.saveState())
+    return {
+        "random": _b64(os.urandom(64)),
+        "short": _b64(bytes(1) * 3),
+        "right prefix, too short": _b64(good[:4] + bytes(1) * 2),
+        "right prefix, over 1 MB": _b64(good[:4] + bytes(1) * (1024 * 1024)),
+    }
+
+
+def test_a_state_blob_that_saveState_could_not_have_written_falls_back_to_the_default(qt_app, monkeypatch):
+    from unittest.mock import MagicMock
+
+    for label, blob in _bad_blobs(qt_app).items():
+        qt_app.settings["workspaces"] = {ADVANCED: {"state": blob, "geometry": blob}}
+        restore_state, restore_geometry = MagicMock(), MagicMock()
+        monkeypatch.setattr(qt_app, "restoreState", restore_state)
+        monkeypatch.setattr(qt_app, "restoreGeometry", restore_geometry)
+        qt_app.timeline_dock.hide()
+        qt_app.workspaces.restore_on_launch()
+        assert not restore_state.called, label
+        assert not restore_geometry.called, label
+        assert not qt_app.timeline_dock.isHidden(), label  # the default layout
+
+
+def test_a_blob_from_saveState_and_saveGeometry_still_restores(qt_app, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from kokoro_gui.qt import settings as qt_settings
+
+    qt_app.settings["workspaces"] = {ADVANCED: {"state": qt_settings.encode_bytes(qt_app.saveState()),
+                                                "geometry": qt_settings.encode_bytes(qt_app.saveGeometry())}}
+    restore_state = MagicMock(return_value=True)
+    restore_geometry = MagicMock()
+    monkeypatch.setattr(qt_app, "restoreState", restore_state)
+    monkeypatch.setattr(qt_app, "restoreGeometry", restore_geometry)
+    qt_app.workspaces.restore_on_launch()
+    assert restore_state.called and restore_geometry.called
+
+
 # -- theme --------------------------------------------------------------------------
 
 

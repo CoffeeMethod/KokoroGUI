@@ -42,3 +42,16 @@ def test_lexicon_feeds_into_assembled_config(qt_app):
     qt_app.settings["lexicon"] = {"TTS": "Tee Tee Ess"}
     config = qt_app._assemble_config()
     assert config["lexicon"] == {"TTS": "Tee Tee Ess"}
+
+
+def test_rule_labels_show_user_markup_as_literal_text(qt_app):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QLabel
+
+    qt_app.settings["lexicon"] = {"<b>x</b>": "<img src=http://example.invalid/a.png>"}
+    qt_app.lexicon_dock.refresh_list()
+
+    row = qt_app.lexicon_dock._list_layout.itemAt(0).widget()
+    labels = {label.text(): label for label in row.findChildren(QLabel)}
+    for text in ("<b>x</b>", "<img src=http://example.invalid/a.png>"):
+        assert labels[text].textFormat() == Qt.TextFormat.PlainText

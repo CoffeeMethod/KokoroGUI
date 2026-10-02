@@ -179,6 +179,137 @@ def test_auto_transcribe_without_wav_selected_is_a_noop(qt_app, monkeypatch):
     assert dock.transcript_edit.toPlainText() == ""
 
 
+# --- reference wav path checks ------------------------------------------------
+
+def _warnings(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from PySide6.QtWidgets import QMessageBox
+
+    warning = MagicMock()
+    monkeypatch.setattr(QMessageBox, "warning", warning)
+    return warning
+
+
+def _guarded_dock(qt_app, monkeypatch):
+    """An Audio8 dock whose transcribe and save calls are spies."""
+    from unittest.mock import MagicMock
+
+    _switch_to_audio8(qt_app, monkeypatch)
+    dock = qt_app.voice_clone_dock
+    transcribe = MagicMock(return_value="text")
+    monkeypatch.setattr(_TRANSCRIBE_TARGET, transcribe)
+    save = MagicMock()
+    monkeypatch.setattr(dock.store, "save_reference", save)
+    dock.transcript_edit.setPlainText("A transcript.")
+    dock.name_edit.setText("Guarded")
+    return dock, transcribe, save
+
+
+def _assert_refused(dock, transcribe, save, warning, fragment):
+    dock._on_transcribe_clicked()
+    dock._on_save_clicked()
+    assert warning.call_count == 2
+    assert all(fragment in call.args[2] for call in warning.call_args_list)
+    assert not transcribe.called
+    assert not save.called
+
+
+def test_a_unc_wav_path_is_refused_before_anything_touches_it(qt_app, monkeypatch):
+    dock, transcribe, save = _guarded_dock(qt_app, monkeypatch)
+    warning = _warnings(monkeypatch)
+    touched = []
+    real_realpath = os.path.realpath
+    monkeypatch.setattr(os.path, "realpath", lambda p: touched.append(p) or real_realpath(p))
+
+    for unc in (r"\\server\share\x.wav", "//server/share/x.wav"):
+        warning.reset_mock()
+        dock.wav_path_edit.setText(unc)
+        _assert_refused(dock, transcribe, save, warning, "Network paths aren't supported")
+    assert touched == []
+
+
+def test_a_missing_wav_is_refused(qt_app, monkeypatch, tmp_path):
+    dock, transcribe, save = _guarded_dock(qt_app, monkeypatch)
+    warning = _warnings(monkeypatch)
+    dock.wav_path_edit.setText(str(tmp_path / "nope.wav"))
+    _assert_refused(dock, transcribe, save, warning, "Select a reference audio file")
+
+
+def test_a_directory_is_refused(qt_app, monkeypatch, tmp_path):
+    dock, transcribe, save = _guarded_dock(qt_app, monkeypatch)
+    warning = _warnings(monkeypatch)
+    folder = tmp_path / "folder.wav"
+    folder.mkdir()
+    dock.wav_path_edit.setText(str(folder))
+    _assert_refused(dock, transcribe, save, warning, "Select a reference audio file")
+
+
+def test_an_oversized_wav_is_refused(qt_app, monkeypatch, tmp_path):
+    from kokoro_gui.qt.docks import voice_clone_dock
+
+    dock, transcribe, save = _guarded_dock(qt_app, monkeypatch)
+    warning = _warnings(monkeypatch)
+    dock.wav_path_edit.setText(_write_wav(tmp_path / "ref.wav"))
+    monkeypatch.setattr(os.path, "getsize", lambda p: voice_clone_dock.MAX_REFERENCE_BYTES + 1)
+    _assert_refused(dock, transcribe, save, warning, "over 200 MB")
+
+
+def test_a_non_wav_extension_is_refused(qt_app, monkeypatch, tmp_path):
+    dock, transcribe, save = _guarded_dock(qt_app, monkeypatch)
+    warning = _warnings(monkeypatch)
+    other = tmp_path / "ref.mp3"
+    other.write_bytes(b"x")
+    dock.wav_path_edit.setText(str(other))
+    _assert_refused(dock, transcribe, save, warning, ".wav")
+
+
+def test_a_local_wav_passes_the_check_and_reaches_the_store_by_real_path(qt_app, monkeypatch, tmp_path):
+    dock, _transcribe, save = _guarded_dock(qt_app, monkeypatch)
+    warning = _warnings(monkeypatch)
+    wav = _write_wav(tmp_path / "ref.wav")
+    dock.wav_path_edit.setText(wav)
+    dock._on_save_clicked()
+    assert not warning.called
+    assert save.call_args.args[1] == os.path.realpath(wav)
+
+
+# --- a transcription outlived by an engine switch ---------------------------------
+
+def test_a_transcript_that_arrives_after_the_dock_is_retired_is_dropped(qt_app, monkeypatch, tmp_path, qtbot):
+    import threading
+
+    _switch_to_audio8(qt_app, monkeypatch)
+    dock = qt_app.voice_clone_dock
+    dock.wav_path_edit.setText(_write_wav(tmp_path / "ref.wav"))
+    dock.transcript_edit.setPlainText("typed by hand")
+    release = threading.Event()
+
+    def _slow(path, **kwargs):
+        release.wait(5)
+        return "late transcript"
+
+    monkeypatch.setattr(_TRANSCRIBE_TARGET, _slow)
+    dock._on_transcribe_clicked()
+    assert not dock.transcribe_btn.isEnabled()
+
+    dock.retire()  # what the Voices tab's engine switch does
+    release.set()
+    qtbot.wait(300)
+
+    assert dock.transcript_edit.toPlainText() == "typed by hand"
+    assert not dock.transcribe_btn.isEnabled()  # the dropped result changes nothing
+
+
+def test_a_transcript_from_the_current_run_still_lands(qt_app, monkeypatch, tmp_path, qtbot):
+    _switch_to_audio8(qt_app, monkeypatch)
+    dock = qt_app.voice_clone_dock
+    dock.wav_path_edit.setText(_write_wav(tmp_path / "ref.wav"))
+    monkeypatch.setattr(_TRANSCRIBE_TARGET, lambda path, **kw: "fresh")
+    dock._on_transcribe_clicked()
+    qtbot.waitUntil(lambda: dock.transcript_edit.toPlainText() == "fresh", timeout=5000)
+
+
 # --- ASR engine picker ----------------------------------------------------
 
 def test_default_engine_is_whisper_and_vosk_row_hidden(qt_app, monkeypatch):
