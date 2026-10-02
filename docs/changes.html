@@ -93,10 +93,49 @@
       <h1>Every change, in full</h1>
       <p class="lede">The README keeps one line per feature. This page has the rest: where each feature lives in the app, how it behaves, and what it does to a project you already have. Newest first.</p>
       <div class="toc">
+        <a href="#unreleased">Unreleased</a>
         <a href="#v4-0-0-beta-2">4.0.0-beta.2</a>
         <a href="#v4-0-0-beta-1">4.0.0-beta.1</a>
         <a href="#v3-2-0">3.2.0</a>
         <a href="#v3-1-0">3.1.0</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="unreleased" data-clip="Unreleased" data-cc="c1">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">After 4.0.0-beta.2</span>Unreleased</h2>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Fixes</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Previews use their own temporary file</h4>
+            <p>Preview and the Custom Voice mix preview wrote to a fixed name in the temp folder, <code>kokoro_preview.wav</code> and <code>kokoro_mix_preview.wav</code>. On a shared machine another user could create or link that name first, and two previews in a row wrote the same file. Each preview now gets a fresh file from the system. The next preview deletes the previous one, and so does closing the app.</p>
+          </li>
+          <li>
+            <h4>The Voice Reference dock refuses network paths</h4>
+            <p>A path such as <code>\server\share\x.wav</code> in the reference audio field made Windows connect to that host. Auto-Transcribe and Save now refuse a network path before they look at it, and tell you to copy the file locally. They also refuse a file that isn't a <code>.wav</code> or is over 200 MB.</p>
+          </li>
+          <li>
+            <h4>A bad saved layout falls back to the default</h4>
+            <p>A workspace layout in <code>config_qt.json</code> goes to Qt as raw bytes, and a damaged one could crash the app on launch. A saved layout or window geometry is now checked first. It has to be between 8 bytes and 1 MB and start the way Qt's own save does. If it isn't, the workspace's default layout is used.</p>
+          </li>
+          <li>
+            <h4>Lexicon rules show as typed</h4>
+            <p>A rule such as <code>&lt;b&gt;x&lt;/b&gt;</code> was drawn as bold text in the Lexicon list. Both sides of each rule are now shown as plain text.</p>
+          </li>
+          <li>
+            <h4>A late transcript doesn't land in the wrong engine's editor</h4>
+            <p>If you moved the Voices tab to another engine while Auto-Transcribe was running, the finished transcript was still written back to the dock. It is now dropped. The transcription itself keeps running until it finishes, since it can't be stopped partway.</p>
+          </li>
+          <li>
+            <h4>run.bat works from any folder</h4>
+            <p><code>run.bat</code> now changes to its own folder first, uses the <code>py -3</code> launcher when there is one, and runs <code>pip</code> and <code>main.py</code> through the virtual environment's <code>python.exe</code> by full path instead of whatever <code>python</code> is first on the path.</p>
+          </li>
+        </ul>
       </div>
     </div>
   </section>
