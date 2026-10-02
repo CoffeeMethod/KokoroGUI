@@ -109,6 +109,28 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Menus and help</h3>
+        <ul class="change-list">
+          <li>
+            <h4>A Help menu with Documentation, Keyboard Shortcuts and About</h4>
+            <p>Documentation opens the docs site. Keyboard Shortcuts lists every menu-bar shortcut plus the keys the window handles itself (Space and Ctrl+Space), read from the live objects, so a new shortcut shows up without anyone editing a list. About shows the app, Python, PySide6 and torch versions, the device, each engine's version or the reason it didn't load, the cache, custom voices and settings paths, and the Whisper model with whether it's downloaded. Copy puts that text on the clipboard. It makes no network call.</p>
+          </li>
+          <li>
+            <h4>File &gt; Show in Folder</h4>
+            <p>Project File, Working Folder and Last Export open the system file manager (Explorer selects the file, Finder reveals it, other systems open its folder). An entry is greyed out while its target doesn't exist.</p>
+          </li>
+          <li>
+            <h4>File &gt; Recent &gt; Clear list</h4>
+            <p>The Recent menu ends with a Clear list entry, the same as the Welcome dialog's button. It isn't shown when the list is empty.</p>
+          </li>
+          <li>
+            <h4>The device is named</h4>
+            <p>Options &gt; Device starts with a greyed-out line, "Detected: CUDA (card name)", "Detected: MPS (Apple)" or "Detected: CPU". The first launch also puts one line in the status bar, saying which device the engines will use and where to change it. An Apple GPU is reported but not offered: Kokoro picks CUDA or the CPU only, and Audio8 ignores the setting.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Fixes</h3>
         <ul class="change-list">
           <li>

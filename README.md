@@ -36,6 +36,10 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 ## What's new
 
+Unreleased:
+
+-   A Help menu with Documentation, Keyboard Shortcuts and About, and File > Show in Folder
+
 In 4.0.0-beta.2:
 
 -   Subtitle import, Fit to slot, the original dialogue and a reference video, for dubbing
