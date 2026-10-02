@@ -28,6 +28,11 @@ from __future__ import annotations
 
 import copy
 import uuid
+from bisect import bisect_right
+
+# An edit that reaches more clips than this snapshots the whole run and clip
+# lists, as every command used to.
+SNAPSHOT_CLIP_LIMIT = 50
 
 
 class Command:
@@ -144,15 +149,125 @@ class CompositeCommand(Command):
             command.undo(document)
 
 
+class _EditSnapshot:
+    """What `Document.replace_text` or `assign_character_to_range` over
+    `[lo, hi]` can change, copied before it runs, so undoing one edit in a
+    book-length document doesn't deep-copy every run and clip.
+
+    The runs overlapping or touching `[lo, hi]`, one more on each side (a
+    merge of equal-tagged neighbours can reach that far), widened to the full
+    extent of every clip the range overlaps (the split rule retags each
+    clip's leftover text), and the clips those runs name, with their list
+    positions. The edits create new runs and clips and drop old ones; they
+    change nothing else, so `restore` puts the copies back and removes
+    what the edit made. It relies on the document being as the edit left it
+    (the undo stack's order guarantees that).
+
+    The whole lists are copied instead, as before, when the edit reaches more
+    than `SNAPSHOT_CLIP_LIMIT` clips or the document holds imported recording
+    clips (their words and segments change in place, in clips and runs
+    outside any range). `seal` checks that the edit stayed inside the slice
+    and, if it didn't, `restore` puts back the objects the document started
+    with."""
+
+    def __init__(self, document, lo: int, hi: int):
+        from kokoro_gui.daw.models import IMPORTED
+
+        self.whole = None
+        self.fallback = None
+        self.slice = None
+        index = document.index()
+        clips = document.clips
+        if any(clip.source == IMPORTED for clip in clips):
+            self._copy_whole(document)
+            return
+        bounds = self._bounds(index, lo, hi)
+        ids = self._clip_ids(index.runs, bounds)
+        for clip_id in ids:
+            extent = index.extent(clip_id)
+            if extent is not None:
+                lo, hi = min(lo, extent[0]), max(hi, extent[1])
+        bounds = self._bounds(index, lo, hi)
+        ids = self._clip_ids(index.runs, bounds)
+        if len(ids) > SNAPSHOT_CLIP_LIMIT:
+            self._copy_whole(document)
+            return
+        first, stop = bounds
+        self.first = first
+        self.suffix = len(index.runs) - stop
+        self.slice = copy.deepcopy(index.runs[first:stop])
+        self.clip_ids = {clip.id for clip in clips}
+        self.clips = [(i, copy.deepcopy(clip)) for i, clip in enumerate(clips) if clip.id in ids]
+        self.touched_ids = ids
+        # What the document held, for `restore` if the edit strays.
+        self._refs = (index.runs, list(clips))
+
+    def _copy_whole(self, document) -> None:
+        self.whole = (copy.deepcopy(document.runs), copy.deepcopy(document.clips))
+
+    @staticmethod
+    def _bounds(index, lo: int, hi: int) -> tuple:
+        """`(first, stop)` run indices: the runs overlapping or touching
+        `[lo, hi]` and one more run each side."""
+        count = len(index.runs)
+        if not count:
+            return 0, 0
+        left = bisect_right(index.starts, max(lo - 1, 0)) - 1
+        right = bisect_right(index.starts, hi) - 1
+        return max(left - 1, 0), min(right + 2, count)
+
+    @staticmethod
+    def _clip_ids(runs, bounds) -> set:
+        return {run.clip_id for run in runs[bounds[0]:bounds[1]] if run.clip_id is not None}
+
+    def seal(self, document) -> None:
+        """Called after the edit: gives up the slice if the edit changed a run
+        or a clip outside it."""
+        if self.whole is not None:
+            return
+        runs, now = self._refs[0], document.runs
+        stop = len(runs) - self.suffix
+        outside_runs = (all(a is b for a, b in zip(runs[:self.first], now[:self.first]))
+                        and len(now) >= self.suffix
+                        and all(a is b for a, b in zip(runs[stop:], now[len(now) - self.suffix:])))
+        kept = {clip.id for clip in document.clips}
+        if not outside_runs or not (self.clip_ids - self.touched_ids) <= kept:
+            self.fallback, self.slice = self._refs, None
+
+    def restore(self, document) -> None:
+        if self.whole is not None:
+            runs, clips = self.whole
+            document.runs = copy.deepcopy(runs)
+            document.clips = copy.deepcopy(clips)
+        elif self.slice is None:
+            runs, clips = self.fallback
+            document.runs = list(runs)
+            document.clips = list(clips)
+        else:
+            runs = document.runs
+            document.runs = [*runs[:self.first], *copy.deepcopy(self.slice),
+                             *runs[len(runs) - self.suffix:]]
+            gone = self.touched_ids | (self._ids_now(document) - self.clip_ids)
+            clips = [clip for clip in document.clips if clip.id not in gone]
+            for position, clip in self.clips:
+                clips.insert(position, copy.deepcopy(clip))
+            document.clips = clips
+
+    @staticmethod
+    def _ids_now(document) -> set:
+        return {clip.id for clip in document.clips}
+
+
 class AssignCharacterCommand(Command):
     """Wraps `Document.assign_character_to_range` (the Characters-menu /
     gutter-dropdown / paste-splitting primitive). Rather than trying to
     reconstruct exactly which runs/clips a split touched, `do()` snapshots
-    (deep-copies) the WHOLE `document.runs`/`document.clips` lists BEFORE
-    calling it, and `undo()` restores both verbatim - `Run`/`Clip` are small
-    plain-data dataclasses, so a full deep copy is cheap, and it sidesteps
-    the lossy-reconstruction trap the retired offset-based version had to
-    work around with a partial-snapshot-plus-reverse-replay (see
+    them BEFORE calling it (`_EditSnapshot`: the runs around the range and
+    the clips they name, deep-copied; the whole lists when the range reaches
+    more than `SNAPSHOT_CLIP_LIMIT` clips), and `undo()` restores them
+    verbatim - `Run`/`Clip` are small plain-data dataclasses, and it
+    sidesteps the lossy-reconstruction trap the retired offset-based version
+    had to work around with a partial-snapshot-plus-reverse-replay (see
     `TextEditCommand` below for the same reasoning applied to text edits).
 
     `redo()` re-runs `do()` from the (now-restored) pre-split state, so it
@@ -171,14 +286,12 @@ class AssignCharacterCommand(Command):
         # Entries merged into the new clip's `overrides`, e.g.
         # `{"fx_preset": "Radio"}` from a `[Name:Radio]:` tag (grill TE12).
         self.clip_overrides = dict(clip_overrides or {})
-        self._pre_runs: "list | None" = None
-        self._pre_clips: "list | None" = None
+        self._snapshot: "_EditSnapshot | None" = None
         self._created_track_ids: list = []
         self.new_clip_id: "str | None" = None
 
     def do(self, document) -> None:
-        self._pre_runs = copy.deepcopy(document.runs)
-        self._pre_clips = copy.deepcopy(document.clips)
+        self._snapshot = snapshot = _EditSnapshot(document, self.start, self.end)
         track_ids = {t.id for t in document.tracks}
         new_clip = document.assign_character_to_range(self.start, self.end, self.character_id)
         for name, value in self.clip_fields.items():
@@ -189,10 +302,10 @@ class AssignCharacterCommand(Command):
         # A character's first use makes its track (grill PR4); undo takes it
         # away again.
         self._created_track_ids = [t.id for t in document.tracks if t.id not in track_ids]
+        snapshot.seal(document)
 
     def undo(self, document) -> None:
-        document.runs = copy.deepcopy(self._pre_runs)
-        document.clips = copy.deepcopy(self._pre_clips)
+        self._snapshot.restore(document)
         created = set(self._created_track_ids)
         if created:
             document.tracks = [t for t in document.tracks if t.id not in created]
@@ -205,13 +318,12 @@ class TextEditCommand(Command):
     transcript editor, which now rides Qt's own native `QTextDocument` undo
     instead (see this module's docstring).
 
-    Same snapshot-the-whole-run-list strategy as `AssignCharacterCommand`,
-    for the same reason: once an edit fully consumes a clip, there's no
-    longer enough information left in `position`/`chars_removed`/
-    `chars_added` alone to know which of the surviving text's *other* runs
-    that clip's characters used to belong to, so a naive "replay the edit in
-    reverse" can mis-tag the restored text. Snapshotting avoids the problem
-    entirely instead of solving it.
+    Same snapshot strategy as `AssignCharacterCommand`, for the same reason:
+    once an edit fully consumes a clip, there's no longer enough information
+    left in `position`/`chars_removed`/`chars_added` alone to know which of
+    the surviving text's *other* runs that clip's characters used to belong
+    to, so a naive "replay the edit in reverse" can mis-tag the restored
+    text. Snapshotting avoids the problem entirely instead of solving it.
     """
 
     def __init__(self, position: int, chars_removed: int, chars_added: int, new_text: str):
@@ -219,17 +331,15 @@ class TextEditCommand(Command):
         self.chars_removed = chars_removed
         self.chars_added = chars_added
         self.new_text = new_text
-        self._pre_runs: "list | None" = None
-        self._pre_clips: "list | None" = None
+        self._snapshot: "_EditSnapshot | None" = None
 
     def do(self, document) -> None:
-        self._pre_runs = copy.deepcopy(document.runs)
-        self._pre_clips = copy.deepcopy(document.clips)
+        self._snapshot = snapshot = _EditSnapshot(document, self.position, self.position + self.chars_removed)
         document.replace_text(self.position, self.chars_removed, self.chars_added, self.new_text)
+        snapshot.seal(document)
 
     def undo(self, document) -> None:
-        document.runs = copy.deepcopy(self._pre_runs)
-        document.clips = copy.deepcopy(self._pre_clips)
+        self._snapshot.restore(document)
 
 
 class MoveClipCommand(Command):

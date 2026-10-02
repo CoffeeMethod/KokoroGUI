@@ -145,6 +145,20 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Speed</h3>
+        <ul class="change-list">
+          <li>
+            <h4>An FX change no longer freezes a long project</h4>
+            <p>Changing a project-wide FX value, or the Settings tab's volume, pitch, normalize or trim, used to render every generated clip on the main thread when the transport reloaded, and the window stopped answering until it finished. Two background threads do that work now. A waveform on screen fills in when its render is ready, and the transport reloads once the renders are done, so the old sound keeps playing until then. On a 1,500-clip project with 750 generated clips, the longest freeze after switching reverb on went from 1.7 s to 0.14 s.</p>
+          </li>
+          <li>
+            <h4>Undo copies what the edit changed</h4>
+            <p>Assigning a character to a range, and the timeline's sub-range text replace, saved a deep copy of every clip and run so Ctrl+Z could put them back. They now save the runs around the edit and the clips those runs belong to. In a 1,500-clip project an assignment went from 50 ms to 6 ms and a replace from 47 ms to 5 ms. An edit that reaches more than 50 clips, or a project with imported recordings, still saves everything. Nothing in the project file changes.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Security</h3>
         <ul class="change-list">
           <li>

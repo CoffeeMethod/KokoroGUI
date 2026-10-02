@@ -335,13 +335,18 @@ class ClipBlockItem(QGraphicsItem):
         self._waveform_item.set_color(QColor(self._color).darker(170).name())
         self._waveform_item.set_peaks(peaks, width, height)
 
-    def set_waveform_source(self, loader, width: float, height: float) -> None:
+    def set_waveform_source(self, loader, width: float, height: float, deferred: bool = False) -> None:
         """Like `set_waveform`, with the peaks computed by `loader()` on the
-        waveform's first paint."""
+        waveform's first paint. With `deferred`, `loader` is a
+        `request(deliver)` that may answer later
+        (`WaveformItem.set_deferred_source`)."""
         if self._waveform_item is None:
             self._waveform_item = WaveformItem(parent=self)
         self._waveform_item.set_color(QColor(self._color).darker(170).name())
-        self._waveform_item.set_source(loader, width, height)
+        if deferred:
+            self._waveform_item.set_deferred_source(loader, width, height)
+        else:
+            self._waveform_item.set_source(loader, width, height)
 
     def clear_waveform(self) -> None:
         if self._waveform_item is not None:
@@ -876,6 +881,9 @@ class TimelineView(QGraphicsView):
         # waveform shows the post-processed audio the transport plays
         # (`QtTTSApp.rendered_clip_samples`); None draws the raw file.
         self._clip_samples = None
+        # `(clip, on_ready)`: the owner's non-blocking `clip_samples`
+        # (`QtTTSApp.rendered_clip_samples_async`); preferred when set.
+        self._clip_samples_async = None
         self._zoom = DEFAULT_PIXELS_PER_SECOND
         self._playhead_s: Optional[float] = None
         self._playhead_item: Optional[QGraphicsLineItem] = None
@@ -1501,11 +1509,16 @@ class TimelineView(QGraphicsView):
     def _peaks_for(self, clip, fallback_path: str, bucket_count: int):
         """Waveform peaks from the owner's rendered samples when it gave us a
         `clip_samples` callable, else from the raw first-segment file."""
-        if self._clip_samples is not None:
-            rendered = self._clip_samples(clip)
-            if rendered is not None:
-                samples, rate = rendered
-                return waveform_data.compute_peaks(samples, rate, bucket_count)
+        rendered = self._clip_samples(clip) if self._clip_samples is not None else None
+        return self._peaks_from(rendered, fallback_path, bucket_count)
+
+    @staticmethod
+    def _peaks_from(rendered, fallback_path: str, bucket_count: int):
+        """Peaks of `rendered` (`(samples, rate)`), or of the raw file when
+        there is none."""
+        if rendered is not None:
+            samples, rate = rendered
+            return waveform_data.compute_peaks(samples, rate, bucket_count)
         peaks, _duration = waveform_data.load_peaks_from_file(fallback_path, bucket_count)
         return peaks
 
@@ -1553,9 +1566,35 @@ class TimelineView(QGraphicsView):
             return self._peaks_memo[memo_key]
         return load
 
+    def _waveform_request(self, clip, audio_path: str, bucket_count: int, key: tuple):
+        """`_waveform_loader` for an owner whose samples may take a while: a
+        `request(deliver)` that answers from the peaks memo at once or when
+        `clip_samples_async` delivers."""
+        memo_key = (key, bucket_count)
+
+        def request(deliver):
+            if memo_key in self._peaks_memo:
+                deliver(self._peaks_memo[memo_key])
+                return
+
+            def landed(rendered):
+                try:
+                    peaks = self._peaks_from(rendered, audio_path, bucket_count)
+                except Exception:
+                    peaks = None
+                self._peaks_memo[memo_key] = peaks
+                deliver(peaks)
+
+            self._clip_samples_async(clip, landed)
+        return request
+
     def render_document(self, document, arrangement: Optional[Arrangement] = None,
-                        clip_samples=None, nested_state=None, clip_render_key=None) -> None:
-        """`nested_state(clip)` gives a subproject block's state ("ok",
+                        clip_samples=None, nested_state=None, clip_render_key=None,
+                        clip_samples_async=None) -> None:
+        """`clip_samples_async(clip, on_ready)` is `clip_samples` that may
+        answer later; when given, a block's waveform is drawn once it does
+        and nothing is rendered on this thread.
+        `nested_state(clip)` gives a subproject block's state ("ok",
         "stale", "missing"); unset, every nested block paints "stale".
         `clip_render_key(clip)` names what the clip's waveform shows
         (`QtTTSApp.clip_render_key`); a block whose key, width and color
@@ -1581,6 +1620,8 @@ class TimelineView(QGraphicsView):
         self._arrangement = arrangement
         if clip_samples is not None:
             self._clip_samples = clip_samples
+        if clip_samples_async is not None:
+            self._clip_samples_async = clip_samples_async
 
         # Only tracks with clips are drawn (grill PR4); an unused one keeps
         # its mixer settings in the model.
@@ -1675,8 +1716,12 @@ class TimelineView(QGraphicsView):
                 render_key = self._render_key(clip)
                 wave = (render_key, bucket_count, width, height, color)
                 if previous is None or previous[1] != wave:
-                    block.set_waveform_source(self._waveform_loader(clip, audio_path, bucket_count, render_key),
-                                              width, height)
+                    if self._clip_samples_async is not None:
+                        block.set_waveform_source(self._waveform_request(clip, audio_path, bucket_count, render_key),
+                                                  width, height, deferred=True)
+                    else:
+                        block.set_waveform_source(self._waveform_loader(clip, audio_path, bucket_count, render_key),
+                                                  width, height)
             else:
                 wave = None
                 block.clear_waveform()
@@ -1778,6 +1823,7 @@ class TimelineWidget(QWidget):
         self.view.verticalScrollBar().valueChanged.connect(self.header.verticalScrollBar().setValue)
 
     def render_document(self, document, arrangement: Optional[Arrangement] = None,
-                        clip_samples=None, nested_state=None, clip_render_key=None) -> None:
+                        clip_samples=None, nested_state=None, clip_render_key=None,
+                        clip_samples_async=None) -> None:
         self.view.render_document(document, arrangement, clip_samples=clip_samples, nested_state=nested_state,
-                                  clip_render_key=clip_render_key)
+                                  clip_render_key=clip_render_key, clip_samples_async=clip_samples_async)

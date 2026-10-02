@@ -94,6 +94,8 @@ from kokoro_gui.qt.welcome_dialog import WelcomeDialog  # noqa: E402
 
 APP_NAME = "KokoroGUI"
 SCHEDULE_REBUILD_DEBOUNCE_MS = 100
+# The schedule rebuild waits for the render pool to go idle, at most this long.
+SCHEDULE_PREWARM_WAIT_MS = 15_000
 # A keystroke's timeline refresh waits this long for the next keystroke.
 TIMELINE_TYPING_DEBOUNCE_MS = 60
 LIBRARY_WATCH_DEBOUNCE_MS = 150
@@ -113,6 +115,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     # (done, total), the result as [(clip_id, segment_id, words)].
     _wordAlignProgress = Signal(int, int)
     _wordsAligned = Signal(object)
+    # A render finished on the pool (`audio/post.py`): queued onto the GUI
+    # thread, which stores it and calls the readers waiting on it.
+    _rendersReady = Signal()
     # Import Recording's Whisper pass on a worker thread (phase 5 P3):
     # progress as (done, total), the result as (job, error).
     _recordingProgress = Signal(int, int)
@@ -204,6 +209,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self._wordAlignProgress.connect(self._on_word_align_progress)
         self._wordsAligned.connect(self._on_words_aligned)
         self._word_align_thread: threading.Thread | None = None
+        self._rendersReady.connect(self._on_renders_ready)
+        post.set_notifier(self._rendersReady.emit)
+        # `_post_inputs_fingerprint` at the last pre-warm; None until one is seen.
+        self._prewarmed_inputs: str | None = None
         self._recordingProgress.connect(self._on_recording_progress)
         self._recordingTranscribed.connect(self._on_recording_transcribed)
         self._recording_thread: threading.Thread | None = None
@@ -224,7 +233,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self._schedule_timer = QTimer(self)
         self._schedule_timer.setSingleShot(True)
         self._schedule_timer.setInterval(SCHEDULE_REBUILD_DEBOUNCE_MS)
-        self._schedule_timer.timeout.connect(self._rebuild_transport_schedule)
+        self._schedule_timer.timeout.connect(self._on_schedule_timer)
+        self._schedule_waited_ms = 0
         # Typing asks for a timeline refresh through this timer, so a burst
         # of keystrokes costs one (`request_timeline_refresh`).
         self._timeline_timer = QTimer(self)
@@ -1223,7 +1233,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def force_refresh(self) -> None:
         """Options > Force refresh: throws away every cache the views read
-        (Claude/PLAN_performance.md) and rebuilds from scratch. The
+        (Claude/old/PLAN_performance.md) and rebuilds from scratch. The
         escape hatch for a cache that missed a change, and for files
         changed on disk while the app kept focus."""
         revision.bump_files()
@@ -1275,8 +1285,47 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         if self.timeline_dock is not None:
             self.timeline_dock.refresh()
         self._schedule_timer.start()
+        self._prewarm_renders()
         if self.transcript_dock is not None:
             self.transcript_dock.sync_header()
+
+    def _prewarm_renders(self) -> None:
+        """When the post inputs (Settings, project FX, the project) moved
+        since the last refresh, starts the renders the transport schedule is
+        about to ask for on the pool. `_on_schedule_timer` holds the rebuild
+        until they're in the memo. The results land on the GUI thread
+        (`post.drain`), the only place `post.RENDERS` moves."""
+        if self.settings_dock is None or self.fx_dock is None:
+            return
+        level = self.level
+        with self.inputs_scope():
+            fingerprint = self._post_inputs_fingerprint(level)
+            previous, self._prewarmed_inputs = self._prewarmed_inputs, fingerprint
+            if previous is None or previous == fingerprint:
+                return
+            post.prewarm(self._scheduled_render_requests(level, self.build_arrangement(level)))
+
+    def _scheduled_render_requests(self, level, arrangement) -> list:
+        """`(path, post_config, rate, range_s)` for what the transport loads
+        for each audible placed clip: the same renders as the entries of
+        `_rebuild_transport_schedule`."""
+        rate = self.project_sample_rate()
+        mixes = clip_mixes(level.document, arrangement)
+        requests = []
+        for placed in arrangement.placed:
+            clip = placed.clip
+            mix = mixes.get(clip.id)
+            if placed.estimated or mix is None:
+                continue
+            post_config = self.post_config_for_clip(clip, level)
+            if clip.is_nested:
+                path = self.nested_audio_path(clip, level)
+                if path:
+                    requests.append((path, post_config, rate, None))
+                continue
+            for play in segment_plays(clip, mix.fade_in_s, mix.fade_out_s):
+                requests.append((play.segment.audio_path, post_config, rate, play.play_range_s))
+        return requests
 
     def save_settings(self) -> None:
         self._save_timer.stop()
@@ -1575,7 +1624,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                     post.post_key(self.post_config_for_clip(clip, project) or {}))
         return (segments, self._post_entry(clip, project)[2])
 
-    # --- derived-state caches (Claude/PLAN_performance.md) ------------------
+    # --- derived-state caches (Claude/old/PLAN_performance.md) ------------------
 
     @contextmanager
     def inputs_scope(self):
@@ -1682,35 +1731,81 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                 total += segment.duration or 0.0
         return total
 
-    def rendered_clip_samples(self, clip, project=None):
-        """`(samples, rate)` for the clip's segments concatenated and
-        post-processed, or None. The timeline draws its waveform from this
-        so it shows what the transport plays."""
+    def _clip_render_requests(self, clip, project=None):
+        """`([(path, post_config, range_s), ...], rate)`: the renders whose
+        concatenation is `rendered_clip_samples`, or None for a clip with
+        no audio."""
+        rate = self.project_sample_rate()
         if clip.is_nested:
             path = self.nested_audio_path(clip, project)
             if not path:
                 return None
-            rate = self.project_sample_rate()
-            try:
-                return post.render(path, self.post_config_for_clip(clip, project), rate), rate
-            except Exception:
-                return None
+            return [(path, self.post_config_for_clip(clip, project), None)], rate
         segments = playable_segments(clip)
         if not segments:
             return None
         post_config = self.post_config_for_clip(clip, project)
-        rate = self.project_sample_rate()
+        return [(s.audio_path, post_config, post.segment_range(s)) for s in segments], rate
+
+    def rendered_clip_samples(self, clip, project=None):
+        """`(samples, rate)` for the clip's segments concatenated and
+        post-processed, or None. The timeline draws its waveform from this
+        so it shows what the transport plays."""
+        plan = self._clip_render_requests(clip, project)
+        if plan is None:
+            return None
+        requests, rate = plan
         parts = []
-        for segment in segments:
+        for path, post_config, range_s in requests:
             try:
-                parts.append(post.render(segment.audio_path, post_config, rate, post.segment_range(segment)))
+                parts.append(post.render(path, post_config, rate, range_s))
             except Exception:
                 continue
+        return self._concat_renders(parts, rate)
+
+    def rendered_clip_samples_async(self, clip, project, on_ready) -> None:
+        """`rendered_clip_samples` without rendering on this thread:
+        `on_ready((samples, rate) or None)` runs at once when every render is
+        in the memo, otherwise on the GUI thread once the pool has made the
+        missing ones (`post.render_async`)."""
+        plan = self._clip_render_requests(clip, project)
+        if plan is None:
+            on_ready(None)
+            return
+        requests, rate = plan
+        parts = [post.cached_render(path, config, rate, range_s) for path, config, range_s in requests]
+        missing = [i for i, part in enumerate(parts) if part is None]
+        if not missing:
+            on_ready(self._concat_renders(parts, rate))
+            return
+        waiting = [len(missing)]
+
+        def landed(index, rendered):
+            parts[index] = rendered
+            waiting[0] -= 1
+            if waiting[0] == 0:
+                on_ready(self._concat_renders([p for p in parts if p is not None], rate))
+
+        for index in missing:
+            path, config, range_s = requests[index]
+            post.render_async(path, config, rate, range_s, lambda rendered, index=index: landed(index, rendered))
+
+    @staticmethod
+    def _concat_renders(parts, rate):
         if not parts:
             return None
         import numpy as np
 
         return np.concatenate(parts), rate
+
+    def _on_renders_ready(self) -> None:
+        post.drain()
+
+    def wait_for_renders(self, timeout_s: float = 30.0) -> None:
+        """Test hook: blocks until the render pool is idle and every finished
+        render has been delivered."""
+        post.wait_idle(timeout_s)
+        QApplication.processEvents()
 
     def build_arrangement(self, project=None):
         """Every `compute_arrangement` call goes through here so they all
@@ -3402,6 +3497,19 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         if self._arrangement is None:
             self._arrangement = self.build_arrangement()
         return self._arrangement
+
+    def _on_schedule_timer(self) -> None:
+        """The debounced rebuild. While the pool is still making renders
+        (`_prewarm_renders`, or a waveform's), it waits and asks again: the
+        rebuild would render every clip the memo lacks on this thread, next
+        to the workers rendering the same ones. The transport plays the old
+        schedule meanwhile, for at most `SCHEDULE_PREWARM_WAIT_MS`."""
+        if post.busy() and self._schedule_waited_ms < SCHEDULE_PREWARM_WAIT_MS:
+            self._schedule_waited_ms += SCHEDULE_REBUILD_DEBOUNCE_MS
+            self._schedule_timer.start()
+            return
+        self._schedule_waited_ms = 0
+        self._rebuild_transport_schedule()
 
     def _rebuild_transport_schedule(self) -> None:
         """The transport's schedule from the arrangement and the mix plan

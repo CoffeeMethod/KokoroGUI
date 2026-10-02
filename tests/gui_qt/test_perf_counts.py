@@ -1,4 +1,4 @@
-"""Operation counts on the GUI's hot paths (Claude/PLAN_performance.md).
+"""Operation counts on the GUI's hot paths (Claude/old/PLAN_performance.md).
 
 Counts, not timings: each test pins how much work one paint or one edit
 does, so a change that brings back a whole-document pass per paint or per
@@ -6,12 +6,14 @@ keystroke fails here instead of showing up as lag on a long project.
 `tests/daw/test_perf_counts.py` holds the headless half, which CI runs.
 """
 import os
+import threading
 
 import pytest
 from PySide6.QtCore import QRectF
 from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import QStyleOptionGraphicsItem
 
+from kokoro_gui.audio import post
 from kokoro_gui.daw import dirty
 from kokoro_gui.daw.dirty import build_segments_from_results
 from kokoro_gui.qt.timeline_view import RULER_HEIGHT_PX, ClipBlockItem, _RulerItem
@@ -186,3 +188,79 @@ def test_a_file_deleted_behind_the_apps_back_counts_after_force_refresh(qt_app):
 
 def test_force_refresh_is_in_the_options_menu(qt_app):
     assert qt_app.force_refresh_action in qt_app.options_menu.actions()
+
+
+def _with_stored_onsets(clips):
+    """Segments generated since 4.0.0-beta.2 carry onset and tail, so placement
+    reads no audio (`post.duration_hint`)."""
+    for clip in clips:
+        for segment in clip.segments:
+            segment.onset_s = 0.0
+            segment.tail_s = 0.0
+
+
+def _reverb_on(qt_app):
+    qt_app.fx_dock._enabled_checks["reverb_enabled"].setChecked(True)
+    qt_app.fx_dock._project_timer.stop()
+    qt_app.refresh_timeline()
+
+
+def _generated_waveform_items(qt_app, clips):
+    view = qt_app.timeline_dock.timeline_view
+    return [view._blocks_by_clip_id[c.id]._waveform_item for c in clips if c.segments]
+
+
+def test_a_project_scope_fx_change_renders_nothing_on_the_gui_thread(qt_app, monkeypatch):
+    clips = _project(qt_app)
+    _with_stored_onsets(clips)
+    qt_app.refresh_timeline()
+    qt_app.wait_for_renders()
+    gui_thread = threading.current_thread()
+    threads = []
+    real = post._render_uncached
+    monkeypatch.setattr(post, "_render_uncached", lambda *a: threads.append(threading.current_thread()) or real(*a))
+
+    _reverb_on(qt_app)
+    for item in _generated_waveform_items(qt_app, clips):
+        item.loaded_peaks()
+    qt_app.wait_for_renders()
+    qt_app._rebuild_transport_schedule()
+
+    assert threads and gui_thread not in threads
+    assert all(item.loaded_peaks() is not None for item in _generated_waveform_items(qt_app, clips))
+
+
+def test_a_waveform_appears_when_its_render_lands(qt_app, monkeypatch):
+    clips = _project(qt_app)
+    _with_stored_onsets(clips)
+    qt_app.refresh_timeline()
+    qt_app.wait_for_renders()
+    release = threading.Event()
+    real = post._render_uncached
+    monkeypatch.setattr(post, "_render_uncached", lambda *a: release.wait(10) and real(*a))
+
+    _reverb_on(qt_app)
+    items = _generated_waveform_items(qt_app, clips)
+    assert all(item.loaded_peaks() is None for item in items)  # asked, not answered
+    release.set()
+    qt_app.wait_for_renders()
+
+    assert all(item._peaks is not None and not item._path.isEmpty() for item in items)
+
+
+def test_a_refresh_with_the_post_inputs_unchanged_prewarms_nothing(qt_app, monkeypatch):
+    clips = _project(qt_app)
+    _with_stored_onsets(clips)
+    _reverb_on(qt_app)
+    qt_app.wait_for_renders()
+    batches = []
+    monkeypatch.setattr(post, "prewarm", lambda requests: batches.append(list(requests)))
+
+    qt_app.refresh_timeline()
+    assert batches == []
+    qt_app.fx_dock._enabled_checks["reverb_enabled"].setChecked(False)
+    qt_app.fx_dock._project_timer.stop()
+    qt_app.refresh_timeline()
+    assert len(batches) == 1 and batches[0]
+    path, _config, _rate, range_s = batches[0][0]
+    assert path.endswith(".wav") and range_s is None
