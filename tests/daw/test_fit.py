@@ -38,6 +38,14 @@ def test_a_music_bed_does_not_count_toward_the_speaking_rate(tmp_path):
     assert rates == {ann: pytest.approx(20.0), None: pytest.approx(20.0)}
 
 
+def test_a_clips_tag_does_not_count_toward_the_speaking_rate():
+    doc = _document()
+    ann = doc.characters[0].id
+    _add(doc, "[Ann:Radio]: " + "x" * 40, 2.0, character_id=ann)
+
+    assert fit.speaking_rates(doc)[ann] == pytest.approx(20.0)
+
+
 def test_nested_and_imported_recording_clips_are_skipped():
     doc = _document()
     ann = doc.characters[0].id

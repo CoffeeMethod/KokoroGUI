@@ -26,6 +26,12 @@ def test_estimate_uses_rate_and_speed():
     assert estimate_duration_s("   ", 1.0, 10.0) == 0.0
 
 
+def test_estimate_leaves_out_a_tag_and_a_pause_marker():
+    """The engine never speaks them (grill TE11), so they add no time."""
+    assert estimate_duration_s("[Alice:Radio]: " + "x" * 30, 1.0, 10.0) == 3.0
+    assert estimate_duration_s("x" * 30 + " [pause:2]", 1.0, 10.0) == 3.0
+
+
 def test_estimate_falls_back_when_no_history():
     assert estimate_duration_s("x" * 30, 1.0, None) == 30 / FALLBACK_CHARS_PER_SECOND
     assert estimate_duration_s("x" * 30, 1.0, 0.0) == 30 / FALLBACK_CHARS_PER_SECOND

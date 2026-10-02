@@ -26,6 +26,7 @@ from kokoro_gui.daw import fit as fit_ops
 from kokoro_gui.daw.models import CLIP_STATUSES
 from kokoro_gui.daw.reference import REFERENCE_RANGE_KEY, reference_range
 from kokoro_gui.daw.undo import SetActiveTakeCommand, SetFieldCommand
+from kokoro_gui.engine.text_extraction import strip_markup
 
 STATUS_LABELS = {"todo": "To do", "generated": "Generated", "approved": "Approved",
                  "needs_rewrite": "Needs rewrite"}
@@ -165,7 +166,7 @@ class ScopeFields(QWidget):
                         "reference_range": reference, "target_duration_s": target}
 
     def _syllable_text(self, clip) -> str:
-        dub = syllable_count(self.app.document.clip_text(clip))
+        dub = syllable_count(strip_markup(self.app.document.clip_text(clip)))
         if not clip.source_text:
             return f"Syllables: {dub}"
         return f"Syllables: source {syllable_count(clip.source_text)} / dub {dub}"
