@@ -96,7 +96,9 @@ from kokoro_gui.qt.docks import (  # noqa: E402
     FXDock, LexiconDock, MixingDock, OutlineDock, SettingsDock, TimelineDock, TranscriptDock, TransportDock,
     VideoDock, VoiceCloneDock,
 )
-from kokoro_gui.qt.docks.export_dialog import ExportDialog, LoudnessDialog, run_export, run_measure_loudness  # noqa: E402
+from kokoro_gui.qt.docks.export_dialog import (  # noqa: E402
+    ExportDialog, ExportReportDialog, LoudnessDialog, run_export, run_measure_loudness,
+)
 from kokoro_gui.qt.timeline_view import STATUS_LABELS  # noqa: E402
 from kokoro_gui.qt.welcome_dialog import WelcomeDialog  # noqa: E402
 
@@ -118,6 +120,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     exportProgress = Signal(float, str)
     exportFinished = Signal(bool, str)
     exportWrote = Signal(str)  # the mix's path, just before a successful exportFinished
+    exportReport = Signal(object, str)  # (ExportResult, preset label), when an export split, warned or failed a check
     loudnessMeasured = Signal(object, str)  # (LoudnessReport or None, note or error)
     # Background project I/O (Open's audio extraction, Save's zip write):
     # progress as (percent, detail), completion as (callback, result, error)
@@ -307,6 +310,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.exportProgress.connect(self._on_export_progress)
         self.exportFinished.connect(self._on_export_finished)
         self.exportWrote.connect(self._on_export_wrote)
+        self.exportReport.connect(self._on_export_report)
         self.loudnessMeasured.connect(self._on_loudness_measured)
         self._loudness_dialog = None
         self._last_export_path: str | None = None
@@ -3467,6 +3471,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     def _on_export_wrote(self, path: str) -> None:
         self._last_export_path = path
         self._sync_show_in_folder_actions()
+
+    def _on_export_report(self, result, preset_label: str) -> None:
+        self._export_report_dialog = ExportReportDialog(result, preset_label, parent=self)
+        self._export_report_dialog.show()
 
     def _on_export_finished(self, success: bool, message: str) -> None:
         self.transport_dock.set_busy(False)
