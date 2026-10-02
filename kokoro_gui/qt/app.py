@@ -40,7 +40,7 @@ import time
 import playback
 from PySide6.QtCore import QEvent, QFileSystemWatcher, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence, QShortcut
-from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QWidget
 
 from kokoro_gui.daw import library as character_library, revision, wordalign
 from kokoro_gui.daw.migration import import_presets_to_library, link_exact_matches
@@ -101,6 +101,9 @@ from kokoro_gui.qt.docks.export_dialog import (  # noqa: E402
 )
 from kokoro_gui.qt.timeline_view import STATUS_LABELS  # noqa: E402
 from kokoro_gui.qt.welcome_dialog import WelcomeDialog  # noqa: E402
+from kokoro_gui.qt.import_dialog import (  # noqa: E402
+    TARGET_ADD as IMPORT_ADD, TARGET_SECTIONS as IMPORT_SECTIONS, TARGETS as IMPORT_TARGETS, ImportDialog,
+)
 
 APP_NAME = "KokoroGUI"
 SCHEDULE_REBUILD_DEBOUNCE_MS = 100
@@ -2979,12 +2982,51 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             self.import_text(path)
 
     def import_text(self, path: str, target: str | None = None) -> None:
-        """WF10: prompts "Add to current project" / "New project" unless
-        `target` ("add" | "new") is given. The file is read on a worker
-        thread behind `is_busy` (`_read_book`); the rest runs when it is in."""
+        """File > Import Text. With no `target` the import wizard opens
+        (`import_book`). An explicit `target` ("add" | "new") skips it and
+        inserts the file's whole text as it is, with no cleanup. The file is
+        read on a worker thread behind `is_busy` (`_read_book`); the rest
+        runs when it is in."""
+        if target is None:
+            self.import_book(path)
+            return
         self._read_book(f"Reading {os.path.basename(path)}...",
                         lambda stop: text_extraction.extract_text_from_file(path, should_stop=stop),
                         lambda text: self._finish_import_text(path, text, target))
+
+    def import_book(self, path: str, targets=IMPORT_TARGETS, default_target: str | None = None) -> None:
+        """Reads `path` into sections on a worker thread, then shows the
+        import wizard (`ImportDialog`) and runs the chosen path on its
+        choices. `targets` limits which destinations the wizard offers (the
+        welcome dialog has no project to add to)."""
+        self._read_book(f"Reading {os.path.basename(path)}...",
+                        lambda stop: text_extraction.extract_sections(path, should_stop=stop),
+                        lambda sections: self._finish_import_book(path, sections, targets, default_target))
+
+    def _ask_import_choices(self, path: str, sections: list, targets, default_target):
+        """The wizard, modal: `(target, [(title, text)])` or None on Cancel.
+        Its own method so tests answer it without a modal."""
+        dialog = ImportDialog(self, path, sections, targets=targets, default_target=default_target)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dialog.choices()
+
+    def _finish_import_book(self, path: str, sections: list, targets, default_target) -> None:
+        if not sections:
+            QMessageBox.warning(self, "Empty", "No text found in that file.")
+            return
+        choice = self._ask_import_choices(path, sections, targets, default_target)
+        if choice is None:
+            return
+        target, parts = choice
+        if not parts:
+            QMessageBox.warning(self, "Empty", "Nothing was left to import after the cleanup.")
+            return
+        if target == IMPORT_SECTIONS and len(parts) > 1:
+            self.new_from_sections(parts)
+            return
+        text = "\n\n".join(part for _title, part in parts)
+        self._finish_import_text(path, text, "add" if target == IMPORT_ADD else "new")
 
     def _read_book(self, label: str, work, then) -> bool:
         """Runs `work(should_stop)` on a worker thread with the Transport
@@ -3039,25 +3081,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             QApplication.processEvents()
         QApplication.processEvents()
 
-    def _finish_import_text(self, path: str, text: str, target: str | None) -> None:
+    def _finish_import_text(self, path: str, text: str, target: str) -> None:
         if not text:
             QMessageBox.warning(self, "Empty", "No text found in that file.")
             return
-        if target is None:
-            box = QMessageBox(self)
-            box.setWindowTitle("Import text")
-            box.setText("Add the text to the current project, or start a new project from it?")
-            add_btn = box.addButton("Add to current project", QMessageBox.ButtonRole.AcceptRole)
-            new_btn = box.addButton("New project", QMessageBox.ButtonRole.ActionRole)
-            box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-            box.exec()
-            clicked = box.clickedButton()
-            if clicked is add_btn:
-                target = "add"
-            elif clicked is new_btn:
-                target = "new"
-            else:
-                return
         if target == "new":
             self.new_project()
         editor = self.editor

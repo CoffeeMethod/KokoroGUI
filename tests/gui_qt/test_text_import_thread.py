@@ -2,9 +2,10 @@
 stops the read, and a refused book is reported with its reason."""
 import threading
 
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QDialog, QMessageBox
 
 from kokoro_gui.engine import text_extraction
+from kokoro_gui.qt.import_dialog import ImportDialog
 
 
 def _slow_extractor(monkeypatch, text="late words"):
@@ -90,9 +91,10 @@ def test_new_from_ebook_reads_off_the_gui_thread(qt_app, tmp_path, monkeypatch):
     def _sections(path, should_stop=None):
         started.set()
         release.wait(5)
-        return [("One", "1."), ("Two", "2.")]
+        return [("One", "First chapter."), ("Two", "Second chapter.")]
 
     monkeypatch.setattr(text_extraction, "extract_sections", _sections)
+    monkeypatch.setattr(ImportDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
     book = tmp_path / "novel.epub"
     book.write_bytes(b"fake")
 

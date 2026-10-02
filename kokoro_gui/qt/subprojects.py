@@ -1064,25 +1064,17 @@ class SubprojectsMixin:
         return made
 
     def new_from_ebook(self, path: str, per_chapter: bool = True) -> list:
-        """The welcome dialog's New from text: an EPUB or a PDF with an
-        outline becomes one subproject per chapter when `per_chapter`,
-        anything else (or a book with one section) plain text as before.
-        The book is read on a worker thread (`_read_book`), so this returns
-        `[]` at once and the project is built when the read lands; tests
+        """The welcome dialog's New from text: reads the book (`import_book`)
+        and opens the import wizard with the two new-project destinations,
+        starting on "one subproject per section" when `per_chapter`, else on
+        "one transcript". A book with one section only offers the
+        transcript. The read runs on a worker thread, so this returns `[]` at
+        once and the project is built when the wizard is accepted; tests
         call `wait_for_text_import`."""
-        from kokoro_gui.engine import text_extraction
+        from kokoro_gui.qt.import_dialog import TARGET_SECTIONS, TARGET_TRANSCRIPT
 
-        if per_chapter and path.lower().endswith((".epub", ".pdf")):
-            def _built(sections):
-                if len(sections) > 1:
-                    self.new_from_sections(sections)
-                else:
-                    self.import_text(path, target="new")
-
-            self._read_book(f"Reading {os.path.basename(path)}...",
-                            lambda stop: text_extraction.extract_sections(path, should_stop=stop), _built)
-            return []
-        self.import_text(path, target="new")
+        self.import_book(path, targets=(TARGET_SECTIONS, TARGET_TRANSCRIPT),
+                         default_target=TARGET_SECTIONS if per_chapter else TARGET_TRANSCRIPT)
         return []
 
     # -- autosave, dirty, save ------------------------------------------------------

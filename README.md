@@ -49,6 +49,8 @@ Unreleased:
 -   Export can normalize to a LUFS target, File > Measure Loudness reports a mix, and the transport has a level meter
 -   The Export dialog has tabs, an MP3 bitrate, a sample rate and a filename template, and asks before it overwrites a file
 -   An Outline tab that lists a book's chapters with a status and a length, and proofs one in a click
+-   Importing a book opens a wizard: tick the sections to keep, pick cleanup rules for page numbers, split words
+    and scene breaks, and check the result before it lands in the project
 
 In 4.0.0-beta.2:
 

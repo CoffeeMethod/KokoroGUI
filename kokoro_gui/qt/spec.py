@@ -196,6 +196,7 @@ SETTINGS_DEFAULTS = {
     "last_project": None,       # File menu: the project launch reopens
     "recent_projects": [],      # File > Recent, most recent first (max 10)
     "show_welcome": True,       # Welcome dialog on launch (File > Welcome... reopens it)
+    "import_rules": {},         # Import wizard cleanup rules: {rule_id: bool}, a missing id keeps its default
     "normalize": False,
     "trim": False,
     "apply_fx": True,
