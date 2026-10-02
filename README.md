@@ -43,6 +43,8 @@ Since 4.0.0-beta.2:
 -   On Windows, an impulse response name with a colon is refused instead of loading a different file
 -   Options > Settings... holds the program and project settings in an OBS-style window; the
     Settings tab keeps only the voice
+-   An FX change in a long project renders in the background instead of freezing the window, and
+    undoing a character change or a text replace copies only what the edit touched
 
 In 4.0.0-beta.2:
 

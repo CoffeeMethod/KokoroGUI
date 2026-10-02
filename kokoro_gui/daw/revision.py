@@ -1,4 +1,4 @@
-"""Change counters for the document model (Claude/PLAN_performance.md).
+"""Change counters for the document model (Claude/old/PLAN_performance.md).
 
 The GUI caches what it derives from a `Document` (the run index, the dirty
 set, the arrangement) and needs to know when that went out of date. Three

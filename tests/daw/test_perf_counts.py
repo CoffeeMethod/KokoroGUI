@@ -1,4 +1,4 @@
-"""Operation counts on the document's derived state (Claude/PLAN_performance.md).
+"""Operation counts on the document's derived state (Claude/old/PLAN_performance.md).
 
 Counts, not timings, so they hold on any machine: an edit inside one clip
 reruns one dirty check, and lookups read the index instead of walking the

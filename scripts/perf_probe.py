@@ -5,13 +5,16 @@
 Builds a `QtTTSApp` against `tests.conftest.StubEngine` (no model, no audio
 device), fills the transcript with CLIPS lines (default 100 400 1500), one
 clip of about 29 words per line cycling three characters, generates every
-other clip with a 4 s tone per segment, and times: a keystroke in the middle
+other clip with a 4 s tone per segment (with the onset and tail generation stores), and times: a keystroke in the middle
 of the document (the synchronous part, then the deferred flush), a
 transcript scroll tick, a timeline repaint while scrolling, a full
-`refresh_timeline` and a full `rehighlight`. Each size runs in its own
+`refresh_timeline`, a full `rehighlight`, a project-scope reverb change
+(the synchronous part, then the longest freeze in the next few seconds,
+timeline scrolled to the middle) and one
+`AssignCharacterCommand` and one `TextEditCommand` push. Each size runs in its own
 process so one size's caches can't help the next. `--profile` prints a
-cProfile of the keystroke and the scroll. The numbers are what
-`Claude/PLAN_performance.md` records per step.
+cProfile of the keystroke and the scroll, and of the FX change. The numbers are what
+`Claude/old/PLAN_performance.md` records per step.
 """
 from __future__ import annotations
 
@@ -31,7 +34,9 @@ sys.path.insert(0, ROOT)
 SENTENCE = ("She pushed the door open, and somewhere inside a radio was playing an old song "
             "about the sea. The kettle was still warm when she reached the kitchen.")
 SCROLL_STEPS = 60
-COLUMNS = ("keystroke", "keystroke flush", "scroll tick", "timeline repaint", "refresh_timeline", "rehighlight")
+FX_WINDOW_S = 6.0
+COLUMNS = ("keystroke", "keystroke flush", "scroll tick", "timeline repaint", "refresh_timeline", "rehighlight",
+           "fx change", "fx stall", "assign push", "text edit push")
 
 
 def build(count: int, details: bool):
@@ -89,7 +94,7 @@ def build(count: int, details: bool):
         for j, piece in enumerate(predict_segment_texts(spoken_text(clip_text, config), config)):
             path = os.path.join(audio_dir, f"{clip.id}_{j}.wav")
             sf.write(path, tone, 24000)
-            results.append({"text": piece, "path": path, "duration": 4.0})
+            results.append({"text": piece, "path": path, "duration": 4.0, "onset_s": 0.0, "tail_s": 0.0})
         clip.segments = build_segments_from_results(expected, results)
         clip.status = "generated"
     app.resize(1600, 1000)
@@ -110,6 +115,21 @@ def settle(qapp, seconds: float = 0.25) -> None:
     qapp.processEvents()
 
 
+def longest_stall(qapp, seconds: float) -> float:
+    """The longest single `processEvents` call, in ms, over `seconds` of
+    running the event loop: how long the GUI stops answering at worst. After
+    an FX change that is the 100 ms schedule timer's rebuild, the waveform
+    repaints and, with a render pool, the results landing."""
+    worst = 0.0
+    end = time.perf_counter() + seconds
+    while time.perf_counter() < end:
+        start = time.perf_counter()
+        qapp.processEvents()
+        worst = max(worst, (time.perf_counter() - start) * 1000)
+        time.sleep(0.002)
+    return worst
+
+
 def ms(fn, reps: int = 1) -> float:
     start = time.perf_counter()
     for _ in range(reps):
@@ -122,6 +142,7 @@ def measure(count: int, details: bool, profile: bool) -> dict:
     import io
     import pstats
 
+    from kokoro_gui.daw.undo import AssignCharacterCommand, TextEditCommand
     from kokoro_gui.qt.transcript_editor import TranscriptGutter
 
     qapp, app = build(count, details)
@@ -185,6 +206,41 @@ def measure(count: int, details: bool, profile: bool) -> dict:
 
     results["refresh_timeline"] = ms(refresh)
     results["rehighlight"] = ms(editor.rehighlight)
+
+    # A project-scope reverb change with the timeline scrolled to the middle:
+    # from the FX edit to the first moment the GUI answers events again.
+    hbar.setValue(hbar.maximum() // 2)
+    app.selection.clear()  # the keystroke selected a clip; the FX tab edits project scope with none
+    qapp.processEvents()
+
+    def fx_change():
+        app.fx_dock._enabled_checks["reverb_enabled"].setChecked(True)
+        app.fx_dock._project_timer.stop()
+        app._save_timer.stop()  # the autosave of the whole document is its own cost
+        app.refresh_timeline()
+        view.viewport().repaint()
+        qapp.processEvents()
+
+    fx_profiler = cProfile.Profile() if profile else None
+    if fx_profiler:
+        fx_profiler.enable()
+    results["fx change"] = ms(fx_change)
+    results["fx stall"] = longest_stall(qapp, FX_WINDOW_S)
+    if fx_profiler:
+        fx_profiler.disable()
+        out = io.StringIO()
+        pstats.Stats(fx_profiler, stream=out).sort_stats("cumulative").print_stats(35)
+        print(out.getvalue())
+
+    def undo_push(command):
+        start = time.perf_counter()
+        doc.undo_stack.push(command)
+        return (time.perf_counter() - start) * 1000
+
+    doc = app.document
+    mid = len(SENTENCE) * (count // 2)
+    results["assign push"] = undo_push(AssignCharacterCommand(mid + 5, mid + 20, doc.characters[1].id))
+    results["text edit push"] = undo_push(TextEditCommand(mid + 3, 0, 1, doc.text[:mid + 3] + "y" + doc.text[mid + 3:]))
     app._ask_close_choice = lambda: "discard"
     return results
 

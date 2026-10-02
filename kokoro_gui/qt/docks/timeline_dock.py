@@ -231,6 +231,8 @@ class TimelineDock(QDockWidget):
             arrangement = self.app.build_arrangement()
             self.timeline_view.render_document(self._doc, arrangement,
                                                clip_samples=lambda clip: self.app.rendered_clip_samples(clip, level),
+                                               clip_samples_async=lambda clip, on_ready:
+                                               self.app.rendered_clip_samples_async(clip, level, on_ready),
                                                nested_state=lambda clip: self.app.nested_state(clip, level),
                                                clip_render_key=lambda clip: self.app.clip_render_key(clip, level))
 

@@ -1,5 +1,5 @@
 """The change counters the derived caches key on (kokoro_gui/daw/revision.py,
-Claude/PLAN_performance.md)."""
+Claude/old/PLAN_performance.md)."""
 import copy
 
 from kokoro_gui.daw import revision

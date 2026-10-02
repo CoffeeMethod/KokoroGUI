@@ -1,5 +1,5 @@
 """`DocumentIndex` against the run walks it replaced
-(kokoro_gui/daw/derived.py, Claude/PLAN_performance.md).
+(kokoro_gui/daw/derived.py, Claude/old/PLAN_performance.md).
 
 A random sequence of edits, character assignments, undo commands, undo and
 redo, with every lookup compared to a linear walk over the runs after each

@@ -12,6 +12,7 @@ from __future__ import annotations
 from PySide6.QtCore import QRectF
 from PySide6.QtGui import QBrush, QColor, QPainterPath
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsScene, QGraphicsView
+from shiboken6 import isValid
 
 from kokoro_gui.qt import waveform_data
 
@@ -38,11 +39,31 @@ class WaveformItem(QGraphicsItem):
         # paint (or `loaded_peaks`) calls, so a block nobody scrolls to never
         # decodes its audio.
         self._loader = None
+        # Like `_loader`, for a source whose peaks may arrive after the
+        # first paint: `request(deliver)` calls `deliver(peaks)` now or later.
+        # `_ticket` names the current request, so an answer to an older one
+        # (the source was replaced meanwhile) is dropped.
+        self._request = None
+        self._ticket = None
+        self._painting = False
 
     def set_source(self, loader, width: float, height: float) -> None:
         """Peaks come from `loader()` when the item is first painted."""
-        self.prepareGeometryChange()
+        self._reset_source(width, height)
         self._loader = loader
+
+    def set_deferred_source(self, request, width: float, height: float) -> None:
+        """Peaks come from `request(deliver)` when the item is first painted.
+        `request` may call `deliver(peaks)` straight away or from the GUI
+        thread later; the item draws nothing until it does, then repaints."""
+        self._reset_source(width, height)
+        self._request = request
+
+    def _reset_source(self, width: float, height: float) -> None:
+        self.prepareGeometryChange()
+        self._loader = None
+        self._request = None
+        self._ticket = None
         self._peaks = None
         self._width = width
         self._height = height
@@ -50,7 +71,8 @@ class WaveformItem(QGraphicsItem):
         self.update()
 
     def loaded_peaks(self):
-        """The peaks, loading them now if the item hasn't been painted."""
+        """The peaks, loading them now if the item hasn't been painted. A
+        deferred source that hasn't answered yet gives None."""
         if self._loader is not None:
             loader, self._loader = self._loader, None
             try:
@@ -59,7 +81,21 @@ class WaveformItem(QGraphicsItem):
                 peaks = None
             self._peaks = peaks
             self._path = self._build_path(peaks, self._width, self._height)
+        elif self._request is not None and self._ticket is None:
+            self._ticket = ticket = object()
+            try:
+                self._request(lambda peaks: self._deliver(ticket, peaks))
+            except Exception:
+                self._deliver(ticket, None)
         return self._peaks
+
+    def _deliver(self, ticket, peaks) -> None:
+        if ticket is not self._ticket or not isValid(self):
+            return
+        self._peaks = peaks
+        self._path = self._build_path(peaks, self._width, self._height)
+        if not self._painting:
+            self.update()
 
     def set_peaks(self, peaks, width: float, height: float) -> None:
         # prepareGeometryChange() must happen *before* the stored width/
@@ -68,6 +104,8 @@ class WaveformItem(QGraphicsItem):
         # repaints after a resize.
         self.prepareGeometryChange()
         self._loader = None
+        self._request = None
+        self._ticket = None
         self._peaks = peaks
         self._width = width
         self._height = height
@@ -98,8 +136,12 @@ class WaveformItem(QGraphicsItem):
         self.update()
 
     def paint(self, painter, option, widget=None) -> None:  # noqa: N802 (Qt override)
-        if self._loader is not None:
-            self.loaded_peaks()
+        self._painting = True
+        try:
+            if self._loader is not None or (self._request is not None and self._ticket is None):
+                self.loaded_peaks()
+        finally:
+            self._painting = False
         painter.fillPath(self._path, QBrush(QColor(self._color)))
 
 

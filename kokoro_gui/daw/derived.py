@@ -1,5 +1,5 @@
 """State derived from a `Document`, cached until the document changes
-(Claude/PLAN_performance.md).
+(Claude/old/PLAN_performance.md).
 
 `DocumentIndex` answers the offset lookups (`clip_covering`,
 `clip_extent`, `clip_text`, `get_clip`, `get_character`) with a bisect or a
