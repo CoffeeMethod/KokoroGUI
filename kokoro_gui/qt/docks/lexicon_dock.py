@@ -58,6 +58,9 @@ class LexiconDock(QDockWidget):
         columns = self.table.horizontalHeader()
         columns.setSectionResizeMode(FIND_COL, QHeaderView.ResizeMode.Stretch)
         columns.setSectionResizeMode(REPLACE_COL, QHeaderView.ResizeMode.Stretch)
+        columns.setStretchLastSection(False)
+        for col in (MODE_COL, CASE_COL, DELETE_COL):
+            columns.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         # Rules apply in the order of the row numbers: drag a number to move a rule.
