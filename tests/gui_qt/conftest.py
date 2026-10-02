@@ -81,6 +81,10 @@ def qt_app(tmp_path, monkeypatch, qtbot):
     # or Open (grill TB12); nearly every test leaves edits behind, so the
     # fixture answers Discard. A test about the prompt re-patches this.
     monkeypatch.setattr(qt_app_module.QtTTSApp, "_ask_close_choice", lambda self: "discard")
+    # Closing while a generate runs asks Cancel and quit / Keep working
+    # (PG2). Tests leave unresolved generates behind; the answer is Keep
+    # working so nothing blocks, and the teardown below clears the flag.
+    monkeypatch.setattr(qt_app_module.QtTTSApp, "_ask_cancel_generate_to_quit", lambda self: False)
     # The Whisper first-use download prompt (grill PR5) answers Yes; the
     # transcribe call itself is always mocked, so nothing downloads.
     from kokoro_gui.qt import asr_prompt
@@ -102,6 +106,7 @@ def qt_app(tmp_path, monkeypatch, qtbot):
                         lambda *a, **k: stub.extract_text_from_file(*a, **k))
     yield app
     app.wait_for_project_io()
+    app._generating = False  # a test's unresolved generate must not hold the window open
     app.close()
 
 

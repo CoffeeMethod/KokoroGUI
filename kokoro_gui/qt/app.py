@@ -96,6 +96,9 @@ APP_NAME = "KokoroGUI"
 SCHEDULE_REBUILD_DEBOUNCE_MS = 100
 # The schedule rebuild waits for the render pool to go idle, at most this long.
 SCHEDULE_PREWARM_WAIT_MS = 15_000
+# A generate or export that ran longer than this alerts the taskbar (and
+# beeps) when it ends while the window isn't the active one.
+NOTIFY_AFTER_S = 10.0
 # A keystroke's timeline refresh waits this long for the next keystroke.
 TIMELINE_TYPING_DEBOUNCE_MS = 60
 LIBRARY_WATCH_DEBOUNCE_MS = 150
@@ -175,6 +178,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self._io_thread: threading.Thread | None = None
         self._pending_open_path: str | None = None
         self._closing_after_save = False
+        # A generate is running (`set_ui_state`), and the window asked to
+        # close while it did: it closes once the cancelled job's handler ran.
+        self._generating = False
+        self._close_after_cancel = False
         self._closed = False
         # Every engine a character uses stays resident (grill V3, "engine
         # follows the character"): engine id -> adapter, and its signal
@@ -979,6 +986,12 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.paste_splits_action.setChecked(bool(self.settings.get("character_fx_paste_splits", True)))
         self.paste_splits_action.toggled.connect(lambda v: self._set_setting("character_fx_paste_splits", v))
         self.options_menu.addAction(self.paste_splits_action)
+
+        self.notify_sound_action = QAction("Sound when a long job finishes", self)
+        self.notify_sound_action.setCheckable(True)
+        self.notify_sound_action.setChecked(bool(self.settings.get("notify_sound", True)))
+        self.notify_sound_action.toggled.connect(lambda v: self._set_setting("notify_sound", v))
+        self.options_menu.addAction(self.notify_sound_action)
 
         self.details_menu = self.options_menu.addMenu("Transcript details")
         self.details_action = QAction("Show details", self)
@@ -2257,6 +2270,18 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         meta = block.get("meta") if isinstance(block, dict) else None
         return dict(meta) if isinstance(meta, dict) else {}
 
+    def _ask_cancel_generate_to_quit(self) -> bool:
+        """True to cancel the running generate and quit, False to keep
+        working (PG2). A method so tests can replace it."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Generate in progress")
+        box.setText("A generate is still running.")
+        quit_btn = box.addButton("Cancel the generate and quit", QMessageBox.ButtonRole.DestructiveRole)
+        keep_btn = box.addButton("Keep working", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep_btn)
+        box.exec()
+        return box.clickedButton() is quit_btn
+
     # -- closing the current project ----------------------------------------
 
     def _ask_close_choice(self) -> str:
@@ -3236,6 +3261,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.transport_dock.set_busy(False)
         self.transport_dock.set_progress_value(100 if success else 0)
         self.set_status(message, "success" if success else "error")
+        self._notify_if_long_job()
 
     def project_sample_rate(self) -> int:
         """The mix rate for transport and export: the highest output rate
@@ -3280,9 +3306,16 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     def on_engine_finish(self) -> None:
         self.set_ui_state(False)
         self._rebuild_transport_schedule()
+        self._notify_if_long_job()
 
     def set_ui_state(self, is_running: bool) -> None:
-        if not is_running and self._subproject_queue:
+        self._generating = is_running
+        if not is_running and self._close_after_cancel:
+            # The cancelled generate is done: finish closing once its
+            # handler has applied the clips that did finish.
+            self._subproject_queue.clear()
+            QTimer.singleShot(0, self.close)
+        elif not is_running and self._subproject_queue:
             # The next stale subproject, once this job's handler is done.
             QTimer.singleShot(0, self._advance_subproject_queue)
         self.transport_dock.set_busy(is_running)
@@ -3394,6 +3427,42 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         else:
             self.generate_stale_subprojects(level)
 
+    def selected_clip_ids(self, project=None) -> set:
+        """The ids of the clips the user has selected in `project` (the
+        level on show by default): the clips the transcript's selected text
+        overlaps, else the clip selected on the timeline, else none. The one
+        place that answers "what's selected" for Generate."""
+        project = project or self.level
+        document = project.document
+        editor = self.editor
+        if editor is not None and project is self.focus:
+            cursor = editor.textCursor()
+            if cursor.hasSelection():
+                start, end = cursor.selectionStart(), cursor.selectionEnd()
+                return {run.clip_id for run, _s, _e in document.index().runs_in(start, end)
+                        if run.clip_id is not None}
+        clip_id = self.selection.selected_clip_id
+        if clip_id is not None and document.get_clip(clip_id) is not None:
+            return {clip_id}
+        return set()
+
+    def stale_selected_clips(self, project=None) -> list:
+        """The stale clips in `selected_clip_ids` that generate as speech
+        (a stale subproject generates through its own document)."""
+        project = project or self.level
+        ids = self.selected_clip_ids(project)
+        return [clip for clip in project.document.dirty_clips() if clip.id in ids and not clip.is_nested]
+
+    def generate_selection(self) -> None:
+        """Generate menu > "Generate stale clips in selection"."""
+        project = self.level
+        stale = self.stale_selected_clips(project)
+        if not stale:
+            self.set_status("Nothing stale in the selection", "warning")
+            return
+        self._nested_after_batch = None
+        self.timeline_dock.generate_dirty_clips_requested(project, clip_ids={clip.id for clip in stale})
+
     def generate_clip(self, clip_id: str) -> None:
         """UI3: the gutter's per-clip play button and the timeline's
         context menu both land here. On a clip that is already clean the
@@ -3432,9 +3501,23 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         else:
             self.set_status(f"Generated {succeeded} of {total} clips ({failed} failed)", "warning")
         self._rebuild_transport_schedule()
+        self._notify_if_long_job()
         project, self._nested_after_batch = self._nested_after_batch, None
-        if project is not None:
+        if project is not None and not self._close_after_cancel:
             self.generate_stale_subprojects(project)
+
+    def _notify_if_long_job(self) -> None:
+        """A job that ran longer than `NOTIFY_AFTER_S` flashes the taskbar
+        entry, and beeps unless Options turns the sound off, when it ends
+        with another window in front."""
+        started = self.transport_dock.busy_since
+        if started is None or self._close_after_cancel or self.isActiveWindow():
+            return
+        if time.monotonic() - started < NOTIFY_AFTER_S:
+            return
+        QApplication.alert(self)
+        if self.settings.get("notify_sound", True):
+            QApplication.beep()
 
     def auto_split_and_generate(self) -> None:
         """Generate menu > "Auto-split then generate": turns every
@@ -3849,6 +3932,16 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             pass
         if self._closed:
             super().closeEvent(event)
+            return
+        if self._generating:
+            # PG2: a running generate asks first. Cancelling waits for the
+            # engines to stop, so the window closes again from the finish
+            # handler (`set_ui_state`) instead of blocking the GUI thread.
+            event.ignore()
+            if not self._close_after_cancel and self._ask_cancel_generate_to_quit():
+                self._close_after_cancel = True
+                self._subproject_queue.clear()
+                self.cancel_conversion()
             return
         if self._io_thread is not None and not self._closing_after_save:
             event.ignore()

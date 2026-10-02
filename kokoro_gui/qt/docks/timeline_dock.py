@@ -901,14 +901,16 @@ class TimelineDock(QDockWidget):
 
     # -- batch dirty-scoped Generate (item 3) --------------------------------
 
-    def generate_dirty_clips_requested(self, project=None) -> None:
+    def generate_dirty_clips_requested(self, project=None, clip_ids=None) -> None:
         """Dispatches `KokoroEngine.generate_dirty_clips` for every clip
         `Document.dirty_clips()` currently reports as stale. Guarded by the
         same one-job-at-a-time check `on_generate_clip_requested` already
         uses. Callers (`QtTTSApp.on_generate_clicked`) are expected to have
         already checked `dirty_clips()` themselves for the "nothing to do"
         message - this method silently no-ops on an empty dirty list so it
-        stays safe to call directly too."""
+        stays safe to call directly too. `clip_ids`, when given, keeps only
+        the stale clips whose id is in it (Generate > "Generate stale clips
+        in selection")."""
         if self.app.is_busy():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before generating.")
             return
@@ -917,6 +919,8 @@ class TimelineDock(QDockWidget):
         # Nested clips aren't TTS: a stale subproject generates through its
         # own document (app.generate_subprojects).
         dirty = [clip for clip in project.document.dirty_clips() if not clip.is_nested]
+        if clip_ids is not None:
+            dirty = [clip for clip in dirty if clip.id in clip_ids]
         # A clip whose engine isn't installed stays stale (grill EN6); the
         # status line says so once, and the rest generate.
         blocked: dict = {}

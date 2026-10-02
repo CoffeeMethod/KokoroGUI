@@ -11,7 +11,8 @@ moved into a dock and reshaped into three rows:
    transport plays when the project has a source track. Without one the
    toggle is disabled on Dub.
 2. Preview, Generate (the row's one `primary` button: a `QToolButton`
-   whose menu holds "Generate dirty clips", "Auto-split then generate" and
+   whose menu holds "Generate dirty clips", "Generate stale clips in
+   selection", "Auto-split then generate" and
    the checkable "Split by paragraph"), Cancel (flat).
 3. One progress bar carrying the status/detail text via `setFormat`, in
    place of the three separate labels the old central widget had.
@@ -21,6 +22,8 @@ feedback; `is_busy()` is the one-job-at-a-time guard every generation
 trigger checks (it used to be `app.cancel_btn.isEnabled()`).
 """
 from __future__ import annotations
+
+import time
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction
@@ -64,6 +67,9 @@ class TransportDock(QDockWidget):
         self._status_text = "Ready"
         self._detail_text = ""
         self._busy = False
+        # When the last job began (time.monotonic()), kept after it ends so
+        # the finish handlers can tell a long job from a short one.
+        self.busy_since: float | None = None
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -136,6 +142,8 @@ class TransportDock(QDockWidget):
         self.generate_menu = QMenu(self.generate_btn)
         self.generate_dirty_action = QAction("Generate dirty clips", self)
         self.generate_dirty_action.triggered.connect(self.app.on_generate_clicked)
+        self.generate_selection_action = QAction("Generate stale clips in selection", self)
+        self.generate_selection_action.triggered.connect(self.app.generate_selection)
         self.auto_split_action = QAction("Auto-split then generate", self)
         self.auto_split_action.triggered.connect(self.app.auto_split_and_generate)
         self.split_paragraph_action = QAction("Split by paragraph", self)
@@ -143,9 +151,11 @@ class TransportDock(QDockWidget):
         self.split_paragraph_action.setChecked(bool(self.app.settings.get("auto_split_by_paragraph", False)))
         self.split_paragraph_action.toggled.connect(self._on_split_paragraph_toggled)
         self.generate_menu.addAction(self.generate_dirty_action)
+        self.generate_menu.addAction(self.generate_selection_action)
         self.generate_menu.addAction(self.auto_split_action)
         self.generate_menu.addSeparator()
         self.generate_menu.addAction(self.split_paragraph_action)
+        self.generate_menu.aboutToShow.connect(self._refresh_generate_menu)
         self.generate_btn.setMenu(self.generate_menu)
         row2.addWidget(self.generate_btn)
 
@@ -168,6 +178,11 @@ class TransportDock(QDockWidget):
         layout.addStretch(1)
         self.setWidget(content)
         self._refresh_format()
+
+    def _refresh_generate_menu(self) -> None:
+        """"Generate stale clips in selection" is on only while the
+        selection holds a stale clip."""
+        self.generate_selection_action.setEnabled(bool(self.app.stale_selected_clips()))
 
     def _apply_icons(self) -> None:
         pal = theme.current()
@@ -217,6 +232,8 @@ class TransportDock(QDockWidget):
         self.progress_bar.setValue(int(max(0, min(100, percent))))
 
     def set_busy(self, busy: bool) -> None:
+        if busy and not self._busy:
+            self.busy_since = time.monotonic()
         self._busy = busy
         self.generate_btn.setEnabled(not busy)
         self.preview_btn.setEnabled(not busy)
