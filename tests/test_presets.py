@@ -170,7 +170,7 @@ def test_fx_filter_clamps_to_the_slider_range():
     data = {"gain_db": 99, "comp_threshold": -500, "reverb_room_size": 1.5, "chorus_rate": 0.0,
             "reverb_dry_level": 1e9}
     assert filter_fx_preset_values(data) == {"gain_db": 20, "comp_threshold": -60, "reverb_room_size": 1,
-                                             "chorus_rate": 0.1, "reverb_dry_level": 1e9}
+                                             "chorus_rate": 0.1, "reverb_dry_level": 1}
 
 
 def test_fx_filter_gives_an_empty_dict_for_a_non_dict():

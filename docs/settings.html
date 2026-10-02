@@ -474,8 +474,8 @@
           <caption>Dynamics</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Compressor</td><td>Threshold (dB) and Ratio. Standard dynamic-range compression.</td></tr>
-            <tr><td>Limiter</td><td>Threshold (dB). A hard ceiling on peak level, separate from the Compressor.</td></tr>
+            <tr><td>Compressor</td><td>Threshold (dB), Ratio, Attack (0.1-100 ms) and Release (10-1000 ms). Standard dynamic-range compression.</td></tr>
+            <tr><td>Limiter</td><td>Threshold (dB) and Release (10-1000 ms). A hard ceiling on peak level, separate from the Compressor.</td></tr>
             <tr><td>Gain</td><td>A flat gain change in dB, applied within the FX chain, on top of the separate Volume control above.</td></tr>
           </tbody>
         </table>
@@ -497,7 +497,7 @@
           <caption>Spatial &amp; time</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Reverb</td><td>Room Size, Wet Level, Damping, Width. Standard algorithmic reverb.</td></tr>
+            <tr><td>Reverb</td><td>Room Size, Wet Level, Dry Level, Damping, Width. Standard algorithmic reverb.</td></tr>
             <tr><td>Delay</td><td>Time (seconds), Feedback, Mix. Echo/repeat effect.</td></tr>
             <tr><td>Convolution Reverb</td><td>Impulse response and Mix (0-1, default 0.5): the sound of a real space or device, recorded as a <code>.wav</code>. The list shows None, then every impulse response the project carries (<code>fx/ir/</code> in the <code>.tbaw</code>) and every one in the library (<code>presets/fx/ir/</code>); the project's copy wins when both have a name. Add&hellip; copies a <code>.wav</code> into the library. Save bundles every impulse response the project uses. One that can't be found plays dry and logs a warning. Runs after Reverb, before the dynamics.</td></tr>
           </tbody>
@@ -508,9 +508,9 @@
           <caption>Guitar / modulation</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Chorus</td><td>Rate (Hz), Depth. Layers a detuned, delayed copy of the signal.</td></tr>
+            <tr><td>Chorus</td><td>Rate (Hz), Depth, Mix. Layers a detuned, delayed copy of the signal.</td></tr>
             <tr><td>Distortion</td><td>Drive (dB). Harmonic distortion.</td></tr>
-            <tr><td>Phaser</td><td>Rate (Hz). Sweeping comb-filter effect.</td></tr>
+            <tr><td>Phaser</td><td>Rate (Hz), Depth, Mix. Sweeping comb-filter effect.</td></tr>
             <tr><td>Clipping</td><td>Threshold (dB). Hard-clips the waveform above the threshold.</td></tr>
           </tbody>
         </table>

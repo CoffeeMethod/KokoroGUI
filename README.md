@@ -60,6 +60,7 @@ Unreleased:
     last playhead, zoom, scroll and selected clip
 -   Export can write a stem per track or per character and a dialogue stem without the music, all the length of the mix
 -   Export can write transcripts with speaker names (WebVTT, SRT, Podcasting 2.0 JSON, plain text), a chapters file and show notes
+-   Sliders for compressor and limiter release, compressor attack, reverb dry level, chorus mix and phaser depth and mix
 
 In 4.0.0-beta.2:
 
