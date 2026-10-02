@@ -13,7 +13,9 @@ subproject or marker range, named `NN - <title>`; the range is ignored then).
 After an export that split, failed a preset check or warned, the report dialog
 lists every file. "Extras" holds "also
 write .srt" (per clip or per word), "also write a cue sheet (.csv)"
-(kokoro_gui/daw/mixdown.py's `write_cue_sheet`) and "keep per-clip files".
+(kokoro_gui/daw/mixdown.py's `write_cue_sheet`), "keep per-clip files" and the
+stems: one file per track or per character, and a dialogue stem without the
+music (`render_mix(stems=...)`, named `<base>_<stem>.<ext>`).
 "Project file" holds the bundle options below. A new option goes into the tab
 it belongs to, in the same `values()` and `export_defaults()` pair.
 Values persist per project in
@@ -54,7 +56,7 @@ from kokoro_gui.audio import loudness as loudness_mod
 from kokoro_gui.daw import markers as marker_ops
 from kokoro_gui.daw.export_presets import CUSTOM_ID, PRESETS, SPLIT_MODES, get_preset, preset_ids
 from kokoro_gui.daw.mixdown import (
-    expand_name, mixdown, mixdown_chapters, name_context, plan_chapters, render_mix, unused_path,
+    STEM_MODES, expand_name, mixdown, mixdown_chapters, name_context, plan_chapters, render_mix, unused_path,
 )
 from kokoro_gui.qt import project as project_io
 
@@ -69,6 +71,12 @@ DEFAULT_RMS_DBFS = -20.0
 DEFAULT_LIMITER_DBFS = -3.5
 NORMALIZE_MODES = ("lufs", "rms")
 SPLIT_LABELS = {None: "One file", "subprojects": "One file per subproject", "markers": "One file per marker range"}
+STEM_LABELS = {None: "None", "track": "One per track", "character": "One per character"}
+STEM_TIP = ("Each stem is the mix with only that track's (or character's) clips, the same length as the mix, so "
+            "they line up at 0 in an editor. They get the mix's loudness gain (and, in RMS mode, its peak "
+            "limiter), so they add up to it. A music bed under ducking is ducked by the whole mix's speech, "
+            "not just the stem's. A project with timecode turned on adds its start timecode to each name "
+            "(<name>_<stem>_01000000.wav); the audio still starts at 0.")
 MAX_PAD_S = 10.0
 NAME_TOKEN_HELP = ("Tokens: {project} (the project title), {date} (YYYY-MM-DD), {time} (HHMMSS), "
                    "{range} (the range below, or \"full\").")
@@ -114,6 +122,8 @@ def export_defaults(app) -> dict:
         "tail_s": _number(project.get("tail_s"), 0.0, 0.0, MAX_PAD_S),
         "split": _choice(project.get("split"), SPLIT_MODES, None),
         "preset": _choice(project.get("preset"), preset_ids(), CUSTOM_ID),
+        "stems": _choice(project.get("stems"), STEM_MODES, None),
+        "dialogue_stem": bool(project.get("dialogue_stem", False)),
     }
 
 
@@ -395,6 +405,17 @@ class ExportDialog(QDialog):
         self.keep_clips_check.setChecked(values["keep_clip_files"])
         form.addRow("", self.keep_clips_check)
 
+        self.stems_combo = QComboBox()
+        for mode in STEM_MODES:
+            self.stems_combo.addItem(STEM_LABELS[mode], mode)
+        self.stems_combo.setCurrentIndex(max(0, self.stems_combo.findData(values["stems"])))
+        self.stems_combo.setToolTip(STEM_TIP)
+        form.addRow("Stems:", self.stems_combo)
+        self.dialogue_stem_check = QCheckBox("Also a dialogue stem (everything but the music)")
+        self.dialogue_stem_check.setChecked(values["dialogue_stem"])
+        self.dialogue_stem_check.setToolTip(STEM_TIP)
+        form.addRow("", self.dialogue_stem_check)
+
     def _build_project_tab(self, form: QFormLayout) -> None:
         bundle = project_io.bundle_options(_export_target(self.app)[1])
         self.bundle_audio_check = QCheckBox("Bundle generated audio in the project file")
@@ -535,6 +556,8 @@ class ExportDialog(QDialog):
             "tail_s": self.tail_spin.value(),
             "split": self.split_combo.currentData(),
             "preset": self.preset_combo.currentData(),
+            "stems": self.stems_combo.currentData(),
+            "dialogue_stem": self.dialogue_stem_check.isChecked(),
         }
 
     def range_s(self):
@@ -643,7 +666,8 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
         srt_granularity="word" if values.get("srt_words") else "clip",
         include_cue_sheet=bool(values.get("cue_sheet")), loudness=loudness,
         bitrate_kbps=values.get("bitrate_kbps"), out_rate=values.get("sample_rate"),
-        head_s=values.get("head_s", 0.0), tail_s=values.get("tail_s", 0.0), checks=checks, **inputs,
+        head_s=values.get("head_s", 0.0), tail_s=values.get("tail_s", 0.0), checks=checks,
+        stems=values.get("stems"), dialogue_stem=bool(values.get("dialogue_stem")), **inputs,
     )
 
     async def _run():
@@ -662,6 +686,8 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
                 extras.append(f"{len(result.clip_files)} clip files")
             if values.get("cue_sheet"):
                 extras.append("cue sheet")
+            if result.stem_files:
+                extras.append(f"{len(result.stem_files)} stem{'s' if len(result.stem_files) != 1 else ''}")
             suffix = f" (+ {', '.join(extras)})" if extras else ""
             if len(result.files) > 1:
                 message = f"Exported {len(result.files)} files to {os.path.dirname(result.audio_path)}{suffix}"

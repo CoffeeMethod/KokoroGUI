@@ -203,6 +203,18 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Stems</h3>
+        <ul class="change-list">
+          <li>
+            <h4>A stem per track or per character, and a dialogue stem</h4>
+            <p>The Extras tab has a Stems box (None, One per track, One per character) and an "Also a dialogue stem" checkbox. Each stem is the project's mix with only one group of clips in it: a track's clips, or a character's. Music beds make a "Music" stem in the per-character set, and clips with no character make "Unassigned". The dialogue stem is every clip except the music beds, so a bed on its own track and the speech on others come apart cleanly. A subproject counts as dialogue. Muted and soloed-out tracks, and clips that aren't generated, have no stem, and a group with nothing audible writes no file. Stems follow the Range choice, and a split export writes them for each chapter.</p>
+            <p>Every stem is the length of the mix and starts at the mix's first sample, so they all line up at 0 in an editor. They are written next to the mixdown as <code>&lt;base&gt;_&lt;stem&gt;.&lt;ext&gt;</code>, for example <code>episode_Alice.wav</code>, with characters a filename can't hold replaced by "_" and a number added when two stems would share a name. A project with timecode turned on also gets its start timecode in each name, as digits without separators: <code>episode_Alice_01000000.wav</code> for a start of 01:00:00:00, or the range's start when you export a range. The audio itself still starts at 0.</p>
+            <p>Each stem gets what the mixdown gets, so the stems add up to it: the same resample, the same head and tail silence, the same loudness gain. In RMS mode the limiter's gain, worked out from the whole mix, is applied to every stem as well. Stems aren't measured, and a preset's checks run on the mixdown only. A bed set to duck is ducked by the speech of the whole mix, including speech that isn't in the stem, so the bed stem sounds as the bed does in the mix. The mixer clips each stem at full scale, as it clips the mix, so a mix that goes over 0 dBFS before normalizing won't add up exactly. Every stem is a full-length stereo array in memory while the export runs, so a long book with many characters needs that much more RAM. Both settings are kept per project in <code>project.json</code>, which older versions ignore.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Editing</h3>
         <ul class="change-list">
           <li>
