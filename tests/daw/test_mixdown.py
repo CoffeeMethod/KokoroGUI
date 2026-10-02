@@ -492,3 +492,105 @@ def test_unused_path_adds_a_number(tmp_path):
     assert unused_path(str(target)) == str(tmp_path / "mix (2).wav")
     (tmp_path / "mix (2).wav").write_bytes(b"x")
     assert unused_path(str(target)) == str(tmp_path / "mix (3).wav")
+
+
+# -- RMS mode, the limiter, head and tail silence ------------------------------------------------
+
+
+def _peaky_doc(tmp_path, seconds=6.0, rate=8000):
+    """Noise at about -26 dBFS RMS with a few spikes, so the RMS target needs the limiter."""
+    rng = np.random.default_rng(11)
+    x = (rng.standard_normal(int(rate * seconds)) * 0.05).astype(np.float32)
+    x[[2000, 20000, 33000]] = 0.5
+    path = tmp_path / "peaky.wav"
+    sf.write(str(path), x, rate)
+    alice = Character.from_preset_dict("Alice", {})
+    track = Track(name="A", character_id=alice.id, order_index=0)
+    clip = Clip(character_id=alice.id, track_id=track.id,
+                segments=[Segment(order_index=0, duration=seconds, audio_path=str(path))])
+    return _doc("Hello there.", [(0, 12, clip)], characters=[alice], tracks=[track])
+
+
+def test_rms_mode_reaches_the_target_and_holds_the_limiter_ceiling(tmp_path):
+    pytest.importorskip("pyloudnorm")
+    doc = _peaky_doc(tmp_path)
+
+    result = mixdown(doc, str(tmp_path / "rms.wav"), fmt="wav", sample_rate=8000, channels=1,
+                     loudness={"mode": "rms", "target_rms_dbfs": -20.0, "limiter_dbfs": -3.5})
+
+    data, _ = sf.read(str(tmp_path / "rms.wav"), dtype="float64")
+    assert result.loudness_before.rms_dbfs == pytest.approx(-26.0, abs=1.0)
+    assert 20 * np.log10(np.sqrt(np.mean(data ** 2))) == pytest.approx(-20.0, abs=0.5)
+    assert 20 * np.log10(np.abs(data).max()) <= -3.5 + 0.1
+    assert result.loudness_after.sample_peak_dbfs <= -3.5 + 0.1
+    assert result.loudness_limited is False
+
+
+def test_rms_mode_says_when_the_limiter_kept_it_short(tmp_path):
+    pytest.importorskip("pyloudnorm")
+    doc = _peaky_doc(tmp_path)
+
+    result = mixdown(doc, str(tmp_path / "short.wav"), fmt="wav", sample_rate=8000, channels=1,
+                     loudness={"mode": "rms", "target_rms_dbfs": -8.0, "limiter_dbfs": -3.5})
+
+    assert result.loudness_limited is True
+    assert result.loudness_after.sample_peak_dbfs <= -3.5 + 0.1
+
+
+def test_a_loudness_dict_without_a_mode_is_still_lufs(tmp_path):
+    pytest.importorskip("pyloudnorm")
+    doc = _tone_doc(tmp_path, 0.05)
+
+    result = mixdown(doc, str(tmp_path / "n.wav"), fmt="wav", sample_rate=8000,
+                     loudness={"mode": "lufs", "target_lufs": -16.0, "ceiling_dbtp": -1.0})
+
+    assert result.loudness_after.integrated_lufs == pytest.approx(-16.0, abs=0.5)
+
+
+def test_head_and_tail_pad_the_file_and_move_the_subtitles(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+
+    result = mixdown(doc, str(tmp_path / "p.wav"), fmt="wav", sample_rate=8000, head_s=0.75, tail_s=2.0,
+                     include_srt=True, include_cue_sheet=True)
+
+    data, _ = sf.read(str(tmp_path / "p.wav"), dtype="float32")
+    assert len(data) == int(8000 * (0.75 + 1.5 + 2.0))
+    assert not data[:6000].any() and not data[-16000:].any()
+    assert np.allclose(data[6000:14000], 0.25, atol=1e-3)
+    assert result.duration_s == pytest.approx(4.25)
+    assert "00:00:00,750 --> 00:00:01,750" in (tmp_path / "p.srt").read_text()
+    assert (tmp_path / "p.csv").read_text().splitlines()[1].startswith("0.750,1.750")
+
+
+def test_no_head_or_tail_writes_the_same_bytes(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+
+    mixdown(doc, str(tmp_path / "plain.wav"), fmt="wav", sample_rate=8000)
+    mixdown(doc, str(tmp_path / "zero.wav"), fmt="wav", sample_rate=8000, head_s=0.0, tail_s=0.0)
+
+    assert (tmp_path / "plain.wav").read_bytes() == (tmp_path / "zero.wav").read_bytes()
+
+
+def test_the_report_measures_the_padded_file(tmp_path):
+    pytest.importorskip("pyloudnorm")
+    doc = _tone_doc(tmp_path, 0.05)
+
+    result = mixdown(doc, str(tmp_path / "n.wav"), fmt="wav", sample_rate=8000, head_s=1.0, tail_s=1.0,
+                     loudness={"target_lufs": -16.0, "ceiling_dbtp": -1.0})
+
+    assert result.loudness_after.duration_s == pytest.approx(6.0, abs=0.01)
+    assert result.files[0].report is result.loudness_after
+
+
+def test_checks_run_on_the_written_file_and_the_failures_are_listed(tmp_path):
+    pytest.importorskip("pyloudnorm")
+    from kokoro_gui.daw.export_presets import Check
+
+    doc = _tone_doc(tmp_path, 0.05)
+    checks = (Check("Peak", "sample_peak_dbfs", high=-60.0), Check("Length", "duration_min", high=1.0))
+
+    result = mixdown(doc, str(tmp_path / "c.wav"), fmt="wav", sample_rate=8000, checks=checks)
+
+    (entry,) = result.files
+    assert entry.path == str(tmp_path / "c.wav") and entry.report is not None
+    assert entry.failed == ["Peak -26.0 dBFS, needs at most -60 dBFS"]
