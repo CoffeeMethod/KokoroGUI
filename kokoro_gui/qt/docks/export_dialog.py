@@ -15,7 +15,10 @@ lists every file. "Extras" holds "also
 write .srt" (per clip or per word), "also write a cue sheet (.csv)"
 (kokoro_gui/daw/mixdown.py's `write_cue_sheet`), "keep per-clip files" and the
 stems: one file per track or per character, and a dialogue stem without the
-music (`render_mix(stems=...)`, named `<base>_<stem>.<ext>`).
+music (`render_mix(stems=...)`, named `<base>_<stem>.<ext>`), and the text
+files of `kokoro_gui/daw/transcripts.py` (WebVTT, a speaker SRT, Podcasting 2.0
+transcript and chapters JSON, plain text, show notes; stored as the list
+`export["extras"]`, with `export["transcript_speakers"]` for the names).
 "Project file" holds the bundle options below. A new option goes into the tab
 it belongs to, in the same `values()` and `export_defaults()` pair.
 Values persist per project in
@@ -58,6 +61,7 @@ from kokoro_gui.daw.export_presets import CUSTOM_ID, PRESETS, SPLIT_MODES, get_p
 from kokoro_gui.daw.mixdown import (
     STEM_MODES, expand_name, mixdown, mixdown_chapters, name_context, plan_chapters, render_mix, unused_path,
 )
+from kokoro_gui.daw.transcripts import clean_extras
 from kokoro_gui.qt import project as project_io
 
 FORMATS = ("wav", "mp3", "flac", "ogg")
@@ -77,6 +81,20 @@ STEM_TIP = ("Each stem is the mix with only that track's (or character's) clips,
             "limiter), so they add up to it. A music bed under ducking is ducked by the whole mix's speech, "
             "not just the stem's. A project with timecode turned on adds its start timecode to each name "
             "(<name>_<stem>_01000000.wav); the audio still starts at 0.")
+EXTRA_LABELS = {
+    "vtt": "WebVTT transcript (.vtt)",
+    "srt_speakers": "SRT transcript (.speakers.srt)",
+    "transcript_json": "Podcasting 2.0 transcript (.transcript.json)",
+    "txt": "Plain text transcript (.txt)",
+    "chapters_json": "Podcasting 2.0 chapters (.chapters.json)",
+    "show_notes": "Show notes with timestamps (.show-notes.md)",
+}
+EXTRA_TIPS = {
+    "srt_speakers": "Next to the plain .srt, which has no names. Clips with no character get no name.",
+    "chapters_json": "One chapter per marker, or per subproject when there are no markers.",
+    "show_notes": "A Markdown list, one chapter per line with its time and the marker's note under it. "
+                  "Chapters come from the markers, or the subprojects when there are none.",
+}
 MAX_PAD_S = 10.0
 NAME_TOKEN_HELP = ("Tokens: {project} (the project title), {date} (YYYY-MM-DD), {time} (HHMMSS), "
                    "{range} (the range below, or \"full\").")
@@ -124,6 +142,8 @@ def export_defaults(app) -> dict:
         "preset": _choice(project.get("preset"), preset_ids(), CUSTOM_ID),
         "stems": _choice(project.get("stems"), STEM_MODES, None),
         "dialogue_stem": bool(project.get("dialogue_stem", False)),
+        "extras": clean_extras(project.get("extras")),
+        "transcript_speakers": bool(project.get("transcript_speakers", True)),
     }
 
 
@@ -416,6 +436,20 @@ class ExportDialog(QDialog):
         self.dialogue_stem_check.setToolTip(STEM_TIP)
         form.addRow("", self.dialogue_stem_check)
 
+        self.extra_checks = {}
+        for number, (key, label) in enumerate(EXTRA_LABELS.items()):
+            check = QCheckBox(label)
+            check.setChecked(key in values["extras"])
+            if key in EXTRA_TIPS:
+                check.setToolTip(EXTRA_TIPS[key])
+            self.extra_checks[key] = check
+            form.addRow("Text files:" if number == 0 else "", check)
+        self.speakers_check = QCheckBox("Speaker names in the transcripts")
+        self.speakers_check.setChecked(values["transcript_speakers"])
+        self.speakers_check.setToolTip("Off leaves the character names out of the WebVTT, SRT, JSON and text "
+                                       "transcripts. A [Name:FX]: tag never appears in them either way.")
+        form.addRow("", self.speakers_check)
+
     def _build_project_tab(self, form: QFormLayout) -> None:
         bundle = project_io.bundle_options(_export_target(self.app)[1])
         self.bundle_audio_check = QCheckBox("Bundle generated audio in the project file")
@@ -558,6 +592,8 @@ class ExportDialog(QDialog):
             "preset": self.preset_combo.currentData(),
             "stems": self.stems_combo.currentData(),
             "dialogue_stem": self.dialogue_stem_check.isChecked(),
+            "extras": [key for key, check in self.extra_checks.items() if check.isChecked()],
+            "transcript_speakers": self.speakers_check.isChecked(),
         }
 
     def range_s(self):
@@ -667,7 +703,9 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
         include_cue_sheet=bool(values.get("cue_sheet")), loudness=loudness,
         bitrate_kbps=values.get("bitrate_kbps"), out_rate=values.get("sample_rate"),
         head_s=values.get("head_s", 0.0), tail_s=values.get("tail_s", 0.0), checks=checks,
-        stems=values.get("stems"), dialogue_stem=bool(values.get("dialogue_stem")), **inputs,
+        stems=values.get("stems"), dialogue_stem=bool(values.get("dialogue_stem")),
+        extras=tuple(clean_extras(values.get("extras"))),
+        transcript_speakers=bool(values.get("transcript_speakers", True)), **inputs,
     )
 
     async def _run():
@@ -688,6 +726,8 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
                 extras.append("cue sheet")
             if result.stem_files:
                 extras.append(f"{len(result.stem_files)} stem{'s' if len(result.stem_files) != 1 else ''}")
+            if result.text_files:
+                extras.append(f"{len(result.text_files)} text file{'s' if len(result.text_files) != 1 else ''}")
             suffix = f" (+ {', '.join(extras)})" if extras else ""
             if len(result.files) > 1:
                 message = f"Exported {len(result.files)} files to {os.path.dirname(result.audio_path)}{suffix}"
