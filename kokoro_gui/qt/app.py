@@ -2940,7 +2940,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                 result = work(stop.is_set)
             except Exception as e:  # noqa: BLE001 - reported on the GUI thread
                 error = e
-            self._textRead.emit((then, result, error))
+            try:
+                self._textRead.emit((then, result, error))
+            except RuntimeError:  # the window was closed while the file was being read
+                pass
 
         self.transport_dock.set_busy(True)
         self.set_status(label, "busy")
