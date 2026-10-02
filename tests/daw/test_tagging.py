@@ -234,3 +234,136 @@ def test_image_sizes_come_from_the_headers():
     assert tagging._image_info(tagging.PNG_MAGIC) == ("image/png", 0, 0, 0)
     assert tagging._image_info(b"\xff\xd8\xff\xe0") == ("image/jpeg", 0, 0, 0)
     assert tagging._image_info(b"") == ("", 0, 0, 0)
+
+
+# -- mixdown writes them -------------------------------------------------------------------------
+
+from kokoro_gui.daw import markers as marker_ops  # noqa: E402
+from kokoro_gui.daw.mixdown import mixdown, mixdown_chapters, plan_chapters  # noqa: E402
+from tests.daw.test_mixdown import RATE as WAV_RATE, _book, _two_generated_clips  # noqa: E402
+
+
+def test_mixdown_tags_the_file_after_writing_it(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+    cover = _cover(tmp_path)
+
+    result = mixdown(doc, str(tmp_path / "out" / "show.flac"), fmt="flac", sample_rate=WAV_RATE,
+                     tags={**META, "cover": cover})
+
+    audio = FLAC(result.audio_path)
+    assert audio["TITLE"] == ["Episode One"] and len(audio.pictures) == 1
+    assert result.files[0].tagged is True and result.warnings == []
+
+
+def test_mixdown_without_tags_writes_a_file_with_none(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+
+    result = mixdown(doc, str(tmp_path / "plain.flac"), fmt="flac", sample_rate=WAV_RATE)
+
+    assert not FLAC(result.audio_path).tags and result.files[0].tagged is False
+
+
+def test_mixdown_gives_a_wav_no_tags_and_no_warning(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+
+    result = mixdown(doc, str(tmp_path / "plain.wav"), fmt="wav", sample_rate=WAV_RATE, tags={"title": "x"})
+
+    assert result.files[0].tagged is False and result.warnings == []
+
+
+def test_mixdown_writes_the_markers_as_chapters_in_an_mp3(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+    for seconds, name in ((0.0, "Opening"), (1.0, "Second voice")):
+        doc.settings["markers"], _m = marker_ops.add_marker(doc.settings, seconds, name)
+
+    result = mixdown(doc, str(tmp_path / "ch.mp3"), fmt="mp3", sample_rate=24000, head_s=0.5,
+                     tags={"title": "T", "chapters": True})
+
+    tags = ID3(result.audio_path)
+    spans = {f.element_id: (f.start_time, f.end_time, str(f.sub_frames["TIT2"])) for f in tags.getall("CHAP")}
+    assert spans["chp0"][:1] == (500,) and spans["chp0"][2] == "Opening"
+    assert spans["chp1"][:1] == (1500,) and spans["chp1"][2] == "Second voice"
+    assert spans["chp0"][1] == 1500 and spans["chp1"][1] == pytest.approx(result.duration_s * 1000, abs=2)
+
+
+def test_chapters_off_leaves_an_mp3_without_chapter_frames(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+    doc.settings["markers"], _m = marker_ops.add_marker(doc.settings, 1.0, "Second voice")
+
+    result = mixdown(doc, str(tmp_path / "nc.mp3"), fmt="mp3", sample_rate=24000,
+                     tags={"title": "T", "chapters": False})
+
+    tags = ID3(result.audio_path)
+    assert str(tags["TIT2"]) == "T" and not tags.getall("CHAP") and not tags.getall("CTOC")
+
+
+def test_a_project_with_no_chapters_writes_no_chapter_frames(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+
+    result = mixdown(doc, str(tmp_path / "none.mp3"), fmt="mp3", sample_rate=24000, tags={"chapters": True})
+
+    assert not ID3(result.audio_path).getall("CHAP")
+
+
+def test_a_bad_cover_adds_a_warning_and_the_export_goes_on(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+
+    result = mixdown(doc, str(tmp_path / "w.ogg"), fmt="ogg", sample_rate=WAV_RATE,
+                     tags={"title": "T", "cover": str(tmp_path / "gone.png")})
+
+    assert OggVorbis(result.audio_path)["TITLE"] == ["T"]
+    assert len(result.warnings) == 1 and "gone.png" in result.warnings[0]
+
+
+def test_a_tag_write_that_fails_is_a_warning_not_a_failed_export(tmp_path, monkeypatch):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+
+    def _broken(*_args, **_kwargs):
+        raise OSError("disk says no")
+
+    monkeypatch.setattr(tagging, "write_tags", _broken)
+
+    result = mixdown(doc, str(tmp_path / "f.flac"), fmt="flac", sample_rate=WAV_RATE, tags={"title": "T"})
+
+    assert result.files[0].tagged is False
+    assert result.warnings == ["Couldn't write the tags into f.flac: disk says no"]
+
+
+def test_without_mutagen_the_export_warns_once(tmp_path, monkeypatch):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+    monkeypatch.setattr(tagging, "available", lambda: False)
+
+    result = mixdown(doc, str(tmp_path / "m.flac"), fmt="flac", sample_rate=WAV_RATE, tags={"title": "T"})
+
+    assert result.warnings == ["mutagen isn't installed, so the files have no tags (pip install mutagen)"]
+    assert not FLAC(result.audio_path).tags
+
+
+def test_a_split_export_titles_and_numbers_each_file(tmp_path):
+    doc, arrangement, nested = _book(tmp_path)
+    plan = plan_chapters(doc, arrangement, "subprojects")
+
+    result = mixdown_chapters(doc, str(tmp_path / "out"), plan, fmt="flac", sample_rate=WAV_RATE,
+                              arrangement=arrangement, nested_audio_path=nested,
+                              tags={"title": "Ignored", "album": "The Book", "artist": "Me"})
+
+    first, second = (FLAC(f.path) for f in result.files)
+    assert (first["TITLE"], first["TRACKNUMBER"], first["TRACKTOTAL"]) == (["Chapter 1"], ["1"], ["2"])
+    assert (second["TITLE"], second["TRACKNUMBER"]) == (["Chapter: 2/B"], ["2"])  # the tag keeps the characters a filename can't
+    assert first["ALBUM"] == second["ALBUM"] == ["The Book"] and first["ARTIST"] == ["Me"]
+
+
+def test_a_split_mp3_carries_a_chapter_frame_and_a_track_number_per_file(tmp_path):
+    doc, arrangement, nested = _book(tmp_path)
+    for seconds, name in ((1.0, "One"), (2.0, "Two"), (3.0, "Three"), (4.0, "End")):
+        doc.settings["markers"], _m = marker_ops.add_marker(doc.settings, seconds, name)
+    plan = plan_chapters(doc, arrangement, "markers")
+
+    result = mixdown_chapters(doc, str(tmp_path / "out"), plan, fmt="mp3", sample_rate=24000, arrangement=arrangement,
+                              nested_audio_path=nested, tags={"chapters": True})
+
+    # A marker range runs between two markers, so each file holds one chapter, at 0.
+    for number, (entry, name) in enumerate(zip(result.files, ("One", "Two", "Three")), start=1):
+        tags = ID3(entry.path)
+        assert [(f.start_time, str(f.sub_frames["TIT2"])) for f in tags.getall("CHAP")] == [(0, name)]
+        assert str(tags["TRCK"]) == f"{number}/3" and str(tags["TIT2"]) == name
