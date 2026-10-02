@@ -2079,9 +2079,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         delete runs it would still be a child answering to "dock_voices",
         and a layout restore could place it instead of the editor now
         shown."""
-        cleanup = getattr(dock, "remove_preview_file", None)
-        if cleanup is not None:
-            cleanup()
+        dock.retire()
         self.removeDockWidget(dock)
         dock.setParent(None)
         dock.deleteLater()

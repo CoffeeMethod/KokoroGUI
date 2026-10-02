@@ -53,8 +53,22 @@ from kokoro_gui.qt.docks.scrolling import scrollable
 from kokoro_gui.qt.docks.voice_header import engine_header
 
 
+# A reference clip is a few seconds to a few minutes of speech. Anything past
+# this is the wrong file, and ASR and the copy into the store read all of it.
+MAX_REFERENCE_BYTES = 200 * 1024 * 1024
+
+
+def _is_network_path(path: str) -> bool:
+    r"""A UNC path (`\\server\share\x.wav` or `//server/x.wav`), which makes
+    Windows connect to that host just to look at the file. The extended form
+    `\\?\C:\...` that `realpath` can give a local drive is local."""
+    if path[:2] not in ("\\\\", "//"):
+        return False
+    return path[2:4] not in ("?\\", "?/") or path[5:6] != ":"
+
+
 class VoiceCloneDock(QDockWidget):
-    transcribeFinished = Signal(bool, str)
+    transcribeFinished = Signal(bool, str, int)  # success, text or error, token
     saveFinished = Signal(bool, str)
 
     def __init__(self, app, parent=None):
@@ -65,6 +79,9 @@ class VoiceCloneDock(QDockWidget):
         # app.py rebuilds the dock when the Voices tab moves to another
         # cloning engine.
         self.backend_id = app.voices_backend().id
+        # Bumped when a transcription starts and when the dock is retired.
+        # A result carrying an older token is dropped.
+        self._transcribe_token = 0
         self.store = app.voices_backend().voice_store
         self.transcribeFinished.connect(self._on_transcribe_finished)
         self.saveFinished.connect(self._on_save_finished)
@@ -194,10 +211,36 @@ class VoiceCloneDock(QDockWidget):
         Vosk model path isn't part of this - see this module's docstring."""
         return {"asr_engine": self.asr_engine_combo.currentData() or ASR_ENGINES[0].id}
 
-    def _on_transcribe_clicked(self) -> None:
-        wav_path = self.wav_path_edit.text().strip()
-        if not wav_path or not os.path.exists(wav_path):
+    def _checked_wav_path(self, path: str) -> str | None:
+        """The real path of the reference wav in the path field, or None
+        after a warning. Refuses a network path (checked before anything
+        touches the file, since `realpath` would connect to the host), a
+        non-file, a file over `MAX_REFERENCE_BYTES` and a non-.wav name."""
+        path = path.strip()
+        if not path:
             QMessageBox.warning(self, "Error", "Select a reference audio file first.")
+            return None
+        if _is_network_path(path):
+            QMessageBox.warning(self, "Error", "Network paths aren't supported; copy the file locally first.")
+            return None
+        real = os.path.realpath(path)
+        if _is_network_path(real):
+            QMessageBox.warning(self, "Error", "Network paths aren't supported; copy the file locally first.")
+            return None
+        if not os.path.isfile(real):
+            QMessageBox.warning(self, "Error", "Select a reference audio file first.")
+            return None
+        if os.path.splitext(real)[1].lower() != ".wav":
+            QMessageBox.warning(self, "Error", "The reference audio must be a .wav file.")
+            return None
+        if os.path.getsize(real) > MAX_REFERENCE_BYTES:
+            QMessageBox.warning(self, "Error", f"The reference audio is over {MAX_REFERENCE_BYTES // (1024 * 1024)} MB.")
+            return None
+        return real
+
+    def _on_transcribe_clicked(self) -> None:
+        wav_path = self._checked_wav_path(self.wav_path_edit.text())
+        if wav_path is None:
             return
 
         engine = self.asr_engine_combo.currentData() or ASR_ENGINES[0].id
@@ -221,13 +264,21 @@ class VoiceCloneDock(QDockWidget):
 
         self.transcribe_btn.setEnabled(False)
         self.status_label.setText("Downloading Whisper model..." if downloading else "Transcribing...")
+        # The worker thread can't be interrupted. Retiring the dock or
+        # starting another run bumps the token, and `_on_transcribe_finished`
+        # drops this run's result when it finally arrives.
+        self._transcribe_token += 1
+        token = self._transcribe_token
 
         def _done(future):
             try:
-                text = future.result()
-                self.transcribeFinished.emit(True, text)
+                outcome = (True, future.result())
             except Exception as e:
-                self.transcribeFinished.emit(False, str(e))
+                outcome = (False, str(e))
+            try:
+                self.transcribeFinished.emit(*outcome, token)
+            except RuntimeError:
+                pass  # the dock was deleted while the thread ran
 
         # Uses whatever's currently typed in the Vosk model field, whether or
         # not it's been Saved yet - transcribing shouldn't require a save
@@ -237,7 +288,15 @@ class VoiceCloneDock(QDockWidget):
         )
         future.add_done_callback(_done)
 
-    def _on_transcribe_finished(self, success: bool, payload: str) -> None:
+    def retire(self) -> None:
+        """Called by `QtTTSApp._drop_voices_dock` when the Voices tab moves
+        to another engine: a transcription still running won't write its
+        result into this dock's fields."""
+        self._transcribe_token += 1
+
+    def _on_transcribe_finished(self, success: bool, payload: str, token: int) -> None:
+        if token != self._transcribe_token:
+            return
         self.transcribe_btn.setEnabled(True)
         if success:
             self.transcript_edit.setPlainText(payload)
@@ -251,14 +310,13 @@ class VoiceCloneDock(QDockWidget):
 
     def _on_save_clicked(self) -> None:
         name = self.name_edit.text().strip()
-        wav_path = self.wav_path_edit.text().strip()
         transcript = self.transcript_edit.toPlainText().strip()
 
         if not name:
             QMessageBox.warning(self, "Error", "Enter a name for this voice reference.")
             return
-        if not wav_path or not os.path.exists(wav_path):
-            QMessageBox.warning(self, "Error", "Select a reference audio file first.")
+        wav_path = self._checked_wav_path(self.wav_path_edit.text())
+        if wav_path is None:
             return
         if not transcript:
             QMessageBox.warning(self, "Error", "Enter or auto-transcribe a transcript first.")

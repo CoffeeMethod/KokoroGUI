@@ -230,6 +230,10 @@ class MixingDock(QDockWidget):
         future = backend.run(_run_preview())
         future.add_done_callback(_done)
 
+    def retire(self) -> None:
+        """Called by `QtTTSApp._drop_voices_dock` when this editor is replaced."""
+        self.remove_preview_file()
+
     def remove_preview_file(self) -> None:
         """Deletes the last preview's temp file. The next preview, a dock
         rebuild and the app's `closeEvent` call it; `playback.play` returns
