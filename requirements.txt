@@ -2,7 +2,7 @@ beautifulsoup4==4.14.3
 EbookLib==0.20
 kokoro==0.9.4
 numpy==2.4.1
-pypdf==6.16.1
+pypdf==6.19.0
 packaging
 scipy
 # 0.9.24 and 0.9.25 Linux wheels are built with -march=native and die with SIGILL
