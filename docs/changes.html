@@ -93,79 +93,10 @@
       <h1>Every change, in full</h1>
       <p class="lede">The README keeps one line per feature. This page has the rest: where each feature lives in the app, how it behaves, and what it does to a project you already have. Newest first.</p>
       <div class="toc">
-        <a href="#unreleased">Unreleased</a>
         <a href="#v4-0-0-beta-2">4.0.0-beta.2</a>
         <a href="#v4-0-0-beta-1">4.0.0-beta.1</a>
         <a href="#v3-2-0">3.2.0</a>
         <a href="#v3-1-0">3.1.0</a>
-      </div>
-    </div>
-  </section>
-
-  <section class="doc-section" id="unreleased" data-clip="Unreleased" data-cc="c4">
-    <div class="wrap">
-      <div class="prose reveal">
-        <h2><span class="idx">Development branch</span>Unreleased <span class="ver-badge">NEXT</span></h2>
-        <p>Changes since the 4.0.0-beta.2 tag.</p>
-      </div>
-
-      <div class="change-group reveal">
-        <h3>Text and generation</h3>
-        <ul class="change-list">
-          <li>
-            <h4>Inline tags are no longer spoken</h4>
-            <p>A clip made from a <code>[Speaker]:</code> or <code>[Speaker:FX]:</code> line, by Generate &gt; Auto-split then generate or by typing the line and pressing Enter, covers its tag. Before, the engine read the tag aloud, and the splitter could make the tag a segment on its own (a name with spaces, such as <code>[Old Man:Big Hall]:</code>, always did). Now every clip's text drops its tags and <code>[pause:x]</code> markers before the Lexicon and the splitter run. The tag stays in the transcript and keeps the character's color, and subtitles and the cue sheet leave it out too. Projects don't change, but a clip whose text holds a tag is marked stale once and needs Generate.</p>
-          </li>
-          <li>
-            <h4>A tag's FX applies to its clip</h4>
-            <p>The FX half of <code>[Alice:Radio]:</code> used to be ignored on clips. Auto-split and the typed-line shortcut now set the new clip's FX preset to <code>Radio</code>, the same as picking it in the Transcript panel's FX box, in the same undo step as the clip. Change it in the Audio FX tab afterwards; editing the tag text doesn't change it. If no preset has that name, the clip is still made with its character's FX, and auto-split names the missing presets in a warning (the typed line says so in the status bar).</p>
-          </li>
-        </ul>
-      </div>
-
-      <div class="change-group reveal">
-        <h3>Interface</h3>
-        <ul class="change-list">
-          <li>
-            <h4>A Settings window for program and project settings</h4>
-            <p><strong>Options &gt; Settings&hellip;</strong> (Ctrl+,) opens a window laid out like OBS's: a page list on the left (General, Generation, Performance, Project, Timeline, Source track), the page on the right, and OK, Cancel and Apply at the bottom. Edits wait for Apply or OK, and Cancel drops them. Apply stays greyed out until a value differs from what the window opened with.</p>
-            <p>The Settings tab used to hold these too. It now keeps only what a voice sounds like: Engine, Language, Voice, Speed, the engine's Model fields, and Audio control. With a clip selected it still shows the clip's own fields (gap, take, status, note, source text, original range, target). What moved:</p>
-            <ul>
-              <li>General: Theme and Device, the same choices as their Options submenus.</li>
-              <li>Generation: Target words per segment, the three Split at toggles, Output format.</li>
-              <li>Performance: Enable segment cache, and per engine Parallel threads and Audio8's Cache reference encoding.</li>
-              <li>Project: the subproject title, Gap and Paragraph gap, Auto-crossfade, Ripple on regenerate, Align locked clips.</li>
-              <li>Timeline: Track layout, Ducking, Timecode.</li>
-              <li>Source track: its offset and Remove. Remove now waits for Apply.</li>
-            </ul>
-            <p>The Engine row stays at the top of the Settings tab so an engine and a voice are picked together. With a clip selected it's no longer greyed out: it switches the clip's character's engine, the same as selecting the character. With nothing selected it's still "Engine for new characters", and the Language and Voice under it now show that engine's defaults (what a new character starts with) instead of the first character's engine.</p>
-            <p>Nothing is stored differently: the app values stay in <code>config_qt.json</code> and the project values in the project's settings, so existing projects and configs open as before. Each project value you change is still its own undo step.</p>
-          </li>
-        </ul>
-      </div>
-
-      <div class="change-group reveal">
-        <h3>Speed</h3>
-        <ul class="change-list">
-          <li>
-            <h4>An FX change no longer freezes a long project</h4>
-            <p>Changing a project-wide FX value, or the Settings tab's volume, pitch, normalize or trim, used to render every generated clip on the main thread when the transport reloaded, and the window stopped answering until it finished. Two background threads do that work now. A waveform on screen fills in when its render is ready, and the transport reloads once the renders are done, so the old sound keeps playing until then. On a 1,500-clip project with 750 generated clips, the longest freeze after switching reverb on went from 1.7 s to 0.14 s.</p>
-          </li>
-          <li>
-            <h4>Undo copies what the edit changed</h4>
-            <p>Assigning a character to a range, and the timeline's sub-range text replace, saved a deep copy of every clip and run so Ctrl+Z could put them back. They now save the runs around the edit and the clips those runs belong to. In a 1,500-clip project an assignment went from 50 ms to 6 ms and a replace from 47 ms to 5 ms. An edit that reaches more than 50 clips, or a project with imported recordings, still saves everything. Nothing in the project file changes.</p>
-          </li>
-        </ul>
-      </div>
-
-      <div class="change-group reveal">
-        <h3>Security</h3>
-        <ul class="change-list">
-          <li>
-            <h4>Impulse response names with a colon are refused on Windows</h4>
-            <p>Windows read a convolution reverb name such as <code>a:b</code> (from a project or an FX preset) as a drive-relative path and loaded the impulse response called <code>b</code>. Such a name is now refused there, as it already was elsewhere, and the reverb plays without it.</p>
-          </li>
-        </ul>
       </div>
     </div>
   </section>
@@ -344,6 +275,27 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Interface</h3>
+        <ul class="change-list">
+          <li>
+            <h4>A Settings window for program and project settings</h4>
+            <p><strong>Options &gt; Settings&hellip;</strong> (Ctrl+,) opens a window laid out like OBS's: a page list on the left (General, Generation, Performance, Project, Timeline, Source track), the page on the right, and OK, Cancel and Apply at the bottom. Edits wait for Apply or OK, and Cancel drops them. Apply stays greyed out until a value differs from what the window opened with.</p>
+            <p>The Settings tab used to hold these too. It now keeps only what a voice sounds like: Engine, Language, Voice, Speed, the engine's Model fields, and Audio control. With a clip selected it still shows the clip's own fields (gap, take, status, note, source text, original range, target). What moved:</p>
+            <ul>
+              <li>General: Theme and Device, the same choices as their Options submenus.</li>
+              <li>Generation: Target words per segment, the three Split at toggles, Output format.</li>
+              <li>Performance: Enable segment cache, and per engine Parallel threads and Audio8's Cache reference encoding.</li>
+              <li>Project: the subproject title, Gap and Paragraph gap, Auto-crossfade, Ripple on regenerate, Align locked clips.</li>
+              <li>Timeline: Track layout, Ducking, Timecode.</li>
+              <li>Source track: its offset and Remove. Remove now waits for Apply.</li>
+            </ul>
+            <p>The Engine row stays at the top of the Settings tab so an engine and a voice are picked together. With a clip selected it's no longer greyed out: it switches the clip's character's engine, the same as selecting the character. With nothing selected it's still "Engine for new characters", and the Language and Voice under it now show that engine's defaults (what a new character starts with) instead of the first character's engine.</p>
+            <p>Nothing is stored differently: the app values stay in <code>config_qt.json</code> and the project values in the project's settings, so existing projects and configs open as before. Each project value you change is still its own undo step.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Text and generation</h3>
         <ul class="change-list">
           <li>
@@ -361,6 +313,14 @@
           <li>
             <h4>Whisper is the default auto-transcription engine</h4>
             <p>The Voices tab's Auto-Transcribe (for Audio8 References) runs Whisper large-v3-turbo locally through faster-whisper (MIT). It asks before the first-use download (about 1.6 GB) and offers another engine instead. Set <code>WHISPER_MODEL</code> in <code>.env</code> to pick a smaller model. <code>python -m kokoro_gui.engine.asr ref.wav whisper --words</code> prints timed words. If you picked Audio8 in the dock before, that choice stays until you change it.</p>
+          </li>
+          <li>
+            <h4>Inline tags are no longer spoken</h4>
+            <p>A clip made from a <code>[Speaker]:</code> or <code>[Speaker:FX]:</code> line, by Generate &gt; Auto-split then generate or by typing the line and pressing Enter, covers its tag. Before, the engine read the tag aloud, and the splitter could make the tag a segment on its own (a name with spaces, such as <code>[Old Man:Big Hall]:</code>, always did). Now every clip's text drops its tags and <code>[pause:x]</code> markers before the Lexicon and the splitter run. The tag stays in the transcript and keeps the character's color, and subtitles and the cue sheet leave it out too. Projects don't change, but a clip whose text holds a tag is marked stale once and needs Generate.</p>
+          </li>
+          <li>
+            <h4>A tag's FX applies to its clip</h4>
+            <p>The FX half of <code>[Alice:Radio]:</code> used to be ignored on clips. Auto-split and the typed-line shortcut now set the new clip's FX preset to <code>Radio</code>, the same as picking it in the Transcript panel's FX box, in the same undo step as the clip. Change it in the Audio FX tab afterwards; editing the tag text doesn't change it. If no preset has that name, the clip is still made with its character's FX, and auto-split names the missing presets in a warning (the typed line says so in the status bar).</p>
           </li>
         </ul>
       </div>
@@ -380,6 +340,14 @@
             <h4>Files deleted outside the app count when you come back to it</h4>
             <p>A segment file deleted by hand still marks its clip stale, but KokoroGUI now notices when its window becomes active again, after Generate, Open, Save and imports, and on Force refresh, instead of on every repaint. Nothing in the project file changes.</p>
           </li>
+          <li>
+            <h4>An FX change no longer freezes a long project</h4>
+            <p>Changing a project-wide FX value, or the Settings tab's volume, pitch, normalize or trim, used to render every generated clip on the main thread when the transport reloaded, and the window stopped answering until it finished. Two background threads do that work now. A waveform on screen fills in when its render is ready, and the transport reloads once the renders are done, so the old sound keeps playing until then. On a 1,500-clip project with 750 generated clips, the longest freeze after switching reverb on went from 1.7 s to 0.14 s.</p>
+          </li>
+          <li>
+            <h4>Undo copies what the edit changed</h4>
+            <p>Assigning a character to a range, and the timeline's sub-range text replace, saved a deep copy of every clip and run so Ctrl+Z could put them back. They now save the runs around the edit and the clips those runs belong to. In a 1,500-clip project an assignment went from 50 ms to 6 ms and a replace from 47 ms to 5 ms. An edit that reaches more than 50 clips, or a project with imported recordings, still saves everything. Nothing in the project file changes.</p>
+          </li>
         </ul>
       </div>
 
@@ -389,6 +357,10 @@
           <li>
             <h4>Private cache and voice folders</h4>
             <p>On Linux and macOS, <code>cache/</code>, <code>custom_voices/</code> and the Audio8 reference folders are created owner-only (0700), and tightened to that if they already exist. A <code>cache/</code> that belongs to another user is left alone and a per-user one under <code>~/.cache/kokorogui/</code> is used instead.</p>
+          </li>
+          <li>
+            <h4>Impulse response names with a colon are refused on Windows</h4>
+            <p>Windows read a convolution reverb name such as <code>a:b</code> (from a project or an FX preset) as a drive-relative path and loaded the impulse response called <code>b</code>. Such a name is now refused there, as it already was elsewhere, and the reverb plays without it.</p>
           </li>
         </ul>
       </div>

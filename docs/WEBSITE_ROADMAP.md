@@ -134,7 +134,7 @@ Whenever `changes.html` grows, do a pass over `docs/index.html`. The engine comp
 workflow panels, the feature tracks and "What's new" are the sections most likely to go stale first, since they
 enumerate specific capabilities.
 
-The Unreleased entry on `changes.html` is covered: `settings.html` documents its settings and
+The 4.0.0-beta.2 entry on `changes.html` is covered: `settings.html` documents its settings and
 menus (subprojects, subtitle import, video, convolution reverb, music beds, recordings, the
 library, Fit to slot, ripple, the unified layout, the source track), `scripting.html` has the
 `[pause:x]` section (07), and `format.html` has the bundle entries. Still to do: new shell

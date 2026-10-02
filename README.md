@@ -36,16 +36,6 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 ## What's new
 
-Since 4.0.0-beta.2:
-
--   A clip made from a `[Speaker:FX]:` line no longer reads the tag aloud, and the tag's FX is
-    applied to the clip
--   On Windows, an impulse response name with a colon is refused instead of loading a different file
--   Options > Settings... holds the program and project settings in an OBS-style window; the
-    Settings tab keeps only the voice
--   An FX change in a long project renders in the background instead of freezing the window, and
-    undoing a character change or a text replace copies only what the edit touched
-
 In 4.0.0-beta.2:
 
 -   Subtitle import, Fit to slot, the original dialogue and a reference video, for dubbing
@@ -63,6 +53,13 @@ In 4.0.0-beta.2:
 -   Transcript details (Options menu): segment boundaries, lexicon rewrites, gaps, and each clip's
     length and status
 -   Typing, scrolling and timeline updates stay fast in long projects, plus Options > Force refresh
+-   A clip made from a `[Speaker:FX]:` line no longer reads the tag aloud, and the tag's FX is
+    applied to the clip
+-   On Windows, an impulse response name with a colon is refused instead of loading a different file
+-   Options > Settings... holds the program and project settings in an OBS-style window; the
+    Settings tab keeps only the voice
+-   An FX change in a long project renders in the background instead of freezing the window, and
+    undoing a character change or a text replace copies only what the edit touched
 
 The [changes page](docs/changes.html) has the full detail for every version, including what the
 update does to existing projects.
@@ -80,7 +77,7 @@ source .venv/bin/activate       # macOS / Linux
 pip install -r requirements.txt
 ```
 
-`4.0.0-beta.2` is the latest tagged beta. Drop `--branch` for the development branch. If `torch` gives you trouble, follow
+`4.0.0-beta.2` is the latest beta. Drop `--branch` for the development branch. If `torch` gives you trouble, follow
 [pytorch.org](https://pytorch.org/get-started/locally/) for your OS and GPU.
 
 Kokoro is optional. Without the `kokoro` package (and eSpeak NG) the app
