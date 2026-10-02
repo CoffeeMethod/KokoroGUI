@@ -112,6 +112,18 @@
         <h3>Fixes</h3>
         <ul class="change-list">
           <li>
+            <h4>Two Audio8 presets generating at once keep their own sampling settings</h4>
+            <p>Audio8's max new tokens, temperature, top P and top K were stored on the engine and set again for each chunk. Two chunks with different settings, running on two worker threads, could swap them, so a chunk generated at the other chunk's temperature. Each chunk now carries its own values into the model call. A clip's cache key never changed, so no clip goes stale.</p>
+          </li>
+          <li>
+            <h4>A half-written Audio8 reference encoding is no longer trusted</h4>
+            <p>The cached encoding of a reference voice is written to a temporary file and renamed when complete. A crash mid-write used to leave a truncated file that the next generate loaded as if it were whole.</p>
+          </li>
+          <li>
+            <h4>An old cache entry for a split paragraph is regenerated</h4>
+            <p>Before 4.0.0-beta.2, the whole-document path could save one paragraph as two or more files in <code>cache/</code>. A hit on such an entry played only the first part. An entry that holds more files than the text now splits into is regenerated, and the extra files are deleted.</p>
+          </li>
+          <li>
             <h4>Previews use their own temporary file</h4>
             <p>Preview and the Custom Voice mix preview wrote to a fixed name in the temp folder, <code>kokoro_preview.wav</code> and <code>kokoro_mix_preview.wav</code>. On a shared machine another user could create or link that name first, and two previews in a row wrote the same file. Each preview now gets a fresh file from the system. The next preview deletes the previous one, and so does closing the app.</p>
           </li>

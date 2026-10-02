@@ -174,7 +174,15 @@ class Audio8Model(ModelBase):
         """`voice` is an already resolved reference wav path; its transcript
         is read from the sidecar `.txt` here."""
         transcript = self._engine.resolve_voice_transcript(voice)
-        return Synthesis(self._engine.generate_segment(text, voice, transcript, speed, lang_code), [])
+        # The chunk's own config, passed down so two chunks with different
+        # sampling settings never read each other's values off the engine.
+        params = params or {}
+        audio = self._engine.generate_segment(
+            text, voice, transcript, speed, lang_code,
+            sampling=Audio8Engine.sampling_from_config(params),
+            cache_reference_codes=params.get("cache_reference_codes", True),
+        )
+        return Synthesis(audio, [])
 
     def engine_version(self):
         return self._engine.engine_version()
@@ -199,16 +207,17 @@ class Audio8Engine(EngineRunner):
         # Whether `generate_segment` should reuse a persisted, content-keyed
         # encoding of the reference wav instead of re-running the model's
         # audio encoder on every segment (see `_reference_codes_path`).
-        # `process_chunk_task` overwrites this from `config['cache_reference_codes']`
-        # each run - the `True` here only matters for callers that skip
-        # `process_chunk_task` (e.g. calling `generate_segment` directly).
+        # A chunk's own `config['cache_reference_codes']` reaches
+        # `generate_segment` as an argument; this attribute is the fallback
+        # for a direct call that passes none.
         self.cache_reference_codes = True
 
         # `ArkttsModel.generate`/`generate_audio` sampling knobs, exposed as
         # config fields (Audio8BackendAdapter.get_config_schema, "Generation"
-        # group) rather than hardcoded - `process_chunk_task` overwrites
-        # these from `config` each run, same pattern as `cache_reference_codes`
-        # above. Defaults match this engine's original hardcoded values,
+        # group) rather than hardcoded. A chunk's config reaches
+        # `generate_segment` as its `sampling` argument; these four are the
+        # fallback for a direct call that passes none. Defaults match this
+        # engine's original hardcoded values,
         # except `max_new_tokens` (was 4096, clamped internally to whatever
         # room is left under the model's `max_seq_len=2048` anyway - 1024
         # is a more honest default that still leaves prompt room).
@@ -246,12 +255,28 @@ class Audio8Engine(EngineRunner):
             "top_k": config.get("top_k", 50),
         }
 
-    def warm_reference_codes(self, project_dir: Optional[str]) -> None:
+    @staticmethod
+    def sampling_from_config(config: dict) -> dict:
+        """The four sampling knobs out of a chunk's config, with the schema
+        defaults (the same ones `cache_key_extra` reads)."""
+        return {
+            "max_new_tokens": config.get("max_new_tokens", 1024),
+            "temperature": config.get("temperature", 0.8),
+            "top_p": config.get("top_p", 0.95),
+            "top_k": config.get("top_k", 50),
+        }
+
+    def warm_reference_codes(self, project_dir: Optional[str],
+                             cache_reference_codes: Optional[bool] = None) -> None:
         """Encodes every reference the project carries into
         `_ref_codes_cache_dir()` if it isn't there yet. Called from the
         first generate after a project opens (`process_chunk_task`), when
-        the model is loaded anyway; never from `on_project_opened`."""
-        if not project_dir or not self.cache_reference_codes:
+        the model is loaded anyway; never from `on_project_opened`.
+        `cache_reference_codes` is the chunk's own setting; `None` uses the
+        instance attribute."""
+        if cache_reference_codes is None:
+            cache_reference_codes = self.cache_reference_codes
+        if not project_dir or not cache_reference_codes:
             return
         refs_dir = os.path.join(project_dir, *PROJECT_REFS_SUBDIR.split("/"))
         if not os.path.isdir(refs_dir):
@@ -347,17 +372,38 @@ class Audio8Engine(EngineRunner):
                 )
                 trimmed = codes[0, :, : int(code_lengths[0])].detach().cpu().numpy().astype(np.int64)
             ensure_private_dir(cache_dir, fallback=False)
-            np.save(cache_path, trimmed)
+            # Write beside the target, then rename: a crash mid-write leaves
+            # a stray .tmp, never a truncated .npy the next run would trust.
+            # An open file object stops numpy appending ".npy" to the name.
+            tmp_path = cache_path + ".tmp"
+            try:
+                with open(tmp_path, "wb") as fh:
+                    np.save(fh, trimmed)
+                os.replace(tmp_path, cache_path)
+            except BaseException:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             print(f"Audio8 reference-codes cache write error: {e}")
             return None
         return cache_path
 
     def generate_segment(self, text: str, ref_wav_path: str, ref_transcript: str,
-                          speed: float, lang_code: str) -> np.ndarray:
+                          speed: float, lang_code: str, *,
+                          sampling: Optional[dict] = None,
+                          cache_reference_codes: Optional[bool] = None) -> np.ndarray:
         """Runs one segment through the shared model, serialized via
         `_model_lock` (see module docstring). Returns mono float32 audio at
         `SAMPLE_RATE`.
+
+        `sampling` is a dict with `max_new_tokens`, `temperature`, `top_p`
+        and `top_k`. `None` uses the instance attributes, and so does
+        `cache_reference_codes`. A chunk run through `process_chunk_task`
+        arrives here via `Audio8Model.synthesize` with its own values, so
+        two chunks on two worker threads never read each other's settings.
 
         Checked against the installed model's actual `processing_arktts.py`/
         `modeling_arktts.py` (the model card guess this originally shipped
@@ -381,16 +427,22 @@ class Audio8Engine(EngineRunner):
           or the combined `model.generate_audio(**inputs, ...)` used below,
           which returns `(waveforms, lengths, codes)` directly.
 
-        When `self.cache_reference_codes` is on (see `process_chunk_task`),
-        looks up/populates a persisted reference-codes cache first (see
+        When `cache_reference_codes` is on, looks up/populates a persisted reference-codes cache first (see
         `_reference_codes_path`) and passes `reference_codes=` instead of
         `reference_audio=`/`reference_text=` on a hit - same output, skips
         re-encoding the reference wav through the model's audio codec.
         """
         model, processor = _get_model()
+        if cache_reference_codes is None:
+            cache_reference_codes = self.cache_reference_codes
+        if sampling is None:
+            sampling = {
+                "max_new_tokens": self.max_new_tokens, "temperature": self.temperature,
+                "top_p": self.top_p, "top_k": self.top_k,
+            }
         cached_codes_path = (
             self._reference_codes_path(ref_wav_path, ref_transcript)
-            if self.cache_reference_codes else None
+            if cache_reference_codes else None
         )
         with _model_lock:
             if cached_codes_path:
@@ -411,8 +463,8 @@ class Audio8Engine(EngineRunner):
                     return_tensors="pt",
                 )
             waveforms, lengths, _codes = model.generate_audio(
-                **inputs, max_new_tokens=self.max_new_tokens, temperature=self.temperature,
-                top_p=self.top_p, top_k=self.top_k,
+                **inputs, max_new_tokens=sampling["max_new_tokens"], temperature=sampling["temperature"],
+                top_p=sampling["top_p"], top_k=sampling["top_k"],
             )
             audio = waveforms[0, : lengths[0]].detach().cpu().numpy()
 
@@ -420,25 +472,20 @@ class Audio8Engine(EngineRunner):
         return audio
 
     def process_chunk_task(self, chunk_data, progress_callback):
-        """`CachingMixin.process_chunk_task` with this engine's per-run
-        state read off `config` first: `cache_reference_codes` and the
-        sampling knobs `generate_segment` uses (also what `cache_key_extra`
-        folds into the key, so a stale segment cached under old values
-        misses rather than serving old audio). The first chunk after a
-        project opens also warms the reference-codes cache from the
-        project's own refs (grill TB7, revised: derived data lives in this
-        machine's cache, so a flag written on another machine is ignored)."""
+        """`CachingMixin.process_chunk_task`. The sampling knobs and
+        `cache_reference_codes` travel in the chunk's config down to
+        `generate_segment` (they are also what `cache_key_extra` folds into
+        the key), so nothing per chunk is written onto the engine. The
+        first chunk after a project opens also warms the reference-codes
+        cache from the project's own refs (grill TB7, revised: derived data
+        lives in this machine's cache, so a flag written on another machine
+        is ignored)."""
         _index, _text, config = chunk_data
-        self.cache_reference_codes = config.get('cache_reference_codes', True)
-        self.max_new_tokens = config.get('max_new_tokens', 1024)
-        self.temperature = config.get('temperature', 0.8)
-        self.top_p = config.get('top_p', 0.95)
-        self.top_k = config.get('top_k', 50)
         project_dir = config.get("project_dir")
         if project_dir and project_dir != self._warmed_project_dir:
             self._warmed_project_dir = project_dir
             try:
-                self.warm_reference_codes(project_dir)
+                self.warm_reference_codes(project_dir, config.get('cache_reference_codes', True))
             except Exception as e:
                 print(f"Audio8 reference warm-up skipped: {e}")
         return super().process_chunk_task(chunk_data, progress_callback)
