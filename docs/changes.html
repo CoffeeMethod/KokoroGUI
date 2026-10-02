@@ -282,7 +282,7 @@
         <ul class="change-list">
           <li>
             <h4>Rules can match a whole word or a pattern, and run in order</h4>
-            <p>The Lexicon tab is now a table with Find, Replace, Mode, Match case and a delete button for each rule. <strong>Exact text</strong> matches anywhere, as every rule did before. <strong>Whole word</strong> skips a match inside a longer word, so a rule for "Al" leaves "Also" alone. <strong>Pattern</strong> is a regular expression, and <code></code> in Replace is its first group. A rule ignores case unless Match case is ticked.</p>
+            <p>The Lexicon tab is now a table with Find, Replace, Mode, Match case and a delete button for each rule. <strong>Exact text</strong> matches anywhere, as every rule did before. <strong>Whole word</strong> skips a match inside a longer word, so a rule for "Al" leaves "Also" alone. <strong>Pattern</strong> is a regular expression, and <code>\1</code> in Replace is its first group. A rule ignores case unless Match case is ticked.</p>
             <p>Rules apply from the top down, so a later rule sees the output of an earlier one. Drag a row number to move a rule, or select it and press Move up or Move down. An invalid pattern, or a Replace that names a group the pattern lacks, is refused and the reason shows under the table. In Exact text and Whole word, Replace is spoken as typed, backslashes included.</p>
           </li>
           <li>
