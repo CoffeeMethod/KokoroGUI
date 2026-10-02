@@ -688,10 +688,12 @@ def test_new_from_ebook_makes_one_subproject_per_chapter(qt_app, tmp_path, monke
 
     book = tmp_path / "novel.epub"
     book.write_bytes(b"fake")
-    monkeypatch.setattr(text_extraction, "extract_sections", lambda path: [
+    monkeypatch.setattr(text_extraction, "extract_sections", lambda path, **k: [
         ("Arrival", "She came home."), ("The Storm", "Rain fell."), ("After", "Quiet.")])
 
-    children = qt_app.new_from_ebook(str(book))
+    assert qt_app.new_from_ebook(str(book)) == []
+    qt_app.wait_for_text_import()
+    children = list(qt_app.children.values())
 
     root = qt_app.root.document
     assert [c.title() for c in children] == ["Arrival", "The Storm", "After"]
@@ -710,9 +712,10 @@ def test_new_from_ebook_unticked_imports_plain_text(qt_app, tmp_path, monkeypatc
 
     book = tmp_path / "novel.epub"
     book.write_bytes(b"fake")
-    monkeypatch.setattr(text_extraction, "extract_sections", lambda path: [("A", "a"), ("B", "b")])
+    monkeypatch.setattr(text_extraction, "extract_sections", lambda path, **k: [("A", "a"), ("B", "b")])
     qt_app.engine.extract_text_from_file.return_value = "a\n\nb"
     assert qt_app.new_from_ebook(str(book), per_chapter=False) == []
+    qt_app.wait_for_text_import()
     assert qt_app.document.text == "a\n\nb"
     assert qt_app.children == {}
 
@@ -722,10 +725,11 @@ def test_welcome_dialog_offers_one_subproject_per_chapter(qt_app, tmp_path, monk
 
     book = tmp_path / "novel.epub"
     book.write_bytes(b"fake")
-    monkeypatch.setattr(text_extraction, "extract_sections", lambda path: [("One", "1."), ("Two", "2.")])
+    monkeypatch.setattr(text_extraction, "extract_sections", lambda path, **k: [("One", "1."), ("Two", "2.")])
     dialog = qt_app.show_welcome()
     assert dialog.per_chapter_check.isChecked()
     dialog.new_from_text(str(book))
+    qt_app.wait_for_text_import()
     assert len(qt_app.children) == 2
 
 

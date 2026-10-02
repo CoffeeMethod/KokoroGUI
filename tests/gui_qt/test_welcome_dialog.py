@@ -121,6 +121,7 @@ def test_new_from_text_starts_fresh_project_with_the_text(qt_app, tmp_path):
     src.write_text("Once upon a time.", encoding="utf-8")
     dialog = qt_app.show_welcome()
     dialog.new_from_text(str(src))
+    qt_app.wait_for_text_import()
     assert qt_app.project_path is None
     assert qt_app.editor.toPlainText() == "Once upon a time."
 

@@ -129,6 +129,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     # progress as (done, total), the result as (job, error).
     _recordingProgress = Signal(int, int)
     _recordingTranscribed = Signal(object)
+    # Import Text's file read on a worker thread: (then, result, error).
+    _textRead = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -223,6 +225,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self._recordingProgress.connect(self._on_recording_progress)
         self._recordingTranscribed.connect(self._on_recording_transcribed)
         self._recording_thread: threading.Thread | None = None
+        self._textRead.connect(self._on_text_read)
+        self._text_read_thread: threading.Thread | None = None
+        self._text_read_stop = threading.Event()
         # Set when the user turns down the Whisper download for alignment,
         # so the next Generate doesn't ask again this session.
         self._word_align_declined = False
@@ -2912,12 +2917,63 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def import_text(self, path: str, target: str | None = None) -> None:
         """WF10: prompts "Add to current project" / "New project" unless
-        `target` ("add" | "new") is given."""
-        try:
-            text = text_extraction.extract_text_from_file(path)
-        except Exception as e:
-            QMessageBox.critical(self, "Import failed", f"Read failed: {e}")
+        `target` ("add" | "new") is given. The file is read on a worker
+        thread behind `is_busy` (`_read_book`); the rest runs when it is in."""
+        self._read_book(f"Reading {os.path.basename(path)}...",
+                        lambda stop: text_extraction.extract_text_from_file(path, should_stop=stop),
+                        lambda text: self._finish_import_text(path, text, target))
+
+    def _read_book(self, label: str, work, then) -> bool:
+        """Runs `work(should_stop)` on a worker thread with the Transport
+        dock busy, then `then(result)` on the GUI thread. Cancel sets
+        `should_stop`; a failure (a book over the extraction limits, an
+        unreadable file) is reported in a dialog. Returns False when a job
+        is already running and nothing was started."""
+        if self.is_busy() or self._text_read_thread is not None:
+            self.set_status("Wait for the current job to finish before importing text.", "warning")
+            return False
+        stop = self._text_read_stop = threading.Event()
+
+        def _work():
+            result = error = None
+            try:
+                result = work(stop.is_set)
+            except Exception as e:  # noqa: BLE001 - reported on the GUI thread
+                error = e
+            self._textRead.emit((then, result, error))
+
+        self.transport_dock.set_busy(True)
+        self.set_status(label, "busy")
+        self._text_read_thread = threading.Thread(target=_work, name="import-text", daemon=True)
+        self._text_read_thread.start()
+        return True
+
+    def _on_text_read(self, payload) -> None:
+        then, result, error = payload
+        self._text_read_thread = None
+        self.transport_dock.set_busy(False)
+        if isinstance(error, text_extraction.ExtractionCancelled):
+            self.set_status("Import cancelled.", "warning")
             return
+        if error is not None:
+            message = str(error) or type(error).__name__
+            self.set_status(f"Import failed: {message}", "error")
+            QMessageBox.critical(self, "Import failed", f"Read failed: {message}")
+            return
+        then(result)
+
+    def wait_for_text_import(self, timeout_s: float = 30.0) -> None:
+        """Test hook: blocks until the file-read thread (and any read its
+        result starts) has finished and its result has been handled."""
+        deadline = time.time() + timeout_s
+        while self._text_read_thread is not None and time.time() < deadline:
+            thread = self._text_read_thread
+            if thread is not None:
+                thread.join(0.02)
+            QApplication.processEvents()
+        QApplication.processEvents()
+
+    def _finish_import_text(self, path: str, text: str, target: str | None) -> None:
         if not text:
             QMessageBox.warning(self, "Empty", "No text found in that file.")
             return
@@ -3607,6 +3663,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.backend.convert_document(text_data, config, jit=self.jit_enabled)
 
     def cancel_conversion(self) -> None:
+        self._text_read_stop.set()
         for backend in self._backends.values():
             backend.cancel()
         self.set_status("Cancelling... waiting for workers...", "warning")
