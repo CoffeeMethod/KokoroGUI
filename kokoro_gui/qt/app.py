@@ -54,8 +54,10 @@ from kokoro_gui.daw.auto_split import plan_auto_split_clips, plan_pause_gaps, pl
 from kokoro_gui.daw.beds import playable_segments
 from kokoro_gui.daw.mixdown import duck_db_setting
 from kokoro_gui.daw.reference import SOURCE_TRACK_KEY, reference_slices, source_track_settings
+from kokoro_gui.daw import split_join
 from kokoro_gui.daw.undo import (
-    AssignCharacterCommand, ImportBedCommand, ImportCuesCommand, ImportRecordingCommand, SetFieldCommand,
+    AssignCharacterCommand, ImportBedCommand, ImportCuesCommand, ImportRecordingCommand, JoinClipsCommand,
+    SetFieldCommand, SplitClipCommand,
 )
 from kokoro_gui import logging_setup
 from kokoro_gui.engine import caching, runtime, text_extraction
@@ -953,6 +955,16 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         for a in (self.cut_action, self.copy_action, self.paste_action):
             self.edit_menu.addAction(a)
         self.edit_menu.addSeparator()
+        self.split_clip_action = self._action("&Split Clip at Playhead", self.split_clip_at_playhead)
+        self.split_clip_action.setToolTip("Cut the clip under the playhead in two at the word it is on. "
+                                          "S does the same with the timeline focused.")
+        self.join_clip_action = self._action("&Join with Next Clip", self.join_selected_with_next)
+        self.join_clip_action.setToolTip("Merge the selected clip, or the one under the playhead, with the clip "
+                                         "after it. They need the same character and kind.")
+        self.edit_menu.addAction(self.split_clip_action)
+        self.edit_menu.addAction(self.join_clip_action)
+        self.edit_menu.aboutToShow.connect(self._sync_split_join_actions)
+        self.edit_menu.addSeparator()
         self.characters_action = self._action("&Characters...", self.open_characters_dialog)
         self.edit_menu.addAction(self.characters_action)
 
@@ -1147,6 +1159,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.timeline_dock.batchGenerationProgress.connect(self.on_batch_generation_progress)
         self.timeline_dock.batchGenerationFinished.connect(self.on_batch_generation_finished)
         self.timeline_dock.timeline_view.seekRequested.connect(self.transport.seek)
+        self.timeline_dock.timeline_view.splitRequested.connect(self.split_clip_at)
+        self.timeline_dock.timeline_view.joinRequested.connect(self.join_clip_with_next)
 
         self.transport_dock.playRequested.connect(self.transport.play)
         self.transport_dock.pauseRequested.connect(self.transport.pause)
@@ -1249,6 +1263,12 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.ctrl_space_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.ctrl_space_shortcut.activated.connect(self.transport.toggle)
         self.ctrl_space_shortcut.setProperty(SHORTCUT_DESCRIPTION_PROPERTY, "Play / pause (works in any panel)")
+        # A plain letter, so only while the timeline has the focus: typing an
+        # "s" in the transcript or a field never reaches it.
+        self.split_shortcut = QShortcut(QKeySequence("S"), self.timeline_dock.timeline_widget)
+        self.split_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.split_shortcut.activated.connect(self.split_clip_at_playhead)
+        self.split_shortcut.setProperty(SHORTCUT_DESCRIPTION_PROPERTY, "Split clip at playhead (timeline focused)")
 
     # --- status helpers ---------------------------------------------------
 
@@ -3905,6 +3925,115 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                     return True
         self.transport.seek(target)
         return True
+
+    # --- split and join clips (plan 10) ------------------------------------
+
+    def _playhead_clip(self):
+        """The clip under the playhead in the level the timeline shows: the
+        selected one when several overlap, never a music bed or a
+        subproject. None when the playhead is in a gap."""
+        hits = [placed for placed in self.build_arrangement().at_time(self.transport.position())
+                if not placed.clip.has_placeholder]
+        selected = self.selection.selected_clip_id
+        for placed in hits:
+            if placed.clip.id == selected:
+                return placed.clip
+        return hits[0].clip if hits else None
+
+    def split_offset_at(self, clip_id: str, seconds: float):
+        """The document offset `split_clip_at` would cut `clip_id` at for
+        timeline time `seconds`, or None (`daw/split_join.py`)."""
+        document = self.level.document
+        clip = document.get_clip(clip_id)
+        extent = document.clip_extent(clip_id)
+        placed = self.build_arrangement().by_clip_id().get(clip_id)
+        if clip is None or extent is None or placed is None:
+            return None
+        return split_join.offset_at(placed, seconds, document.clip_text(clip), extent[0],
+                                    lambda segment, index: self._word_offsets(clip, segment, index))
+
+    def split_clip_at(self, clip_id: str, seconds: float) -> bool:
+        """Cuts the clip in two at the word timeline time `seconds` falls on
+        (the block menu's "Split here" passes the clicked time). One undo
+        step; False with a status line when there is no place to cut."""
+        document = self.level.document
+        clip = document.get_clip(clip_id)
+        if clip is None:
+            return False
+        offset = self.split_offset_at(clip_id, seconds)
+        if offset is None:
+            self.set_status("No word boundary to cut this clip at.", "warning")
+            return False
+        problem = document.split_problem(clip, offset)
+        if problem:
+            self.set_status(problem, "warning")
+            return False
+        document.undo_stack.push(SplitClipCommand(clip_id, offset))
+        self._after_split_or_join()
+        self.set_status("Split the clip in two.", "success")
+        return True
+
+    def split_clip_at_playhead(self) -> bool:
+        """Edit > Split Clip at Playhead and the timeline's S key."""
+        clip = self._playhead_clip()
+        if clip is None:
+            self.set_status("Put the playhead on a clip to split it.", "warning")
+            return False
+        return self.split_clip_at(clip.id, self.transport.position())
+
+    def _join_pair(self):
+        """`(first, second)` for Join with Next Clip: the selected clip, else
+        the one under the playhead, and the clip after it. None when
+        either is missing."""
+        document = self.level.document
+        selected = self.selection.selected_clip_id
+        first = document.get_clip(selected) if selected else None
+        first = first or self._playhead_clip()
+        second = document.next_clip(first.id) if first is not None else None
+        return (first, second) if second is not None else None
+
+    def join_clip_with_next(self, clip_id: str) -> bool:
+        """Joins the clip with the one after it, one undo step. False with a
+        status line when they can't join (`Document.join_problem`)."""
+        document = self.level.document
+        first = document.get_clip(clip_id)
+        second = document.next_clip(clip_id) if first is not None else None
+        if second is None:
+            self.set_status("There is no clip after this one to join.", "warning")
+            return False
+        problem = document.join_problem(first, second)
+        if problem:
+            self.set_status(problem, "warning")
+            return False
+        document.undo_stack.push(JoinClipsCommand(first.id, second.id))
+        self._after_split_or_join()
+        self.set_status("Joined the two clips.", "success")
+        return True
+
+    def join_selected_with_next(self) -> bool:
+        """Edit > Join with Next Clip."""
+        pair = self._join_pair()
+        if pair is None:
+            self.set_status("Select a clip that has another clip after it.", "warning")
+            return False
+        return self.join_clip_with_next(pair[0].id)
+
+    def _after_split_or_join(self) -> None:
+        if self.editor is not None:
+            self.editor.rehighlight()
+        self.schedule_save()
+        self.refresh_timeline()
+
+    def _sync_split_join_actions(self) -> None:
+        """Edit menu `aboutToShow`: Split is on when the playhead sits on a
+        clip with a place to cut, Join when the selected clip (or the one
+        under the playhead) can join the clip after it."""
+        document = self.level.document
+        clip = self._playhead_clip()
+        offset = self.split_offset_at(clip.id, self.transport.position()) if clip is not None else None
+        self.split_clip_action.setEnabled(offset is not None and document.split_problem(clip, offset) is None)
+        pair = self._join_pair()
+        self.join_clip_action.setEnabled(pair is not None and document.join_problem(*pair) is None)
 
     def play_clip(self, clip_id: str) -> bool:
         """The gutter's play button on an imported recording clip (phase 5

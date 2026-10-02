@@ -847,6 +847,8 @@ class TimelineView(QGraphicsView):
     # "enter", "render", "relink", "detach", "embed" or "remove".
     subprojectActionRequested = Signal(str, str)  # (clip_id, action)
     seekRequested = Signal(float)
+    splitRequested = Signal(str, float)  # (clip_id, timeline seconds): the block menu's Split here
+    joinRequested = Signal(str)  # clip_id: the block menu's Join with next
     zoomChanged = Signal(float)
     fadeChanged = Signal(str, str, float)  # (clip_id, "fade_in_s" | "fade_out_s", seconds)
     takeSelected = Signal(str, int)
@@ -991,6 +993,8 @@ class TimelineView(QGraphicsView):
             unpin.triggered.connect(lambda checked=False, cid=block.clip_id: self.unpinRequested.emit(cid))
 
         if clip is not None:
+            menu.addSeparator()
+            self._add_split_join(menu, clip, x_to_seconds(self.mapToScene(pos).x(), self._zoom))
             lock = menu.addAction("Lock in time")
             lock.setCheckable(True)
             lock.setChecked(bool(clip.pinned))
@@ -1014,6 +1018,25 @@ class TimelineView(QGraphicsView):
                 fit.triggered.connect(lambda checked=False, cid=clip.id: self.fitToSlotRequested.emit(cid))
 
         return menu
+
+    def _add_split_join(self, menu: QMenu, clip, seconds: float) -> None:
+        """Split here cuts at the word under the clicked time; Join with next
+        merges the clip with the one after it. A disabled entry's tooltip
+        says why."""
+        menu.setToolTipsVisible(True)
+        split = menu.addAction("Split here")
+        if clip.timeline_timestamp is not None:
+            split.setEnabled(False)
+            split.setToolTip("A clip placed on the timeline can't be split. Unpin it first.")
+        split.triggered.connect(lambda checked=False, cid=clip.id, t=seconds: self.splitRequested.emit(cid, t))
+        following = self._document.next_clip(clip.id)
+        problem = self._document.join_problem(clip, following) if following is not None else "No clip follows this one."
+        join = menu.addAction("Join with next")
+        if problem:
+            join.setEnabled(False)
+            join.setToolTip(problem)
+        join.triggered.connect(lambda checked=False, cid=clip.id: self.joinRequested.emit(cid))
+        menu.addSeparator()
 
     def _build_subproject_menu(self, menu: QMenu, clip) -> QMenu:
         """A nested block: Enter, Generate and render, Detach to file... or

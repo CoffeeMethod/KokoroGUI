@@ -32,20 +32,21 @@ def first_cut_from(text: str, rel: int) -> Optional[int]:
     return None
 
 
-def timed_words(placed, start: int, word_offsets: Callable) -> list:
-    """`(start_s, end_s, rel_offset)` for each word of the clip's segments
-    that has a time and a place in the text, in text order. `rel_offset` is
-    relative to the clip's start `start`; times are timeline seconds."""
-    words = []
+def _word_at_time(placed, seconds: float):
+    """`(segment, index)` of the word the playhead is on in `placed`'s
+    segments, else the next word after it, else None. Word times are
+    `Segment.words` entries `[text, start_s, end_s]` mapped onto the timeline
+    by `segment_timeline`."""
+    following = None
     for segment, seg_start, scale in segment_timeline(placed):
         for index, word in enumerate(segment.words or []):
-            span = word_offsets(segment, index)
-            if span is None:
-                continue
-            words.append((seg_start + float(word[1]) * scale, seg_start + float(word[2]) * scale,
-                          span[0] - start))
-    words.sort(key=lambda w: w[2])
-    return words
+            start_s = seg_start + float(word[1]) * scale
+            end_s = seg_start + float(word[2]) * scale
+            if start_s <= seconds < end_s:
+                return segment, index
+            if start_s > seconds and following is None:
+                following = (segment, index)
+    return following
 
 
 def offset_at(placed, seconds: float, text: str, start: int, word_offsets: Callable) -> Optional[int]:
@@ -56,18 +57,17 @@ def offset_at(placed, seconds: float, text: str, start: int, word_offsets: Calla
     `word_offsets(segment, index)` returns the `(start, end)` document
     offsets of a segment's word, or None. With word times the cut is the
     start of the word the playhead is on, or of the next word in a gap.
-    Without them it is proportional by characters, then moved forward to
-    the next word start. The first word's start isn't a cut, so a playhead
-    on the first word cuts before the second."""
-    words = timed_words(placed, start, word_offsets)
-    if words:
-        under = next((w for w in words if w[0] <= seconds < w[1]), None)
-        after = next((w for w in words if w[0] > seconds), None)
-        hit = under or after
-        if hit is None:
-            return None
-        rel = hit[2]
-    else:
+    Without them, or when the word has no place in the text, it is
+    proportional by characters. Either way the cut moves forward to a word
+    start with text before it, so a playhead on the first word cuts before
+    the second."""
+    rel = None
+    hit = _word_at_time(placed, seconds)
+    if hit is not None:
+        span = word_offsets(*hit)
+        if span is not None:
+            rel = span[0] - start
+    if rel is None:
         if placed.duration_s <= 0 or not text:
             return None
         fraction = (seconds - placed.start_s) / placed.duration_s
