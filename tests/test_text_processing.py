@@ -8,6 +8,15 @@ from kokoro_gui.engine import text_extraction
 from kokoro_gui.engine.text_extraction import find_character_fx_spans
 
 
+def _write_zip(path):
+    """A real (tiny) zip: the EPUB reader is faked, but the size check opens
+    the file as a zip first."""
+    import zipfile
+
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+
+
 # --- parse_multispeaker_text ---
 
 def test_parse_multispeaker_no_markers_returns_single_none_tuple(engine):
@@ -167,7 +176,7 @@ def test_extract_text_from_file_epub(engine, tmp_path, monkeypatch):
 
     monkeypatch.setattr(text_extraction.epub, "read_epub", lambda path, options=None: FakeBook())
     p = tmp_path / "sample.epub"
-    p.write_bytes(b"fake-epub")
+    _write_zip(p)
 
     text = engine.extract_text_from_file(str(p))
     assert "Chapter text." in text
@@ -215,7 +224,7 @@ def test_extract_sections_epub_titles_from_headings_in_spine_order(tmp_path, mon
         ("c3", "<html><body><p>No heading here.</p></body></html>"),
     ], spine=[("c1", "yes"), ("c2", "yes"), ("blank", "yes"), ("c3", "yes")])
     p = tmp_path / "book.epub"
-    p.write_bytes(b"fake-epub")
+    _write_zip(p)
 
     sections = extract_sections(str(p))
 

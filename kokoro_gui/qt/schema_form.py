@@ -11,6 +11,7 @@ docks/settings_dock.py and app.py's `backend` property).
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Callable, Optional
 
 from PySide6.QtWidgets import (
@@ -19,6 +20,70 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.engines.base import ConfigField, ConfigFieldType
+
+
+_TRUE_STRINGS = {"true", "1"}
+_FALSE_STRINGS = {"false", "0"}
+
+
+def _int_range(f: ConfigField) -> tuple[int, int]:
+    return int(f.min if f.min is not None else 0), int(f.max if f.max is not None else 100)
+
+
+def _float_range(f: ConfigField) -> tuple[float, float]:
+    return float(f.min if f.min is not None else 0.0), float(f.max if f.max is not None else 1.0)
+
+
+def _fallback(f: ConfigField) -> Any:
+    """`f.default`, or the type's zero when the schema leaves it `None`."""
+    if f.default is not None:
+        return f.default
+    if f.type == ConfigFieldType.BOOL:
+        return False
+    if f.type == ConfigFieldType.INT:
+        return _int_range(f)[0]
+    if f.type in (ConfigFieldType.FLOAT, ConfigFieldType.SLIDER):
+        return _float_range(f)[0]
+    if f.type in (ConfigFieldType.TEXT, ConfigFieldType.FILE):
+        return ""
+    return None
+
+
+def coerce(f: ConfigField, value: Any) -> Any:
+    """`value` as `f`'s type, clamped to its range, or the field's default
+    when it can't be read as one (`None`, a list, "abc" for an int). A
+    settings file is untrusted input: a wrong-typed value must not reach a
+    Qt setter, which raises `TypeError` and stops the app from starting.
+    `bool("false")` is True, so a bool field takes only real bools and the
+    strings "true", "false", "1" and "0". A CHOICE field's value is
+    returned as it is (the combo falls back to its first entry)."""
+    if f.type == ConfigFieldType.CHOICE:
+        return value
+    default = _fallback(f)
+    try:
+        if f.type == ConfigFieldType.BOOL:
+            if isinstance(value, bool):
+                return value
+            text = value.strip().lower() if isinstance(value, str) else None
+            if text in _TRUE_STRINGS:
+                return True
+            return False if text in _FALSE_STRINGS else default
+        if f.type in (ConfigFieldType.TEXT, ConfigFieldType.FILE):
+            if isinstance(value, str):
+                return value
+            return str(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else default
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            return default
+        number = float(value)
+        if not math.isfinite(number):
+            return default
+        if f.type == ConfigFieldType.INT:
+            low, high = _int_range(f)
+            return max(low, min(high, int(number)))
+        low, high = _float_range(f)
+        return max(low, min(high, number))
+    except (ValueError, OverflowError):
+        return default
 
 
 class SchemaFormWidget(QWidget):
@@ -53,6 +118,7 @@ class SchemaFormWidget(QWidget):
         self._skip_keys = skip_keys or set()
         self._on_change = on_change
         self._widgets: dict[str, QWidget] = {}
+        self._fields: dict[str, ConfigField] = {}
         self._getters: dict[str, Callable[[], Any]] = {}
         self._setters: dict[str, Callable[[Any], None]] = {}
 
@@ -77,6 +143,7 @@ class SchemaFormWidget(QWidget):
         self.set_values(values)
 
     def _add_field(self, form: QFormLayout, f: ConfigField) -> None:
+        self._fields[f.key] = f
         choices = self._choices_overrides.get(f.key, f.choices)
 
         if f.type in (ConfigFieldType.CHOICE,) or choices is not None:
@@ -99,7 +166,7 @@ class SchemaFormWidget(QWidget):
 
         elif f.type == ConfigFieldType.INT:
             spin = QSpinBox()
-            spin.setRange(int(f.min if f.min is not None else 0), int(f.max if f.max is not None else 100))
+            spin.setRange(*_int_range(f))
             spin.setSingleStep(int(f.step or 1))
             spin.valueChanged.connect(lambda _v, k=f.key: self._emit_change(k))
             form.addRow(f.label, spin)
@@ -109,7 +176,7 @@ class SchemaFormWidget(QWidget):
 
         elif f.type in (ConfigFieldType.FLOAT, ConfigFieldType.SLIDER):
             spin = QDoubleSpinBox()
-            spin.setRange(float(f.min if f.min is not None else 0.0), float(f.max if f.max is not None else 1.0))
+            spin.setRange(*_float_range(f))
             spin.setSingleStep(float(f.step or 0.1))
             spin.setDecimals(3)
             spin.valueChanged.connect(lambda _v, k=f.key: self._emit_change(k))
@@ -168,7 +235,10 @@ class SchemaFormWidget(QWidget):
     def set_values(self, values: dict[str, Any]) -> None:
         for k, setter in self._setters.items():
             if k in values:
-                setter(values[k])
+                value = values[k]
+                if not isinstance(self._widgets[k], QComboBox):
+                    value = coerce(self._fields[k], value)
+                setter(value)
 
     def set_choices(self, key: str, choices: list[tuple[str, Any]], current: Any = None) -> None:
         """Repopulate a CHOICE field's options at runtime (used for "voice"

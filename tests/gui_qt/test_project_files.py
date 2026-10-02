@@ -1736,6 +1736,7 @@ def test_import_text_add_inserts_at_caret_on_native_undo(qt_app, tmp_path):
     src.write_text("imported words", encoding="utf-8")
 
     qt_app.import_text(str(src), target="add")
+    qt_app.wait_for_text_import()
 
     assert qt_app.document.text == "start imported words"
     assert qt_app.editor.toPlainText() == "start imported words"
@@ -1750,6 +1751,7 @@ def test_import_text_new_starts_a_fresh_project_with_the_text(qt_app, tmp_path):
     src.write_text("chapter one", encoding="utf-8")
 
     qt_app.import_text(str(src), target="new")
+    qt_app.wait_for_text_import()
 
     assert qt_app.document.text == "chapter one"
     assert qt_app.project_path is None

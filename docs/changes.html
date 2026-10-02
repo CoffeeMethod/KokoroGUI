@@ -207,6 +207,22 @@
             <h4>run.bat works from any folder</h4>
             <p><code>run.bat</code> now changes to its own folder first, uses the <code>py -3</code> launcher when there is one, and runs <code>pip</code> and <code>main.py</code> through the virtual environment's <code>python.exe</code> by full path instead of whatever <code>python</code> is first on the path.</p>
           </li>
+          <li>
+            <h4>A huge or malformed book is refused, with the reason</h4>
+            <p>An EPUB is a zip, and one small file can inflate to gigabytes of text in memory. Import Text and New from eBook now read the zip's directory first and refuse an EPUB with an entry over 50 MB uncompressed, an entry compressed more than 100 to 1, or more than 500 MB in all. They also refuse a file over 500 MB, a PDF over 5,000 pages, and a book with more than 20 million characters of text. The error dialog names the limit that was hit.</p>
+          </li>
+          <li>
+            <h4>Importing a book no longer freezes the window</h4>
+            <p>Import Text and New from eBook read the file on the GUI thread, so a big EPUB or PDF locked the window until it finished. The read now runs on a worker thread. The Transport dock shows "Reading name..." and its Cancel button stops the read between pages and chapters.</p>
+          </li>
+          <li>
+            <h4>A damaged settings value no longer stops the app from starting</h4>
+            <p>A string where <code>config_qt.json</code> expects a number, such as <code>"speed": "fast"</code>, raised an error while the docks were built and the app never opened. A value of the wrong type now goes back to its default, and so does a file that isn't a JSON object. The Settings fields and the Audio FX dock clamp a number to the field's range. A saved FX preset is checked the same way: a value of the wrong type is skipped and one outside a slider's range is set to the nearest end of it.</p>
+          </li>
+          <li>
+            <h4>config_qt.json is written through a temporary file</h4>
+            <p>The settings file was written in place, so a crash or a full disk partway through left a truncated file, and the next launch read it as empty and started with the defaults. It is now written to <code>config_qt.json.tmp</code> and renamed over the old file once complete.</p>
+          </li>
         </ul>
       </div>
     </div>

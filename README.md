@@ -40,6 +40,7 @@ Unreleased:
 
 -   A Help menu with Documentation, Keyboard Shortcuts and About, and File > Show in Folder
 -   A log file, and a dialog with the traceback when something crashes
+-   Importing a big book no longer freezes the window, and an oversized or malformed one is refused with the reason
 -   Generate stale clips in the selection only, a taskbar alert when a long job finishes, and a
     prompt before closing mid-generate
 -   Split a clip in two at the playhead and join two clips back, from Edit, the block menu or `S`

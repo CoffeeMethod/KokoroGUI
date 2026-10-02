@@ -152,3 +152,64 @@ def test_list_ir_names_leaves_out_a_file_whose_name_is_unsafe(tmp_path, monkeypa
     # DEL, not a tab: a Windows file name can hold it.
     _wav(tmp_path / "presets" / "fx" / "ir" / "a\x7fb.wav")
     assert list_ir_names(None) == ["Hall"]
+
+
+# -- FX preset values are coerced and clamped (plan 03) -------------------------
+
+def test_fx_filter_drops_a_loud_gain_and_other_wrong_kinds():
+    from kokoro_gui.engine.presets import filter_fx_preset_values
+
+    data = {"gain_db": "loud", "reverb_enabled": 1, "comp_ratio": True, "delay_time": float("nan"),
+            "eq_bass": float("inf"), "bitcrush_depth": 10**400, "gsm_enabled": "true", "eq_treble": 2.5}
+    assert filter_fx_preset_values(data) == {"eq_treble": 2.5}
+
+
+def test_fx_filter_clamps_to_the_slider_range():
+    from kokoro_gui.engine.presets import filter_fx_preset_values
+
+    data = {"gain_db": 99, "comp_threshold": -500, "reverb_room_size": 1.5, "chorus_rate": 0.0,
+            "reverb_dry_level": 1e9}
+    assert filter_fx_preset_values(data) == {"gain_db": 20, "comp_threshold": -60, "reverb_room_size": 1,
+                                             "chorus_rate": 0.1, "reverb_dry_level": 1e9}
+
+
+def test_fx_filter_gives_an_empty_dict_for_a_non_dict():
+    from kokoro_gui.engine.presets import filter_fx_preset_values
+
+    assert filter_fx_preset_values([1, 2]) == {}
+    assert filter_fx_preset_values(None) == {}
+
+
+def test_fx_value_ranges_mirror_the_sliders():
+    from kokoro_gui.engine.presets import FX_VALUE_RANGES
+    from kokoro_gui.qt import spec
+
+    sliders = {s.key: (s.minimum, s.maximum) for s in spec.FX_FIELD_SPECS if hasattr(s, "minimum")}
+    assert FX_VALUE_RANGES == sliders
+
+
+def test_every_default_fx_setting_is_inside_its_range():
+    from kokoro_gui.engine.presets import filter_fx_preset_values
+    from kokoro_gui.qt import spec
+
+    defaults = {k: spec.SETTINGS_DEFAULTS[k] for k in spec.FX_PRESET_KEYS}
+    assert filter_fx_preset_values(defaults) == defaults
+
+
+def test_load_fx_preset_with_a_loud_gain_loads_without_error(engine, tmp_path, monkeypatch):
+    from kokoro_gui.engine.presets import filter_fx_preset_values
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "presets" / "fx").mkdir(parents=True)
+    (tmp_path / "presets" / "fx" / "Loud.json").write_text(
+        json.dumps({"gain_db": "loud", "gain_enabled": True}), encoding="utf-8")
+
+    loaded = engine.load_fx_preset("Loud")
+    assert filter_fx_preset_values(loaded) == {"gain_enabled": True}
+
+
+def test_load_fx_preset_of_a_json_list_is_none(engine, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "presets" / "fx").mkdir(parents=True)
+    (tmp_path / "presets" / "fx" / "List.json").write_text("[1, 2]", encoding="utf-8")
+    assert engine.load_fx_preset("List") is None

@@ -2,6 +2,8 @@
 import json
 import os
 
+import pytest
+
 from kokoro_gui.qt import settings as qt_settings
 
 
@@ -143,3 +145,110 @@ def test_engine_settings_default_from_the_schema(qt_app):
     audio8 = qt_app.engine_settings("audio8")
     assert audio8["lang_code"] == "English" and audio8["temperature"] == 0.8
     assert audio8["voice"] is None and "caching" not in audio8 and "speed" not in audio8
+
+
+# --- untrusted config_qt.json: wrong-typed values, atomic write -----------------
+
+def _write_config(tmp_path, content):
+    path = tmp_path / "config_qt.json"
+    path.write_text(content if isinstance(content, str) else json.dumps(content), encoding="utf-8")
+    return str(path)
+
+
+def test_load_settings_resets_a_wrong_typed_value_to_its_default(tmp_path, capsys):
+    from kokoro_gui.qt import spec
+
+    cfg = _write_config(tmp_path, {"speed": "fast", "lexicon": [], "num_threads": 2.5, "caching": "false",
+                                   "volume": 2, "voice_note": "unknown keys pass through"})
+    settings = qt_settings.load_settings(cfg)
+
+    assert settings["speed"] == spec.SETTINGS_DEFAULTS["speed"]
+    assert settings["lexicon"] == {}
+    assert settings["num_threads"] == spec.SETTINGS_DEFAULTS["num_threads"]
+    assert settings["caching"] == spec.SETTINGS_DEFAULTS["caching"]
+    assert settings["volume"] == 2  # an int where a float is expected is fine
+    assert settings["voice_note"] == "unknown keys pass through"
+    assert "caching, lexicon, num_threads, speed" in capsys.readouterr().out
+
+
+def test_load_settings_rejects_a_bool_for_a_number_and_a_non_finite_float(tmp_path):
+    from kokoro_gui.qt import spec
+
+    cfg = _write_config(tmp_path, '{"speed": true, "pitch": NaN, "num_threads": true, "last_project": 5}')
+    settings = qt_settings.load_settings(cfg)
+    assert settings["speed"] == spec.SETTINGS_DEFAULTS["speed"]
+    assert settings["pitch"] == spec.SETTINGS_DEFAULTS["pitch"]
+    assert settings["num_threads"] == spec.SETTINGS_DEFAULTS["num_threads"]
+    assert settings["last_project"] is None
+
+
+def test_load_settings_keeps_a_last_project_path(tmp_path):
+    cfg = _write_config(tmp_path, {"last_project": "C:/books/novel.tbaw"})
+    assert qt_settings.load_settings(cfg)["last_project"] == "C:/books/novel.tbaw"
+
+
+def test_a_config_holding_a_list_loads_the_defaults(tmp_path):
+    from kokoro_gui.qt import spec
+
+    assert qt_settings.load_settings(_write_config(tmp_path, "[]")) == spec.SETTINGS_DEFAULTS
+
+
+def test_a_config_that_is_not_json_loads_the_defaults(tmp_path):
+    from kokoro_gui.qt import spec
+
+    assert qt_settings.load_settings(_write_config(tmp_path, "{not json")) == spec.SETTINGS_DEFAULTS
+
+
+@pytest.fixture
+def wrong_typed_config(tmp_path):
+    """On disk before `qt_app` builds (a fixture listed first is set up first)."""
+    return _write_config(tmp_path, {"speed": "fast", "lexicon": [], "volume": "loud", "reverb_room_size": "big",
+                                    "gain_db": None, "comp_enabled": "yes", "convolution_ir": ["x"],
+                                    "highpass_freq": {"a": 1}, "gsm_enabled": 3})
+
+
+def test_the_app_starts_with_wrong_typed_settings(wrong_typed_config, qt_app):
+    """Each of these used to raise `TypeError` in a widget constructor."""
+    from kokoro_gui.qt import spec
+
+    assert qt_app.settings["speed"] == spec.SETTINGS_DEFAULTS["speed"]
+    assert qt_app.settings["lexicon"] == {}
+    assert qt_app.settings_dock.volume_spin.value() == spec.SETTINGS_DEFAULTS["volume"]
+    assert qt_app.fx_dock._value_widgets["gain_db"].value() == spec.SETTINGS_DEFAULTS["gain_db"]
+
+
+def test_save_settings_leaves_no_temp_file(tmp_path):
+    cfg = str(tmp_path / "config_qt.json")
+    qt_settings.save_settings(cfg, {"speed": 1.2})
+    assert sorted(os.listdir(tmp_path)) == ["config_qt.json"]
+
+
+def test_a_failed_replace_keeps_the_old_file_and_removes_the_temp(tmp_path, monkeypatch):
+    cfg = str(tmp_path / "config_qt.json")
+    qt_settings.save_settings(cfg, {"speed": 1.2})
+
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(qt_settings.os, "replace", boom)
+    qt_settings.save_settings(cfg, {"speed": 9.9})
+
+    with open(cfg, "r", encoding="utf-8") as f:
+        assert json.load(f) == {"speed": 1.2}
+    assert sorted(os.listdir(tmp_path)) == ["config_qt.json"]
+
+
+def test_a_write_that_fails_midway_keeps_the_old_file(tmp_path, monkeypatch):
+    cfg = str(tmp_path / "config_qt.json")
+    qt_settings.save_settings(cfg, {"speed": 1.2})
+
+    def boom(obj, fp, **kwargs):
+        fp.write('{"speed": ')
+        raise OSError("disk full")
+
+    monkeypatch.setattr(qt_settings.json, "dump", boom)
+    qt_settings.save_settings(cfg, {"speed": 9.9})
+
+    with open(cfg, "r", encoding="utf-8") as f:
+        assert json.load(f) == {"speed": 1.2}
+    assert sorted(os.listdir(tmp_path)) == ["config_qt.json"]

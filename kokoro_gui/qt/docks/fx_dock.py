@@ -379,6 +379,9 @@ class FXDock(QDockWidget):
         return dict(self._none_values)
 
     def set_values(self, data: dict) -> None:
+        # A preset or settings file is untrusted: a wrong-typed value would
+        # raise in a Qt setter. The filter keeps only well-typed, in-range ones.
+        data = filter_fx_preset_values(data)
         was_loading = self._loading
         self._loading = True
         try:
