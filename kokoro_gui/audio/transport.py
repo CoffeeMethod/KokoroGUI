@@ -29,7 +29,11 @@ The original dialogue neither ducks nor is ducked: its clips load with
 speech only.
 
 Position is the callback's frame counter, sample accurate, published to
-the GUI thread by a 30Hz `QTimer` as `positionChanged(float)`. `play()`,
+the GUI thread by a 30Hz `QTimer` as `positionChanged(float)`. The same
+tick publishes `levelsChanged(peak_l, peak_r, rms_l, rms_r)`, linear: the
+callback keeps the loudest peak since the last tick and the latest block's
+RMS (four floats under the lock; the reductions allocate no per-frame
+arrays), and a pause, stop or end sends zeros. `play()`,
 `pause()`, `stop()`, `seek()`, `toggle()` are GUI-thread API.
 
 `stream_factory` is injectable: tests pass a fake whose `pull(frames)`
@@ -55,6 +59,7 @@ DEFAULT_SAMPLE_RATE = 24000
 MONITOR_MODES = ("dub", "original", "both")
 # Each side's gain in the "both" monitor mode: -6 dB.
 BOTH_GAIN = 0.5012
+_SILENT_LEVELS = (0.0, 0.0, 0.0, 0.0)
 
 
 @dataclass(frozen=True)
@@ -128,6 +133,7 @@ class Transport(QObject):
     stateChanged = Signal(str)  # "playing" | "paused" | "stopped"
     finished = Signal()
     loaded = Signal()
+    levelsChanged = Signal(float, float, float, float)  # peak L/R, RMS L/R, linear
 
     def __init__(self, parent=None, stream_factory: Optional[Callable] = None):
         super().__init__(parent)
@@ -149,6 +155,9 @@ class Transport(QObject):
         self.loop_range: Optional[tuple] = None
         # The sidechain's state while any loaded clip ducks, else None.
         self._duck: Optional[mixer.DuckState] = None
+        # (peak_l, peak_r, rms_l, rms_r), written by the callback and read
+        # (and the peaks reset) by `_on_tick`.
+        self._levels = _SILENT_LEVELS
         self._timer = QTimer(self)
         self._timer.setInterval(POSITION_TIMER_MS)
         self._timer.timeout.connect(self._on_tick)
@@ -288,6 +297,7 @@ class Transport(QObject):
             return
         self._close_stream()
         self._timer.stop()
+        self._clear_levels()
         self._set_state("paused")
         self.positionChanged.emit(self.position())
 
@@ -299,6 +309,7 @@ class Transport(QObject):
             self._ended = False
             if self._duck is not None:
                 self._duck.reset()
+        self._clear_levels()
         self._set_state("stopped")
         self.positionChanged.emit(0.0)
 
@@ -327,6 +338,11 @@ class Transport(QObject):
         self.positionChanged.emit(self.position())
 
     # -- internals -------------------------------------------------------------
+
+    def _clear_levels(self) -> None:
+        with self._lock:
+            self._levels = _SILENT_LEVELS
+        self.levelsChanged.emit(*_SILENT_LEVELS)
 
     def _set_state(self, state: str) -> None:
         if state == self._state:
@@ -377,6 +393,12 @@ class Transport(QObject):
         else:
             block = mixer.mix_block(clips, frame, frames, duck=duck)
         self._write_block(outdata, block)
+        # Per-channel peak and RMS without a temporary: min/max and a dot
+        # product reduce to two-element arrays.
+        has_audio = frames > 0
+        if has_audio:
+            top, bottom = block.max(axis=0), block.min(axis=0)
+            energy = np.einsum("ij,ij->j", block, block) / frames
         ended = False
         # Short of a loop region's end, playback runs on through silence.
         looping_region = loop_range is not None and new_frame < loop_range[1]
@@ -390,6 +412,11 @@ class Transport(QObject):
             self._frame = new_frame
             if ended:
                 self._ended = True
+            if has_audio:
+                held_l, held_r = self._levels[0], self._levels[1]
+                self._levels = (max(held_l, float(top[0]), -float(bottom[0])),
+                                max(held_r, float(top[1]), -float(bottom[1])),
+                                float(np.sqrt(energy[0])), float(np.sqrt(energy[1])))
 
     @staticmethod
     def _write_block(outdata, block: np.ndarray) -> None:
@@ -407,12 +434,16 @@ class Transport(QObject):
     def _on_tick(self) -> None:
         with self._lock:
             ended = self._ended
+            levels = self._levels
+            self._levels = (0.0, 0.0, levels[2], levels[3])
         self.positionChanged.emit(self.position())
+        self.levelsChanged.emit(*levels)
         if ended:
             self._close_stream()
             self._timer.stop()
             with self._lock:
                 self._ended = False
+            self._clear_levels()
             self._set_state("stopped")
             self.finished.emit()
 

@@ -127,6 +127,24 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Export and loudness</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Normalize loudness on export</h4>
+            <p>The Export dialog has a "Normalize loudness" checkbox, off by default, with a "Target (LUFS)" box (-30 to -5, default -16) and a "True peak ceiling (dBTP)" box (-6 to 0, default -1). The export gets one gain that brings the integrated loudness (ITU-R BS.1770) to the target. If that gain would push the true peak past the ceiling, the gain stops at the ceiling and the target isn't reached. There is no limiter. The status line then reports what the file measures, for example "Measured -16.0 LUFS, -1.2 dBTP", and adds "target not reached: peak-limited" when the ceiling won, with the loudness it did reach. A stereo export reads 3 LU louder than the same signal as mono, because both channels count, so pick the target for the channel setting you export. Per-clip files are not normalized. The three settings are kept per project in <code>project.json</code>, which older versions ignore. Normalizing and measuring need the <code>pyloudnorm</code> package, now in <code>requirements.txt</code>. Without it the row is greyed out.</p>
+          </li>
+          <li>
+            <h4>File &gt; Measure Loudness</h4>
+            <p>Renders the project the way Export would, with the channel setting from the Export dialog, and shows the integrated loudness, true peak, sample peak, RMS, noise floor and length. No file is written, and a clip that is out of date counts as silence, as it does in an export. The noise floor is the quietest tenth of the 50 ms windows, measured as RMS, which is how ACX looks for room tone.</p>
+          </li>
+          <li>
+            <h4>A level meter on the transport</h4>
+            <p>Two thin bars under the play buttons show the left and right output level from -60 to 0 dBFS while the project plays. The bar is the RMS of the last block and the tick is the peak, held for 1.5 seconds. The bar is green below -6 dBFS, amber up to -1 and red above. Both bars are empty when playback is stopped or paused.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Editing</h3>
         <ul class="change-list">
           <li>

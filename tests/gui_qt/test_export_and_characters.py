@@ -1,9 +1,11 @@
 """Tests for the Export dialog (section 6) and the Edit > Characters dialog
 (UI13) of Claude/PLAN_ui_shell_redesign.md, plus the transport -> playhead
 -> transcript follow chain (section 5) at the app level."""
+import math
 import os
 
 import numpy as np
+import pytest
 import soundfile as sf
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QMessageBox
@@ -21,11 +23,15 @@ def _type(editor, text):
     cursor.insertText(text)
 
 
-def _generated_clip(qt_app, tmp_path, start, end, seconds=1.0, name="a"):
+def _generated_clip(qt_app, tmp_path, start, end, seconds=1.0, name="a", tone_hz=None):
     alice = qt_app.document.characters[0]
     clip = qt_app.document.assign_character_to_range(start, end, alice.id)
     path = str(tmp_path / f"{name}.wav")
-    sf.write(path, np.full(int(24000 * seconds), 0.25, dtype=np.float32), 24000)
+    if tone_hz:  # loudness tests need something K-weighting does not remove
+        samples = (0.25 * np.sin(2 * np.pi * tone_hz * np.arange(int(24000 * seconds)) / 24000)).astype(np.float32)
+    else:
+        samples = np.full(int(24000 * seconds), 0.25, dtype=np.float32)
+    sf.write(path, samples, 24000)
     text = qt_app.document.clip_text(clip)
     expected = compute_expected_cache_hash(text, qt_app.document.effective_config_for_clip(clip))
     clip.segments = build_segments_from_results(expected, [{"text": text, "path": path, "duration": seconds}])
@@ -57,7 +63,8 @@ def test_export_dialog_reads_back_sanitized_values(qt_app):
     values = dialog.values()
 
     assert values == {"out_dir": "out", "filename": "evil", "format": "flac", "srt": True, "keep_clip_files": True,
-                      "channels": 2, "srt_words": False, "cue_sheet": False}
+                      "channels": 2, "srt_words": False, "cue_sheet": False,
+                      "normalize_loudness": False, "target_lufs": -16.0, "ceiling_dbtp": -1.0}
 
 
 def test_run_export_refuses_without_clips(qt_app, monkeypatch):
@@ -416,3 +423,113 @@ def test_both_pickers_list_the_same_engines_in_the_same_order(qt_app):
     dialog_ids = [dialog.engine_combo.itemData(i) for i in range(dialog.engine_combo.count())]
     dock_ids = [combo.itemData(i) for i in range(combo.count())]
     assert dialog_ids == dock_ids == [engine_id for _label, engine_id in qt_app.engine_choices()]
+
+
+# -- loudness (plan 12) -------------------------------------------------------------------
+
+
+def test_export_dialog_loudness_rows_default_off_and_persist(qt_app):
+    pytest.importorskip("pyloudnorm")
+    dialog = ExportDialog(qt_app)
+    assert not dialog.normalize_check.isChecked()
+    assert not dialog.target_spin.isEnabled() and not dialog.ceiling_spin.isEnabled()
+    assert (dialog.target_spin.value(), dialog.ceiling_spin.value()) == (-16.0, -1.0)
+    assert (dialog.target_spin.minimum(), dialog.target_spin.maximum()) == (-30.0, -5.0)
+    assert (dialog.ceiling_spin.minimum(), dialog.ceiling_spin.maximum()) == (-6.0, 0.0)
+
+    dialog.normalize_check.setChecked(True)
+    dialog.target_spin.setValue(-19.0)
+    dialog.ceiling_spin.setValue(-3.0)
+    assert dialog.target_spin.isEnabled() and dialog.ceiling_spin.isEnabled()
+    qt_app.project_settings["export"] = dialog.values()
+
+    again = ExportDialog(qt_app)
+    assert again.normalize_check.isChecked()
+    assert (again.target_spin.value(), again.ceiling_spin.value()) == (-19.0, -3.0)
+
+
+def test_export_defaults_ignore_a_bad_loudness_value(qt_app):
+    qt_app.project_settings["export"] = {"target_lufs": "loud", "ceiling_dbtp": 40, "normalize_loudness": 1}
+    values = export_defaults(qt_app)
+    assert values["target_lufs"] == -16.0 and values["ceiling_dbtp"] == 0.0 and values["normalize_loudness"] is True
+
+
+def test_export_dialog_disables_normalize_without_pyloudnorm(qt_app, monkeypatch):
+    from kokoro_gui.audio import loudness
+
+    monkeypatch.setattr(loudness, "available", lambda: False)
+    qt_app.project_settings["export"] = {"normalize_loudness": True}
+    dialog = ExportDialog(qt_app)
+    assert not dialog.normalize_check.isEnabled() and not dialog.normalize_check.isChecked()
+    assert "pyloudnorm" in dialog.normalize_check.toolTip()
+
+
+def _export_with_loudness(qt_app, tmp_path, **loud):
+    qt_app.document.settings["gap_s"] = 0.0
+    _type(qt_app.editor, "hello world")
+    _generated_clip(qt_app, tmp_path, 0, 5, seconds=1.0, name="a", tone_hz=440)
+    _generated_clip(qt_app, tmp_path, 6, 11, seconds=1.0, name="b", tone_hz=440)
+    values = {"out_dir": str(tmp_path / "out"), "filename": "mix", "format": "wav", "srt": False,
+              "keep_clip_files": False, "normalize_loudness": True, **loud}
+    assert run_export(qt_app, values) is True
+    coro = qt_app.engine.worker.run_coro.call_args[0][0]
+    import asyncio
+
+    result = asyncio.run(coro)
+    qt_app.engine.worker.run_coro.return_value.set_result(result)
+    return result
+
+
+def test_export_with_loudness_reports_what_it_measured(qt_app, tmp_path):
+    pytest.importorskip("pyloudnorm")
+    result = _export_with_loudness(qt_app, tmp_path, target_lufs=-20.0, ceiling_dbtp=-1.0)
+
+    assert not result.loudness_limited
+    assert result.loudness_after.integrated_lufs == pytest.approx(-20.0, abs=0.5)
+    message = qt_app.transport_dock.status_text()
+    assert "Measured" in message and "LUFS" in message and "dBTP" in message
+
+
+def test_export_message_says_when_the_peak_ceiling_limited_the_gain(qt_app, tmp_path):
+    pytest.importorskip("pyloudnorm")
+    result = _export_with_loudness(qt_app, tmp_path, target_lufs=-5.0, ceiling_dbtp=-6.0)
+
+    assert result.loudness_limited
+    assert "target not reached: peak-limited" in qt_app.transport_dock.status_text()
+
+
+# -- Measure Loudness ---------------------------------------------------------------------
+
+
+def test_measure_loudness_refuses_without_clips(qt_app, monkeypatch):
+    infos = []
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: infos.append(a)))
+    qt_app.measure_loudness()
+    assert infos and not qt_app.is_busy()
+
+
+def test_measure_loudness_shows_numbers_for_two_clips_and_writes_no_file(qt_app, tmp_path):
+    pytest.importorskip("pyloudnorm")
+    qt_app.document.settings["gap_s"] = 0.0
+    _type(qt_app.editor, "hello world")
+    _generated_clip(qt_app, tmp_path, 0, 5, seconds=1.0, name="a", tone_hz=440)
+    _generated_clip(qt_app, tmp_path, 6, 11, seconds=1.0, name="b", tone_hz=440)
+    before = sorted(p.name for p in tmp_path.rglob("*"))
+
+    qt_app.measure_loudness()
+    assert qt_app.is_busy()
+    coro = qt_app.engine.worker.run_coro.call_args[0][0]
+    import asyncio
+
+    report = asyncio.run(coro)
+    qt_app.engine.worker.run_coro.return_value.set_result(report)
+
+    assert not qt_app.is_busy()
+    dialog = qt_app._loudness_dialog
+    assert dialog is not None and dialog.isVisible()
+    assert dialog.report.duration_s == pytest.approx(2.0, abs=0.05)
+    assert math.isfinite(dialog.report.integrated_lufs)
+    assert "LUFS" in dialog.value_labels["integrated"].text()
+    assert "dBTP" in dialog.value_labels["true_peak"].text()
+    assert sorted(p.name for p in tmp_path.rglob("*")) == before
+    dialog.close()

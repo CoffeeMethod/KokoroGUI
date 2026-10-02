@@ -429,6 +429,7 @@
             <tr><td>Bundle imported audio in the project file</td><td>On by default. Music beds, the source track and imported recordings go under <code>audio/imported/</code> in the <code>.tbaw</code>. Off leaves them out; a copy opened elsewhere plays without them.</td></tr>
             <tr><td>Format</td><td>wav, mp3, flac or ogg.</td></tr>
             <tr><td>Channels</td><td>Stereo, or mono (the average of the two channels). Muted and soloed-out tracks are left out either way.</td></tr>
+            <tr><td>Normalize loudness / Target (LUFS) / True peak ceiling (dBTP)</td><td>Off by default. On, the export gets one gain that brings its integrated loudness to the target (-30 to -5, default -16) without the true peak passing the ceiling (-6 to 0, default -1). There is no limiter, so a peaky mix can end short of the target; the status line says "target not reached: peak-limited" then. Per-clip files aren't normalized. Remembered per project. Needs <code>pyloudnorm</code>.</td></tr>
             <tr><td>Range</td><td>The whole project, the stretch between any two neighbouring markers, or the loop region.</td></tr>
             <tr><td>Also write .srt</td><td>Subtitles timed from each clip's timeline start and duration, one row per generated clip. "One subtitle per word" writes a row per spoken word instead, from the stored word timings.</td></tr>
             <tr><td>Also write a cue sheet (.csv)</td><td>One row per clip: start, end (timecode when it's on), character, source text, text, status and note.</td></tr>

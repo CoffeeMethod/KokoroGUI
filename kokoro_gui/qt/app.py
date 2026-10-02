@@ -96,7 +96,7 @@ from kokoro_gui.qt.docks import (  # noqa: E402
     FXDock, LexiconDock, MixingDock, OutlineDock, SettingsDock, TimelineDock, TranscriptDock, TransportDock,
     VideoDock, VoiceCloneDock,
 )
-from kokoro_gui.qt.docks.export_dialog import ExportDialog, run_export  # noqa: E402
+from kokoro_gui.qt.docks.export_dialog import ExportDialog, LoudnessDialog, run_export, run_measure_loudness  # noqa: E402
 from kokoro_gui.qt.timeline_view import STATUS_LABELS  # noqa: E402
 from kokoro_gui.qt.welcome_dialog import WelcomeDialog  # noqa: E402
 
@@ -118,6 +118,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     exportProgress = Signal(float, str)
     exportFinished = Signal(bool, str)
     exportWrote = Signal(str)  # the mix's path, just before a successful exportFinished
+    loudnessMeasured = Signal(object, str)  # (LoudnessReport or None, note or error)
     # Background project I/O (Open's audio extraction, Save's zip write):
     # progress as (percent, detail), completion as (callback, result, error)
     # marshalled onto the GUI thread.
@@ -306,6 +307,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.exportProgress.connect(self._on_export_progress)
         self.exportFinished.connect(self._on_export_finished)
         self.exportWrote.connect(self._on_export_wrote)
+        self.loudnessMeasured.connect(self._on_loudness_measured)
+        self._loudness_dialog = None
         self._last_export_path: str | None = None
 
         # Theme before any custom-painted widget exists, so their first
@@ -943,6 +946,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.file_menu.addAction(self.load_video_action)
         self.export_action = self._action("&Export...", self.export_dialog, "Ctrl+E")
         self.file_menu.addAction(self.export_action)
+        self.measure_loudness_action = self._action("&Measure Loudness...", self.measure_loudness)
+        self.file_menu.addAction(self.measure_loudness_action)
         self.file_menu.addSeparator()
         self.quit_action = self._action("&Quit", self.close, QKeySequence.StandardKey.Quit)
         self.file_menu.addAction(self.quit_action)
@@ -1172,6 +1177,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.transport_dock.playRequested.connect(self.transport.play)
         self.transport_dock.pauseRequested.connect(self.transport.pause)
         self.transport_dock.stopRequested.connect(self.transport.stop)
+        self.transport.levelsChanged.connect(self.transport_dock.set_levels)
         self.transport_dock.loopToggled.connect(self._on_loop_toggled)
         self.transport_dock.monitorChanged.connect(self.set_monitor_mode)
 
@@ -3436,6 +3442,19 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         if dialog.exec() != ExportDialog.DialogCode.Accepted:
             return
         run_export(self, dialog.values(), parent=self, bundle=dialog.bundle_values(), range_s=dialog.range_s())
+
+    def measure_loudness(self) -> None:
+        run_measure_loudness(self, parent=self)
+
+    def _on_loudness_measured(self, report, note: str) -> None:
+        self.transport_dock.set_busy(False)
+        self.transport_dock.set_progress_value(100 if report is not None else 0)
+        if report is None:
+            self.set_status(note, "error")
+            return
+        self.set_status("Measured loudness.", "success")
+        self._loudness_dialog = LoudnessDialog(report, note, parent=self)
+        self._loudness_dialog.show()
 
     def _on_export_progress(self, percent: float, detail: str) -> None:
         self.transport_dock.set_progress(percent, detail)

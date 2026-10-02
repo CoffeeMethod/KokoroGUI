@@ -2,10 +2,11 @@
 (section 6 of Claude/PLAN_ui_shell_redesign.md). Writes real wav files
 into tmp_path; no engine, no Qt."""
 import numpy as np
+import pytest
 import soundfile as sf
 
 from kokoro_gui.daw.arrangement import compute_arrangement
-from kokoro_gui.daw.mixdown import mixdown, write_srt
+from kokoro_gui.daw.mixdown import mixdown, render_mix, write_audio, write_srt
 from kokoro_gui.daw.models import Character, Clip, Document, Run, Segment, Track
 
 
@@ -311,3 +312,84 @@ def test_srt_and_cue_sheet_leave_out_inline_markup(tmp_path):
     cues = open(write_cue_sheet(doc, arrangement, str(tmp_path / "a.csv")), encoding="utf-8").read()
     assert "\nHello there.\n" in srt and "[Alice" not in srt
     assert "Hello there." in cues and "[Alice" not in cues
+
+
+# -- render_mix and the loudness option (plan 12) ----------------------------
+
+
+def test_render_mix_returns_the_mix_without_writing_anything(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+
+    mix = render_mix(doc, 8000)
+
+    assert mix.samples.shape == (12000, 2)
+    assert mix.samples.dtype == np.float32
+    assert np.allclose(mix.samples[:8000], 0.25, atol=1e-3)
+    assert mix.duration_s == 1.5
+    assert mix.skipped == []
+    assert [index for index, _placed, _samples in mix.per_clip] == [0, 1]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["a.wav", "b.wav"]
+    assert render_mix(doc, 8000, channels=1).samples.shape == (12000,)
+
+
+def test_mixdown_without_loudness_writes_what_render_mix_returns(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+
+    result = mixdown(doc, str(tmp_path / "out.wav"), fmt="wav", sample_rate=8000)
+    write_audio(str(tmp_path / "ref.wav"), render_mix(doc, 8000).samples, 8000, "wav")
+
+    assert (tmp_path / "out.wav").read_bytes() == (tmp_path / "ref.wav").read_bytes()
+    assert result.loudness_before is None and result.loudness_after is None
+    assert result.loudness_limited is False
+
+
+def _tone_doc(tmp_path, amplitude, seconds=4.0, rate=8000):
+    t = np.arange(int(rate * seconds)) / rate
+    path = tmp_path / "tone.wav"
+    sf.write(str(path), (amplitude * np.sin(2 * np.pi * 440 * t)).astype(np.float32), rate)
+    alice = Character.from_preset_dict("Alice", {})
+    track = Track(name="A", character_id=alice.id, order_index=0)
+    clip = Clip(character_id=alice.id, track_id=track.id,
+                segments=[Segment(order_index=0, duration=seconds, audio_path=str(path))])
+    return _doc("Hello there.", [(0, 12, clip)], characters=[alice], tracks=[track])
+
+
+def test_mixdown_normalizes_to_the_target_and_reports_before_and_after(tmp_path):
+    pytest.importorskip("pyloudnorm")
+    import pyloudnorm
+
+    doc = _tone_doc(tmp_path, 0.05)
+    out = tmp_path / "norm.wav"
+
+    result = mixdown(doc, str(out), fmt="wav", sample_rate=8000,
+                     loudness={"target_lufs": -16.0, "ceiling_dbtp": -1.0})
+
+    data, rate = sf.read(str(out), dtype="float64")
+    assert pyloudnorm.Meter(rate).integrated_loudness(data) == pytest.approx(-16.0, abs=0.5)
+    assert result.loudness_before.integrated_lufs < -20.0
+    assert result.loudness_after.integrated_lufs == pytest.approx(-16.0, abs=0.5)
+    assert result.loudness_after.true_peak_dbtp <= -1.0 + 0.01
+    assert result.loudness_limited is False
+
+
+def test_mixdown_normalize_stops_at_the_ceiling_and_says_so(tmp_path):
+    pytest.importorskip("pyloudnorm")
+    doc = _tone_doc(tmp_path, 0.9)  # a -0.9 dBFS peak (about -0.5 LUFS in stereo) cannot reach -5 LUFS under -6 dBTP
+
+    result = mixdown(doc, str(tmp_path / "limited.wav"), fmt="wav", sample_rate=8000,
+                     loudness={"target_lufs": -5.0, "ceiling_dbtp": -6.0})
+
+    assert result.loudness_limited is True
+    assert result.loudness_after.true_peak_dbtp == pytest.approx(-6.0, abs=0.1)
+    assert result.loudness_after.integrated_lufs < -5.0
+
+
+def test_mixdown_normalize_leaves_per_clip_files_alone(tmp_path):
+    pytest.importorskip("pyloudnorm")
+    doc = _tone_doc(tmp_path, 0.05)
+
+    result = mixdown(doc, str(tmp_path / "n.wav"), fmt="wav", sample_rate=8000, keep_clip_files=True,
+                     loudness={"target_lufs": -16.0, "ceiling_dbtp": -1.0})
+
+    clip, _ = sf.read(result.clip_files[0], dtype="float32")
+    assert np.max(np.abs(clip)) == pytest.approx(0.05, abs=1e-3)

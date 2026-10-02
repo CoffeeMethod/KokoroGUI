@@ -3,8 +3,10 @@
 Holds what left the Settings tab: output folder, base filename, format,
 "also write .srt" (per clip or per word), "keep per-clip files", plus
 channels (stereo, or mono as the average of the two), a range (the whole
-project or between two markers) and "also write a cue sheet (.csv)"
-(kokoro_gui/daw/mixdown.py's `write_cue_sheet`). Values persist per project in
+project or between two markers), "also write a cue sheet (.csv)"
+(kokoro_gui/daw/mixdown.py's `write_cue_sheet`) and "Normalize loudness"
+(a LUFS target under a true-peak ceiling, `kokoro_gui.audio.loudness`).
+Values persist per project in
 `app.project_settings["export"]`, falling back to the old `config_qt.json`
 keys (`out_dir`/`filename`/`format`/`export_subtitles`/`separate`) so an
 existing user's choices carry over.
@@ -21,24 +23,31 @@ engine worker via `run_coro` and reports through the Transport dock's
 progress bar. A document with no clips at all still gets the whole-text
 `start_conversion()` path - that's unchanged, this dialog is for clip
 documents.
+
+`run_measure_loudness()` (File > Measure Loudness...) renders the same mix
+on the worker thread and shows a `LoudnessDialog`; no file is written.
 """
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QLineEdit,
-    QMessageBox, QPushButton, QWidget,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
+    QLineEdit, QMessageBox, QPushButton, QWidget,
 )
 
+from kokoro_gui.audio import loudness as loudness_mod
 from kokoro_gui.daw import markers as marker_ops
-from kokoro_gui.daw.mixdown import mixdown
+from kokoro_gui.daw.mixdown import mixdown, render_mix
 from kokoro_gui.qt import project as project_io
 
 FORMATS = ("wav", "mp3", "flac", "ogg")
 BUNDLE_AUDIO_FORMATS = ("wav", "flac")
+DEFAULT_TARGET_LUFS = -16.0
+DEFAULT_CEILING_DBTP = -1.0
 
 
 def _export_target(app):
@@ -63,6 +72,45 @@ def export_defaults(app) -> dict:
         "channels": 1 if project.get("channels") == 1 else 2,
         "srt_words": bool(project.get("srt_words", False)),
         "cue_sheet": bool(project.get("cue_sheet", False)),
+        "normalize_loudness": bool(project.get("normalize_loudness", False)),
+        "target_lufs": _number(project.get("target_lufs"), DEFAULT_TARGET_LUFS, -30.0, -5.0),
+        "ceiling_dbtp": _number(project.get("ceiling_dbtp"), DEFAULT_CEILING_DBTP, -6.0, 0.0),
+    }
+
+
+def _number(value, default: float, lo: float, hi: float) -> float:
+    """`value` as a float inside `[lo, hi]`, or `default` when it isn't a
+    number (a hand-edited project.json)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return min(hi, max(lo, number)) if math.isfinite(number) else default
+
+
+def format_levels(report) -> str:
+    """"-16.0 LUFS, -1.2 dBTP", or plain words for silence."""
+    if report is None or not math.isfinite(report.integrated_lufs):
+        return "no measurable loudness"
+    return f"{report.integrated_lufs:.1f} LUFS, {report.true_peak_dbtp:.1f} dBTP"
+
+
+def _mix_inputs(app) -> dict:
+    """The keyword arguments `render_mix` and `mixdown` share, resolved on
+    the GUI thread: the arrangement, the mix rate, each clip's
+    post-processing (it reads dock state) and each subproject's mixdown file
+    (phase 4)."""
+    level = getattr(app, "level", None)
+    arrangement = app.build_arrangement()
+    post_configs = {p.clip.id: app.post_config_for_clip(p.clip, level) for p in arrangement.placed}
+    nested = {p.clip.id: app.nested_audio_path(p.clip, level)
+              for p in arrangement.placed if p.clip.is_nested} if hasattr(app, "nested_audio_path") else {}
+    return {
+        "sample_rate": app.project_sample_rate(),
+        "arrangement": arrangement,
+        "engine_id": app.backend.id,
+        "post_config_for_clip": lambda clip: post_configs.get(clip.id),
+        "nested_audio_path": lambda clip: nested.get(clip.id),
     }
 
 
@@ -99,6 +147,32 @@ class ExportDialog(QDialog):
         self.channels_combo.addItem("Mono", 1)
         self.channels_combo.setCurrentIndex(self.channels_combo.findData(values["channels"]))
         form.addRow("Channels:", self.channels_combo)
+
+        # Normalize the mix to a loudness target (kokoro_gui.audio.loudness).
+        self.normalize_check = QCheckBox("Normalize loudness")
+        self.normalize_check.setChecked(values["normalize_loudness"])
+        form.addRow("", self.normalize_check)
+        self.target_spin = QDoubleSpinBox()
+        self.target_spin.setRange(-30.0, -5.0)
+        self.target_spin.setDecimals(1)
+        self.target_spin.setSingleStep(0.5)
+        self.target_spin.setValue(values["target_lufs"])
+        self.target_spin.setToolTip("Integrated loudness the mix is brought to (ITU-R BS.1770, in LUFS).")
+        form.addRow("Target (LUFS):", self.target_spin)
+        self.ceiling_spin = QDoubleSpinBox()
+        self.ceiling_spin.setRange(-6.0, 0.0)
+        self.ceiling_spin.setDecimals(1)
+        self.ceiling_spin.setSingleStep(0.5)
+        self.ceiling_spin.setValue(values["ceiling_dbtp"])
+        self.ceiling_spin.setToolTip("The gain stops short of the target rather than push the true peak past "
+                                     "this. There is no limiter.")
+        form.addRow("True peak ceiling (dBTP):", self.ceiling_spin)
+        self.normalize_check.toggled.connect(self._sync_loudness_rows)
+        if not loudness_mod.available():
+            self.normalize_check.setChecked(False)
+            self.normalize_check.setEnabled(False)
+            self.normalize_check.setToolTip("Needs the pyloudnorm package (pip install pyloudnorm).")
+        self._sync_loudness_rows()
 
         # Whole project, or between two markers (kokoro_gui/daw/markers.py).
         self.range_combo = QComboBox()
@@ -156,6 +230,11 @@ class ExportDialog(QDialog):
         self.buttons.rejected.connect(self.reject)
         form.addRow(self.buttons)
 
+    def _sync_loudness_rows(self) -> None:
+        on = self.normalize_check.isChecked()
+        self.target_spin.setEnabled(on)
+        self.ceiling_spin.setEnabled(on)
+
     def _browse_dir(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "Select output folder", self.out_dir_edit.text())
         if d:
@@ -181,6 +260,9 @@ class ExportDialog(QDialog):
             "channels": self.channels_combo.currentData(),
             "srt_words": self.srt_words_check.isChecked(),
             "cue_sheet": self.cue_sheet_check.isChecked(),
+            "normalize_loudness": self.normalize_check.isChecked(),
+            "target_lufs": self.target_spin.value(),
+            "ceiling_dbtp": self.ceiling_spin.value(),
         }
 
     def range_s(self):
@@ -227,15 +309,12 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
     app.schedule_save()
 
     out_path = os.path.join(values["out_dir"], f"{values['filename']}.{values['format']}")
-    arrangement = app.build_arrangement()
-    sample_rate = app.project_sample_rate()
-    # Resolved on the GUI thread (it reads dock state); the export thread
+    # Resolved on the GUI thread (they read dock state); the export thread
     # only applies them.
-    level = getattr(app, "level", None)
-    post_configs = {p.clip.id: app.post_config_for_clip(p.clip, level) for p in arrangement.placed}
-    # Subprojects export as their mixdowns (phase 4).
-    nested_paths = {p.clip.id: app.nested_audio_path(p.clip, level)
-                    for p in arrangement.placed if p.clip.is_nested} if hasattr(app, "nested_audio_path") else {}
+    inputs = _mix_inputs(app)
+    loudness = {"target_lufs": values.get("target_lufs", DEFAULT_TARGET_LUFS),
+                "ceiling_dbtp": values.get("ceiling_dbtp", DEFAULT_CEILING_DBTP)} \
+        if values.get("normalize_loudness") and loudness_mod.available() else None
 
     app.transport_dock.set_busy(True)
     app.transport_dock.set_status("Exporting...", "busy")
@@ -246,11 +325,10 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
 
     async def _run():
         return await asyncio.to_thread(
-            mixdown, document, out_path, values["format"], sample_rate,
-            values["srt"], values["keep_clip_files"], arrangement, app.backend.id, _progress,
-            lambda clip: post_configs.get(clip.id), values.get("channels", 2), range_s,
-            "word" if values.get("srt_words") else "clip", bool(values.get("cue_sheet")),
-            lambda clip: nested_paths.get(clip.id),
+            mixdown, document, out_path, fmt=values["format"], include_srt=values["srt"],
+            keep_clip_files=values["keep_clip_files"], progress=_progress, channels=values.get("channels", 2),
+            range_s=range_s, srt_granularity="word" if values.get("srt_words") else "clip",
+            include_cue_sheet=bool(values.get("cue_sheet")), loudness=loudness, **inputs,
         )
 
     def _done(future):
@@ -264,10 +342,105 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
             if result.cue_sheet_path:
                 extras.append("cue sheet")
             suffix = f" (+ {', '.join(extras)})" if extras else ""
+            if result.loudness_after is not None:
+                suffix += f". Measured {format_levels(result.loudness_after)}"
+                if result.loudness_limited:
+                    suffix += "; target not reached: peak-limited"
             app.exportWrote.emit(result.audio_path)
             app.exportFinished.emit(True, f"Exported {result.audio_path}{suffix}")
         except Exception as e:  # noqa: BLE001 - surfaced to the status line
             app.exportFinished.emit(False, f"Export failed: {e}")
+
+    future = app.backend.run(_run())
+    future.add_done_callback(_done)
+    return True
+
+
+class LoudnessDialog(QDialog):
+    """The numbers `loudness.measure` found for the project's mix."""
+
+    def __init__(self, report, note: str = "", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Loudness")
+        self.report = report
+        form = QFormLayout(self)
+        self.value_labels: dict = {}
+        for key, label, text in (
+            ("integrated", "Integrated loudness:", _level(report.integrated_lufs, "LUFS")),
+            ("true_peak", "True peak:", _level(report.true_peak_dbtp, "dBTP")),
+            ("sample_peak", "Sample peak:", _level(report.sample_peak_dbfs, "dBFS")),
+            ("rms", "RMS:", _level(report.rms_dbfs, "dBFS")),
+            ("noise_floor", "Noise floor:", _level(report.noise_floor_dbfs, "dBFS")),
+            ("duration", "Length:", f"{report.duration_s:.1f} s"),
+        ):
+            value = QLabel(text)
+            self.value_labels[key] = value
+            form.addRow(label, value)
+        hint = QLabel("The noise floor is the quietest tenth of the 50 ms windows, the way ACX measures it.")
+        hint.setWordWrap(True)
+        form.addRow(hint)
+        if note:
+            self.note_label = QLabel(note)
+            self.note_label.setWordWrap(True)
+            form.addRow(self.note_label)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        form.addRow(buttons)
+
+
+def _level(value: float, unit: str) -> str:
+    return f"{value:.1f} {unit}" if math.isfinite(value) else "silent"
+
+
+def run_measure_loudness(app, parent=None) -> bool:
+    """File > Measure Loudness...: renders the mix `run_export` would write
+    (the export dialog's channel choice, the whole project) on the engine
+    worker, measures it and hands the report to `app.loudnessMeasured`. No
+    file is written. Returns False when nothing was scheduled."""
+    parent = parent or app
+    document, _project_settings = _export_target(app)
+    if not document.clips:
+        QMessageBox.information(parent, "Nothing to measure",
+                                "This project has no clips yet. Assign characters to text and generate first.")
+        return False
+    if app.transport_dock.is_busy():
+        QMessageBox.warning(parent, "Busy", "Finish or cancel the current job before measuring.")
+        return False
+    if not loudness_mod.available():
+        QMessageBox.warning(parent, "Loudness", "Measuring loudness needs the pyloudnorm package "
+                                                "(pip install pyloudnorm).")
+        return False
+
+    channels = export_defaults(app)["channels"]
+    inputs = _mix_inputs(app)
+    sample_rate = inputs["sample_rate"]
+    stale = len(document.dirty_clips())
+
+    app.transport_dock.set_busy(True)
+    app.transport_dock.set_status("Measuring loudness...", "busy")
+    app.transport_dock.set_progress(0, "")
+
+    def _progress(fraction: float, detail: str) -> None:
+        app.exportProgress.emit(fraction * 100.0, detail)
+
+    def _job():
+        mix = render_mix(document, channels=channels, progress=_progress, **inputs)
+        _progress(0.85, "Measuring loudness")
+        return loudness_mod.measure(mix.samples, sample_rate)
+
+    async def _run():
+        return await asyncio.to_thread(_job)
+
+    note = "Measured as " + ("mono." if channels == 1 else "stereo, the export's default.")
+    if stale:
+        note += f" {stale} clip(s) are out of date and count as silence."
+
+    def _done(future):
+        try:
+            app.loudnessMeasured.emit(future.result(), note)
+        except Exception as e:  # noqa: BLE001 - surfaced to the status line
+            app.loudnessMeasured.emit(None, f"Measuring loudness failed: {e}")
 
     future = app.backend.run(_run())
     future.add_done_callback(_done)
