@@ -381,7 +381,22 @@ class CachingMixin:
                         audio_data, _ = sf.read(f_path)
                         loaded.append((seg_text, audio_data))
                     if all_exist and loaded:
-                        cached_segments = loaded
+                        # An entry written before 4.0.0-beta.2 can hold more
+                        # files than this text now predicts (`<key>_0.wav`
+                        # and `<key>_1.wav` for one paragraph). Serving it
+                        # would play only the first part, so it is a miss.
+                        # The extra files go, or the entry would miss on
+                        # every later run.
+                        n = len(predicted_texts)
+                        if os.path.exists(os.path.join(cache_dir, f"{cache_hash}_{n}.wav")):
+                            while True:
+                                extra = os.path.join(cache_dir, f"{cache_hash}_{n}.wav")
+                                if not os.path.exists(extra):
+                                    break
+                                os.remove(extra)
+                                n += 1
+                        else:
+                            cached_segments = loaded
             except Exception as e:
                 print(f"Cache check error: {e}")
                 cached_segments = []

@@ -119,6 +119,26 @@ def test_cache_partial_files_missing_forces_regeneration(engine, fake_pipeline, 
     assert (isolated_dirs.cache_dir / f"{h}_1.wav").exists()
 
 
+def test_cache_entry_with_more_files_than_predicted_is_a_miss(engine, fake_pipeline, isolated_dirs, make_config):
+    # An entry from before 4.0.0-beta.2 holds `_0` and `_1` for a paragraph
+    # that now predicts one file. Serving it would play the first part only.
+    text = "Hello world."
+    config = make_config(caching=True)
+    h = _hash(text, config)
+
+    stale = (0.1 * np.sin(2 * np.pi * 220 * np.arange(3000) / 24000)).astype(np.float32)
+    sf.write(str(isolated_dirs.cache_dir / f"{h}_0.wav"), stale, 24000)
+    sf.write(str(isolated_dirs.cache_dir / f"{h}_1.wav"), stale, 24000)
+
+    results = engine.process_chunk_task((0, text, config), None)
+
+    assert len(results) == 1
+    # The model ran (the fake writes 1200 samples, the stale file had 3000),
+    # and the extra file is gone so the entry hits next time.
+    assert sf.info(str(isolated_dirs.cache_dir / f"{h}_0.wav")).frames == 1200
+    assert not (isolated_dirs.cache_dir / f"{h}_1.wav").exists()
+
+
 def test_pitch_affects_cache_key(engine, fake_pipeline, isolated_dirs, make_config):
     text = "Hello world."
     config_a = make_config(caching=True, pitch=0.0)
