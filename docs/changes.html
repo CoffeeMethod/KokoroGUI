@@ -172,6 +172,26 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Importing books</h3>
+        <ul class="change-list">
+          <li>
+            <h4>An import wizard with a section checklist and cleanup rules</h4>
+            <p>File &gt; Import Text and the Welcome dialog's "New from text file..." read the book and then open a wizard before anything reaches a project. The left side lists the sections, an EPUB's chapters or a PDF's outline entries, with a checkbox and a word count each. A section whose title starts with copyright, contents, table of contents, also by, acknowledgments, about the author or dedication starts unticked, and so does a section under 200 characters that is mostly digits and punctuation. All and None set every box. A plain <code>.txt</code> is one section, and the wizard still opens so the cleanup rules apply to it.</p>
+            <p>The right side has one checkbox per cleanup rule and two panes, the selected section before and after the ticked rules. The preview updates 150 ms after a change and shows the first 20,000 characters of a long section. The rules run in this order:</p>
+            <ul>
+              <li>Drop page numbers. A line of only digits, a roman numeral in one case ("iv", "XIV"), "Page 12", "Page 12 of 300" or "- 12 -" goes. A word that is also a valid numeral, such as "mix" alone on a line, goes too.</li>
+              <li>Join words split by a hyphen at a line break. "exam-" then "ple" becomes "example". The next line has to start with a lowercase letter, so "well-" then "Known" keeps its hyphen.</li>
+              <li>Join wrapped lines inside a paragraph, off by default. A line break becomes a space unless a blank line follows, the line ends a sentence, or either line is a scene break. It suits PDFs, where every line is a wrap. A heading with no punctuation gets joined to the text under it.</li>
+              <li>Turn a line of only <code>*</code>, <code>#</code>, <code>~</code> or em dashes into <code>[pause:1.5]</code> in a paragraph of its own. Auto-split turns the marker into a 1.5 second gap.</li>
+              <li>Collapse three or more line breaks to one blank line.</li>
+              <li>Strip trailing spaces.</li>
+            </ul>
+            <p>Under the panes, three radio buttons pick the destination: a new project with one subproject per section, a new project with one transcript (the sections joined by a blank line), or the current project at the caret. The Welcome dialog offers only the two new-project choices and starts on one subproject per section, and the "One subproject per chapter" checkbox it had is gone. A file with one section has no per-section choice. OK stays greyed until a section is ticked. The ticked rules are kept in <code>import_rules</code> in <code>config_qt.json</code> and come back next time. Before, Import Text asked only whether to add or start a new project, and inserted the whole file as extracted.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Menus and help</h3>
         <ul class="change-list">
           <li>

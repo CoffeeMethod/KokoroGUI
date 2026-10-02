@@ -47,6 +47,8 @@ Unreleased:
 -   Split a clip in two at the playhead and join two clips back, from Edit, the block menu or `S`
 -   Export can normalize to a LUFS target, File > Measure Loudness reports a mix, and the transport has a level meter
 -   An Outline tab that lists a book's chapters with a status and a length, and proofs one in a click
+-   Importing a book opens a wizard: tick the sections to keep, pick cleanup rules for page numbers, split words
+    and scene breaks, and check the result before it lands in the project
 
 In 4.0.0-beta.2:
 
