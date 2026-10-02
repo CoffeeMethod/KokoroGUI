@@ -116,7 +116,7 @@ class OutlineDock(QDockWidget):
         total = f"Total {outline.format_hms(result.total_s, result.estimated)}"
         if result.kind == outline.CHAPTERS:
             count = len(result.rows)
-            return f"{count} chapter{'s' if count != 1 else ''}. {total}"
+            return f"{count} subproject{'s' if count != 1 else ''}. {total}"
         if result.kind == outline.MARKERS:
             return f"{len(result.rows)} marker{'s' if len(result.rows) != 1 else ''}. {total}"
         return f"No subprojects or markers. {total}"

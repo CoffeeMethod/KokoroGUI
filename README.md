@@ -44,6 +44,7 @@ Unreleased:
 -   Generate stale clips in the selection only, a taskbar alert when a long job finishes, and a
     prompt before closing mid-generate
 -   Split a clip in two at the playhead and join two clips back, from Edit, the block menu or `S`
+-   An Outline tab that lists a book's chapters with a status and a length, and proofs one in a click
 
 In 4.0.0-beta.2:
 

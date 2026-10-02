@@ -50,7 +50,7 @@ def test_two_subprojects_make_two_rows(qt_app, qtbot):
     assert [r.status for r in rows] == [outline.IN_PROGRESS, outline.IN_PROGRESS]
     assert [dock.tree.topLevelItem(i).text(0) for i in range(2)] == ["Alpha", "Beta"]
     assert dock.tree.topLevelItem(0).text(2).startswith("~")
-    assert dock.footer.text().startswith("2 chapters. Total ~")
+    assert dock.footer.text().startswith("2 subprojects. Total ~")
 
 
 def test_rendering_a_chapter_turns_it_done_and_gives_its_length(qt_app, qtbot):
