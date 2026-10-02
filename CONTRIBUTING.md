@@ -16,6 +16,12 @@ python main.py
 Python 3.11 or newer. eSpeak NG is only needed to actually synthesize with Kokoro; the fast test
 suite runs without it.
 
+## Reporting a bug
+
+`python main.py` writes a log to `cache/logs/kokorogui.log` (Help > Open Log Folder opens it).
+Attach the end of it, or the traceback from the crash dialog's Copy button. It can hold file paths
+from your machine, so read it first.
+
 ## Tests
 
 ```bash

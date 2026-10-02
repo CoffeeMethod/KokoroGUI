@@ -127,6 +127,10 @@
             <h4>The device is named</h4>
             <p>Options &gt; Device starts with a greyed-out line, "Detected: CUDA (card name)", "Detected: MPS (Apple)" or "Detected: CPU". The first launch also puts one line in the status bar, saying which device the engines will use and where to change it. An Apple GPU is reported but not offered: Kokoro picks CUDA or the CPU only, and Audio8 ignores the setting.</p>
           </li>
+          <li>
+            <h4>A log file, and a crash dialog</h4>
+            <p>Starting the app from <code>main.py</code> (or <code>run.bat</code>) now writes <code>cache/logs/kokorogui.log</code>, 2 MB per file with 5 older files kept. Each line has the time, the level, the thread and the logger. Everything the app prints goes into the same file as well, so the existing messages need no change, and the console still gets them. An exception nobody caught, on the main thread or a worker, is logged with its traceback and opens a dialog saying "Something went wrong. The details are saved in the log." The dialog shows the traceback, with Copy, Open Log Folder and Close. It never quits the app and doesn't block the window, so you can still save. Only one dialog is open at a time, and a second exception while it's open is only logged. Help &gt; Open Log Folder opens the folder, and About has a Log file line. The log can hold file paths from your machine, so look through it before you attach it to a bug report.</p>
+          </li>
         </ul>
       </div>
 

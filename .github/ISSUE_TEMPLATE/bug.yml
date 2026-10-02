@@ -69,7 +69,7 @@ body:
     id: traceback
     attributes:
       label: Traceback or log
-      description: The terminal output from `python main.py`, if any. Pasted as text, not a screenshot.
+      description: The end of `cache/logs/kokorogui.log` (Help > Open Log Folder), or the crash dialog's traceback. Pasted as text, not a screenshot. Read it first, since it can hold file paths from your machine.
       render: text
   - type: checkboxes
     id: checks
