@@ -60,6 +60,8 @@ In 4.0.0-beta.2:
     Settings tab keeps only the voice
 -   An FX change in a long project renders in the background instead of freezing the window, and
     undoing a character change or a text replace copies only what the edit touched
+-   Generate stale clips in the selection only, a taskbar alert when a long job finishes, and a
+    prompt before closing mid-generate
 
 The [changes page](docs/changes.html) has the full detail for every version, including what the
 update does to existing projects.
