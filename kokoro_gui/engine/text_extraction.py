@@ -7,7 +7,8 @@ at call time, so tests can monkeypatch them on those modules (e.g.
 """
 import os
 import re
-from typing import NamedTuple, Optional
+import zipfile
+from typing import Callable, NamedTuple, Optional
 
 from bs4 import BeautifulSoup
 
@@ -20,6 +21,69 @@ from ebooklib import epub
 # ebooklib warns on every EPUB it opens.
 warnings.filterwarnings("ignore", category=UserWarning, module="ebooklib")
 warnings.filterwarnings("ignore", category=FutureWarning, module="ebooklib")
+
+# A book file is untrusted input: an EPUB is a zip that can inflate a
+# thousandfold, and a PDF can claim any number of pages. These caps refuse
+# such a file with `ExtractionLimitError` before it fills memory.
+MAX_BOOK_FILE_BYTES = 500 * 1024 * 1024        # the file on disk, any type
+MAX_EPUB_ENTRY_BYTES = 50 * 1024 * 1024        # one zip entry, uncompressed
+MAX_EPUB_TOTAL_BYTES = 500 * 1024 * 1024       # all entries, uncompressed
+MAX_EPUB_RATIO = 100                           # uncompressed / compressed, per entry
+MAX_PDF_PAGES = 5000
+MAX_TEXT_CHARS = 20_000_000                    # the extracted text
+
+
+class ExtractionLimitError(ValueError):
+    """A book file is over one of the limits above; the message names it."""
+
+
+class ExtractionCancelled(Exception):
+    """`should_stop` returned True while a file was being read."""
+
+
+def _mb(n: int) -> str:
+    return f"{n / (1024 * 1024):.0f} MB"
+
+
+def _check_stop(should_stop) -> None:
+    if should_stop is not None and should_stop():
+        raise ExtractionCancelled("Import cancelled.")
+
+
+def _check_file_size(fpath: str) -> None:
+    size = os.path.getsize(fpath)
+    if size > MAX_BOOK_FILE_BYTES:
+        raise ExtractionLimitError(
+            f"The file is {_mb(size)}, over the {_mb(MAX_BOOK_FILE_BYTES)} limit for a book file.")
+
+
+def _check_chars(count: int) -> None:
+    if count > MAX_TEXT_CHARS:
+        raise ExtractionLimitError(
+            f"The book holds more than {MAX_TEXT_CHARS:,} characters of text, over the limit.")
+
+
+def _check_epub(fpath: str) -> None:
+    """Refuses an EPUB whose zip would inflate past the limits, reading only
+    the directory (`zipfile` never decompresses here). Call before
+    `epub.read_epub`, which decompresses every entry into memory."""
+    _check_file_size(fpath)
+    total = 0
+    with zipfile.ZipFile(fpath) as archive:
+        for info in archive.infolist():
+            if info.file_size > MAX_EPUB_ENTRY_BYTES:
+                raise ExtractionLimitError(
+                    f"'{info.filename}' inflates to {_mb(info.file_size)}, over the "
+                    f"{_mb(MAX_EPUB_ENTRY_BYTES)} limit for one EPUB entry.")
+            if info.compress_size and info.file_size / info.compress_size > MAX_EPUB_RATIO:
+                raise ExtractionLimitError(
+                    f"'{info.filename}' is compressed more than {MAX_EPUB_RATIO} to 1, "
+                    "over the limit for an EPUB entry.")
+            total += info.file_size
+            if total > MAX_EPUB_TOTAL_BYTES:
+                raise ExtractionLimitError(
+                    f"The EPUB inflates to more than {_mb(MAX_EPUB_TOTAL_BYTES)}, over the limit.")
+
 
 # Same tag syntax `TextExtractionMixin.parse_multispeaker_text` matches -
 # duplicated here deliberately rather than shared/refactored out of that
@@ -108,10 +172,11 @@ def find_character_fx_spans(text: str) -> list:
     return spans
 
 
-def _epub_sections(fpath: str) -> list:
+def _epub_sections(fpath: str, should_stop: Optional[Callable[[], bool]] = None) -> list:
     """One `(title, text)` per EPUB spine document with text, in reading
     order; the title is the document's first `<h1>`/`<h2>`, else
     "Chapter N"."""
+    _check_epub(fpath)
     book = epub.read_epub(fpath, options={'ignore_ncx': True})
     documents = [item for item in book.get_items() if item.get_type() == ebooklib.ITEM_DOCUMENT]
     spine = [entry[0] if isinstance(entry, (tuple, list)) else entry for entry in (getattr(book, "spine", None) or [])]
@@ -121,23 +186,44 @@ def _epub_sections(fpath: str) -> list:
         ordered += [item for item in documents if item not in ordered]
         documents = ordered
     sections = []
+    chars = 0
     for item in documents:
+        _check_stop(should_stop)
         soup = BeautifulSoup(item.get_content(), 'html.parser')
         heading = soup.find(["h1", "h2"])
         text = soup.get_text(separator='\n\n').strip()
         if not text:
             continue
+        chars += len(text)
+        _check_chars(chars)
         title = heading.get_text(" ", strip=True) if heading is not None else ""
         sections.append((title or f"Chapter {len(sections) + 1}", text))
     return sections
 
 
-def _pdf_sections(fpath: str) -> list:
+def _pdf_pages(fpath: str, should_stop: Optional[Callable[[], bool]] = None) -> tuple:
+    """`(reader, [page text, ...])` under the page and text limits;
+    `should_stop` is asked after each page."""
+    _check_file_size(fpath)
+    reader = pypdf.PdfReader(fpath)
+    count = len(reader.pages)
+    if count > MAX_PDF_PAGES:
+        raise ExtractionLimitError(f"The PDF has {count:,} pages, over the {MAX_PDF_PAGES:,} page limit.")
+    pages, chars = [], 0
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        chars += len(text)
+        _check_chars(chars)
+        pages.append(text)
+        _check_stop(should_stop)
+    return reader, pages
+
+
+def _pdf_sections(fpath: str, should_stop: Optional[Callable[[], bool]] = None) -> list:
     """One `(title, text)` per top-level outline entry, from its page to the
     next entry's; the whole document as one section when there's no
     outline."""
-    reader = pypdf.PdfReader(fpath)
-    pages = [(page.extract_text() or "") for page in reader.pages]
+    reader, pages = _pdf_pages(fpath, should_stop)
     starts = []
     try:
         outline = reader.outline or []
@@ -163,51 +249,66 @@ def _pdf_sections(fpath: str) -> list:
     return sections
 
 
-def extract_sections(fpath: str) -> list:
+def extract_sections(fpath: str, should_stop: Optional[Callable[[], bool]] = None) -> list:
     """`[(title, text), ...]`: a book split at its chapters (grill NP8, the
     New-from-eBook path that makes one subproject each). EPUB: spine
     documents, titled by their first heading. PDF: the outline's top-level
-    page ranges. Anything else, or a PDF without an outline: one section."""
+    page ranges. Anything else, or a PDF without an outline: one section.
+
+    A book over the module's limits raises `ExtractionLimitError`.
+    `should_stop`, when given, is asked between spine documents and pages;
+    True raises `ExtractionCancelled`."""
     if not os.path.exists(fpath):
         raise FileNotFoundError("File does not exist.")
     lower = fpath.lower()
     if lower.endswith(".epub"):
-        return _epub_sections(fpath)
+        return _epub_sections(fpath, should_stop)
     if lower.endswith(".pdf"):
-        return _pdf_sections(fpath)
-    with open(fpath, "r", encoding="utf-8") as f:
-        text = f.read().strip()
+        return _pdf_sections(fpath, should_stop)
+    text = _read_text_file(fpath).strip()
     return [(os.path.splitext(os.path.basename(fpath))[0], text)] if text else []
 
 
-def extract_text_from_file(fpath):
+def _read_text_file(fpath: str) -> str:
+    """A plain-text file under the size and character limits."""
+    _check_file_size(fpath)
+    with open(fpath, "r", encoding="utf-8") as f:
+        text = f.read(MAX_TEXT_CHARS + 1)
+    _check_chars(len(text))
+    return text
+
+
+def extract_text_from_file(fpath, should_stop: Optional[Callable[[], bool]] = None):
     """The text of a .txt, .pdf or .epub file. A module function: it never
-    needed an engine (the GUI calls it without one)."""
+    needed an engine (the GUI calls it without one). A file over the
+    module's limits raises `ExtractionLimitError`; `should_stop`, when
+    given, is asked between pages and spine documents and True raises
+    `ExtractionCancelled`."""
     if not os.path.exists(fpath):
         raise FileNotFoundError("File does not exist.")
 
-    text_data = ""
     lower_path = fpath.lower()
 
     if lower_path.endswith(".pdf"):
-        reader = pypdf.PdfReader(fpath)
-        for page in reader.pages:
-            extracted = page.extract_text()
-            if extracted:
-                text_data += extracted + "\n\n"
+        _reader, pages = _pdf_pages(fpath, should_stop)
+        return "".join(page + "\n\n" for page in pages if page)
 
-    elif lower_path.endswith(".epub"):
+    if lower_path.endswith(".epub"):
+        _check_epub(fpath)
         book = epub.read_epub(fpath, options={'ignore_ncx': True})
+        parts, chars = [], 0
         for item in book.get_items():
             if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                _check_stop(should_stop)
                 soup = BeautifulSoup(item.get_content(), 'html.parser')
-                text_data += soup.get_text(separator='\n\n') + "\n\n"
-    else:
-        # Assume text based
-        with open(fpath, "r", encoding="utf-8") as f:
-            text_data = f.read()
+                part = soup.get_text(separator='\n\n') + "\n\n"
+                chars += len(part)
+                _check_chars(chars)
+                parts.append(part)
+        return "".join(parts)
 
-    return text_data
+    # Assume text based
+    return _read_text_file(fpath)
 
 
 class TextExtractionMixin:
