@@ -310,7 +310,8 @@ def test_context_menu_over_clip_with_audio_shows_generate_and_play(qtbot, tmp_pa
     menu = view._build_context_menu(pos)
 
     # Status is always there; Align words needs audio.
-    assert _menu_action_texts(menu) == ["Generate", "Play", "Lock in time", "", "Status", "Align words"]
+    assert _menu_action_texts(menu) == ["Generate", "Play", "", "Split here", "Join with next", "", "Lock in time", "", "Status",
+                                         "Align words"]
 
 
 def test_context_menu_over_clip_without_audio_shows_generate_only(qtbot):
@@ -326,7 +327,7 @@ def test_context_menu_over_clip_without_audio_shows_generate_only(qtbot):
     pos = view.mapFromScene(block.mapToScene(0, 0))
     menu = view._build_context_menu(pos)
 
-    assert _menu_action_texts(menu) == ["Generate", "Lock in time", "", "Status"]
+    assert _menu_action_texts(menu) == ["Generate", "", "Split here", "Join with next", "", "Lock in time", "", "Status"]
 
 
 def test_triggering_play_emits_play_clip_requested(qtbot, tmp_path):

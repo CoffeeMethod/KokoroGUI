@@ -311,6 +311,56 @@ class AssignCharacterCommand(Command):
             document.tracks = [t for t in document.tracks if t.id not in created]
 
 
+class SplitClipCommand(Command):
+    """Wraps `Document.split_clip`: one clip cut in two at a text offset.
+    Snapshots through `_EditSnapshot` over the clip's extent, like
+    `AssignCharacterCommand`, so undo puts the one clip back with its
+    segments, takes and fade-out and drops the second half. Redo re-runs
+    `do()` and gives the second half the id it had, so a later command that
+    names it still finds it."""
+
+    def __init__(self, clip_id: str, offset: int):
+        self.clip_id = clip_id
+        self.offset = offset
+        self.new_clip_id: "str | None" = None
+        self._snapshot: "_EditSnapshot | None" = None
+
+    def do(self, document) -> None:
+        extent = document.clip_extent(self.clip_id)
+        if extent is None:
+            raise ValueError(f"SplitClipCommand: no clip {self.clip_id!r}")
+        self._snapshot = snapshot = _EditSnapshot(document, extent[0], extent[1])
+        new_clip = document.split_clip(self.clip_id, self.offset, new_id=self.new_clip_id)
+        self.new_clip_id = new_clip.id
+        snapshot.seal(document)
+
+    def undo(self, document) -> None:
+        self._snapshot.restore(document)
+
+
+class JoinClipsCommand(Command):
+    """Wraps `Document.join_clips`: the second clip's text joins the first's.
+    Snapshots the range both clips and the whitespace between them cover
+    (`_EditSnapshot`), so undo brings the second clip back with its audio,
+    takes and settings."""
+
+    def __init__(self, first_id: str, second_id: str):
+        self.first_id = first_id
+        self.second_id = second_id
+        self._snapshot: "_EditSnapshot | None" = None
+
+    def do(self, document) -> None:
+        first, second = document.clip_extent(self.first_id), document.clip_extent(self.second_id)
+        if first is None or second is None:
+            raise ValueError("JoinClipsCommand: a clip has no text")
+        self._snapshot = snapshot = _EditSnapshot(document, min(first[0], second[0]), max(first[1], second[1]))
+        document.join_clips(self.first_id, self.second_id)
+        snapshot.seal(document)
+
+    def undo(self, document) -> None:
+        self._snapshot.restore(document)
+
+
 class TextEditCommand(Command):
     """Wraps `Document.replace_text` for one text edit - used only for
     non-interactive, custom-stack text mutations (the sub-range TTS replace
@@ -1014,9 +1064,3 @@ class RelaneCommand(Command):
         created = set(self._created_track_ids)
         if created:
             document.tracks = [t for t in document.tracks if t.id not in created]
-
-
-# The split-or-create primitive item 7 ("Auto-split on generation") and
-# item 9 ("Sub-range TTS replacement") will reuse is exactly
-# `assign_character_to_range` - a plain alias, not a new class.
-SplitClipCommand = AssignCharacterCommand

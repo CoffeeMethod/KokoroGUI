@@ -28,9 +28,10 @@ def test_context_menu_shows_generate_action_over_a_clip_block(qt_app):
     menu = qt_app.timeline_dock.timeline_view._build_context_menu(view_pos)
 
     assert menu is not None
-    # No audio, one take: Generate, Lock in time, then the Status submenu
-    # (no Play, Take or Align words).
-    assert [a.text() for a in menu.actions() if not a.isSeparator()] == ["Generate", "Lock in time", "Status"]
+    # No audio, one take: Generate, Split here, Join with next, Lock in time,
+    # then the Status submenu (no Play, Take or Align words).
+    assert [a.text() for a in menu.actions() if not a.isSeparator()] == [
+        "Generate", "Split here", "Join with next", "Lock in time", "Status"]
 
 
 def test_context_menu_empty_over_lane_background(qt_app):

@@ -338,6 +338,9 @@ class Run(Tracked):
 
 # `Run.kind` (and `Clip.source`) of an imported recording's text.
 IMPORTED = "imported"
+# `Clip.overrides` keys that belong to one clip: its take, and the slot a
+# subtitle cue or a dub's reference line sets. A split's second half drops them.
+_SLOT_KEYS = frozenset({"take", "target_duration_s", "reference_range"})
 # The `Document.settings` key holding `Document.sources`.
 SOURCES_KEY = "sources"
 
@@ -599,10 +602,11 @@ class Document(Tracked):
         clip = self.get_clip(run.clip_id)
         return clip if clip is not None and is_recording_clip(clip) else None
 
-    def _split_clip_at(self, clip: Clip, offset: int) -> Clip:
+    def _split_clip_at(self, clip: Clip, offset: int, new_id: Optional[str] = None) -> Clip:
         """Moves `clip`'s runs at or after text offset `offset` to a new
-        imported clip (fresh id, same character, track, overrides and FX),
-        inserted after `clip` in `clips`, and returns it. The new clip
+        imported clip (a fresh id, or `new_id` when a redo wants the id it
+        had; same character, track, overrides and FX), inserted after
+        `clip` in `clips`, and returns it. The new clip
         follows the old one with no added silence (`gap_before_s = 0`) and
         takes its fade-out, so the recording plays as it did. Segments are
         left for `refresh_imported_segments`."""
@@ -611,6 +615,7 @@ class Document(Tracked):
             character_id=clip.character_id, track_id=clip.track_id,
             overrides=copy.deepcopy(clip.overrides), fx_override=copy.deepcopy(clip.fx_override),
             source=clip.source, gap_before_s=0.0, fade_out_s=clip.fade_out_s, status=clip.status,
+            **({"id": new_id} if new_id else {}),
         )
         clip.fade_out_s = 0.0
         for run, start, _end in self._iter_runs_with_offsets():
@@ -660,6 +665,122 @@ class Document(Tracked):
                 run.clip_id = target.id
         target.fade_out_s = other.fade_out_s
         self.clips = [c for c in self.clips if c.id != other.id]
+
+    # -- split and join at a point ------------------------------------------
+
+    def next_clip(self, clip_id: str) -> Optional[Clip]:
+        """The next clip after `clip_id`'s text, whatever sits between the
+        two, or None."""
+        extent = self.clip_extent(clip_id)
+        if extent is None:
+            return None
+        for run, _start, _end in self.index().runs_in(extent[1], len(self.text)):
+            if run.clip_id is not None and run.clip_id != clip_id:
+                return self.get_clip(run.clip_id)
+        return None
+
+    def split_problem(self, clip: Clip, offset: int) -> Optional[str]:
+        """Why `clip` can't be split at text offset `offset`, or None when it
+        can. A subproject, a music bed and a clip placed by timestamp
+        refuse, and the cut must leave text on both sides."""
+        if clip.has_placeholder:
+            return "A subproject or an audio file can't be split."
+        if clip.timeline_timestamp is not None:
+            return "A clip placed on the timeline can't be split. Unpin it first."
+        extent = self.clip_extent(clip.id)
+        if extent is None:
+            return "The clip has no text."
+        text = self.clip_text(clip)
+        cut = offset - extent[0]
+        if not 0 < cut < len(text) or not text[:cut].strip() or not text[cut:].strip():
+            return "Cut between two words, with text on both sides."
+        return None
+
+    def split_clip(self, clip_id: str, offset: int, new_id: Optional[str] = None) -> Clip:
+        """Splits a clip at text offset `offset` and returns the second half
+        (a new clip with `new_id`, or a fresh id). The text doesn't change:
+        the runs from `offset` on move to the new clip, which follows the
+        first with no added silence (`gap_before_s = 0`) and takes its
+        fade-out. An imported recording splits the way an edit inside it
+        does (`_split_clip_at`), words and audio intact. A generated clip
+        keeps its segments on the first half, where they no longer match
+        its text, so it shows stale and a regenerate parks them as a take.
+        The new half has no audio and no takes, and drops the overrides
+        that belong to one clip (`_SLOT_KEYS`). Raises `ValueError` for a
+        clip `split_problem` refuses."""
+        clip = self.get_clip(clip_id)
+        if clip is None:
+            raise ValueError(f"split_clip: no clip {clip_id!r}")
+        problem = self.split_problem(clip, offset)
+        if problem:
+            raise ValueError(problem)
+        if clip.source == IMPORTED:
+            new_clip = self._split_clip_at(clip, offset, new_id)
+            self._normalize_runs()
+            self.refresh_imported_segments({clip.id, new_clip.id})
+            self.touch()
+            return new_clip
+        self._split_at(offset)
+        new_clip = Clip(
+            character_id=clip.character_id, track_id=clip.track_id,
+            overrides={key: copy.deepcopy(value) for key, value in clip.overrides.items()
+                       if key not in _SLOT_KEYS},
+            fx_override=copy.deepcopy(clip.fx_override), status=clip.status, note=clip.note,
+            gap_before_s=0.0, fade_out_s=clip.fade_out_s, **({"id": new_id} if new_id else {}),
+        )
+        clip.fade_out_s = 0.0
+        for run, start, _end in self._iter_runs_with_offsets():
+            if run.clip_id == clip.id and start >= offset:
+                run.clip_id = new_clip.id
+        self.clips.insert(self.clips.index(clip) + 1, new_clip)
+        self.touch()
+        return new_clip
+
+    def join_problem(self, first: Clip, second: Clip) -> Optional[str]:
+        """Why `second` can't be joined onto `first`, or None when it can.
+        `second` must follow `first` with only whitespace between them and
+        no other clip's text. Both need the same character and source,
+        neither may be a subproject or a music bed, and `second` can't be
+        placed by timestamp."""
+        if first.has_placeholder or second.has_placeholder:
+            return "A subproject or an audio file can't be joined."
+        if first.source != second.source or first.character_id != second.character_id:
+            return "Only two clips with the same character and kind join."
+        if second.timeline_timestamp is not None:
+            return "A clip placed on the timeline can't be joined. Unpin it first."
+        first_extent, second_extent = self.clip_extent(first.id), self.clip_extent(second.id)
+        if first_extent is None or second_extent is None or first_extent[1] > second_extent[0]:
+            return "The second clip must follow the first."
+        if self.text[first_extent[1]:second_extent[0]].strip():
+            return "There is text between the two clips."
+        for run, _start, _end in self.index().runs_in(first_extent[1], second_extent[0]):
+            if run.clip_id is not None:
+                return "Another clip sits between the two."
+        return None
+
+    def join_clips(self, first_id: str, second_id: str) -> Clip:
+        """Joins the second clip onto the first and returns the first. The
+        text doesn't change. The second's runs and the whitespace between
+        them go to the first, which keeps its own fields and fade-in and
+        takes the second's fade-out. The second, its audio and its takes are
+        dropped, and a generated first clip, whose segments no longer match
+        its text, shows stale. Raises `ValueError` for a pair `join_problem`
+        refuses."""
+        first, second = self.get_clip(first_id), self.get_clip(second_id)
+        if first is None or second is None or first is second:
+            raise ValueError("join_clips needs two different clips")
+        problem = self.join_problem(first, second)
+        if problem:
+            raise ValueError(problem)
+        gap_start, gap_end = self.clip_extent(first.id)[1], self.clip_extent(second.id)[0]
+        if gap_end > gap_start:
+            self._retag_range(gap_start, gap_end, first.id, first.run_kind)
+        self._merge_clip_into(first, second)
+        self._normalize_runs()
+        if first.source == IMPORTED:
+            self.refresh_imported_segments({first.id})
+        self.touch()
+        return first
 
     def _last_word_source(self, clip_id: str, last: bool = True) -> Optional[str]:
         """The source of the clip's last (or, `last=False`, first) word in
