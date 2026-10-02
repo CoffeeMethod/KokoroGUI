@@ -145,6 +145,28 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Export options</h3>
+        <ul class="change-list">
+          <li>
+            <h4>The Export dialog has tabs</h4>
+            <p>The dialog is now three tabs. Audio holds the folder, name, format, MP3 bitrate, sample rate, channels, loudness and range. Extras holds the subtitles, the cue sheet and the per-clip files. Project file holds the four bundle options. Nothing was removed.</p>
+          </li>
+          <li>
+            <h4>MP3 bitrate and sample rate</h4>
+            <p>An MP3 export can be 128, 192, 256 or 320 kbps constant bitrate, default 192. Before, the encoder always wrote 320. The bitrate box shows only while the format is mp3. MP3 stops at 160 kbps below a 32 kHz sample rate, so at the usual 24000 Hz the choices from 192 up all come out at 160 kbps. The Sample rate box offers the project rate (the default, nothing is resampled), 22050, 24000, 44100 and 48000 Hz. Another rate resamples the finished mix once, before the loudness step, so a normalized file measures what the status line reports. Per-clip files keep the project rate and subtitle times don't change. Both choices are kept per project in <code>project.json</code>, which older versions ignore.</p>
+          </li>
+          <li>
+            <h4>A filename template</h4>
+            <p>The Base filename box takes <code>{project}</code> (the project title, or "Untitled"), <code>{date}</code> (YYYY-MM-DD), <code>{time}</code> (HHMMSS) and <code>{range}</code> (the Range choice, or "full"). <code>{project}-{date}</code> gives <code>My Book-2026-10-02.wav</code>. A token it doesn't know stays as typed. A path in the name is cut to its last part, and <code>&lt;&gt;:"/\|?*</code> and control characters are dropped from the name and from what a token expands to. A line under the box shows the name Export will write, and the template itself is what is remembered, so tomorrow's export gets tomorrow's date.</p>
+          </li>
+          <li>
+            <h4>Export asks before it overwrites</h4>
+            <p>When the file Export would write already exists, a prompt offers Replace, Add number and Cancel. Add number appends " (2)", then " (3)", to the first name that is free, and the subtitle, cue sheet and per-clip files take the same name. Cancel leaves the dialog's choices unsaved. Only the mixdown itself is checked; the other files are replaced as before.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Editing</h3>
         <ul class="change-list">
           <li>

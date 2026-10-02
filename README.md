@@ -31,7 +31,8 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 -   **Recordings and music.** Edit a recording by editing its transcript, and add music beds that
     duck under speech.
 -   **Export.** One file in wav, mp3, flac or ogg, with `.srt` subtitles and a cue sheet, optionally
-    normalized to a LUFS target under a true-peak ceiling. File > Measure Loudness reports the numbers.
+    normalized to a LUFS target under a true-peak ceiling, with an MP3 bitrate, a sample rate and a filename template.
+    File > Measure Loudness reports the numbers.
 -   **One-file projects.** A `.tbaw` holds the text, the audio and every voice it uses, so it opens
     on another machine.
 
@@ -46,6 +47,7 @@ Unreleased:
     prompt before closing mid-generate
 -   Split a clip in two at the playhead and join two clips back, from Edit, the block menu or `S`
 -   Export can normalize to a LUFS target, File > Measure Loudness reports a mix, and the transport has a level meter
+-   The Export dialog has tabs, an MP3 bitrate, a sample rate and a filename template, and asks before it overwrites a file
 
 In 4.0.0-beta.2:
 
