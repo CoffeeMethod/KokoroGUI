@@ -215,6 +215,26 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Transcripts and chapters</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Four transcript formats</h4>
+            <p>The Extras tab has a "Text files" list. WebVTT writes <code>&lt;base&gt;.vtt</code> with each speaker in a voice span (<code>&lt;v Alice&gt;Hello</code>). "SRT transcript" writes <code>&lt;base&gt;.speakers.srt</code> with <code>Alice: Hello</code>; the plain <code>.srt</code> from "Also write .srt" stays as it was, with no names. The Podcasting 2.0 transcript is <code>&lt;base&gt;.transcript.json</code>, version 1.0.0, a list of segments with <code>speaker</code>, <code>startTime</code>, <code>endTime</code> and <code>body</code>, times in seconds. Plain text is <code>&lt;base&gt;.txt</code>, one line per clip as <code>Alice: Hello</code>, with a blank line wherever the speaker changes.</p>
+            <p>Each cue is one clip, in timeline order, with the clip's timeline start and end. Music beds, subprojects and clips that have no audio yet get no cue. A <code>[Name:FX]:</code> tag or a <code>[pause:1.5]</code> marker never appears in the text, and runs of whitespace become one space. A clip with no character has no name. Turn off "Speaker names in the transcripts" to leave the names out of all four files.</p>
+          </li>
+          <li>
+            <h4>A chapters file and show notes</h4>
+            <p>"Podcasting 2.0 chapters" writes <code>&lt;base&gt;.chapters.json</code>, version 1.2.0, with a <code>startTime</code> and a <code>title</code> per chapter. "Show notes with timestamps" writes <code>&lt;base&gt;.show-notes.md</code>, a Markdown list with one line per chapter, <code>- (01:05) Title</code> (<code>1:02:05</code> from an hour on), and the marker's note indented under it.</p>
+            <p>Chapters are the markers, with the marker's name as the title. A project with no marker inside the export uses its subprojects instead, titled by their name. A project with neither gets an empty chapters list and an empty notes file, and the status line says so. ID3 chapter frames inside the MP3 aren't written yet.</p>
+          </li>
+          <li>
+            <h4>They follow the export</h4>
+            <p>A range export starts the times at the range, and drops the markers outside it. Silence at the start moves every time later. A split export writes the set for each file, named after the file, so <code>01 - Chapter 1.vtt</code> sits next to <code>01 - Chapter 1.wav</code>. The overwrite prompt checks only the main file, as it does for the subtitles. The choices are stored with the project's other export settings.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Editing</h3>
         <ul class="change-list">
           <li>
