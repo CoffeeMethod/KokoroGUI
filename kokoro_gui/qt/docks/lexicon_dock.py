@@ -4,7 +4,7 @@ Saves eagerly (bypasses the debounced autosave every other field uses). A
 Test field under the table shows a sentence after the rules."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDockWidget, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMessageBox, QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -30,7 +30,20 @@ def replacement_for_display(stored: str, mode: str) -> str:
     return stored if mode == "regex" else stored.replace("\\\\", "\\")
 
 
+def format_reading(pairs) -> str:
+    """`explain_text`'s `[(token, spoken form), ...]` as one line: each token
+    that has a spoken form, then the form between slashes. A token with none
+    (a bare `$`) or whose form is itself (punctuation) is left out."""
+    shown = [f"{token.strip()} /{spoken.strip()}/" for token, spoken in pairs
+             if token.strip() and spoken.strip() and token.strip() != spoken.strip()]
+    return "  ".join(shown) if shown else "nothing to say"
+
+
 class LexiconDock(QDockWidget):
+    # (request number, `explain_text`'s pairs or None): emitted on the
+    # engine's thread, delivered on the GUI thread.
+    explained = Signal(int, object)
+
     def __init__(self, app, parent=None):
         super().__init__("Lexicon", parent)
         self.setObjectName("dock_lexicon")
@@ -107,6 +120,17 @@ class LexiconDock(QDockWidget):
         layout.addWidget(self.test_edit)
         self.after_label = self._result_label()
         layout.addWidget(self.after_label)
+        # "<engine> reads: ...", only for an engine that can explain how it reads text.
+        self.reads_label = self._result_label()
+        self.reads_label.setVisible(False)
+        layout.addWidget(self.reads_label)
+        self._reads_token = 0
+        self._reads_name = ""
+        self._reads_timer = QTimer(self)
+        self._reads_timer.setSingleShot(True)
+        self._reads_timer.setInterval(350)
+        self._reads_timer.timeout.connect(self._request_reading)
+        self.explained.connect(self._show_reading)
 
         # Scrolls when the dock is short, so its tab never sets how short the
         # column it shares with the other tabs can get.
@@ -319,4 +343,59 @@ class LexiconDock(QDockWidget):
 
     def update_test(self, *_args) -> None:
         text = self.test_edit.text()
-        self.after_label.setText(f"After your rules: {self.after_rules(text)}" if text else "")
+        self.after_label.setText(f"After your rules: {self.after_rules(text)}" if text.strip() else "")
+        self._reads_token += 1  # an answer in flight is for older text
+        if text.strip():
+            self._reads_timer.start()
+        else:
+            self._reads_timer.stop()
+            self.reads_label.setVisible(False)
+
+    def _explaining_backend(self):
+        """The active character's backend when it can explain how it reads
+        text, else None."""
+        try:
+            backend = self.app.backend
+        except Exception:  # noqa: BLE001 - no document or engine yet
+            return None
+        return backend if getattr(backend, "explains_text", False) else None
+
+    def _request_reading(self) -> None:
+        """Asks the active engine how it reads the sentence after the rules.
+        The answer comes back on the engine's worker and reaches
+        `_show_reading` on the GUI thread."""
+        backend = self._explaining_backend()
+        text = self.after_rules(self.test_edit.text())
+        if backend is None or not text.strip():
+            self.reads_label.setVisible(False)
+            return
+        lang_code = self.app.engine_settings(backend.id).get("lang_code")
+        future = backend.explain(text, lang_code)
+        if future is None:
+            self.reads_label.setVisible(False)
+            return
+        self._reads_token += 1
+        token = self._reads_token
+        # "Kokoro (local)" reads as "Kokoro".
+        self._reads_name = (getattr(backend, "display_name", "") or backend.id).split(" (")[0]
+        self.reads_label.setText(f"{self._reads_name} reads: ...")
+        self.reads_label.setVisible(True)
+        future.add_done_callback(lambda f, t=token: self._reading_done(t, f))
+
+    def _reading_done(self, token: int, future) -> None:
+        """Runs on the engine's thread: hands the result to the GUI thread."""
+        try:
+            pairs = future.result()
+        except Exception:  # noqa: BLE001 - a missing language package, a cancelled job
+            pairs = None
+        try:
+            self.explained.emit(token, pairs)
+        except RuntimeError:  # the dock closed while the engine was answering
+            pass
+
+    def _show_reading(self, token: int, pairs) -> None:
+        if token != self._reads_token:
+            return
+        reading = format_reading(pairs) if pairs else "not available"
+        self.reads_label.setText(f"{self._reads_name} reads: {reading}")
+        self.reads_label.setVisible(True)

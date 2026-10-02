@@ -223,3 +223,105 @@ def test_show_text_fills_the_test_field_and_raises_the_tab(qt_app):
     dock.show_text("in 1999\nDr. Who")
     assert dock.test_edit.text() == "in 1999 Dr. Who"
     assert not dock.isHidden()
+
+
+# -- how the engine reads it (plan 23) -----------------------------------------
+
+
+def _answering(backend, pairs, calls):
+    """Makes `backend.explain` answer `pairs` from another thread, as the
+    engine's worker would, and records each request in `calls`."""
+    import concurrent.futures
+    import threading
+
+    def explain(text, lang_code):
+        calls.append((text, lang_code))
+        future = concurrent.futures.Future()
+        threading.Timer(0.02, future.set_result, args=(pairs,)).start()
+        return future
+
+    backend.explain = explain
+
+
+def test_the_test_field_shows_how_kokoro_reads_the_sentence(qt_app, qtbot):
+    dock = qt_app.lexicon_dock
+    calls = []
+    _answering(qt_app.backend, [("in", "IN"), ("1999", "NUM NUM"), (",", ","), ("$", "")], calls)
+    qt_app.settings["lexicon"] = [_rule("yr", "1999", "word")]
+    dock.refresh_list()
+
+    dock.test_edit.setText("in yr")
+    dock._request_reading()
+
+    qtbot.waitUntil(lambda: "/NUM NUM/" in dock.reads_label.text(), timeout=3000)
+    assert dock.reads_label.text() == "Kokoro reads: in /IN/  1999 /NUM NUM/"
+    # The engine is asked about the text after the rules, in its language.
+    assert calls == [("in 1999", "a")]
+    assert dock.reads_label.textFormat() == Qt.TextFormat.PlainText
+
+
+def test_typing_asks_the_engine_after_a_pause(qt_app, qtbot):
+    dock = qt_app.lexicon_dock
+    calls = []
+    _answering(qt_app.backend, [("hi", "HI")], calls)
+    dock.test_edit.setText("h")
+    dock.test_edit.setText("hi")
+    assert calls == []  # not per keystroke
+    qtbot.waitUntil(lambda: bool(calls) and dock.reads_label.text() == "Kokoro reads: hi /HI/", timeout=3000)
+    assert calls == [("hi", "a")]
+
+
+def test_an_answer_for_older_text_is_dropped(qt_app, qtbot):
+    dock = qt_app.lexicon_dock
+    calls = []
+    _answering(qt_app.backend, [("old", "OLD")], calls)
+    dock.test_edit.setText("old")
+    dock._request_reading()
+    dock.test_edit.setText("newer")  # before the answer lands
+    qtbot.wait(150)
+    assert "OLD" not in dock.reads_label.text()
+
+
+def test_an_engine_that_cannot_explain_shows_no_reading(qt_app, qtbot):
+    dock = qt_app.lexicon_dock
+    qt_app.backend.explains_text = False
+    dock.test_edit.setText("in 1999")
+    dock._request_reading()
+    assert dock.reads_label.isHidden()
+    assert dock.after_label.text() == "After your rules: in 1999"
+
+
+def test_a_failed_explanation_says_it_is_not_available(qt_app, qtbot):
+    import concurrent.futures
+
+    dock = qt_app.lexicon_dock
+    future = concurrent.futures.Future()
+    future.set_exception(RuntimeError("no G2P for this language"))
+    qt_app.backend.explain = lambda text, lang_code: future
+    dock.test_edit.setText("hola")
+    dock._request_reading()
+    qtbot.waitUntil(lambda: dock.reads_label.text().endswith("not available"), timeout=3000)
+
+
+def test_how_will_this_be_read_puts_the_selection_in_the_test_field(qt_app):
+    editor = qt_app.editor
+    qt_app.document.text = "Born in 1999. Dr. Who."
+    editor.setPlainText("Born in 1999. Dr. Who.")
+    cursor = editor.textCursor()
+    cursor.setPosition(8)
+    cursor.setPosition(12, cursor.MoveMode.KeepAnchor)
+    editor.setTextCursor(cursor)
+
+    menu = editor._build_context_menu()
+    action = next(a for a in menu.actions() if a.text() == "How will this be read?")
+    assert action.isEnabled()
+    action.trigger()
+
+    assert qt_app.lexicon_dock.test_edit.text() == "1999"
+    assert not qt_app.lexicon_dock.isHidden()
+
+
+def test_how_will_this_be_read_needs_a_selection(qt_app):
+    menu = qt_app.editor._build_context_menu()
+    action = next(a for a in menu.actions() if a.text() == "How will this be read?")
+    assert not action.isEnabled()

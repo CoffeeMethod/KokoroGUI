@@ -123,3 +123,13 @@ def test_real_jit_conversion_with_playback_mocked(real_engine, timestamped_outpu
     print(f"\n[HUMAN CONFIRMATION NEEDED] Listen to {jit_output}")
     print(f"It should say: {text}")
     print(f"(transcript saved to {transcript})")
+
+
+def test_real_g2p_explains_numbers_and_abbreviations_without_the_voice_model():
+    """`explain_text` loads misaki's G2P only (`KPipeline(model=False)`), so it
+    needs no weights."""
+    pairs = dict(kokoro_engine.explain_text("In 1999, Dr. Smith paid $4.50.", "a"))
+
+    assert pairs["1999"] and pairs["1999"] != "1999"
+    assert pairs["Dr."] and pairs["Dr."] != "Dr."
+    assert pairs["4.50"] and pairs["4.50"] != "4.50"

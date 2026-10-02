@@ -27,6 +27,7 @@ walks the document and hands each backend the voice names it uses.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass, field
 from enum import Enum
@@ -262,6 +263,28 @@ class BackendHooksMixin:
     def preview_text(self, lang_code: Optional[str] = None) -> str:
         """A short sentence to preview a voice with in `lang_code`."""
         return "This is a preview of your custom voice."
+
+    # Whether `explain_text` answers (the Lexicon tab's "how it will be read"
+    # line shows only for a backend that does).
+    explains_text = False
+
+    def explain_text(self, text: str, lang_code: Optional[str]) -> Optional[list]:
+        """How the model reads `text`, as `[(token, spoken form), ...]` (the
+        spoken form may be phonemes), or None when this backend can't say.
+        Blocking: `explain` runs it off the GUI thread."""
+        return None
+
+    def explain(self, text: str, lang_code: Optional[str]):
+        """The `concurrent.futures.Future` of `explain_text` run on this
+        engine's worker (in a thread, so a slow G2P never blocks its loop),
+        or None when the backend has no explanation."""
+        if not self.explains_text:
+            return None
+
+        async def job():
+            return await asyncio.to_thread(self.explain_text, text, lang_code)
+
+        return self.run(job())
 
     def engine_version(self) -> str:
         """What goes into the segment key and `manifest.engines[id].version`.

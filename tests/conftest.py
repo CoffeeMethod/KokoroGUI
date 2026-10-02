@@ -119,12 +119,21 @@ class FakePipeline:
     def load_voice(self, name):
         return torch.zeros(510, 1, 256)
 
+    def g2p(self, text):
+        """misaki's English shape: `(phonemes, tokens)`, a token having
+        `text` and `phonemes`. Here each word's phonemes are its letters
+        upper-cased, and a bare number is spelled "NUM"."""
+        tokens = [SimpleNamespace(text=word, phonemes="NUM" if word.isdigit() else word.upper(), whitespace=" ")
+                  for word in text.split()]
+        return " ".join(t.phonemes for t in tokens), tokens
+
 
 @pytest.fixture
 def fake_pipeline(monkeypatch):
     fp = FakePipeline()
     monkeypatch.setattr(kokoro_engine, "get_thread_pipeline", lambda lang_code="a": fp)
-    monkeypatch.setattr(kokoro_engine, "KPipeline", lambda lang_code="a": fp)
+    monkeypatch.setattr(kokoro_engine, "KPipeline", lambda lang_code="a", **kwargs: fp)
+    monkeypatch.setattr(kokoro_engine, "_G2P_PIPELINES", {})
     return fp
 
 

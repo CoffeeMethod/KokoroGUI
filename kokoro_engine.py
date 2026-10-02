@@ -62,6 +62,29 @@ def get_thread_pipeline(lang_code="a"):
             return None
     return thread_local.pipeline
 
+# One model-less KPipeline per language, only for its G2P: `explain_text` asks
+# it how a sentence is read without loading (or downloading) the voice model.
+_G2P_PIPELINES = {}
+_G2P_LOCK = threading.Lock()
+
+
+def explain_text(text, lang_code="a"):
+    """How misaki, Kokoro's G2P, reads `text`, as `[(token, phonemes), ...]`.
+    English gives one pair per token (`1999` becomes the phonemes of "nineteen
+    ninety-nine"); another language gives one pair for the whole text. Blocking
+    (the first call per language loads the G2P): run it off the GUI thread."""
+    lang_code = lang_code or "a"
+    with _G2P_LOCK:
+        pipeline = _G2P_PIPELINES.get(lang_code)
+        if pipeline is None:
+            pipeline = _G2P_PIPELINES[lang_code] = KPipeline(lang_code=lang_code, model=False)
+        result = pipeline.g2p(text)
+    if isinstance(result, tuple):
+        _phonemes, tokens = result
+        return [(token.text, token.phonemes or "") for token in tokens]
+    return [(text, str(result or ""))]
+
+
 class KokoroModel(ModelBase):
     """Kokoro as a `SynthesisModel`: one `KPipeline` per worker thread and
     language (`get_thread_pipeline`, called by name so tests can patch it),
