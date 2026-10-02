@@ -2,6 +2,7 @@
 (section 6 of Claude/PLAN_ui_shell_redesign.md). Writes real wav files
 into tmp_path; no engine, no Qt."""
 import datetime
+import json
 import os
 
 import numpy as np
@@ -960,3 +961,96 @@ def test_stems_survive_a_split_export(tmp_path):
     names = sorted(os.path.basename(p) for p in result.stem_files)
     assert names == sorted(f"{chapter.name}_{stem}.wav" for chapter in plan.chapters
                            for stem in ("Unassigned", "Dialogue"))
+
+
+# -- text extras: transcripts and chapter files --------------------------------------------------
+
+
+ALL_EXTRAS = ("vtt", "srt_speakers", "transcript_json", "txt", "chapters_json", "show_notes")
+
+
+def test_extras_write_every_text_file_beside_the_mixdown(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+    doc.settings["markers"], _m = marker_ops.add_marker(doc.settings, 1.0, "Second voice", "Check the mic.")
+
+    result = mixdown(doc, str(tmp_path / "out" / "story.wav"), fmt="wav", sample_rate=8000, extras=ALL_EXTRAS)
+
+    out = tmp_path / "out"
+    assert [os.path.basename(p) for p in result.text_files] == [
+        "story.vtt", "story.speakers.srt", "story.transcript.json", "story.txt", "story.chapters.json",
+        "story.show-notes.md"]
+    assert (out / "story.vtt").read_text(encoding="utf-8").splitlines()[:4] == [
+        "WEBVTT", "", "00:00:00.000 --> 00:00:01.000", "<v Alice>Hello there."]
+    assert "Bo b/ok: General Kenobi." in (out / "story.speakers.srt").read_text(encoding="utf-8")
+    assert (out / "story.txt").read_text(encoding="utf-8") == "Alice: Hello there.\n\nBo b/ok: General Kenobi.\n"
+    assert json.loads((out / "story.chapters.json").read_text(encoding="utf-8"))["chapters"] == [
+        {"startTime": 1, "title": "Second voice"}]
+    assert (out / "story.show-notes.md").read_text(encoding="utf-8") == "- (00:01) Second voice\n  Check the mic.\n"
+    assert result.warnings == []
+
+
+def test_no_extras_write_no_text_files(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+
+    result = mixdown(doc, str(tmp_path / "plain.wav"), fmt="wav", sample_rate=8000)
+
+    assert result.text_files == [] and sorted(os.listdir(tmp_path)) == ["a.wav", "b.wav", "plain.wav"]
+
+
+def test_extras_without_speakers_leave_the_names_out(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+
+    mixdown(doc, str(tmp_path / "s.wav"), fmt="wav", sample_rate=8000, extras=("vtt", "txt"),
+            transcript_speakers=False)
+
+    assert "Alice" not in (tmp_path / "s.vtt").read_text(encoding="utf-8")
+    assert (tmp_path / "s.txt").read_text(encoding="utf-8") == "Hello there.\n\nGeneral Kenobi.\n"
+
+
+def test_extras_of_a_range_start_at_the_range(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+    for seconds, name in ((0.0, "Before"), (0.75, "Inside"), (1.4, "Late")):
+        doc.settings["markers"], _m = marker_ops.add_marker(doc.settings, seconds, name)
+
+    mixdown(doc, str(tmp_path / "r.wav"), fmt="wav", sample_rate=8000, range_s=(0.5, 1.25),
+            extras=("vtt", "chapters_json"))
+
+    assert "00:00:00.000 --> 00:00:00.500\n<v Alice>Hello there." in (tmp_path / "r.vtt").read_text(encoding="utf-8")
+    assert json.loads((tmp_path / "r.chapters.json").read_text(encoding="utf-8"))["chapters"] == [
+        {"startTime": 0.25, "title": "Inside"}]
+
+
+def test_extras_move_later_with_the_head_silence(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+    doc.settings["markers"], _m = marker_ops.add_marker(doc.settings, 1.0, "Second")
+
+    mixdown(doc, str(tmp_path / "p.wav"), fmt="wav", sample_rate=8000, head_s=0.75, extras=("vtt", "chapters_json"))
+
+    assert "00:00:00.750 --> 00:00:01.750" in (tmp_path / "p.vtt").read_text(encoding="utf-8")
+    assert json.loads((tmp_path / "p.chapters.json").read_text(encoding="utf-8"))["chapters"] == [
+        {"startTime": 1.75, "title": "Second"}]
+
+
+def test_a_project_without_markers_or_subprojects_warns_about_empty_chapters(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+
+    result = mixdown(doc, str(tmp_path / "e.wav"), fmt="wav", sample_rate=8000,
+                     extras=("chapters_json", "show_notes", "vtt"))
+
+    assert result.warnings == ["no markers or subprojects, so the chapters file and the show notes came out empty"]
+    assert json.loads((tmp_path / "e.chapters.json").read_text(encoding="utf-8"))["chapters"] == []
+
+
+def test_a_split_export_writes_the_extras_per_file(tmp_path):
+    doc, arrangement, nested = _book(tmp_path)
+    plan = plan_chapters(doc, arrangement, "subprojects")
+
+    result = mixdown_chapters(doc, str(tmp_path / "out"), plan, fmt="wav", sample_rate=RATE, arrangement=arrangement,
+                              nested_audio_path=nested, extras=("chapters_json", "txt"))
+
+    out = tmp_path / "out"
+    assert sorted(os.path.basename(p) for p in result.text_files) == [
+        "01 - Chapter 1.chapters.json", "01 - Chapter 1.txt", "02 - Chapter 2B.chapters.json", "02 - Chapter 2B.txt"]
+    assert json.loads((out / "02 - Chapter 2B.chapters.json").read_text(encoding="utf-8"))["chapters"] == [
+        {"startTime": 0, "title": "Chapter: 2/B"}]
+    assert result.warnings == ["2 clips outside any subproject weren't exported"]

@@ -207,10 +207,10 @@ def write_show_notes(document, arrangement: Arrangement, path: str, *, range_s: 
 def write_extras(document, arrangement: Arrangement, out_dir: str, base: str, extras, *, speakers: bool = True,
                  range_s: Optional[tuple] = None, head_s: float = 0.0) -> tuple:
     """Writes each of `extras` (keys of `TEXT_EXTRAS`) as `<base><suffix>` in
-    `out_dir`. `(paths, warnings)`; a warning says a chapter file came out
-    empty."""
-    paths, warnings = [], []
-    chapter_rows_found = None
+    `out_dir`. `(paths, warnings)`; a warning says the chapters file or the show
+    notes came out empty."""
+    paths, empty = [], []
+    has_chapters = None
     for key in clean_extras(extras):
         path = extra_path(out_dir, base, key)
         if key == "vtt":
@@ -222,13 +222,14 @@ def write_extras(document, arrangement: Arrangement, out_dir: str, base: str, ex
         elif key == "txt":
             write_plain_text(document, arrangement, path, speakers=speakers)
         else:
-            if chapter_rows_found is None:
-                chapter_rows_found = bool(chapter_rows(document, arrangement, range_s, head_s))
-            if not chapter_rows_found:
-                warnings.append("the chapters and show notes are empty: the project has no markers or subprojects")
+            if has_chapters is None:
+                has_chapters = bool(chapter_rows(document, arrangement, range_s, head_s))
+            if not has_chapters:
+                empty.append("the chapters file" if key == "chapters_json" else "the show notes")
             if key == "chapters_json":
                 write_chapters_json(document, arrangement, path, range_s=range_s, head_s=head_s)
             else:
                 write_show_notes(document, arrangement, path, range_s=range_s, head_s=head_s)
         paths.append(path)
-    return paths, list(dict.fromkeys(warnings))
+    warnings = [f"no markers or subprojects, so {' and '.join(empty)} came out empty"] if empty else []
+    return paths, warnings
