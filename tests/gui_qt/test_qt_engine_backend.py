@@ -182,6 +182,56 @@ def test_preview_uses_the_active_characters_engine_and_voice(qt_app):
     assert voice == "bf_emma"
 
 
+def test_preview_writes_to_a_private_temp_file_and_the_next_one_removes_it(qt_app):
+    import os
+
+    qt_app.preview_conversion()
+    first = qt_app.engine.generate_preview.call_args[0][3]
+    assert os.path.basename(first) != "kokoro_preview.wav"
+    assert os.path.basename(first).startswith("kokorogui-preview-")
+    assert os.path.exists(first)
+
+    qt_app.preview_conversion()
+    second = qt_app.engine.generate_preview.call_args[0][3]
+    assert second != first
+    assert not os.path.exists(first)
+    assert os.path.exists(second)
+
+    qt_app._remove_preview_file()
+    assert not os.path.exists(second)
+
+
+def test_mix_preview_uses_its_own_temp_file_and_the_next_one_removes_it(qt_app, monkeypatch):
+    import os
+    from concurrent.futures import Future
+
+    dock = qt_app.mixing_dock
+    paths = []
+
+    def fake_run(coro):
+        coro.close()
+        future = Future()
+        future.set_result((False, "stub"))
+        return future
+
+    monkeypatch.setattr(qt_app.backend, "run", fake_run, raising=False)
+    monkeypatch.setattr(qt_app.backend, "preview_text", lambda lang: "hello", raising=False)
+
+    dock.preview_mix()
+    paths.append(dock._preview_path)
+    assert os.path.basename(paths[0]).startswith("kokorogui-mixpreview-")
+    assert os.path.basename(paths[0]) != "kokoro_mix_preview.wav"
+    assert os.path.exists(paths[0])
+
+    dock.preview_mix()
+    paths.append(dock._preview_path)
+    assert paths[1] != paths[0]
+    assert not os.path.exists(paths[0])
+
+    dock.remove_preview_file()
+    assert not os.path.exists(paths[1])
+
+
 # --- a project whose engine isn't installed (grill EN6) -----------------------
 
 def _ghost_project(qt_app, seconds=0.2):

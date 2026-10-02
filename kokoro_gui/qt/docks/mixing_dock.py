@@ -35,6 +35,7 @@ class MixingDock(QDockWidget):
         # The engine this editor was built for; app.py rebuilds the dock when
         # the Voices tab moves to another mixing engine.
         self.backend_id = app.voices_backend().id
+        self._preview_path: str | None = None
         self.previewFinished.connect(self._on_preview_finished)
         self.mixFinished.connect(self._on_mix_finished)
 
@@ -198,7 +199,10 @@ class MixingDock(QDockWidget):
 
         preview_text = self.backend.preview_text(preview_lang)
         tmp_voice_name = "_tmp_mix_preview"
-        tmp_audio_path = os.path.join(tempfile.gettempdir(), "kokoro_mix_preview.wav")
+        self.remove_preview_file()
+        fd, tmp_audio_path = tempfile.mkstemp(suffix=".wav", prefix="kokorogui-mixpreview-")
+        os.close(fd)
+        self._preview_path = tmp_audio_path
 
         self.mix_status_label.setText("Generating preview...")
         backend = self.backend
@@ -225,6 +229,17 @@ class MixingDock(QDockWidget):
 
         future = backend.run(_run_preview())
         future.add_done_callback(_done)
+
+    def remove_preview_file(self) -> None:
+        """Deletes the last preview's temp file. The next preview, a dock
+        rebuild and the app's `closeEvent` call it; `playback.play` returns
+        before the sound ends, so nothing deletes the file right after."""
+        path, self._preview_path = self._preview_path, None
+        if path:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     def _on_preview_finished(self, success: bool, err: str) -> None:
         if success:
