@@ -93,10 +93,37 @@
       <h1>Every change, in full</h1>
       <p class="lede">The README keeps one line per feature. This page has the rest: where each feature lives in the app, how it behaves, and what it does to a project you already have. Newest first.</p>
       <div class="toc">
+        <a href="#unreleased">Unreleased</a>
         <a href="#v4-0-0-beta-2">4.0.0-beta.2</a>
         <a href="#v4-0-0-beta-1">4.0.0-beta.1</a>
         <a href="#v3-2-0">3.2.0</a>
         <a href="#v3-1-0">3.1.0</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="unreleased" data-clip="Unreleased" data-cc="c1">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">After 4.0.0-beta.2</span>Unreleased</h2>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Fixes</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Two Audio8 presets generating at once keep their own sampling settings</h4>
+            <p>Audio8's max new tokens, temperature, top P and top K were stored on the engine and set again for each chunk. Two chunks with different settings, running on two worker threads, could swap them, so a chunk generated at the other chunk's temperature. Each chunk now carries its own values into the model call. A clip's cache key never changed, so no clip goes stale.</p>
+          </li>
+          <li>
+            <h4>A half-written Audio8 reference encoding is no longer trusted</h4>
+            <p>The cached encoding of a reference voice is written to a temporary file and renamed when complete. A crash mid-write used to leave a truncated file that the next generate loaded as if it were whole.</p>
+          </li>
+          <li>
+            <h4>An old cache entry for a split paragraph is regenerated</h4>
+            <p>Before 4.0.0-beta.2, the whole-document path could save one paragraph as two or more files in <code>cache/</code>. A hit on such an entry played only the first part. An entry that holds more files than the text now splits into is regenerated, and the extra files are deleted.</p>
+          </li>
+        </ul>
       </div>
     </div>
   </section>
