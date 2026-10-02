@@ -11,6 +11,7 @@ from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QPlainTextEdit, QPushButton, QVBoxLayout
 
 import kokoro_gui
+from kokoro_gui import logging_setup
 from kokoro_gui.engine import asr, runtime
 from kokoro_gui.engines import registry
 
@@ -88,6 +89,7 @@ def about_text(config_file: str) -> str:
         f"Cache folder: {os.path.abspath(runtime.CACHE_DIR)}",
         f"Custom voices folder: {os.path.abspath(runtime.CUSTOM_VOICES_DIR)}",
         f"Settings file: {os.path.abspath(config_file)}",
+        f"Log file: {logging_setup.resolve_log_path(runtime.CACHE_DIR)}",
         f"Whisper model: {model} ({cached})",
     ]
     return "\n".join(lines)

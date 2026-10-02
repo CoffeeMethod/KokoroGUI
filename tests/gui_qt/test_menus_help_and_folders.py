@@ -100,10 +100,10 @@ def test_recent_clear_list_empties_the_menu_and_the_setting(qt_app, tmp_path):
 # -- Help menu, About, shortcut sheet --------------------------------------------------
 
 
-def test_help_menu_lists_documentation_shortcuts_and_about(qt_app):
+def test_help_menu_lists_documentation_shortcuts_log_folder_and_about(qt_app):
     texts = [a.text() for a in qt_app.help_menu.actions()]
-    assert texts == ["&Documentation", "&Keyboard Shortcuts", "", "&About KokoroGUI"]
-    assert qt_app.help_menu.actions()[2].isSeparator()
+    assert texts == ["&Documentation", "&Keyboard Shortcuts", "Open &Log Folder", "", "&About KokoroGUI"]
+    assert qt_app.help_menu.actions()[3].isSeparator()
     assert [a.text() for a in qt_app.menuBar().actions()][-1] == "&Help"
 
 
@@ -146,6 +146,7 @@ def test_about_lists_versions_engines_paths_and_whisper(qt_app, monkeypatch):
     assert "kokoro" in text.lower()
     assert "Cache folder:" in text and "Custom voices folder:" in text
     assert "config_qt.json" in text
+    assert "Log file:" in text and "kokorogui.log" in text
     assert f"Whisper model: {asr.get_whisper_model_name()} (cached)" in text
 
 

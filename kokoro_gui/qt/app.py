@@ -57,6 +57,7 @@ from kokoro_gui.daw.reference import SOURCE_TRACK_KEY, reference_slices, source_
 from kokoro_gui.daw.undo import (
     AssignCharacterCommand, ImportBedCommand, ImportCuesCommand, ImportRecordingCommand, SetFieldCommand,
 )
+from kokoro_gui import logging_setup
 from kokoro_gui.engine import caching, runtime, text_extraction
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.engines.base import per_engine_fields
@@ -1054,14 +1055,21 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.help_menu = bar.addMenu("&Help")
         self.documentation_action = self._action("&Documentation", self.open_documentation)
         self.shortcuts_action = self._action("&Keyboard Shortcuts", self.show_shortcuts)
+        self.open_log_folder_action = self._action("Open &Log Folder", self.open_log_folder)
         self.about_action = self._action("&About KokoroGUI", self.show_about)
         self.help_menu.addAction(self.documentation_action)
         self.help_menu.addAction(self.shortcuts_action)
+        self.help_menu.addAction(self.open_log_folder_action)
         self.help_menu.addSeparator()
         self.help_menu.addAction(self.about_action)
 
     def open_documentation(self) -> None:
         QDesktopServices.openUrl(QUrl(DOCS_URL))
+
+    def open_log_folder(self) -> None:
+        log_path = logging_setup.resolve_log_path(runtime.CACHE_DIR)
+        if not reveal(os.path.dirname(log_path)):
+            self.set_status("No log folder yet. It is created when the app starts from main.py.", "warning")
 
     def show_shortcuts(self) -> ShortcutsDialog:
         dialog = ShortcutsDialog(self)
