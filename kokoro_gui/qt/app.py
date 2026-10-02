@@ -64,6 +64,7 @@ from kokoro_gui.engines.missing import MissingBackend
 from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
 from kokoro_gui.qt import settings as qt_settings
 from kokoro_gui.qt.open_projects import OpenProject
+from kokoro_gui.qt.reveal import reveal
 from kokoro_gui.qt import recording_import
 from kokoro_gui.qt.subprojects import ParentStore, SubprojectsMixin
 from kokoro_gui.qt.selection import SelectionModel
@@ -106,6 +107,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     themeChanged = Signal()
     exportProgress = Signal(float, str)
     exportFinished = Signal(bool, str)
+    exportWrote = Signal(str)  # the mix's path, just before a successful exportFinished
     # Background project I/O (Open's audio extraction, Save's zip write):
     # progress as (percent, detail), completion as (callback, result, error)
     # marshalled onto the GUI thread.
@@ -283,6 +285,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.previewFinished.connect(self._on_preview_finished)
         self.exportProgress.connect(self._on_export_progress)
         self.exportFinished.connect(self._on_export_finished)
+        self.exportWrote.connect(self._on_export_wrote)
+        self._last_export_path: str | None = None
 
         # Theme before any custom-painted widget exists, so their first
         # paint already reads the right palette.
@@ -893,6 +897,18 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.file_menu.addSeparator()
         self.file_menu.addAction(self.save_action)
         self.file_menu.addAction(self.save_as_action)
+        self.show_in_folder_menu = self.file_menu.addMenu("Show in Fol&der")
+        self.show_project_file_action = self._action(
+            "&Project File", lambda: self._reveal_path(self.project_path))
+        self.show_working_folder_action = self._action(
+            "&Working Folder", lambda: self._reveal_path(self.root.project_dir))
+        self.show_last_export_action = self._action(
+            "Last &Export", lambda: self._reveal_path(self._last_export_path))
+        for action in (self.show_project_file_action, self.show_working_folder_action,
+                       self.show_last_export_action):
+            self.show_in_folder_menu.addAction(action)
+        self.show_in_folder_menu.aboutToShow.connect(self._sync_show_in_folder_actions)
+        self._sync_show_in_folder_actions()
         self.file_menu.addSeparator()
         self.import_text_action = self._action("Import &Text...", self.import_text_dialog)
         self.file_menu.addAction(self.import_text_action)
@@ -2124,6 +2140,25 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             action = self.recent_menu.addAction(project_io.project_title(path))
             action.setToolTip(path)
             action.triggered.connect(lambda checked=False, p=path: self.open_project(p))
+        self.recent_menu.addSeparator()
+        self.recent_menu.addAction("Clear list").triggered.connect(self._clear_recent_projects)
+
+    def _clear_recent_projects(self) -> None:
+        project_io.clear_recent(self.settings)
+        self.schedule_save()
+        self._rebuild_recent_menu()
+
+    def _sync_show_in_folder_actions(self) -> None:
+        """Each entry is enabled only while its target exists on disk."""
+        self.show_project_file_action.setEnabled(bool(self.project_path) and os.path.exists(self.project_path))
+        working = self.root.project_dir
+        self.show_working_folder_action.setEnabled(bool(working) and os.path.isdir(working))
+        last = self._last_export_path
+        self.show_last_export_action.setEnabled(bool(last) and os.path.exists(last))
+
+    def _reveal_path(self, path: str | None) -> None:
+        if not reveal(path):
+            self.set_status("Nothing to show: that file or folder is gone.", "warning")
 
     def show_welcome(self) -> WelcomeDialog:
         """Window-modal via `open()`, not `exec()`, so engine init keeps
@@ -3231,6 +3266,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def _on_export_progress(self, percent: float, detail: str) -> None:
         self.transport_dock.set_progress(percent, detail)
+
+    def _on_export_wrote(self, path: str) -> None:
+        self._last_export_path = path
+        self._sync_show_in_folder_actions()
 
     def _on_export_finished(self, success: bool, message: str) -> None:
         self.transport_dock.set_busy(False)
