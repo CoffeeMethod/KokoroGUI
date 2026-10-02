@@ -4,7 +4,7 @@ Claude/PLAN_ui_shell_redesign.md, section 4).
 `TimelineView` owns the scene: a ruler across the top, one lane per
 track that has clips (`Document.used_tracks`; an unused track isn't
 drawn), one `ClipBlockItem` per placed clip, and a playhead. x is
-`seconds * self._zoom` (Ctrl+wheel, 20-400 px/s). Where a clip sits comes
+`seconds * self._zoom` (Ctrl+wheel or `zoom_to_fit`, 0.05-400 px/s). Where a clip sits comes
 from `kokoro_gui.daw.arrangement.compute_arrangement` - the same placement
 the transport plays and the exporter writes - never from text offsets.
 Generated clips draw a waveform; estimated (ungenerated) clips draw a
@@ -81,7 +81,7 @@ from kokoro_gui.daw.timecode import format_position
 from kokoro_gui.qt import theme, waveform_data
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
 from kokoro_gui.qt.selection import SelectionModel
-from kokoro_gui.qt.waveform_view import WaveformItem
+from kokoro_gui.qt.waveform_view import WAVEFORM_MIN_WIDTH_PX, WaveformItem
 
 RULER_HEIGHT_PX = 22.0
 MARKER_HIT_PX = 6.0
@@ -106,8 +106,16 @@ LANE_HEIGHT_PX = 80.0
 LANE_MARGIN_PX = 8.0
 MIN_CLIP_WIDTH_PX = 20.0
 DEFAULT_PIXELS_PER_SECOND = 50.0
-MIN_PIXELS_PER_SECOND = 20.0
+# Ten hours fit in 1,800 px at the floor.
+MIN_PIXELS_PER_SECOND = 0.05
 MAX_PIXELS_PER_SECOND = 400.0
+# A block narrower than this draws no label (and none narrower than
+# `WAVEFORM_MIN_WIDTH_PX`, a waveform): zoomed out, a book is thousands of
+# blocks.
+LABEL_MIN_WIDTH_PX = 24.0
+# `zoom_to_fit` leaves this much room right of the last block (a block is
+# never drawn narrower than `MIN_CLIP_WIDTH_PX` at the old zoom floor).
+ZOOM_FIT_MARGIN_PX = 24.0
 HEADER_WIDTH_PX = 150
 # Track header controls: the M/S/A/D buttons, and the Vol/Pan sliders
 # indented past their text labels. Name row, button row and two slider
@@ -150,10 +158,19 @@ def lane_top(index: int) -> float:
     return RULER_HEIGHT_PX + index * LANE_HEIGHT_PX
 
 
+def min_block_width(zoom: float) -> float:
+    """The narrowest a block is drawn at `zoom`: `MIN_CLIP_WIDTH_PX` (so a
+    short clip stays clickable) from 20 px/s up, shrinking with the zoom
+    below that, down to 1 px, so a zoomed-out book isn't a pile of
+    overlapping 20 px blocks."""
+    return max(1.0, min(MIN_CLIP_WIDTH_PX, zoom))
+
+
 def choose_tick_step(zoom: float, min_label_px: float = 60.0) -> float:
     """The tick spacing (seconds) that keeps labels at least
-    `min_label_px` apart at `zoom`: 1, 2, 5, 10, 15, 30, 60, ..."""
-    candidates = (0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600)
+    `min_label_px` apart at `zoom`: 1, 2, 5, 10, 15, 30, 60, ... up to two
+    hours."""
+    candidates = (0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200)
     for step in candidates:
         if step * zoom >= min_label_px:
             return float(step)
@@ -167,6 +184,8 @@ def format_ruler_label(seconds: float) -> str:
         return f"{rest:.1f}s"
     if minutes == 0:
         return f"{int(rest)}s"
+    if minutes >= 60:
+        return f"{minutes // 60}:{minutes % 60:02d}:{int(rest):02d}"
     return f"{minutes}:{int(rest):02d}"
 
 
@@ -314,15 +333,28 @@ class ClipBlockItem(QGraphicsItem):
         self._fade_out_px = max(0.0, min(fade_out_px, self._width))
         self.update()
 
+    @property
+    def is_compact(self) -> bool:
+        """True below `MIN_CLIP_WIDTH_PX`, which only happens zoomed out
+        under 20 px/s: the block draws and hit-tests no fade handles and no
+        FX chip."""
+        return self._width < MIN_CLIP_WIDTH_PX
+
     def fade_in_handle_rect(self) -> QRectF:
+        if self.is_compact:
+            return QRectF()
         x = min(self._fade_in_px, max(0.0, self._width - FADE_HANDLE_PX))
         return QRectF(x, 0.0, FADE_HANDLE_PX, FADE_HANDLE_PX)
 
     def fade_out_handle_rect(self) -> QRectF:
+        if self.is_compact:
+            return QRectF()
         x = max(0.0, self._width - self._fade_out_px - FADE_HANDLE_PX)
         return QRectF(x, 0.0, FADE_HANDLE_PX, FADE_HANDLE_PX)
 
     def fx_button_rect(self) -> QRectF:
+        if self.is_compact:
+            return QRectF()
         width = min(FX_BUTTON_WIDTH_PX, self._width)
         height = min(FX_BUTTON_HEIGHT_PX, self._height)
         x = max(0.0, self._width - FX_BUTTON_WIDTH_PX)
@@ -431,10 +463,16 @@ class ClipBlockItem(QGraphicsItem):
             for x in self._loop_marks_px:
                 painter.drawLine(QPointF(x, 0.5), QPointF(x, self._height - 0.5))
             painter.restore()
-        if self._label:
+        if self._label and self._width >= LABEL_MIN_WIDTH_PX:
             painter.setPen(label_color_for(base) if not self._estimated else QColor(pal.text))
             painter.drawText(rect.adjusted(label_left, 3, -4, -2), 0, self._label)
 
+        if self.is_compact:
+            # Zoomed far out: the fade handles and the FX chip are fixed-size
+            # and would spill past the block.
+            if self.slot_px is not None:
+                self._paint_slot_bracket(painter, pal, base)
+            return
         if not self._estimated:
             # Fade ramps: a line from the bottom corner up to where the fade
             # ends on the top edge, and the corner handles.
@@ -938,6 +976,16 @@ class TimelineView(QGraphicsView):
         if self._document is not None:
             self.render_document(self._document, self._arrangement)
         self.zoomChanged.emit(self._zoom)
+
+    def zoom_to_fit(self) -> None:
+        """Zooms so the whole arrangement fits the viewport (clamped to the
+        zoom range) and scrolls to the start. An empty arrangement only
+        scrolls."""
+        total = self._arrangement.total_duration_s if self._arrangement is not None else 0.0
+        room = self.viewport().width() - ZOOM_FIT_MARGIN_PX
+        if total > 0 and room > 0:
+            self.set_zoom(room / total)
+        self.horizontalScrollBar().setValue(0)
 
     def wheelEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -1671,7 +1719,7 @@ class TimelineView(QGraphicsView):
                 color = pal.accent
 
             x = seconds_to_x(placed.start_s, self._zoom)
-            width = max(seconds_to_x(placed.duration_s, self._zoom), MIN_CLIP_WIDTH_PX)
+            width = max(seconds_to_x(placed.duration_s, self._zoom), min_block_width(self._zoom))
             y = lane_top(lane_index_by_track_id[track.id]) + LANE_MARGIN_PX
             height = LANE_HEIGHT_PX - 2 * LANE_MARGIN_PX
 
@@ -1734,7 +1782,7 @@ class TimelineView(QGraphicsView):
                 block.set_fx_active(fx_active)
                 block.set_audio_path(audio_path)
 
-            if audio_path is not None and not placed.estimated and revision.file_exists(audio_path):
+            if audio_path is not None and not placed.estimated and width >= WAVEFORM_MIN_WIDTH_PX                     and revision.file_exists(audio_path):
                 bucket_count = max(1, int(width))
                 render_key = self._render_key(clip)
                 wave = (render_key, bucket_count, width, height, color)

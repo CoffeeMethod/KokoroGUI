@@ -14,7 +14,8 @@ from kokoro_gui.qt.selection import SelectionModel
 from kokoro_gui.daw.arrangement import compute_arrangement
 from kokoro_gui.qt.timeline_view import (
     ClipBlockItem, DEFAULT_PIXELS_PER_SECOND, FX_BUTTON_HEIGHT_PX, FX_BUTTON_WIDTH_PX, LANE_HEIGHT_PX,
-    MIN_CLIP_WIDTH_PX, RULER_HEIGHT_PX, TimelineView, TimelineWidget, lane_top, seconds_to_x,
+    MAX_PIXELS_PER_SECOND, MIN_CLIP_WIDTH_PX, MIN_PIXELS_PER_SECOND, RULER_HEIGHT_PX, TimelineView, TimelineWidget,
+    choose_tick_step, format_ruler_label, lane_top, min_block_width, seconds_to_x,
 )
 
 # Every ungenerated clip is estimated at this rate, so a clip's width is
@@ -171,8 +172,12 @@ def test_zoom_rescales_clip_positions(qtbot):
 
     assert view.zoom == 100.0
     assert _clip_block_items(view)[0].pos().x() == 200.0
-    view.set_zoom(5.0)  # clamps to the minimum
-    assert view.zoom == 20.0
+    view.set_zoom(5.0)  # inside the range now: the floor is 0.05
+    assert view.zoom == 5.0
+    view.set_zoom(0.001)  # clamps to the minimum
+    assert view.zoom == MIN_PIXELS_PER_SECOND == 0.05
+    view.set_zoom(10000.0)
+    assert view.zoom == MAX_PIXELS_PER_SECOND
 
 
 def test_clip_width_floors_at_min_clip_width(qtbot):
@@ -1292,3 +1297,153 @@ def test_fit_to_slot_is_in_the_menu_only_for_a_clip_with_a_target(qtbot, tmp_pat
     view.fitToSlotRequested.connect(received.append)
     next(a for a in menu.actions() if a.text() == "Fit to slot").trigger()
     assert received == [clip.id]
+
+
+# --- zoom to fit, the lower zoom floor ---------------------------------------------
+
+
+def test_ruler_labels_show_hours_past_sixty_minutes():
+    assert format_ruler_label(3600) == "1:00:00"
+    assert format_ruler_label(3725) == "1:02:05"
+    assert format_ruler_label(36000) == "10:00:00"
+    assert format_ruler_label(3599) == "59:59"
+    assert format_ruler_label(600) == "10:00"
+    assert format_ruler_label(2.5) == "2.5s"
+
+
+def test_tick_steps_reach_an_hour_at_the_new_floor():
+    assert choose_tick_step(MIN_PIXELS_PER_SECOND) == 1800.0
+    assert choose_tick_step(0.02) == 3600.0
+    assert choose_tick_step(0.005) == 7200.0
+    assert choose_tick_step(1000.0) == 0.5
+    # Unchanged inside the old range.
+    assert choose_tick_step(20.0) == 5.0
+    assert choose_tick_step(50.0) == 2.0
+
+
+def test_min_block_width_keeps_twenty_px_from_the_old_floor_up():
+    assert min_block_width(20.0) == MIN_CLIP_WIDTH_PX
+    assert min_block_width(400.0) == MIN_CLIP_WIDTH_PX
+    assert min_block_width(5.0) == 5.0
+    assert min_block_width(MIN_PIXELS_PER_SECOND) == 1.0
+
+
+def _many_clip_doc(tmp_path, count, seconds=0.25):
+    alice = Character.from_preset_dict("Alice", {})
+    track = Track(name="Alice", character_id=alice.id)
+    path = tmp_path / "tone.wav"
+    _write_tone_wav(path, seconds=seconds)
+    clips = [Clip(character_id=alice.id, track_id=track.id,
+                  segments=[Segment(order_index=0, text="x" * 10, audio_path=str(path), duration=seconds)])
+             for _ in range(count)]
+    tagged = [(i * 10, i * 10 + 10, clip) for i, clip in enumerate(clips)]
+    return _tagged_doc("x" * (10 * count), tagged, characters=[alice], tracks=[track])
+
+
+def test_zoomed_far_out_blocks_skip_the_waveform_and_never_load_peaks(qtbot, tmp_path, monkeypatch):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc = _many_clip_doc(tmp_path, 200)
+    calls = []
+    monkeypatch.setattr(view, "_peaks_for", lambda *a, **k: calls.append(a) or [(0.0, 0.0)])
+    view.set_zoom(MIN_PIXELS_PER_SECOND)
+    _render(view, doc)
+
+    blocks = _clip_block_items(view)
+    assert len(blocks) == 200
+    assert all(b._waveform_item is None for b in blocks)
+    assert all(b.boundingRect().width() == 1.0 for b in blocks)
+    _paint(view)
+    assert calls == []
+
+    # Zoomed back in, a block draws its waveform again (decoded on paint).
+    view.set_zoom(400.0)
+    _render(view, doc)
+    _paint(view)
+    assert calls
+
+
+def test_a_waveform_item_narrower_than_four_px_does_not_call_its_loader(qtbot):
+    from PySide6.QtGui import QImage, QPainter
+    from kokoro_gui.qt.waveform_view import WaveformItem
+
+    calls = []
+    item = WaveformItem()
+    item.set_source(lambda: calls.append(1) or [(-0.5, 0.5)], 3.0, 40.0)
+    image = QImage(20, 40, QImage.Format.Format_ARGB32)
+    painter = QPainter(image)
+    item.paint(painter, None)
+    painter.end()
+    assert calls == []
+    item.set_source(lambda: calls.append(1) or [(-0.5, 0.5)], 30.0, 40.0)
+    painter = QPainter(image)
+    item.paint(painter, None)
+    painter.end()
+    assert calls == [1]
+
+
+def test_a_block_under_24_px_draws_no_label_and_a_compact_one_no_chip(qtbot):
+    from PySide6.QtGui import QImage, QPainter
+
+    painted = []
+
+    class Recorder(QPainter):
+        def drawText(self, *args):  # noqa: N802
+            painted.append(args)
+            return super().drawText(*args)
+
+    def paint_block(width):
+        block = ClipBlockItem()
+        block.set_geometry(0, 0, width, 60)
+        block.set_label("Alice")
+        image = QImage(60, 60, QImage.Format.Format_ARGB32)
+        painter = Recorder(image)
+        painted.clear()
+        block.paint(painter, None)
+        painter.end()
+        return [a for a in painted if a and a[-1] == "Alice"], [a for a in painted if a and a[-1] == "FX"]
+
+    assert paint_block(23.0)[0] == []
+    assert paint_block(30.0)[0] != []
+    assert paint_block(15.0)[1] == []  # compact: no FX chip
+    assert paint_block(30.0)[1] != []
+    compact = ClipBlockItem()
+    compact.set_geometry(0, 0, 10, 60)
+    assert compact.fx_button_rect().isNull() and compact.fade_in_handle_rect().isNull()
+    assert not compact.fx_button_rect().contains(QPointF(9, 59))
+
+
+def test_zoom_to_fit_puts_the_last_block_inside_the_viewport(qtbot):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    view.resize(800, 300)
+    alice = Character.from_preset_dict("Alice", {})
+    track = Track(name="Alice", character_id=alice.id)
+    first = Clip(character_id=alice.id, track_id=track.id)
+    last = Clip(character_id=alice.id, track_id=track.id)
+    doc = _tagged_doc("x" * 1000, [(0, 990, first), (990, 1000, last)], characters=[alice], tracks=[track])
+    _render(view, doc)
+    view.set_zoom(400.0)
+    view.horizontalScrollBar().setValue(500)
+    assert compute_arrangement(doc, chars_per_second=CPS).total_duration_s == pytest.approx(100.0)
+
+    view.zoom_to_fit()
+
+    assert view.zoom < DEFAULT_PIXELS_PER_SECOND
+    assert view.horizontalScrollBar().value() == 0
+    block = next(b for b in _clip_block_items(view) if b.clip_id == last.id)
+    assert block.pos().x() + block.boundingRect().width() <= view.viewport().width()
+    # And not left much smaller than the viewport.
+    assert block.pos().x() + block.boundingRect().width() > view.viewport().width() * 0.9
+
+
+def test_zoom_to_fit_clamps_and_guards_an_empty_arrangement(qtbot):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    view.resize(800, 300)
+    view.zoom_to_fit()  # nothing rendered yet
+    assert view.zoom == DEFAULT_PIXELS_PER_SECOND
+    doc, _clip, _track = _build_doc_with_one_clip()
+    view.render_document(doc, compute_arrangement(doc, chars_per_second=1e9))
+    view.zoom_to_fit()  # a near-zero length: clamps to the top of the range
+    assert view.zoom == MAX_PIXELS_PER_SECOND

@@ -148,6 +148,11 @@ class TimelineDock(QDockWidget):
         filter_row.addWidget(QLabel("Show:"))
         filter_row.addWidget(self.status_filter_combo)
         filter_row.addStretch(1)
+        self.zoom_fit_button = QPushButton("Zoom to fit")
+        self.zoom_fit_button.setToolTip("Zoom out until the whole arrangement fits the window, and scroll to "
+                                        "the start.")
+        self.zoom_fit_button.clicked.connect(lambda _checked=False: self.timeline_view.zoom_to_fit())
+        filter_row.addWidget(self.zoom_fit_button)
         self.fit_all_button = QPushButton("Fit all over slot")
         self.fit_all_button.setToolTip("Fit every clip that runs past its target duration: regenerate "
                                        "faster, or time-stretch on an engine without a speed control.")
