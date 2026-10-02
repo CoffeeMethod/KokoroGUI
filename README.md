@@ -48,6 +48,7 @@ Unreleased:
 -   Split a clip in two at the playhead and join two clips back, from Edit, the block menu or `S`
 -   Export can normalize to a LUFS target, File > Measure Loudness reports a mix, and the transport has a level meter
 -   The Export dialog has tabs, an MP3 bitrate, a sample rate and a filename template, and asks before it overwrites a file
+-   An Outline tab that lists a book's chapters with a status and a length, and proofs one in a click
 
 In 4.0.0-beta.2:
 

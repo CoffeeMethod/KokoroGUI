@@ -179,6 +179,21 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Chapters</h3>
+        <ul class="change-list">
+          <li>
+            <h4>An Outline tab for a book's chapters</h4>
+            <p>The tab sits after Lexicon in the top-right group. It lists the nested subprojects of the level the timeline shows, in text order, with a status and a length, and a total at the bottom. A chapter is "not started" when it is open and none of its clips has audio, "in progress" when it has stale clips (a chapter you haven't opened this session reads "in progress" too, since the tab doesn't open projects to find out), "done" once its mixdown is current, and "missing" when its file can't be found. A chapter that hasn't been rendered shows its estimated length with a "~" in front, the same estimate its timeline block uses.</p>
+            <p>Right-click a chapter for Mark proofed. That sets the status of the chapter's block to Approved, the same status the block menu offers, and the row reads "proofed" for as long as the chapter stays done. Clear proofed sets it back to Generated. Each is one undo step on the parent project, and nothing new is stored in the project file. The menu also has Enter subproject and Generate. Double-clicking a row moves the transcript caret to the chapter's line, which points the docks at that subproject as a click there does, and moves the playhead to its start. The tab only rebuilds while it is showing.</p>
+          </li>
+          <li>
+            <h4>Markers as an outline, and a running length</h4>
+            <p>A project with no subprojects lists its markers instead, each with the time to the next marker (the last one to the end of the arrangement). The total is the whole project's length, with a "~" when any clip in it isn't generated yet. For an episode that isn't split into chapters, that is the running length while you write.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Menus and help</h3>
         <ul class="change-list">
           <li>

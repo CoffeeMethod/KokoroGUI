@@ -111,9 +111,28 @@ def test_all_panels_are_docks_in_the_grid(qt_app):
         assert qt_app.dockWidgetArea(dock) == bottom
     tabbed = qt_app.tabifiedDockWidgets(qt_app.settings_dock)
     assert qt_app.fx_dock in tabbed and qt_app.lexicon_dock in tabbed
+    assert qt_app.outline_dock in tabbed and qt_app.outline_dock.windowTitle() == "Outline"
     assert qt_app.mixing_dock in tabbed  # Kokoro -> Mixing behind the "Voices" tab
     assert qt_app.mixing_dock.windowTitle() == "Voices"
     assert qt_app.mixing_dock.objectName() == "dock_voices"
+
+
+def test_a_saved_layout_that_predates_the_outline_dock_still_shows_it(qt_app, qtbot):
+    from kokoro_gui.qt import settings as qt_settings
+
+    qt_app.show()
+    qtbot.waitExposed(qt_app)
+    qt_app.removeDockWidget(qt_app.outline_dock)  # a layout saved before the dock existed
+    old_state = qt_app.saveState()
+    qt_app.arrange_docks_default()
+    qt_app.settings["workspaces"] = {ADVANCED: {"state": qt_settings.encode_bytes(old_state),
+                                                "geometry": qt_settings.encode_bytes(qt_app.saveGeometry())}}
+
+    qt_app.workspaces.activate(ADVANCED, save_outgoing=False)
+
+    dock = qt_app.outline_dock
+    assert dock.isVisible() and not dock.isFloating()
+    assert dock in qt_app.tabifiedDockWidgets(qt_app.settings_dock)
 
 
 def test_voices_tab_keeps_its_title_across_engines(qt_app):
