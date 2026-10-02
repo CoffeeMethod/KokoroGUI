@@ -93,7 +93,7 @@ from kokoro_gui.daw.arrangement import clip_audio_duration_s  # noqa: E402
 from kokoro_gui.qt.characters_dialog import CharactersDialog  # noqa: E402
 from kokoro_gui.qt.fx_presets import list_fx_preset_names  # noqa: E402
 from kokoro_gui.qt.docks import (  # noqa: E402
-    FXDock, LexiconDock, MixingDock, SettingsDock, TimelineDock, TranscriptDock, TransportDock,
+    FXDock, LexiconDock, MixingDock, OutlineDock, SettingsDock, TimelineDock, TranscriptDock, TransportDock,
     VideoDock, VoiceCloneDock,
 )
 from kokoro_gui.qt.docks.export_dialog import ExportDialog, run_export  # noqa: E402
@@ -280,6 +280,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.settings_dock: SettingsDock | None = None
         self.fx_dock: FXDock | None = None
         self.lexicon_dock: LexiconDock | None = None
+        self.outline_dock: OutlineDock | None = None
         self.mixing_dock: MixingDock | None = None
         self._preview_path: str | None = None
         self.voice_clone_dock: VoiceCloneDock | None = None
@@ -1157,6 +1158,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.settings_dock = SettingsDock(self)
         self.fx_dock = FXDock(self)
         self.lexicon_dock = LexiconDock(self)
+        self.outline_dock = OutlineDock(self)
         self.timeline_dock = TimelineDock(self)
         self.transport_dock = TransportDock(self)
         self.video_dock = VideoDock(self)
@@ -1200,7 +1202,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         bottom = Qt.DockWidgetArea.LeftDockWidgetArea
         self.addDockWidget(top, self.transcript_dock)
         self.addDockWidget(top, self.settings_dock)
-        for dock in (self.fx_dock, self.lexicon_dock):
+        for dock in (self.fx_dock, self.lexicon_dock, self.outline_dock):
             self.addDockWidget(top, dock)
             self.tabifyDockWidget(self.settings_dock, dock)
         self._follow_active_for_voices()
@@ -1252,7 +1254,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def _all_docks(self) -> list:
         docks = [self.transcript_dock, self.settings_dock, self.fx_dock, self.lexicon_dock,
-                 self.mixing_dock, self.voice_clone_dock, self.timeline_dock, self.transport_dock,
+                 self.outline_dock, self.mixing_dock, self.voice_clone_dock, self.timeline_dock, self.transport_dock,
                  self.video_dock]
         return [d for d in docks if d is not None]
 
@@ -1408,6 +1410,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self._prewarm_renders()
         if self.transcript_dock is not None:
             self.transcript_dock.sync_header()
+        if self.outline_dock is not None:
+            self.outline_dock.refresh()
 
     def _prewarm_renders(self) -> None:
         """When the post inputs (Settings, project FX, the project) moved
