@@ -50,6 +50,11 @@ mixdown once it is written: the fields, the cover and, in an mp3, the markers
 export titles each file with its chapter and numbers it `n/total`. Stems and
 per-clip files are working files and get no tags.
 
+`mixdown(fmt="m4b")` writes the main file through `kokoro_gui.daw.m4b` (an
+ffmpeg subprocess): AAC at `bitrate_kbps`, a chapter per subproject (else per
+marker), and the tags and cover from `tags` when given. Stems and per-clip
+files in M4B come out without chapters.
+
 `write_srt(granularity="word")` writes one subtitle per stored word
 (`Segment.words`) instead of one per clip. `write_cue_sheet` writes a CSV
 row per clip for review and dubbing: timecode (when the document has it
@@ -73,7 +78,7 @@ from scipy.signal import resample_poly
 
 from kokoro_gui.audio import limiter, loudness as loudness_mod, mixer, post
 from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement, segment_timeline
-from kokoro_gui.daw import markers as marker_ops, tagging, transcripts
+from kokoro_gui.daw import m4b, markers as marker_ops, tagging, transcripts
 from kokoro_gui.daw.imported import segment_plays
 from kokoro_gui.daw.mixplan import ClipMix, clip_mixes
 from kokoro_gui.daw.timecode import format_position
@@ -320,8 +325,12 @@ def _crossfaded_samples(plays: list, sample_rate: int, post_config: Optional[dic
 def write_audio(path: str, samples: np.ndarray, sample_rate: int, fmt: str,
                 bitrate_kbps: Optional[int] = None) -> None:
     """`samples` is `(frames,)` mono or `(frames, channels)`. `bitrate_kbps`
-    only applies to mp3."""
+    applies to mp3 and m4b (an M4B through here has no chapters or tags;
+    `mixdown` writes the main file with them)."""
     fmt = (fmt or "wav").lower()
+    if fmt == "m4b":
+        m4b.write_m4b(samples, sample_rate, path, bitrate_kbps)
+        return
     if fmt in SOUNDFILE_FORMATS:
         import soundfile as sf
 
@@ -567,7 +576,9 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
     any of `tagging.META_KEYS`, plus `"cover"` (a path) and `"chapters"` (true
     writes the markers, else the subprojects, as ID3 chapters in an mp3). A
     cover that can't be used, a missing `mutagen` or a write that fails adds a
-    warning; the export goes on.
+    warning; the export goes on. An M4B takes the same fields through ffmpeg
+    (no `mutagen` needed) and always carries its chapters, `tags["chapters"]`
+    or not.
 
     `out_rate` writes the mixdown at that rate instead of `sample_rate`: the
     whole mix is resampled once before the loudness step, so what gets
@@ -629,9 +640,13 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
     result.duration_s = len(mixed) / float(mix_rate)
     if progress:
         progress(0.85, "Writing mixdown")
-    write_audio(out_path, mixed, mix_rate, ext, bitrate_kbps=bitrate_kbps)
-    failed = [c.describe(report) for c in checks if not c.passed(report)] if checks else []
     tagged = False
+    if ext == "m4b":
+        tagged = _write_m4b(out_path, mixed, mix_rate, bitrate_kbps, tags, document, arrangement_out, range_s,
+                            head_s, result.duration_s, result.warnings)
+    else:
+        write_audio(out_path, mixed, mix_rate, ext, bitrate_kbps=bitrate_kbps)
+    failed = [c.describe(report) for c in checks if not c.passed(report)] if checks else []
     if tags and tagging.supports(ext):
         tagged = _tag_file(out_path, ext, tags, document, arrangement_out, range_s, head_s, result.duration_s,
                            result.warnings)
@@ -671,6 +686,20 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
     if progress:
         progress(1.0, "Export finished")
     return result
+
+
+def _write_m4b(path: str, samples: np.ndarray, rate: int, bitrate_kbps: Optional[int], tags: Optional[dict],
+               document, arrangement: Arrangement, range_s: Optional[tuple], head_s: float, duration_s: float,
+               warnings: list) -> bool:
+    """Writes the main mixdown as an M4B: the chapters (subprojects, else
+    markers) always, the tags and cover when `tags` is given. ffmpeg writes
+    them, so this doesn't need `mutagen`. True when tags went in; a cover
+    that can't be used lands in `warnings`."""
+    chapters = m4b.m4b_chapters(document, arrangement, range_s, head_s)
+    meta = {key: tags[key] for key in tagging.META_KEYS if tags.get(key)} if tags else {}
+    problems = m4b.write_m4b(samples, rate, path, bitrate_kbps, chapters, meta, (tags or {}).get("cover"))
+    warnings.extend(problem for problem in problems if problem not in warnings)
+    return bool(tags)
 
 
 def _tag_file(path: str, ext: str, tags: dict, document, arrangement: Arrangement, range_s: Optional[tuple],
