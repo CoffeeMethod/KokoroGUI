@@ -42,6 +42,7 @@ Unreleased:
 -   A log file, and a dialog with the traceback when something crashes
 -   Generate stale clips in the selection only, a taskbar alert when a long job finishes, and a
     prompt before closing mid-generate
+-   Split a clip in two at the playhead and join two clips back, from Edit, the block menu or `S`
 
 In 4.0.0-beta.2:
 
