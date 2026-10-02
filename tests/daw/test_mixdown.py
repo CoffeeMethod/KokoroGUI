@@ -1,12 +1,16 @@
 """Tests for kokoro_gui/daw/mixdown.py - offline export of a clip document
 (section 6 of Claude/PLAN_ui_shell_redesign.md). Writes real wav files
 into tmp_path; no engine, no Qt."""
+import datetime
+
 import numpy as np
 import pytest
 import soundfile as sf
 
 from kokoro_gui.daw.arrangement import compute_arrangement
-from kokoro_gui.daw.mixdown import mixdown, render_mix, write_audio, write_srt
+from kokoro_gui.daw.mixdown import (
+    expand_name, mixdown, name_context, render_mix, unused_path, write_audio, write_srt,
+)
 from kokoro_gui.daw.models import Character, Clip, Document, Run, Segment, Track
 
 
@@ -393,3 +397,98 @@ def test_mixdown_normalize_leaves_per_clip_files_alone(tmp_path):
 
     clip, _ = sf.read(result.clip_files[0], dtype="float32")
     assert np.max(np.abs(clip)) == pytest.approx(0.05, abs=1e-3)
+
+
+# -- export options: mp3 bitrate, output rate, file-name template -----------------------
+
+
+def _noise_doc(tmp_path, seconds=2.0, rate=48000):
+    rng = np.random.default_rng(7)
+    path = tmp_path / "noise.wav"
+    sf.write(str(path), (rng.standard_normal(int(rate * seconds)) * 0.1).astype(np.float32), rate)
+    alice = Character.from_preset_dict("Alice", {})
+    track = Track(name="A", character_id=alice.id, order_index=0)
+    clip = Clip(character_id=alice.id, track_id=track.id,
+                segments=[Segment(order_index=0, duration=seconds, audio_path=str(path))])
+    return _doc("Hello there.", [(0, 12, clip)], characters=[alice], tracks=[track])
+
+
+def test_mp3_bitrate_sets_the_file_size(tmp_path):
+    doc = _noise_doc(tmp_path)
+
+    sizes = {}
+    for kbps in (128, 320):
+        out = tmp_path / f"out{kbps}.mp3"
+        mixdown(doc, str(out), fmt="mp3", sample_rate=48000, bitrate_kbps=kbps)
+        sizes[kbps] = out.stat().st_size
+
+    assert sizes[320] > sizes[128] * 2
+    assert sizes[128] * 8 / 2.0 / 1000 == pytest.approx(128, rel=0.1)  # constant bitrate, not a quality target
+
+
+def test_out_rate_writes_the_mixdown_at_that_rate_and_length(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+
+    result = mixdown(doc, str(tmp_path / "r.wav"), fmt="wav", sample_rate=8000, out_rate=48000,
+                     keep_clip_files=True, include_srt=True)
+
+    info = sf.info(str(tmp_path / "r.wav"))
+    assert info.samplerate == 48000 and info.frames == 72000
+    assert result.duration_s == pytest.approx(1.5)
+    assert sf.info(result.clip_files[0]).samplerate == 8000  # per-clip files keep the project rate
+    data, _ = sf.read(str(tmp_path / "r.wav"))
+    assert np.allclose(data[8000:40000], 0.25, atol=0.01)  # the level survives the resample
+
+
+def test_out_rate_equal_to_the_mix_rate_writes_the_same_bytes(tmp_path):
+    doc, _a, _b = _two_generated_clips(tmp_path)
+
+    mixdown(doc, str(tmp_path / "plain.wav"), fmt="wav", sample_rate=8000)
+    mixdown(doc, str(tmp_path / "same.wav"), fmt="wav", sample_rate=8000, out_rate=8000)
+
+    assert (tmp_path / "plain.wav").read_bytes() == (tmp_path / "same.wav").read_bytes()
+
+
+def test_loudness_is_measured_at_the_output_rate(tmp_path):
+    pytest.importorskip("pyloudnorm")
+    doc = _tone_doc(tmp_path, 0.05)
+
+    result = mixdown(doc, str(tmp_path / "n.wav"), fmt="wav", sample_rate=8000, out_rate=16000,
+                     loudness={"target_lufs": -16.0, "ceiling_dbtp": -1.0})
+
+    assert sf.info(str(tmp_path / "n.wav")).samplerate == 16000
+    assert result.loudness_after.duration_s == pytest.approx(4.0, abs=0.01)
+
+
+def test_expand_name_fills_the_tokens():
+    context = name_context("My Book", range_label="Intro to Ch1", now=datetime.datetime(2026, 10, 2, 9, 5, 7))
+
+    assert expand_name("{project}-{date}", context) == "My Book-2026-10-02"
+    assert expand_name("{project}_{time}_{range}", context) == "My Book_090507_Intro to Ch1"
+    assert expand_name("{project}", name_context("")) == "Untitled"
+    assert expand_name("{range}", name_context("x")) == "full"
+
+
+def test_expand_name_keeps_an_unknown_token_as_typed():
+    assert expand_name("{project}-{chapter}", name_context("Book")) == "Book-{chapter}"
+
+
+def test_expand_name_cannot_leave_the_folder_or_hold_bad_characters():
+    context = name_context("a/b:c*")
+
+    assert expand_name("../../evil", context) == "evil"
+    assert expand_name("..", context) == "output"
+    assert expand_name('x<y>:"z"|?*', context) == "xyz"
+    assert expand_name("{project}", context) == "abc"  # a value can't add a folder either
+    assert expand_name("", context) == "output"
+    assert expand_name("name. ", context) == "name"
+    assert expand_name("a\x00b\x1fc", context) == "abc"
+
+
+def test_unused_path_adds_a_number(tmp_path):
+    target = tmp_path / "mix.wav"
+    assert unused_path(str(target)) == str(target)
+    target.write_bytes(b"x")
+    assert unused_path(str(target)) == str(tmp_path / "mix (2).wav")
+    (tmp_path / "mix (2).wav").write_bytes(b"x")
+    assert unused_path(str(target)) == str(tmp_path / "mix (3).wav")
