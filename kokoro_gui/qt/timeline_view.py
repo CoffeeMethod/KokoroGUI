@@ -2,7 +2,8 @@
 Claude/PLAN_ui_shell_redesign.md, section 4).
 
 `TimelineView` owns the scene: a ruler across the top, one lane per
-`Document.track`, one `ClipBlockItem` per placed clip, and a playhead. x is
+track that has clips (`Document.used_tracks`; an unused track isn't
+drawn), one `ClipBlockItem` per placed clip, and a playhead. x is
 `seconds * self._zoom` (Ctrl+wheel, 20-400 px/s). Where a clip sits comes
 from `kokoro_gui.daw.arrangement.compute_arrangement` - the same placement
 the transport plays and the exporter writes - never from text offsets.
@@ -26,6 +27,34 @@ Mouse gestures on the main view (all resolved in `mouseReleaseEvent`):
 - Shift+drag inside one block: `subRangeTtsRequested(clip_id, start, end)`
   - item 9's sub-range TTS replacement, now behind Shift so a plain drag
   can mean "move".
+- drag a block's top-left or top-right corner handle: `fadeChanged(clip_id,
+  "fade_in_s" | "fade_out_s", seconds)`.
+- drag a music bed's left or right edge (below the fade handle):
+  `bedEdgeDragged(clip_id, "left" | "right", delta_s)`, a trim, or on a
+  looping bed the loop's length (phase 5 P2).
+- on the ruler: drag a marker flag to move it (`markerMoved`), Shift+drag
+  to set a loop region (`loopRangeRequested`), right-click for "Add marker
+  here" or a flag's Rename / Delete / Loop to next marker. Double-click
+  seeks, like a plain click.
+- in a lane whose automation is shown (the header's `A` toggle): double-click
+  adds a breakpoint, drag moves one (clamped between its neighbours in
+  time), right-click deletes one, Alt+drag on a segment moves both its
+  ends. Each edit is one `automationChanged(track_id, points)`. Clips in
+  that lane don't move while it's shown.
+
+The header column has, per track, `M` (mute), `S` (solo), `A` (show the
+automation lane), `D` (duck under speech, `Track.duck`), a fader and a pan
+slider (`trackFieldChanged`).
+The block context menu adds Take (pick or delete a parked take), Status,
+"Align words" and "Lock in time" (`Clip.pinned`: ripple on regenerate
+won't move it). A music bed's menu is Play, Loop, Reset trim, Lock in time
+and Remove (`bedActionRequested`). Two clips overlapping on one track get a
+red border (`arrangement.overlaps`). A clip with a duration target
+(`kokoro_gui/daw/fit.py`) draws its slot as a bracket, tints amber or red
+when it runs past it, shows the fit percentage in its label and offers
+"Fit to slot" (`fitToSlotRequested`). The ruler labels in timecode when the
+document has it enabled (`kokoro_gui/daw/timecode.py`). `set_status_filter`
+dims blocks that don't match the timeline dock's filter.
 
 The widget stays app-independent (no `self.app`): the dock owning
 `app.document`/`app.engine` handles every signal. `render_document()` is a
@@ -36,27 +65,57 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
-    QGraphicsItem, QGraphicsLineItem, QGraphicsRectItem, QGraphicsScene, QGraphicsSimpleTextItem,
-    QGraphicsView, QHBoxLayout, QMenu, QMessageBox, QWidget,
+    QGraphicsItem, QGraphicsLineItem, QGraphicsProxyWidget, QGraphicsRectItem, QGraphicsScene,
+    QGraphicsSimpleTextItem, QGraphicsView, QHBoxLayout, QMenu, QMessageBox, QSlider, QToolButton, QWidget,
 )
 
-from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement
+from kokoro_gui.daw import fit as fit_ops
+from kokoro_gui.daw import markers as marker_ops, revision
+from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement, overlaps
+from kokoro_gui.daw.beds import bed_segments
+from kokoro_gui.daw.models import CLIP_STATUSES
+from kokoro_gui.daw.timecode import format_position
 from kokoro_gui.qt import theme, waveform_data
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
 from kokoro_gui.qt.selection import SelectionModel
 from kokoro_gui.qt.waveform_view import WaveformItem
 
 RULER_HEIGHT_PX = 22.0
+MARKER_HIT_PX = 6.0
+MARKER_LABEL_WIDTH_PX = 130.0  # a marker flag plus its name, for culling
+FADE_HANDLE_PX = 8.0
+# How far in from a bed block's left or right edge a press grabs the edge.
+EDGE_HANDLE_PX = 6.0
+AUTOMATION_POINT_RADIUS_PX = 4.0
+AUTOMATION_HIT_PX = 7.0
+AUTOMATION_MAX_GAIN = 2.0
+PAN_DETENT = 0.05
+STATUS_LABELS = {"todo": "To do", "generated": "Generated", "approved": "Approved",
+                 "needs_rewrite": "Needs rewrite"}
+# Which statuses each timeline filter shows at full opacity.
+STATUS_FILTERS = {
+    "all": set(CLIP_STATUSES),
+    "not_approved": set(CLIP_STATUSES) - {"approved"},
+    "needs_rewrite": {"needs_rewrite"},
+}
+FILTERED_OUT_OPACITY = 0.3
 LANE_HEIGHT_PX = 80.0
 LANE_MARGIN_PX = 8.0
 MIN_CLIP_WIDTH_PX = 20.0
 DEFAULT_PIXELS_PER_SECOND = 50.0
 MIN_PIXELS_PER_SECOND = 20.0
 MAX_PIXELS_PER_SECOND = 400.0
-HEADER_WIDTH_PX = 120
+HEADER_WIDTH_PX = 150
+# Track header controls: the M/S/A/D buttons, and the Vol/Pan sliders
+# indented past their text labels. Name row, button row and two slider
+# rows fit one LANE_HEIGHT_PX.
+TOGGLE_WIDTH_PX = 24
+TOGGLE_HEIGHT_PX = 20
+SLIDER_LEFT_PX = 34
+SLIDER_HEIGHT_PX = 14
 CLIP_RADIUS_PX = 4.0
 # A clip's fill is its character color over the lane at this alpha: the
 # label stays readable in both themes and the waveform (the color's darker
@@ -67,10 +126,16 @@ MIN_SCENE_SECONDS = 10.0
 AUTO_SCROLL_GRACE_S = 2.0
 FALLBACK_CLIP_COLOR = "#888888"
 SELECTED_BORDER_WIDTH_PX = 3
+OVERLAP_BORDER_WIDTH_PX = 2
 FX_BUTTON_WIDTH_PX = 24.0
 FX_BUTTON_HEIGHT_PX = 16.0
 FX_BUTTON_ACTIVE_OPACITY = 0.9
 FX_BUTTON_INACTIVE_OPACITY = 0.5
+SLOT_TICK_PX = 8.0
+SLOT_BRACKET_WIDTH_PX = 2
+FIT_TINT_ALPHA = 110
+# `fit.fit_level` -> the theme token a block over its slot is tinted with.
+FIT_TINT_TOKENS = {"over": "fit_over", "far_over": "fit_far_over"}
 
 
 def seconds_to_x(seconds: float, zoom: float) -> float:
@@ -114,7 +179,12 @@ def label_color_for(fill: QColor) -> QColor:
 class ClipBlockItem(QGraphicsItem):
     """One clip's block on a lane: character-colored fill, label, optional
     child `WaveformItem`, FX chip in the bottom-right corner. Estimated
-    clips get a dashed outline and no waveform."""
+    clips get a dashed outline and no waveform.
+
+    A clip with a duration target (`daw/fit.py`) draws its slot as a
+    bracket along the bottom edge, from the clip's timestamp to timestamp +
+    target, which may reach past the block; `fit_ratio` is the rendered
+    length over the target and `fit_level` picks the tint (`fit_tint`)."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -127,6 +197,20 @@ class ClipBlockItem(QGraphicsItem):
         self._selected = False
         self._fx_active = False
         self._estimated = False
+        self._overlap = False
+        # A subproject's block (phase 4): None for an ordinary clip, else
+        # "ok", "stale" or "missing".
+        self._nested_state = None
+        # A music bed's block (phase 5 P2): its edges trim, and a looping
+        # one marks where each pass starts.
+        self._bed = False
+        self._loop_marks_px: list = []
+        self._fade_in_px = 0.0
+        self._fade_out_px = 0.0
+        # The slot bracket in item x (start, end), or None without a target.
+        self.slot_px: Optional[tuple] = None
+        self.fit_ratio: Optional[float] = None
+        self.fit_level: Optional[str] = None
         self.clip_id: Optional[str] = None
         self.audio_path: Optional[str] = None
         self.start_s = 0.0
@@ -153,6 +237,10 @@ class ClipBlockItem(QGraphicsItem):
         self._label = text
         self.update()
 
+    @property
+    def label(self) -> str:
+        return self._label
+
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
         self.update()
@@ -169,6 +257,71 @@ class ClipBlockItem(QGraphicsItem):
     def estimated(self) -> bool:
         return self._estimated
 
+    def set_nested_state(self, state) -> None:
+        self._nested_state = state
+        self.update()
+
+    @property
+    def nested_state(self):
+        return self._nested_state
+
+    def set_bed(self, bed: bool, loop_marks_px=()) -> None:
+        self._bed = bool(bed)
+        self._loop_marks_px = list(loop_marks_px)
+        self.update()
+
+    @property
+    def is_bed(self) -> bool:
+        return self._bed
+
+    def left_edge_rect(self) -> QRectF:
+        return QRectF(0.0, FADE_HANDLE_PX, min(EDGE_HANDLE_PX, self._width / 3.0),
+                      max(0.0, self._height - FADE_HANDLE_PX))
+
+    def right_edge_rect(self) -> QRectF:
+        width = min(EDGE_HANDLE_PX, self._width / 3.0)
+        return QRectF(self._width - width, FADE_HANDLE_PX, width, max(0.0, self._height - FADE_HANDLE_PX))
+
+    def set_overlap(self, overlap: bool) -> None:
+        self._overlap = overlap
+        self.update()
+
+    @property
+    def overlap(self) -> bool:
+        return self._overlap
+
+    def set_fit(self, slot_start_px: Optional[float], slot_width_px: Optional[float],
+                ratio: Optional[float]) -> None:
+        """The slot bracket (item x of its start, and its width; None for
+        no target) and the fit ratio (None while the length is estimated)."""
+        self.prepareGeometryChange()
+        if slot_start_px is None or slot_width_px is None:
+            self.slot_px = None
+        else:
+            start = max(0.0, float(slot_start_px))
+            self.slot_px = (start, start + max(0.0, float(slot_width_px)))
+        self.fit_ratio = ratio
+        self.fit_level = fit_ops.fit_level(ratio)
+        self.update()
+
+    @property
+    def fit_tint(self) -> Optional[str]:
+        """The theme token the block is tinted with, or None."""
+        return FIT_TINT_TOKENS.get(self.fit_level)
+
+    def set_fades_px(self, fade_in_px: float, fade_out_px: float) -> None:
+        self._fade_in_px = max(0.0, min(fade_in_px, self._width))
+        self._fade_out_px = max(0.0, min(fade_out_px, self._width))
+        self.update()
+
+    def fade_in_handle_rect(self) -> QRectF:
+        x = min(self._fade_in_px, max(0.0, self._width - FADE_HANDLE_PX))
+        return QRectF(x, 0.0, FADE_HANDLE_PX, FADE_HANDLE_PX)
+
+    def fade_out_handle_rect(self) -> QRectF:
+        x = max(0.0, self._width - self._fade_out_px - FADE_HANDLE_PX)
+        return QRectF(x, 0.0, FADE_HANDLE_PX, FADE_HANDLE_PX)
+
     def fx_button_rect(self) -> QRectF:
         width = min(FX_BUTTON_WIDTH_PX, self._width)
         height = min(FX_BUTTON_HEIGHT_PX, self._height)
@@ -182,11 +335,42 @@ class ClipBlockItem(QGraphicsItem):
         self._waveform_item.set_color(QColor(self._color).darker(170).name())
         self._waveform_item.set_peaks(peaks, width, height)
 
+    def set_waveform_source(self, loader, width: float, height: float, deferred: bool = False) -> None:
+        """Like `set_waveform`, with the peaks computed by `loader()` on the
+        waveform's first paint. With `deferred`, `loader` is a
+        `request(deliver)` that may answer later
+        (`WaveformItem.set_deferred_source`)."""
+        if self._waveform_item is None:
+            self._waveform_item = WaveformItem(parent=self)
+        self._waveform_item.set_color(QColor(self._color).darker(170).name())
+        if deferred:
+            self._waveform_item.set_deferred_source(loader, width, height)
+        else:
+            self._waveform_item.set_source(loader, width, height)
+
+    def clear_waveform(self) -> None:
+        if self._waveform_item is not None:
+            self._waveform_item.setParentItem(None)
+            if self._waveform_item.scene() is not None:
+                self._waveform_item.scene().removeItem(self._waveform_item)
+            self._waveform_item = None
+
     def boundingRect(self) -> QRectF:  # noqa: N802 (Qt override)
-        return QRectF(0, 0, self._width, self._height)
+        # The slot bracket can run past the block's end.
+        width = max(self._width, self.slot_px[1] + 1.0) if self.slot_px is not None else self._width
+        return QRectF(0, 0, width, self._height)
+
+    def shape(self) -> QPainterPath:  # noqa: N802 (Qt override)
+        # Clicks and the waveform clip to the block, not the bracket.
+        path = QPainterPath()
+        path.addRect(QRectF(0, 0, self._width, self._height))
+        return path
 
     def paint(self, painter, option, widget=None) -> None:  # noqa: N802 (Qt override)
         pal = theme.current()
+        # The item's own opacity (the status filter dims it) is already on
+        # the painter; the FX chip multiplies into it.
+        base_opacity = painter.opacity()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = QRectF(0.5, 0.5, self._width - 1, self._height - 1)
         base = QColor(self._color)
@@ -194,28 +378,114 @@ class ClipBlockItem(QGraphicsItem):
         fill.setAlpha(70 if self._estimated else CLIP_FILL_ALPHA)
         if self._selected:
             painter.setPen(QPen(QColor(pal.selection_border), SELECTED_BORDER_WIDTH_PX))
+        elif self._overlap:
+            painter.setPen(QPen(QColor(pal.overlap_border), OVERLAP_BORDER_WIDTH_PX))
         elif self._estimated:
             painter.setPen(QPen(QColor(pal.estimated_outline), 1, Qt.PenStyle.DashLine))
         else:
             painter.setPen(QPen(base.darker(135), 1))
         painter.setBrush(fill)
         painter.drawRoundedRect(rect, CLIP_RADIUS_PX, CLIP_RADIUS_PX)
+        if self.fit_tint is not None:
+            # Over its slot: a tint inside the border, so an overlap's red
+            # border still shows on top of it.
+            tint = QColor(getattr(pal, self.fit_tint))
+            tint.setAlpha(FIT_TINT_ALPHA)
+            painter.save()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(tint)
+            painter.drawRoundedRect(rect.adjusted(1.5, 1.5, -1.5, -1.5), CLIP_RADIUS_PX, CLIP_RADIUS_PX)
+            painter.restore()
+        label_left = 6
+        if self._nested_state is not None:
+            # A subproject: a folder glyph before the title; a stale one is
+            # hatched like a stale clip, a missing one crossed out.
+            painter.save()
+            if self._nested_state in ("stale", "missing"):
+                pattern = Qt.BrushStyle.DiagCrossPattern if self._nested_state == "missing" \
+                    else Qt.BrushStyle.BDiagPattern
+                hatch = QColor(pal.dirty_underline if self._nested_state == "missing" else pal.estimated_outline)
+                hatch.setAlpha(150)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(hatch, pattern))
+                painter.drawRoundedRect(rect, CLIP_RADIUS_PX, CLIP_RADIUS_PX)
+            painter.setPen(QPen(QColor(pal.text), 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            folder = QRectF(6, 6, 12, 9)
+            painter.drawRect(folder)
+            painter.drawLine(QPointF(6, 6), QPointF(9, 3.5))
+            painter.drawLine(QPointF(9, 3.5), QPointF(12, 3.5))
+            painter.drawLine(QPointF(12, 3.5), QPointF(13, 6))
+            painter.restore()
+            label_left = 22
+        if self._bed:
+            # Edge grips, and a dotted line where each loop pass starts.
+            painter.save()
+            painter.setPen(Qt.PenStyle.NoPen)
+            grip = QColor(label_color_for(base))
+            grip.setAlpha(110)
+            painter.setBrush(grip)
+            painter.drawRect(self.left_edge_rect().adjusted(1, 2, -2, -2))
+            painter.drawRect(self.right_edge_rect().adjusted(2, 2, -1, -2))
+            painter.setPen(QPen(grip, 1, Qt.PenStyle.DotLine))
+            for x in self._loop_marks_px:
+                painter.drawLine(QPointF(x, 0.5), QPointF(x, self._height - 0.5))
+            painter.restore()
         if self._label:
             painter.setPen(label_color_for(base) if not self._estimated else QColor(pal.text))
-            painter.drawText(rect.adjusted(6, 3, -4, -2), 0, self._label)
+            painter.drawText(rect.adjusted(label_left, 3, -4, -2), 0, self._label)
 
-        painter.setOpacity(FX_BUTTON_ACTIVE_OPACITY if self._fx_active else FX_BUTTON_INACTIVE_OPACITY)
+        if not self._estimated:
+            # Fade ramps: a line from the bottom corner up to where the fade
+            # ends on the top edge, and the corner handles.
+            painter.setPen(QPen(label_color_for(base), 1))
+            if self._fade_in_px > 0:
+                painter.drawLine(QPointF(0.5, self._height - 0.5), QPointF(self._fade_in_px, 0.5))
+            if self._fade_out_px > 0:
+                painter.drawLine(QPointF(self._width - self._fade_out_px, 0.5),
+                                 QPointF(self._width - 0.5, self._height - 0.5))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(pal.fx_badge_bg))
+            painter.drawRect(self.fade_in_handle_rect())
+            painter.drawRect(self.fade_out_handle_rect())
+
+        painter.setOpacity(base_opacity * (FX_BUTTON_ACTIVE_OPACITY if self._fx_active
+                                           else FX_BUTTON_INACTIVE_OPACITY))
         fx_rect = self.fx_button_rect()
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(pal.fx_badge_bg))
         painter.drawRoundedRect(fx_rect, 4, 4)
         painter.setPen(QPen(QColor(pal.fx_badge_text)))
         painter.drawText(fx_rect, Qt.AlignmentFlag.AlignCenter, "FX")
-        painter.setOpacity(1.0)
+        painter.setOpacity(base_opacity)
+        if self.slot_px is not None:
+            self._paint_slot_bracket(painter, pal, base)
+
+    def _paint_slot_bracket(self, painter, pal, base: QColor) -> None:
+        """`|___|` along the bottom edge from the slot's start to its end:
+        in the label color over the block, in the text color past it."""
+        start, end = self.slot_px
+        bottom = self._height - 1.5
+        path = QPainterPath()
+        path.moveTo(start + 1, bottom - SLOT_TICK_PX)
+        path.lineTo(start + 1, bottom)
+        path.lineTo(end - 1, bottom)
+        path.lineTo(end - 1, bottom - SLOT_TICK_PX)
+        parts = [(QRectF(0, 0, self._width, self._height), label_color_for(base))]
+        if end > self._width:
+            parts.append((QRectF(self._width, 0, end - self._width + 2, self._height), QColor(pal.text)))
+        for clip_rect, color in parts:
+            painter.save()
+            painter.setClipRect(clip_rect, Qt.ClipOperation.IntersectClip)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(color, SLOT_BRACKET_WIDTH_PX))
+            painter.drawPath(path)
+            painter.restore()
 
 
 class _RulerItem(QGraphicsItem):
-    """Ticks and mm:ss labels across the top of the scene, plus the
+    """Ticks and labels across the top of the scene (mm:ss, or timecode
+    when the document enables it), the loop region, marker flags, and the
     playhead's triangle."""
 
     def __init__(self):
@@ -223,7 +493,13 @@ class _RulerItem(QGraphicsItem):
         self._width = 0.0
         self._zoom = DEFAULT_PIXELS_PER_SECOND
         self._playhead_x: Optional[float] = None
+        self._markers: list = []
+        self._settings: dict = {}
+        self._loop_s: Optional[tuple] = None
         self.setZValue(5)
+        # `paint` draws only `option.exposedRect`, which Qt fills in only
+        # with this flag (without it the rect is the whole ruler).
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, True)
 
     def set_span(self, width: float, zoom: float) -> None:
         self.prepareGeometryChange()
@@ -235,28 +511,78 @@ class _RulerItem(QGraphicsItem):
         self._playhead_x = x
         self.update()
 
+    def set_markers(self, markers: list) -> None:
+        self._markers = list(markers)
+        self.update()
+
+    def set_document_settings(self, settings: dict) -> None:
+        self._settings = dict(settings or {})
+        self.update()
+
+    def set_loop_s(self, loop_s: Optional[tuple]) -> None:
+        self._loop_s = loop_s
+        self.update()
+
+    def marker_at_x(self, x: float) -> Optional[dict]:
+        """The marker whose flag is within `MARKER_HIT_PX` of scene `x`."""
+        best, best_d = None, MARKER_HIT_PX
+        for marker in self._markers:
+            d = abs(seconds_to_x(marker["seconds"], self._zoom) - x)
+            if d <= best_d:
+                best, best_d = marker, d
+        return best
+
+    def label_for(self, seconds: float) -> str:
+        return format_position(self._settings, seconds) or format_ruler_label(seconds)
+
     def boundingRect(self) -> QRectF:  # noqa: N802 (Qt override)
         return QRectF(0, 0, self._width, RULER_HEIGHT_PX)
 
     def paint(self, painter, option, widget=None) -> None:  # noqa: N802 (Qt override)
         pal = theme.current()
-        painter.fillRect(self.boundingRect(), QColor(pal.ruler_bg))
+        exposed = option.exposedRect if option is not None else self.boundingRect()
+        left, right = exposed.left(), exposed.right()
+        painter.fillRect(exposed, QColor(pal.ruler_bg))
+        if self._loop_s is not None:
+            loop = QColor(pal.playhead)
+            loop.setAlpha(60)
+            x0, x1 = (seconds_to_x(t, self._zoom) for t in self._loop_s)
+            painter.fillRect(QRectF(x0, 0, max(1.0, x1 - x0), RULER_HEIGHT_PX), loop)
         painter.setPen(QPen(QColor(pal.ruler_text)))
-        step = choose_tick_step(self._zoom)
+        timecode = format_position(self._settings, 0.0) is not None
+        step = choose_tick_step(self._zoom, min_label_px=90.0 if timecode else 60.0)
         total_s = self._width / self._zoom if self._zoom > 0 else 0.0
-        t = 0.0
-        while t <= total_s + 1e-6:
+        # Only the ticks whose line or label reaches the exposed rect: a
+        # label runs one step to the right of its tick.
+        first = max(0, int((left / self._zoom) // step) - 1) if self._zoom > 0 else 0
+        k = first
+        while True:
+            t = k * step
             x = seconds_to_x(t, self._zoom)
+            if t > total_s + 1e-6 or x > right:
+                break
             painter.drawLine(QPointF(x, RULER_HEIGHT_PX - 6), QPointF(x, RULER_HEIGHT_PX))
             painter.drawText(QRectF(x + 2, 0, step * self._zoom - 4, RULER_HEIGHT_PX - 4),
-                             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), format_ruler_label(t))
+                             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), self.label_for(t))
             minor = t + step / 2
             if minor <= total_s:
                 mx = seconds_to_x(minor, self._zoom)
                 painter.drawLine(QPointF(mx, RULER_HEIGHT_PX - 3), QPointF(mx, RULER_HEIGHT_PX))
-            t += step
+            k += 1
         painter.setPen(QPen(QColor(pal.lane_border)))
-        painter.drawLine(QPointF(0, RULER_HEIGHT_PX - 0.5), QPointF(self._width, RULER_HEIGHT_PX - 0.5))
+        painter.drawLine(QPointF(left, RULER_HEIGHT_PX - 0.5), QPointF(min(right, self._width), RULER_HEIGHT_PX - 0.5))
+        for marker in self._markers:
+            x = seconds_to_x(marker["seconds"], self._zoom)
+            if x < left - MARKER_LABEL_WIDTH_PX or x > right:
+                continue
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(pal.selection_border))
+            painter.drawPolygon(QPolygonF([QPointF(x, 2), QPointF(x + 8, 6), QPointF(x, 10)]))
+            painter.setPen(QPen(QColor(pal.selection_border)))
+            painter.drawLine(QPointF(x, 2), QPointF(x, RULER_HEIGHT_PX))
+            if marker.get("name"):
+                painter.drawText(QRectF(x + 10, 0, MARKER_LABEL_WIDTH_PX, 12),
+                                 int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop), marker["name"])
         if self._playhead_x is not None:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(pal.playhead))
@@ -264,6 +590,74 @@ class _RulerItem(QGraphicsItem):
             painter.drawPolygon(QPolygonF([
                 QPointF(x - 6, RULER_HEIGHT_PX - 12), QPointF(x + 6, RULER_HEIGHT_PX - 12), QPointF(x, RULER_HEIGHT_PX - 1),
             ]))
+
+
+class AutomationLaneItem(QGraphicsItem):
+    """A track's volume automation drawn over its lane: gain 0 at the lane's
+    bottom margin, `AUTOMATION_MAX_GAIN` at its top, 1.0 halfway. No points
+    draws a dashed line at unity. Geometry lives here; the view owns the
+    mouse."""
+
+    def __init__(self, track_id: str, top: float, width: float, zoom: float, points: list):
+        super().__init__()
+        self.track_id = track_id
+        self._top = top
+        self._width = width
+        self._zoom = zoom
+        self.points = sorted([float(p[0]), float(p[1])] for p in points or [])
+        self.setZValue(4)
+
+    def _band(self) -> tuple:
+        return self._top + LANE_MARGIN_PX, self._top + LANE_HEIGHT_PX - LANE_MARGIN_PX
+
+    def gain_to_y(self, gain: float) -> float:
+        lo, hi = self._band()
+        return hi - (max(0.0, min(AUTOMATION_MAX_GAIN, gain)) / AUTOMATION_MAX_GAIN) * (hi - lo)
+
+    def y_to_gain(self, y: float) -> float:
+        lo, hi = self._band()
+        return round(max(0.0, min(AUTOMATION_MAX_GAIN, (hi - y) / (hi - lo) * AUTOMATION_MAX_GAIN)), 3)
+
+    def point_pos(self, point) -> QPointF:
+        return QPointF(seconds_to_x(point[0], self._zoom), self.gain_to_y(point[1]))
+
+    def point_index_at(self, scene_pos: QPointF) -> Optional[int]:
+        for index, point in enumerate(self.points):
+            p = self.point_pos(point)
+            if abs(p.x() - scene_pos.x()) <= AUTOMATION_HIT_PX and abs(p.y() - scene_pos.y()) <= AUTOMATION_HIT_PX:
+                return index
+        return None
+
+    def segment_index_at(self, scene_pos: QPointF) -> Optional[int]:
+        """The index of the left point of the segment under `scene_pos`."""
+        seconds = x_to_seconds(scene_pos.x(), self._zoom)
+        for index in range(len(self.points) - 1):
+            if self.points[index][0] <= seconds <= self.points[index + 1][0]:
+                return index
+        return None
+
+    def boundingRect(self) -> QRectF:  # noqa: N802 (Qt override)
+        return QRectF(0, self._top, self._width, LANE_HEIGHT_PX)
+
+    def paint(self, painter, option, widget=None) -> None:  # noqa: N802 (Qt override)
+        pal = theme.current()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        color = QColor(pal.playhead)
+        if not self.points:
+            painter.setPen(QPen(color, 1, Qt.PenStyle.DashLine))
+            y = self.gain_to_y(1.0)
+            painter.drawLine(QPointF(0, y), QPointF(self._width, y))
+            return
+        painter.setPen(QPen(color, 2))
+        first, last = self.point_pos(self.points[0]), self.point_pos(self.points[-1])
+        path = QPainterPath(QPointF(0, first.y()))
+        for point in self.points:
+            path.lineTo(self.point_pos(point))
+        path.lineTo(QPointF(self._width, last.y()))
+        painter.drawPath(path)
+        painter.setBrush(color)
+        for point in self.points:
+            painter.drawEllipse(self.point_pos(point), AUTOMATION_POINT_RADIUS_PX, AUTOMATION_POINT_RADIUS_PX)
 
 
 class _TrackLabelItem(QGraphicsSimpleTextItem):
@@ -281,8 +675,29 @@ class _TrackLabelItem(QGraphicsSimpleTextItem):
         return path
 
 
+def gain_to_slider(gain: float) -> int:
+    return int(round(max(0.0, min(AUTOMATION_MAX_GAIN, float(gain))) * 100))
+
+
+def pan_to_slider(pan: float) -> int:
+    return int(round(max(-1.0, min(1.0, float(pan))) * 100))
+
+
+def slider_to_pan(value: int) -> float:
+    """Slider units to pan, snapping to centre within `PAN_DETENT`."""
+    pan = value / 100.0
+    return 0.0 if abs(pan) <= PAN_DETENT else pan
+
+
 class TrackHeaderView(QGraphicsView):
-    """The fixed-width track header column."""
+    """The fixed-width track header column: per track a color swatch, the
+    name, `M` / `S` / `A` / `D` toggles, a fader (0-200%) and a pan slider
+    (centre detent). The toggles and sliders are plain widgets on
+    `QGraphicsProxyWidget`s; edits go out as `trackFieldChanged(track_id,
+    field, value)` and `A` as `automationToggled(track_id, shown)`."""
+
+    trackFieldChanged = Signal(str, str, object)
+    automationToggled = Signal(str, bool)
 
     def __init__(self, parent=None, selection_model: Optional[SelectionModel] = None):
         super().__init__(parent)
@@ -290,16 +705,52 @@ class TrackHeaderView(QGraphicsView):
         self.setScene(self._scene)
         self._selection_model = selection_model
         self._labels: list = []  # keep-alive for Python-subclassed items
+        self.controls: dict = {}  # track_id -> {"mute", "solo", "auto", "duck", "gain", "pan"} widgets
         self.setFixedWidth(HEADER_WIDTH_PX)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self.setFrameShape(QGraphicsView.Shape.NoFrame)
 
-    def render_tracks(self, tracks: list, document) -> None:
+    def _add_widget(self, widget, x: float, y: float):
+        proxy = QGraphicsProxyWidget()
+        proxy.setWidget(widget)
+        proxy.setPos(x, y)
+        self._scene.addItem(proxy)
+        return widget
+
+    def _toggle(self, text: str, tip: str, checked: bool) -> QToolButton:
+        button = QToolButton()
+        button.setProperty("trackToggle", True)
+        button.setText(text)
+        button.setToolTip(tip)
+        button.setCheckable(True)
+        button.setChecked(checked)
+        button.setFixedSize(TOGGLE_WIDTH_PX, TOGGLE_HEIGHT_PX)
+        return button
+
+    def _slider(self, lo: int, hi: int, value: int, tip: str) -> QSlider:
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(lo, hi)
+        slider.setValue(value)
+        slider.setToolTip(tip)
+        slider.setFixedSize(HEADER_WIDTH_PX - SLIDER_LEFT_PX - 8, SLIDER_HEIGHT_PX)
+        # Without this the proxied slider paints a window-colored strip
+        # over the header row.
+        slider.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        return slider
+
+    def _slider_label(self, text: str, y: float, color: str) -> None:
+        label = QGraphicsSimpleTextItem(text)
+        label.setBrush(QColor(color))
+        label.setPos(6, y + (SLIDER_HEIGHT_PX - label.boundingRect().height()) / 2)
+        self._scene.addItem(label)
+
+    def render_tracks(self, tracks: list, document, automation_shown=frozenset()) -> None:
         pal = theme.current()
         self._scene.clear()
         self._labels = []
+        self.controls = {}
         total_height = RULER_HEIGHT_PX + max(len(tracks), 1) * LANE_HEIGHT_PX
         corner = QGraphicsRectItem(0, 0, HEADER_WIDTH_PX, RULER_HEIGHT_PX)
         corner.setBrush(QColor(pal.ruler_bg))
@@ -322,8 +773,56 @@ class TrackHeaderView(QGraphicsView):
             label.setPos(22, y + 5)
             self._scene.addItem(label)
             self._labels.append(label)
+
+            toggles = [
+                self._toggle("M", "Mute", bool(track.mute)),
+                self._toggle("S", "Solo", bool(track.solo)),
+                self._toggle("A", "Show volume automation", track.id in automation_shown),
+                self._toggle("D", "Duck under speech: turn this track down while other clips play",
+                             bool(track.duck)),
+            ]
+            for j, button in enumerate(toggles):
+                self._add_widget(button, 6 + j * (TOGGLE_WIDTH_PX + 4), y + 24)
+            mute, solo, auto, duck = toggles
+            gain_y, pan_y = y + 48, y + 48 + SLIDER_HEIGHT_PX + 2
+            self._slider_label("Vol", gain_y, pal.text_muted)
+            self._slider_label("Pan", pan_y, pal.text_muted)
+            gain = self._add_widget(self._slider(0, 200, gain_to_slider(track.gain), "Volume"),
+                                    SLIDER_LEFT_PX, gain_y)
+            pan_slider = self._slider(-100, 100, pan_to_slider(track.pan), "Pan")
+            pan_slider.setProperty("centered", True)  # no accent fill from the left edge
+            pan = self._add_widget(pan_slider, SLIDER_LEFT_PX, pan_y)
+            tid = track.id
+            field = self._emit_field_later
+            mute.toggled.connect(lambda on, t=tid: field(t, "mute", bool(on)))
+            solo.toggled.connect(lambda on, t=tid: field(t, "solo", bool(on)))
+            auto.toggled.connect(lambda on, t=tid: self._emit_later(self.automationToggled, t, bool(on)))
+            duck.toggled.connect(lambda on, t=tid: field(t, "duck", bool(on)))
+            # sliderReleased, not valueChanged: one undo step per drag.
+            gain.sliderReleased.connect(lambda g=gain, t=tid: field(t, "gain", g.value() / 100.0))
+            pan.sliderReleased.connect(lambda p=pan, t=tid: self._emit_pan(t, p))
+            self.controls[tid] = {"mute": mute, "solo": solo, "auto": auto, "duck": duck, "gain": gain, "pan": pan}
         self._scene.setSceneRect(0, 0, HEADER_WIDTH_PX, total_height)
         self.setBackgroundBrush(QColor(pal.panel))
+
+    def _emit_later(self, signal, *args) -> None:
+        """Every receiver re-renders the header, which deletes the control
+        that sent the edit. Emitting from inside that control's mouse
+        handler leaves Qt running the rest of the handler on a deleted
+        widget, an access violation on Windows. The signal goes out on the
+        next event-loop turn instead."""
+        QTimer.singleShot(0, self, lambda: signal.emit(*args))
+
+    def _emit_field_later(self, track_id: str, field: str, value) -> None:
+        self._emit_later(self.trackFieldChanged, track_id, field, value)
+
+    def _emit_pan(self, track_id: str, slider: QSlider) -> None:
+        pan = slider_to_pan(slider.value())
+        if pan == 0.0 and slider.value() != 0:
+            slider.blockSignals(True)
+            slider.setValue(0)
+            slider.blockSignals(False)
+        self._emit_field_later(track_id, "pan", pan)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().mousePressEvent(event)
@@ -343,8 +842,29 @@ class TimelineView(QGraphicsView):
     subRangeTtsRequested = Signal(str, int, int)  # (clip_id, sub_start, sub_end) text offsets
     clipMoved = Signal(str, float)  # (clip_id, new_start_s)
     unpinRequested = Signal(str)
+    lockInTimeRequested = Signal(str, bool)  # (clip_id, pinned)
+    # Phase 4: a subproject block's menu and double-click. The action is
+    # "enter", "render", "relink", "detach", "embed" or "remove".
+    subprojectActionRequested = Signal(str, str)  # (clip_id, action)
     seekRequested = Signal(float)
     zoomChanged = Signal(float)
+    fadeChanged = Signal(str, str, float)  # (clip_id, "fade_in_s" | "fade_out_s", seconds)
+    takeSelected = Signal(str, int)
+    takeDeleteRequested = Signal(str, int)
+    statusChangeRequested = Signal(str, str)
+    alignWordsRequested = Signal(str)
+    fitToSlotRequested = Signal(str)
+    markerAddRequested = Signal(float)
+    markerMoved = Signal(str, float)
+    markerRenameRequested = Signal(str)
+    markerDeleteRequested = Signal(str)
+    loopRangeRequested = Signal(float, float)
+    loopClearRequested = Signal()
+    automationChanged = Signal(str, object)  # (track_id, [[seconds, gain], ...])
+    # Phase 5 P2: a music bed's menu ("loop", "reset_trim", "remove") and
+    # its edge drags.
+    bedActionRequested = Signal(str, str)  # (clip_id, action)
+    bedEdgeDragged = Signal(str, str, float)  # (clip_id, "left" | "right", delta_s)
 
     def __init__(self, parent=None, selection_model: Optional[SelectionModel] = None):
         super().__init__(parent)
@@ -361,6 +881,9 @@ class TimelineView(QGraphicsView):
         # waveform shows the post-processed audio the transport plays
         # (`QtTTSApp.rendered_clip_samples`); None draws the raw file.
         self._clip_samples = None
+        # `(clip, on_ready)`: the owner's non-blocking `clip_samples`
+        # (`QtTTSApp.rendered_clip_samples_async`); preferred when set.
+        self._clip_samples_async = None
         self._zoom = DEFAULT_PIXELS_PER_SECOND
         self._playhead_s: Optional[float] = None
         self._playhead_item: Optional[QGraphicsLineItem] = None
@@ -374,6 +897,25 @@ class TimelineView(QGraphicsView):
         self._drag_threshold_px = 8
         self._drag_clip_x_range: Optional[tuple] = None
         self._drag_shift = False
+        # What a press started, resolved on release: None (a clip move or
+        # sub-range drag, the default), "fade_in"/"fade_out", "marker",
+        # "loop", "automation" or "automation_segment".
+        self._drag_mode: Optional[str] = None
+        self._drag_payload = None
+
+        self._automation_shown: set = set()
+        self._nested_state_fn = None
+        self._automation_items: dict = {}
+        # Reconciled rendering (`render_document`): per clip id, what its
+        # block shows and what its waveform was drawn from; peaks by render
+        # key and bucket count; the document the scene holds.
+        self._block_states: dict = {}
+        self._peaks_memo: dict = {}
+        self._rendered_document = None
+        self._clip_render_key = None
+        self._scene_span = (0.0, 0.0)
+        self._status_filter = "all"
+        self._loop_s: Optional[tuple] = None
 
         self.header: Optional[TrackHeaderView] = None
         self.horizontalScrollBar().valueChanged.connect(self._on_hscroll)
@@ -426,6 +968,11 @@ class TimelineView(QGraphicsView):
             return None
 
         menu = QMenu(self)
+        clip = self._document.get_clip(block.clip_id) if self._document is not None else None
+        if clip is not None and clip.is_nested:
+            return self._build_subproject_menu(menu, clip)
+        if clip is not None and clip.is_bed:
+            return self._build_bed_menu(menu, clip, block)
         generate_action = menu.addAction("Generate")
         generate_action.triggered.connect(
             lambda checked=False, cid=block.clip_id: self.generateClipRequested.emit(cid)
@@ -443,12 +990,207 @@ class TimelineView(QGraphicsView):
             unpin = menu.addAction("Unpin from timeline")
             unpin.triggered.connect(lambda checked=False, cid=block.clip_id: self.unpinRequested.emit(cid))
 
+        if clip is not None:
+            lock = menu.addAction("Lock in time")
+            lock.setCheckable(True)
+            lock.setChecked(bool(clip.pinned))
+            lock.setToolTip("Ripple on regenerate won't move this clip.")
+            lock.triggered.connect(lambda checked=False, cid=clip.id: self.lockInTimeRequested.emit(cid, bool(checked)))
+            menu.addSeparator()
+            self._add_take_menu(menu, clip)
+            status_menu = menu.addMenu("Status")
+            for status in CLIP_STATUSES:
+                action = status_menu.addAction(STATUS_LABELS[status])
+                action.setCheckable(True)
+                action.setChecked(clip.status == status)
+                action.triggered.connect(
+                    lambda checked=False, cid=clip.id, st=status: self.statusChangeRequested.emit(cid, st))
+            if any(s.audio_path for s in clip.segments):
+                align = menu.addAction("Align words")
+                align.triggered.connect(lambda checked=False, cid=clip.id: self.alignWordsRequested.emit(cid))
+            if fit_ops.target_duration_s(clip) is not None:
+                fit = menu.addAction("Fit to slot")
+                fit.setToolTip("Regenerate faster or slower, or time-stretch, until the clip fills its target.")
+                fit.triggered.connect(lambda checked=False, cid=clip.id: self.fitToSlotRequested.emit(cid))
+
         return menu
 
+    def _build_subproject_menu(self, menu: QMenu, clip) -> QMenu:
+        """A nested block: Enter, Generate and render, Detach to file... or
+        Embed, Relink..., Remove."""
+        kind = (clip.child or {}).get("kind", "embedded")
+        items = [("Enter", "enter"), ("Generate and render", "render")]
+        items.append(("Detach to file...", "detach") if kind == "embedded" else ("Embed", "embed"))
+        items.append(("Relink...", "relink"))
+        items.append(("Remove", "remove"))
+        for label, action_name in items:
+            action = menu.addAction(label)
+            action.triggered.connect(
+                lambda checked=False, cid=clip.id, a=action_name: self.subprojectActionRequested.emit(cid, a))
+        return menu
+
+    def _build_bed_menu(self, menu: QMenu, clip, block) -> QMenu:
+        """A music bed's block: Play, Loop, Reset trim, Unpin, Lock in
+        time, Remove. No Generate, Take or Align words: it isn't TTS."""
+        if block.audio_path and not block.estimated:
+            menu.addAction("Play").triggered.connect(
+                lambda checked=False, cid=clip.id: self.playClipRequested.emit(cid))
+        loop = menu.addAction("Loop")
+        loop.setCheckable(True)
+        loop.setChecked(bool(clip.overrides.get("loop", False)))
+        loop.setToolTip("Repeat the audio; drag the right edge to set how long.")
+        loop.triggered.connect(lambda checked=False, cid=clip.id: self.bedActionRequested.emit(cid, "loop"))
+        reset = menu.addAction("Reset trim")
+        reset.setEnabled("trim" in clip.overrides)
+        reset.triggered.connect(lambda checked=False, cid=clip.id: self.bedActionRequested.emit(cid, "reset_trim"))
+        menu.addSeparator()
+        if clip.timeline_timestamp is not None:
+            menu.addAction("Unpin from timeline").triggered.connect(
+                lambda checked=False, cid=clip.id: self.unpinRequested.emit(cid))
+        lock = menu.addAction("Lock in time")
+        lock.setCheckable(True)
+        lock.setChecked(bool(clip.pinned))
+        lock.triggered.connect(lambda checked=False, cid=clip.id: self.lockInTimeRequested.emit(cid, bool(checked)))
+        menu.addSeparator()
+        menu.addAction("Remove").triggered.connect(
+            lambda checked=False, cid=clip.id: self.bedActionRequested.emit(cid, "remove"))
+        return menu
+
+    def _add_take_menu(self, menu: QMenu, clip) -> None:
+        """Take > one entry per take (the active one ticked, each with its
+        length), then Delete take > the parked ones. A parked take whose
+        text differs from the clip's text now is marked "old text", its
+        text in the tooltip: picking it makes the clip stale at once."""
+        active = int(clip.overrides.get("take", 0) or 0)
+        takes = {active: clip.segments, **clip.takes}
+        if len(takes) < 2:
+            return
+        current_text = " ".join(self._document.clip_text(clip).split())
+        take_menu = menu.addMenu("Take")
+        take_menu.setToolTipsVisible(True)
+        for index in sorted(takes):
+            segments = takes[index]
+            seconds = sum(float(s.duration or 0.0) for s in segments)
+            text = " ".join(" ".join(s.text for s in segments).split())
+            label = f"Take {index + 1} ({seconds:.1f}s)"
+            if text != current_text:
+                label += " - old text"
+            action = take_menu.addAction(label)
+            action.setToolTip(text)
+            action.setCheckable(True)
+            action.setChecked(index == active)
+            if index != active:
+                action.triggered.connect(
+                    lambda checked=False, cid=clip.id, i=index: self.takeSelected.emit(cid, i))
+        delete_menu = menu.addMenu("Delete take")
+        for index in sorted(clip.takes):
+            action = delete_menu.addAction(f"Take {index + 1}")
+            action.triggered.connect(
+                lambda checked=False, cid=clip.id, i=index: self.takeDeleteRequested.emit(cid, i))
+
+    def _build_ruler_menu(self, scene_x: float) -> QMenu:
+        menu = QMenu(self)
+        marker = self._ruler.marker_at_x(scene_x) if self._ruler is not None else None
+        if marker is not None:
+            mid = marker["id"]
+            menu.addAction("Rename marker...").triggered.connect(
+                lambda checked=False: self.markerRenameRequested.emit(mid))
+            menu.addAction("Delete marker").triggered.connect(
+                lambda checked=False: self.markerDeleteRequested.emit(mid))
+            later = [m for m in self._markers() if m["seconds"] > marker["seconds"]]
+            if later:
+                end_s = later[0]["seconds"]
+                menu.addAction("Loop to next marker").triggered.connect(
+                    lambda checked=False: self.loopRangeRequested.emit(marker["seconds"], end_s))
+        else:
+            seconds = x_to_seconds(scene_x, self._zoom)
+            menu.addAction("Add marker here").triggered.connect(
+                lambda checked=False: self.markerAddRequested.emit(seconds))
+        if self._loop_s is not None:
+            menu.addSeparator()
+            menu.addAction("Clear loop").triggered.connect(lambda checked=False: self.loopClearRequested.emit())
+        return menu
+
+    def _markers(self) -> list:
+        return marker_ops.list_markers(self._document.settings if self._document is not None else {})
+
     def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        scene_pos = self.mapToScene(event.pos())
+        if scene_pos.y() < RULER_HEIGHT_PX:
+            self._build_ruler_menu(scene_pos.x()).exec(event.globalPos())
+            return
+        if self._delete_automation_point_at(scene_pos):
+            return
         menu = self._build_context_menu(event.pos())
         if menu is not None:
             menu.exec(event.globalPos())
+
+    # -- automation lanes ------------------------------------------------------
+
+    def set_automation_visible(self, track_id: str, shown: bool) -> None:
+        if shown:
+            self._automation_shown.add(track_id)
+        else:
+            self._automation_shown.discard(track_id)
+        if self._document is not None:
+            self.render_document(self._document, self._arrangement)
+
+    def automation_item(self, track_id: str) -> Optional[AutomationLaneItem]:
+        return self._automation_items.get(track_id)
+
+    def _automation_lane_at(self, scene_pos: QPointF) -> Optional[AutomationLaneItem]:
+        if self._document is None or scene_pos.y() < RULER_HEIGHT_PX:
+            return None
+        track = self._track_at_y(self._document, scene_pos.y())
+        return self._automation_items.get(track.id) if track is not None else None
+
+    def _delete_automation_point_at(self, scene_pos: QPointF) -> bool:
+        lane = self._automation_lane_at(scene_pos)
+        if lane is None:
+            return False
+        index = lane.point_index_at(scene_pos)
+        if index is None:
+            return False
+        points = [list(p) for p in lane.points]
+        del points[index]
+        self.automationChanged.emit(lane.track_id, points)
+        return True
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        block = self._clip_block_at(event.position().toPoint())
+        if block is not None and block.nested_state is not None and block.clip_id is not None:
+            # A subproject's block: enter it (NP6).
+            self.subprojectActionRequested.emit(block.clip_id, "enter")
+            event.accept()
+            return
+        scene_pos = self.mapToScene(event.position().toPoint())
+        if event.button() == Qt.MouseButton.LeftButton:
+            if scene_pos.y() < RULER_HEIGHT_PX:
+                self.seekRequested.emit(x_to_seconds(scene_pos.x(), self._zoom))
+                return
+            lane = self._automation_lane_at(scene_pos)
+            if lane is not None:
+                seconds = round(x_to_seconds(scene_pos.x(), self._zoom), 3)
+                points = sorted([list(p) for p in lane.points] + [[seconds, lane.y_to_gain(scene_pos.y())]])
+                self.automationChanged.emit(lane.track_id, points)
+                return
+        super().mouseDoubleClickEvent(event)
+
+    def set_status_filter(self, name: str) -> None:
+        self._status_filter = name if name in STATUS_FILTERS else "all"
+        self._apply_status_filter()
+
+    def _apply_status_filter(self) -> None:
+        shown = STATUS_FILTERS[self._status_filter]
+        for clip_id, block in self._blocks_by_clip_id.items():
+            clip = self._document.get_clip(clip_id) if self._document is not None else None
+            dim = clip is not None and clip.status not in shown
+            block.setOpacity(FILTERED_OUT_OPACITY if dim else 1.0)
+
+    def set_loop_s(self, loop_s: Optional[tuple]) -> None:
+        self._loop_s = loop_s
+        if self._ruler is not None:
+            self._ruler.set_loop_s(loop_s)
 
     # -- FX menu -----------------------------------------------------------------
 
@@ -477,11 +1219,34 @@ class TimelineView(QGraphicsView):
             return
         pos = event.position().toPoint()
         scene_pos = self.mapToScene(pos)
+        self._drag_mode = None
+        self._drag_payload = None
+        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
 
         if scene_pos.y() < RULER_HEIGHT_PX:
-            self.seekRequested.emit(x_to_seconds(scene_pos.x(), self._zoom))
             self._drag_clip_id = None
-            self._drag_start_pos = None
+            self._drag_start_pos = pos
+            marker = self._ruler.marker_at_x(scene_pos.x()) if self._ruler is not None else None
+            if marker is not None:
+                self._drag_mode, self._drag_payload = "marker", marker["id"]
+            elif shift:
+                self._drag_mode = "loop"
+            else:
+                self._drag_start_pos = None
+                self.seekRequested.emit(x_to_seconds(scene_pos.x(), self._zoom))
+            return
+
+        lane = self._automation_lane_at(scene_pos)
+        if lane is not None:
+            self._drag_clip_id = None
+            self._drag_start_pos = pos
+            index = lane.point_index_at(scene_pos)
+            if index is not None:
+                self._drag_mode, self._drag_payload = "automation", (lane.track_id, index)
+            elif event.modifiers() & Qt.KeyboardModifier.AltModifier:
+                segment = lane.segment_index_at(scene_pos)
+                if segment is not None:
+                    self._drag_mode, self._drag_payload = "automation_segment", (lane.track_id, segment)
             return
 
         block = self._clip_block_at(pos)
@@ -490,6 +1255,15 @@ class TimelineView(QGraphicsView):
             if block.fx_button_rect().contains(local_pos):
                 self._handle_fx_button_click(block, event.globalPosition().toPoint())
                 return
+            if not block.estimated:
+                if block.fade_in_handle_rect().contains(local_pos):
+                    self._drag_mode, self._drag_payload = "fade_in", block
+                elif block.fade_out_handle_rect().contains(local_pos):
+                    self._drag_mode, self._drag_payload = "fade_out", block
+                elif block.is_bed and block.left_edge_rect().contains(local_pos):
+                    self._drag_mode, self._drag_payload = "edge_left", block
+                elif block.is_bed and block.right_edge_rect().contains(local_pos):
+                    self._drag_mode, self._drag_payload = "edge_right", block
 
         self._drag_start_pos = pos
         self._drag_clip_id = block.clip_id if block is not None else None
@@ -505,7 +1279,7 @@ class TimelineView(QGraphicsView):
         self._select_clip_block_at(pos)
 
     def _track_at_y(self, document, y: float):
-        tracks = sorted(document.tracks, key=lambda t: t.order_index)
+        tracks = document.used_tracks()
         index = int((y - RULER_HEIGHT_PX) // LANE_HEIGHT_PX)
         if y < RULER_HEIGHT_PX:
             return None
@@ -539,10 +1313,17 @@ class TimelineView(QGraphicsView):
         start_pos = self._drag_start_pos
         clip_x_range = self._drag_clip_x_range
         shift = self._drag_shift
+        mode, payload = self._drag_mode, self._drag_payload
         self._drag_clip_id = None
         self._drag_start_pos = None
         self._drag_clip_x_range = None
         self._drag_shift = False
+        self._drag_mode = None
+        self._drag_payload = None
+
+        if mode is not None and start_pos is not None and event.button() == Qt.MouseButton.LeftButton:
+            self._finish_drag(mode, payload, start_pos, event.position().toPoint())
+            return
 
         if clip_id is None or start_pos is None or self._document is None:
             return
@@ -591,7 +1372,8 @@ class TimelineView(QGraphicsView):
         if target_track is None or target_track.id == clip.track_id:
             return
 
-        if target_track.character_id is None or target_track.character_id == clip.character_id:
+        # A music bed has no character to reassign: it just moves.
+        if target_track.character_id is None or target_track.character_id == clip.character_id or clip.is_bed:
             self.clipDragReassigned.emit(clip.id, target_track.id, False)
             return
 
@@ -612,6 +1394,56 @@ class TimelineView(QGraphicsView):
             self.clipDragReassigned.emit(clip.id, target_track.id, True)
         elif clicked is move_btn:
             self.clipDragReassigned.emit(clip.id, target_track.id, False)
+
+    def _finish_drag(self, mode: str, payload, start_pos, pos) -> None:
+        """Release half of the ruler, fade and automation drags."""
+        press_scene, scene_pos = self.mapToScene(start_pos), self.mapToScene(pos)
+        moved = abs(pos.x() - start_pos.x()) > self._drag_threshold_px \
+            or abs(pos.y() - start_pos.y()) > self._drag_threshold_px
+        seconds = x_to_seconds(scene_pos.x(), self._zoom)
+        if mode == "marker":
+            if moved:
+                self.markerMoved.emit(payload, round(seconds, 3))
+            else:
+                self.seekRequested.emit(x_to_seconds(press_scene.x(), self._zoom))
+        elif mode == "loop":
+            start_s = x_to_seconds(press_scene.x(), self._zoom)
+            if moved and abs(seconds - start_s) > 1e-3:
+                self.loopRangeRequested.emit(*sorted((start_s, seconds)))
+        elif mode in ("fade_in", "fade_out") and moved:
+            block = payload
+            local_x = block.mapFromScene(scene_pos).x()
+            width_s = block.duration_s
+            if mode == "fade_in":
+                fade = local_x / self._zoom
+            else:
+                fade = (block.boundingRect().width() - local_x) / self._zoom
+            fade = round(max(0.0, min(width_s, fade)), 3)
+            self.fadeChanged.emit(block.clip_id, f"{mode}_s", fade)
+        elif mode in ("edge_left", "edge_right") and moved:
+            block = payload
+            delta_s = round((scene_pos.x() - press_scene.x()) / self._zoom, 4)
+            self.bedEdgeDragged.emit(block.clip_id, "left" if mode == "edge_left" else "right", delta_s)
+        elif mode == "automation" and moved:
+            track_id, index = payload
+            lane = self._automation_items.get(track_id)
+            if lane is None:
+                return
+            points = [list(p) for p in lane.points]
+            lo = points[index - 1][0] if index > 0 else 0.0
+            hi = points[index + 1][0] if index + 1 < len(points) else float("inf")
+            points[index] = [round(max(lo, min(hi, seconds)), 3), lane.y_to_gain(scene_pos.y())]
+            self.automationChanged.emit(track_id, points)
+        elif mode == "automation_segment" and moved:
+            track_id, index = payload
+            lane = self._automation_items.get(track_id)
+            if lane is None:
+                return
+            delta = lane.y_to_gain(scene_pos.y()) - lane.y_to_gain(press_scene.y())
+            points = [list(p) for p in lane.points]
+            for i in (index, index + 1):
+                points[i][1] = round(max(0.0, min(AUTOMATION_MAX_GAIN, points[i][1] + delta)), 3)
+            self.automationChanged.emit(track_id, points)
 
     def _select_clip_block_at(self, pos) -> None:
         block = self._clip_block_at(pos)
@@ -668,38 +1500,133 @@ class TimelineView(QGraphicsView):
     # -- rendering -----------------------------------------------------------------
 
     def set_arrangement(self, arrangement: Arrangement) -> None:
-        if self._document is None:
+        # The app's arrangement memo hands back the object already shown
+        # when nothing moved.
+        if self._document is None or arrangement is self._arrangement:
             return
         self.render_document(self._document, arrangement)
 
     def _peaks_for(self, clip, fallback_path: str, bucket_count: int):
         """Waveform peaks from the owner's rendered samples when it gave us a
         `clip_samples` callable, else from the raw first-segment file."""
-        if self._clip_samples is not None:
-            rendered = self._clip_samples(clip)
-            if rendered is not None:
-                samples, rate = rendered
-                return waveform_data.compute_peaks(samples, rate, bucket_count)
+        rendered = self._clip_samples(clip) if self._clip_samples is not None else None
+        return self._peaks_from(rendered, fallback_path, bucket_count)
+
+    @staticmethod
+    def _peaks_from(rendered, fallback_path: str, bucket_count: int):
+        """Peaks of `rendered` (`(samples, rate)`), or of the raw file when
+        there is none."""
+        if rendered is not None:
+            samples, rate = rendered
+            return waveform_data.compute_peaks(samples, rate, bucket_count)
         peaks, _duration = waveform_data.load_peaks_from_file(fallback_path, bucket_count)
         return peaks
 
+    def _loop_marks_px(self, clip) -> list:
+        """x offsets inside a looping bed's block where each pass after the
+        first starts."""
+        if not clip.overrides.get("loop"):
+            return []
+        marks, x = [], 0.0
+        for segment in bed_segments(clip)[:-1]:
+            x += seconds_to_x(float(segment.duration or 0.0), self._zoom)
+            marks.append(x)
+        return marks
+
+    def forget_rendered(self) -> None:
+        """Drops every item and remembered waveform, so the next
+        `render_document` builds the scene from nothing (Options > Force
+        refresh)."""
+        self._scene.clear()
+        self._blocks_by_clip_id = {}
+        self._block_states = {}
+        self._peaks_memo = {}
+        self._selected_block = None
+        self._playhead_item = None
+        self._ruler = None
+        self._automation_items = {}
+        self._rendered_document = None
+
+    def _render_key(self, clip) -> tuple:
+        """What a block's waveform is drawn from: the owner's
+        `clip_render_key` (segments and post config), else the files."""
+        if self._clip_render_key is not None:
+            try:
+                return ("owner", self._clip_render_key(clip))
+            except Exception:
+                pass
+        return ("files", clip.original_audio_path,
+                tuple((s.audio_path, tuple(s.range) if s.range else None) for s in clip.segments))
+
+    def _waveform_loader(self, clip, audio_path: str, bucket_count: int, key: tuple):
+        def load():
+            memo_key = (key, bucket_count)
+            if memo_key not in self._peaks_memo:
+                self._peaks_memo[memo_key] = self._peaks_for(clip, audio_path, bucket_count)
+            return self._peaks_memo[memo_key]
+        return load
+
+    def _waveform_request(self, clip, audio_path: str, bucket_count: int, key: tuple):
+        """`_waveform_loader` for an owner whose samples may take a while: a
+        `request(deliver)` that answers from the peaks memo at once or when
+        `clip_samples_async` delivers."""
+        memo_key = (key, bucket_count)
+
+        def request(deliver):
+            if memo_key in self._peaks_memo:
+                deliver(self._peaks_memo[memo_key])
+                return
+
+            def landed(rendered):
+                try:
+                    peaks = self._peaks_from(rendered, audio_path, bucket_count)
+                except Exception:
+                    peaks = None
+                self._peaks_memo[memo_key] = peaks
+                deliver(peaks)
+
+            self._clip_samples_async(clip, landed)
+        return request
+
     def render_document(self, document, arrangement: Optional[Arrangement] = None,
-                        clip_samples=None) -> None:
+                        clip_samples=None, nested_state=None, clip_render_key=None,
+                        clip_samples_async=None) -> None:
+        """`clip_samples_async(clip, on_ready)` is `clip_samples` that may
+        answer later; when given, a block's waveform is drawn once it does
+        and nothing is rendered on this thread.
+        `nested_state(clip)` gives a subproject block's state ("ok",
+        "stale", "missing"); unset, every nested block paints "stale".
+        `clip_render_key(clip)` names what the clip's waveform shows
+        (`QtTTSApp.clip_render_key`); a block whose key, width and color
+        didn't change keeps its waveform.
+
+        The scene is reconciled, not rebuilt: a block is kept per clip id
+        and its setters run only when what it shows changed; a clip gone
+        from the arrangement loses its block. Lanes and grid lines are
+        painted by `drawBackground`, the ruler and playhead are kept, and a
+        waveform is decoded on its first paint, so a refresh after a
+        one-clip edit touches one block."""
         pal = theme.current()
+        if nested_state is not None:
+            self._nested_state_fn = nested_state
+        if clip_render_key is not None:
+            self._clip_render_key = clip_render_key
+        if document is not self._rendered_document:
+            self.forget_rendered()
+            self._rendered_document = document
         self._document = document
         if arrangement is None:
             arrangement = compute_arrangement(document)
         self._arrangement = arrangement
         if clip_samples is not None:
             self._clip_samples = clip_samples
+        if clip_samples_async is not None:
+            self._clip_samples_async = clip_samples_async
 
-        self._scene.clear()
-        self._blocks_by_clip_id = {}
-        self._selected_block = None
-        self._playhead_item = None
-        self._ruler = None
-
-        tracks = sorted(document.tracks, key=lambda t: t.order_index)
+        # Only tracks with clips are drawn (grill PR4); an unused one keeps
+        # its mixer settings in the model.
+        tracks = document.used_tracks()
+        overlapping = {clip_id for pair in overlaps(arrangement) for clip_id in pair}
         lane_index_by_track_id = {track.id: i for i, track in enumerate(tracks)}
         self._lane_count = len(tracks)
 
@@ -707,28 +1634,9 @@ class TimelineView(QGraphicsView):
         total_seconds = max(arrangement.total_duration_s + 2.0, visible_seconds, MIN_SCENE_SECONDS)
         total_width = seconds_to_x(total_seconds, self._zoom)
         total_height = RULER_HEIGHT_PX + max(len(tracks), 1) * LANE_HEIGHT_PX
+        self._scene_span = (total_width, total_height)
 
-        for i, _track in enumerate(tracks):
-            y = lane_top(i)
-            lane_rect = QGraphicsRectItem(0, y, total_width, LANE_HEIGHT_PX)
-            lane_rect.setBrush(QColor(pal.lane_bg if i % 2 == 0 else pal.lane_alt_bg))
-            lane_rect.setPen(QPen(QColor(pal.lane_border)))
-            lane_rect.setZValue(-1)
-            self._scene.addItem(lane_rect)
-
-        # Grid lines at the ruler's ticks, under the clips.
-        step = choose_tick_step(self._zoom)
-        t = step
-        while t < total_seconds:
-            x = seconds_to_x(t, self._zoom)
-            grid = QGraphicsLineItem(x, RULER_HEIGHT_PX, x, total_height)
-            grid_color = QColor(pal.lane_border)
-            grid_color.setAlpha(120)
-            grid.setPen(QPen(grid_color, 1, Qt.PenStyle.DotLine))
-            grid.setZValue(-0.5)
-            self._scene.addItem(grid)
-            t += step
-
+        seen = set()
         for placed in arrangement.placed:
             clip = placed.clip
             track = document.get_track(clip.track_id)
@@ -736,55 +1644,166 @@ class TimelineView(QGraphicsView):
                 continue
             character = document.get_character(clip.character_id)
             color = character.highlight_color if character is not None else FALLBACK_CLIP_COLOR
+            if clip.is_nested:
+                color = pal.accent
 
             x = seconds_to_x(placed.start_s, self._zoom)
             width = max(seconds_to_x(placed.duration_s, self._zoom), MIN_CLIP_WIDTH_PX)
             y = lane_top(lane_index_by_track_id[track.id]) + LANE_MARGIN_PX
             height = LANE_HEIGHT_PX - 2 * LANE_MARGIN_PX
 
-            block = ClipBlockItem()
-            block.set_clip_id(clip.id)
-            block.set_color(color)
-            block.set_label(character.name if character is not None else "")
-            block.set_geometry(x, y, width, height)
-            block.set_estimated(placed.estimated)
-            block.start_s = placed.start_s
-            block.duration_s = placed.duration_s
+            nested_value = None
+            loop_marks = ()
+            if clip.is_nested:
+                label = document.clip_text(clip)
+                state_fn = getattr(self, "_nested_state_fn", None)
+                nested_value = state_fn(clip) if state_fn is not None else "stale"
+            elif clip.is_bed:
+                label = document.clip_text(clip)
+                loop_marks = tuple(self._loop_marks_px(clip))
+            else:
+                label = character.name if character is not None else ""
+            fit = None
+            target = None if clip.has_placeholder else fit_ops.target_duration_s(clip)
+            if target is not None:
+                # The slot starts at the timestamp (the cue's in-time), not
+                # at an onset-aligned block start.
+                slot_start = clip.timeline_timestamp if clip.timeline_timestamp is not None else placed.start_s
+                ratio = None if placed.estimated else fit_ops.fit_ratio(placed.duration_s, target)
+                fit = (seconds_to_x(float(slot_start) - placed.start_s, self._zoom),
+                       seconds_to_x(target, self._zoom), ratio)
+                if ratio is not None:
+                    label = f"{label}  {round(ratio * 100)}%"
+            fades = (seconds_to_x(float(clip.fade_in_s or 0.0), self._zoom),
+                     seconds_to_x(float(clip.fade_out_s or 0.0), self._zoom))
             has_character_fx = bool(character is not None and character.preset_data.get("fx_preset")
                                     and character.preset_data.get("fx_preset") != "Select FX Preset...")
-            block.set_fx_active(bool(clip.fx_override) or bool(clip.overrides.get("fx_preset")) or has_character_fx)
-            self._blocks_by_clip_id[clip.id] = block
-            self._scene.addItem(block)
+            fx_active = bool(clip.fx_override) or bool(clip.overrides.get("fx_preset")) or has_character_fx
+            if clip.is_bed:
+                audio_path = clip.original_audio_path
+            else:
+                audio_segment = next((s for s in clip.segments if s.audio_path), None)
+                audio_path = audio_segment.audio_path if audio_segment is not None else None
 
-            audio_segment = next((s for s in clip.segments if s.audio_path), None)
-            block.set_audio_path(audio_segment.audio_path if audio_segment is not None else None)
-            if audio_segment is not None and not placed.estimated:
-                try:
-                    peaks = self._peaks_for(clip, audio_segment.audio_path, max(1, int(width)))
-                except Exception:
-                    peaks = None
-                if peaks is not None:
-                    block.set_waveform(peaks, width, height)
+            state = (x, y, width, height, color, label, clip.id in overlapping, nested_value, clip.is_bed,
+                     loop_marks, fit, placed.estimated, placed.start_s, placed.duration_s, fades, fx_active,
+                     audio_path)
+            block = self._blocks_by_clip_id.get(clip.id)
+            if block is None:
+                block = ClipBlockItem()
+                block.set_clip_id(clip.id)
+                self._blocks_by_clip_id[clip.id] = block
+                self._scene.addItem(block)
+            seen.add(clip.id)
+            previous = self._block_states.get(clip.id)
+            if previous is None or previous[0] != state:
+                block.set_overlap(clip.id in overlapping)
+                block.set_color(color)
+                block.set_nested_state(nested_value)
+                block.set_bed(clip.is_bed, loop_marks)
+                block.set_label(label)
+                block.set_geometry(x, y, width, height)
+                block.set_fit(*(fit if fit is not None else (None, None, None)))
+                block.set_estimated(placed.estimated)
+                block.start_s = placed.start_s
+                block.duration_s = placed.duration_s
+                block.set_fades_px(*fades)
+                block.set_fx_active(fx_active)
+                block.set_audio_path(audio_path)
 
-        self._ruler = _RulerItem()
+            if audio_path is not None and not placed.estimated and revision.file_exists(audio_path):
+                bucket_count = max(1, int(width))
+                render_key = self._render_key(clip)
+                wave = (render_key, bucket_count, width, height, color)
+                if previous is None or previous[1] != wave:
+                    if self._clip_samples_async is not None:
+                        block.set_waveform_source(self._waveform_request(clip, audio_path, bucket_count, render_key),
+                                                  width, height, deferred=True)
+                    else:
+                        block.set_waveform_source(self._waveform_loader(clip, audio_path, bucket_count, render_key),
+                                                  width, height)
+            else:
+                wave = None
+                block.clear_waveform()
+            self._block_states[clip.id] = (state, wave)
+
+        for clip_id in [cid for cid in self._blocks_by_clip_id if cid not in seen]:
+            block = self._blocks_by_clip_id.pop(clip_id)
+            self._block_states.pop(clip_id, None)
+            if block is self._selected_block:
+                self._selected_block = None
+            self._scene.removeItem(block)
+
+        for lane in self._automation_items.values():
+            self._scene.removeItem(lane)
+        self._automation_items = {}
+        for track in tracks:
+            if track.id in self._automation_shown:
+                lane = AutomationLaneItem(track.id, lane_top(lane_index_by_track_id[track.id]), total_width,
+                                          self._zoom, track.automation)
+                self._automation_items[track.id] = lane
+                self._scene.addItem(lane)
+
+        if self._ruler is None:
+            self._ruler = _RulerItem()
+            self._scene.addItem(self._ruler)
         self._ruler.set_span(total_width, self._zoom)
-        self._scene.addItem(self._ruler)
+        self._ruler.set_document_settings(document.settings)
+        self._ruler.set_markers(marker_ops.list_markers(document.settings))
+        self._ruler.set_loop_s(self._loop_s)
+        self._apply_status_filter()
 
-        self._playhead_item = QGraphicsLineItem()
+        if self._playhead_item is None:
+            self._playhead_item = QGraphicsLineItem()
+            self._playhead_item.setZValue(10)
+            self._playhead_item.hide()
+            self._scene.addItem(self._playhead_item)
         self._playhead_item.setPen(QPen(QColor(pal.playhead), 2))
-        self._playhead_item.setZValue(10)
-        self._playhead_item.hide()
-        self._scene.addItem(self._playhead_item)
 
         self._scene.setSceneRect(0, 0, total_width, total_height)
         self.setBackgroundBrush(QColor(pal.panel))
+        self._scene.update()
         if self.header is not None:
-            self.header.render_tracks(tracks, document)
+            self.header.render_tracks(tracks, document, frozenset(self._automation_shown))
 
         if self._playhead_s is not None:
             self.set_playhead(self._playhead_s)
         if self._selection_model is not None:
             self._on_selection_changed()
+
+    def drawBackground(self, painter, rect) -> None:  # noqa: N802 (Qt override)
+        """The lanes and the grid lines at the ruler's ticks, painted for
+        `rect` only (one item each made every refresh cost a scene rebuild
+        of a whole book's worth of lines)."""
+        super().drawBackground(painter, rect)
+        width, height = getattr(self, "_scene_span", (0.0, 0.0))
+        if width <= 0:
+            return
+        pal = theme.current()
+        left, right = max(0.0, rect.left()), min(width, rect.right())
+        border = QColor(pal.lane_border)
+        for i in range(self._lane_count):
+            top = lane_top(i)
+            if top > rect.bottom() or top + LANE_HEIGHT_PX < rect.top():
+                continue
+            lane = QRectF(left, top, right - left, LANE_HEIGHT_PX)
+            painter.fillRect(lane, QColor(pal.lane_bg if i % 2 == 0 else pal.lane_alt_bg))
+            painter.setPen(QPen(border))
+            painter.drawLine(QPointF(left, top), QPointF(right, top))
+            painter.drawLine(QPointF(left, top + LANE_HEIGHT_PX), QPointF(right, top + LANE_HEIGHT_PX))
+        if self._zoom <= 0:
+            return
+        step = choose_tick_step(self._zoom)
+        grid_color = QColor(pal.lane_border)
+        grid_color.setAlpha(120)
+        painter.setPen(QPen(grid_color, 1, Qt.PenStyle.DotLine))
+        k = max(1, int((left / self._zoom) // step))
+        while True:
+            x = seconds_to_x(k * step, self._zoom)
+            if x > right or x >= width:
+                break
+            painter.drawLine(QPointF(x, RULER_HEIGHT_PX), QPointF(x, height))
+            k += 1
 
 
 class TimelineWidget(QWidget):
@@ -798,10 +1817,13 @@ class TimelineWidget(QWidget):
         self.header = TrackHeaderView(selection_model=selection_model)
         self.view = TimelineView(selection_model=selection_model)
         self.view.header = self.header
+        self.header.automationToggled.connect(self.view.set_automation_visible)
         layout.addWidget(self.header)
         layout.addWidget(self.view, 1)
         self.view.verticalScrollBar().valueChanged.connect(self.header.verticalScrollBar().setValue)
 
     def render_document(self, document, arrangement: Optional[Arrangement] = None,
-                        clip_samples=None) -> None:
-        self.view.render_document(document, arrangement, clip_samples=clip_samples)
+                        clip_samples=None, nested_state=None, clip_render_key=None,
+                        clip_samples_async=None) -> None:
+        self.view.render_document(document, arrangement, clip_samples=clip_samples, nested_state=nested_state,
+                                  clip_render_key=clip_render_key, clip_samples_async=clip_samples_async)

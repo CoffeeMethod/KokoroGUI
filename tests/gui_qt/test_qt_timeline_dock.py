@@ -54,6 +54,7 @@ def test_real_edit_triggers_timeline_refresh(qt_app, monkeypatch):
     editor = _editor(qt_app)
 
     _set_text_via_real_edit(editor, "hello world")
+    qt_app.flush_updates()  # typing defers the refresh until it pauses
 
     assert calls
 
@@ -111,6 +112,7 @@ def test_paste_without_split_still_refreshes_via_text_edit_path(qt_app, monkeypa
     editor.insertFromMimeData(_mime_with_character(" PASTED", character.id))
 
     # No clip-metadata mutation happens (splits disabled), but the plain
-    # text insertion still flows through _on_contents_change, which already
-    # calls refresh_timeline() unconditionally.
+    # text insertion still flows through _on_contents_change, which asks
+    # for a refresh_timeline() once typing pauses.
+    qt_app.flush_updates()
     assert calls

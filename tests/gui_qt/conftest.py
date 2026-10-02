@@ -24,8 +24,30 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from tests.conftest import StubEngine  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _flush_deferred_deletes(qapp):
+    """Actually destroys the widgets each test leaves behind.
+
+    pytest-qt's teardown calls `deleteLater()` on every `qtbot.addWidget`
+    widget, but a deferred delete only runs when control returns to a Qt
+    event loop, and the suite never runs one (`processEvents()` skips
+    DeferredDelete on purpose). Every test's QtTTSApp (~440 widgets) then
+    lived until the process exited, and each new QtTTSApp's theme.apply()
+    (QApplication.setStyle/setStyleSheet) re-polished all of them, so setup
+    grew linearly with the number of earlier tests and the whole suite
+    quadratically - over an hour for a full local `pytest`. Autouse, so it
+    is set up first and torn down last: after pytest-qt's deleteLater()
+    and after `qt_app`'s own teardown.
+    """
+    yield
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
 @pytest.fixture
 def qt_app(tmp_path, monkeypatch, qtbot):
+    import kokoro_engine
     import kokoro_gui.qt.app as qt_app_module
     from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
@@ -34,7 +56,11 @@ def qt_app(tmp_path, monkeypatch, qtbot):
     monkeypatch.setattr(qt_app_module, "PRESETS_DIR", str(tmp_path / "presets"))
     monkeypatch.setattr(qt_app_module, "FX_PRESETS_DIR", str(tmp_path / "presets" / "fx"))
     monkeypatch.setattr(qt_app_module, "DOCUMENT_FILE", str(tmp_path / "document.json"))
-    monkeypatch.setattr(qt_app_module, "KokoroEngine", StubEngine)
+    # The Kokoro adapter builds `kokoro_engine.KokoroEngine()` (read at call
+    # time) when the app makes the engine resident.
+    monkeypatch.setattr(kokoro_engine, "KokoroEngine", StubEngine)
+    from kokoro_gui.daw import library as library_module
+    monkeypatch.setattr(library_module, "LIBRARY_DIR", str(tmp_path / "characters"))
     (tmp_path / "custom_voices").mkdir(exist_ok=True)
 
     # Modal dialogs (QMessageBox.exec/QInputDialog.exec/...) block on the
@@ -55,9 +81,25 @@ def qt_app(tmp_path, monkeypatch, qtbot):
     # or Open (grill TB12); nearly every test leaves edits behind, so the
     # fixture answers Discard. A test about the prompt re-patches this.
     monkeypatch.setattr(qt_app_module.QtTTSApp, "_ask_close_choice", lambda self: "discard")
+    # The Whisper first-use download prompt (grill PR5) answers Yes; the
+    # transcribe call itself is always mocked, so nothing downloads.
+    from kokoro_gui.qt import asr_prompt
+    monkeypatch.setattr(asr_prompt, "ask_whisper_download", lambda *a, **k: asr_prompt.PROCEED)
+    # Word alignment after a generate (phase 2, C1) would otherwise load
+    # Whisper for real; a test about alignment patches in its own words.
+    from kokoro_gui.engine import asr
+    monkeypatch.setattr(asr, "transcribe_wav_words", lambda *a, **k: [])
 
     app = qt_app_module.QtTTSApp()
     qtbot.addWidget(app)
+    # FX presets and text extraction are module functions the GUI calls
+    # directly; the stub engine's mocks stand in for them, looked up at call
+    # time so a test that replaces `qt_app.engine.load_fx_preset` wins.
+    from kokoro_gui.engine import presets as presets_module, text_extraction
+    stub = app.engine
+    monkeypatch.setattr(presets_module, "load_fx_preset", lambda *a, **k: stub.load_fx_preset(*a, **k))
+    monkeypatch.setattr(text_extraction, "extract_text_from_file",
+                        lambda *a, **k: stub.extract_text_from_file(*a, **k))
     yield app
     app.wait_for_project_io()
     app.close()

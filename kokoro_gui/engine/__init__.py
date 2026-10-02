@@ -1,3 +1,6 @@
+# The model-agnostic mixins every backend is built from. Nothing here imports
+# `kokoro_engine` (or `kokoro`): shared state lives in `runtime`, and the one
+# Kokoro-specific mixin (`voices.VoiceMixingMixin`) imports it lazily.
 from .audio_fx import AudioFXMixin
 from .caching import CachingMixin
 from .conversion import ConversionMixin

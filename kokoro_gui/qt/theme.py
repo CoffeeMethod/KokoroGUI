@@ -12,9 +12,11 @@ built from the tokens, the application font (`FONT_FAMILIES`,
 `FONT_POINT_SIZE`) and the stylesheet `stylesheet(pal)` renders from the
 same tokens (flat dock titles, borderless group boxes, rounded inputs and
 buttons, underlined tabs, thin scrollbars, a flat progress bar). Widgets
-opt into the two button variants with dynamic properties:
+opt into the three button variants with dynamic properties:
 `setProperty("primary", True)` for the one filled accent button in a row,
-`setProperty("transport", True)` for the round play/pause/stop buttons.
+`setProperty("transport", True)` for the round play/pause/stop buttons,
+`setProperty("trackToggle", True)` for the timeline header's one-letter
+M/S/A/D buttons.
 `set_active(name)` alone is enough for tests and for headless code that
 only needs the token values.
 
@@ -65,6 +67,16 @@ class Palette:
     fx_badge_text: str
     playing_highlight: str
     estimated_outline: str
+    overlap_border: str
+    # Fit to slot (phase 5, D4): a clip's tint when it runs past its target
+    # (amber) and past 115 % of it (red). A fill, where an overlap is a
+    # border, so the two read apart on one block.
+    fit_over: str
+    fit_far_over: str
+    # Transcript details: a segment boundary at a pause, and the dot of an
+    # approved clip in the gutter.
+    segment_mark: str
+    status_approved: str
     accent: str
     accent_hover: str
     border: str
@@ -97,6 +109,11 @@ LIGHT = Palette(
     fx_badge_text="#ffffff",
     playing_highlight="#f5d87a",
     estimated_outline="#8a8f98",
+    overlap_border="#e5484d",
+    fit_over="#f59e0b",
+    fit_far_over="#dc2626",
+    segment_mark="#8b8f96",
+    status_approved="#16a34a",
     accent="#2563eb",
     accent_hover="#1d4fd8",
     border="#d4d4d8",
@@ -125,6 +142,11 @@ DARK = Palette(
     fx_badge_text="#f0f0f0",
     playing_highlight="#8a7a2a",
     estimated_outline="#8f939a",
+    overlap_border="#f0716a",
+    fit_over="#fbbf24",
+    fit_far_over="#ef4444",
+    segment_mark="#6e737b",
+    status_approved="#4ade80",
     accent="#4c8df6",
     accent_hover="#6ba1f8",
     border="#3a3d42",
@@ -264,6 +286,10 @@ QToolButton[transport="true"] {{
     min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px;
     padding: 0; border-radius: 15px;
 }}
+QToolButton[trackToggle="true"] {{
+    min-width: 24px; max-width: 24px; min-height: 20px; max-height: 20px;
+    padding: 0; border-radius: 3px; font-weight: 600;
+}}
 
 QTabBar::tab {{
     background: transparent; color: {pal.text_muted};
@@ -284,8 +310,11 @@ QProgressBar {{
 }}
 QProgressBar::chunk {{ background: {chunk}; border-radius: 4px; }}
 
+QSlider {{ background: transparent; }}
 QSlider::groove:horizontal {{ height: 4px; background: {pal.border}; border-radius: 2px; }}
 QSlider::sub-page:horizontal {{ background: {pal.accent}; border-radius: 2px; }}
+QSlider[centered="true"]::sub-page:horizontal {{ background: {pal.border}; }}
+QLabel[muted="true"] {{ color: {pal.text_muted}; }}
 QSlider::handle:horizontal {{
     width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
     background: {pal.text}; border: none;

@@ -7,13 +7,14 @@ from kokoro_gui.daw.migration import migrate_legacy_settings_to_document
 from kokoro_gui.daw.serialization import load_document
 
 
-def load_or_create_document(document_path: str, settings: dict, presets_dir: str):
-    """Loads `document_path` if it exists and parses; otherwise migrates
-    today's presets/settings into a fresh `Document` (see
-    `migrate_legacy_settings_to_document`). Migration is a one-time
-    bootstrap, not an ongoing sync - once a `document.json` exists, it's
-    trusted as-is even if `presets_dir`'s contents have since changed."""
+def load_or_create_document(document_path: str, settings: dict, library):
+    """Loads `document_path` if it exists and parses; otherwise starts a
+    fresh `Document` whose characters come from the character library
+    (`library`, a `kokoro_gui.daw.library.CharacterLibrary`; see
+    `migrate_legacy_settings_to_document`). A loaded document is trusted
+    as-is; its linked characters are refreshed later, by the app's
+    `resolve_characters` call."""
     doc = load_document(document_path)
     if doc is not None:
         return doc
-    return migrate_legacy_settings_to_document(settings, presets_dir)
+    return migrate_legacy_settings_to_document(settings, library)

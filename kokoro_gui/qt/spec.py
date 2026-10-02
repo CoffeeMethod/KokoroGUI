@@ -1,5 +1,6 @@
 """Pure-data constants for the Qt frontend's field lists (generation config
-keys, FX preset keys/slider specs, language/voice tables, settings defaults).
+keys, FX preset keys/slider specs, settings defaults). Engine data (voices,
+languages) lives on each backend in `kokoro_gui/engines/`.
 
 This module has no Qt imports so both `kokoro_gui/qt/*` and the test suite can
 import it standalone.
@@ -22,11 +23,43 @@ from typing import Optional
 # --- Generation config dict (non-FX keys) --------------------------------
 
 GENERATION_BASE_KEYS = [
-    "engine_id", "lang_code", "voice", "speed", "split_pattern", "filename",
+    "engine_id", "lang_code", "voice", "speed", "filename",
     "format", "out_dir", "separate", "combine", "export_subtitles", "caching",
     "time_id", "num_threads", "volume", "pitch", "normalize", "trim_silence",
-    "lexicon",
+    "lexicon", "segment_target_words", "segment_at_paragraphs", "segment_at_sentences",
+    "segment_at_pauses",
 ]
+
+# Project-wide segmentation settings (kokoro_gui/engine/segmenting.py): what
+# decides the pieces a text is generated as, on every path.
+SEGMENTATION_KEYS = (
+    "segment_target_words", "segment_at_paragraphs", "segment_at_sentences", "segment_at_pauses",
+)
+
+# Schema fields that belong to the program, not to a voice: Options >
+# Settings... shows them and the Settings tab leaves them out. That's the
+# segmentation keys, the default output format, and every field in a
+# backend's "Advanced" group (threads, the segment cache, Audio8's
+# reference-encoding cache) except the lexicon, which has its own tab.
+PROGRAM_SCHEMA_KEYS = (*SEGMENTATION_KEYS, "format")
+PROGRAM_SCHEMA_GROUP = "Advanced"
+
+
+def is_program_field(field) -> bool:
+    """True for a `ConfigField` the Settings window owns (see above)."""
+    if field.key == "lexicon":
+        return False
+    return field.key in PROGRAM_SCHEMA_KEYS or field.group == PROGRAM_SCHEMA_GROUP
+
+
+# Options > Transcript details: the overlay toggles under "Show details"
+# (`transcript_details`), as (settings key, menu label).
+DETAIL_LAYERS = (
+    ("details_segments", "Segment boundaries"),
+    ("details_clip_info", "Clip info"),
+    ("details_lexicon", "Lexicon rewrites"),
+    ("details_gaps", "Gaps"),
+)
 
 # --- FX preset / config-merge keys ----------------------------------------
 
@@ -47,6 +80,7 @@ FX_PRESET_KEYS = [
     "pitch_shift_enabled", "pitch_shift_semitones",
     "limiter_enabled", "limiter_threshold", "limiter_release",
     "gain_enabled", "gain_db",
+    "convolution_ir", "convolution_mix",
 ]
 
 
@@ -65,6 +99,21 @@ class FXSliderSpec:
     enabled_key: Optional[str] = None   # bool field this is gated under, if any
     unit: str = ""
     decimals: int = 2
+
+
+@dataclass(frozen=True)
+class FXFileSpec:
+    """One FX field that names a file in an asset store instead of holding a
+    number: the dock shows a combo of the names in `store` (project-local
+    first, then global) with a "None" entry that stores "". `store` is
+    "ir" for impulse responses (`presets/fx/ir/*.wav`, grill Q31), the only
+    store so far."""
+    key: str
+    label: str
+    group: str
+    section: str
+    store: str = "ir"
+    enabled_key: Optional[str] = None
 
 
 FX_FIELD_SPECS = [
@@ -86,6 +135,9 @@ FX_FIELD_SPECS = [
     FXSliderSpec("delay_time", "Time", 0, 2, 100, "Spatial & Time", "Delay", "delay_enabled", "s", 2),
     FXSliderSpec("delay_feedback", "Feedback", 0, 1, 100, "Spatial & Time", "Delay", "delay_enabled", "", 2),
     FXSliderSpec("delay_mix", "Mix", 0, 1, 100, "Spatial & Time", "Delay", "delay_enabled", "", 2),
+    # Convolution reverb (grill Q31): an impulse response by name, "" for none.
+    FXFileSpec("convolution_ir", "Impulse response", "Spatial & Time", "Convolution Reverb"),
+    FXSliderSpec("convolution_mix", "Mix", 0, 1, 100, "Spatial & Time", "Convolution Reverb", None, "", 2),
     # --- Guitar / Modulation ---
     FXSliderSpec("chorus_rate", "Rate", 0.1, 10, 50, "Guitar / Modulation", "Chorus", "chorus_enabled", "Hz", 1),
     FXSliderSpec("chorus_depth", "Depth", 0, 1, 50, "Guitar / Modulation", "Chorus", "chorus_enabled", "", 2),
@@ -108,45 +160,9 @@ FX_KEYS_WITHOUT_WIDGET = {"reverb_dry_level", "chorus_mix", "phaser_depth", "pha
 
 FX_GROUP_ORDER = ["Dynamics", "EQ & Filters", "Spatial & Time", "Guitar / Modulation", "Quality / Pitch"]
 
-# --- Voice / language display data ----------------------------------------
-
-LANGUAGES = {
-    "American English": "a",
-    "British English": "b",
-    "Spanish": "e",
-    "French": "f",
-    "Italian": "i",
-    "Portuguese": "p",
-    "Japanese": "j",
-    "Chinese": "z",
-}
-
-VOICE_DB = {
-    "a": ["af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa"],
-    "b": ["bf_alice", "bf_emma", "bf_isabella", "bf_lily", "bm_daniel", "bm_fable", "bm_george", "bm_lewis"],
-    "e": ["ef_dora", "em_alex", "em_santa"],
-    "f": ["ff_siwis"],
-    "i": ["if_sara", "im_nicola"],
-    "p": ["pf_dora", "pm_alex"],
-    "j": ["jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro"],
-    "z": ["zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zm_yunjian"],
-}
-
-MIX_PREVIEW_TEXT = {
-    "f": "Ceci est un aperçu de votre voix personnalisée.",
-    "e": "Esta es una vista previa de su voz personalizada.",
-    "i": "Questa è un'anteprima della tua voce personalizzata.",
-    "p": "Esta é uma prévia da sua voz personalizada.",
-    "j": "これはカスタム合成音声のプレビューです。",
-    "z": "这是您的自定义混合语音预览。",
-}
-MIX_PREVIEW_TEXT_DEFAULT = "This is a preview of your custom mixed voice."
-
 # --- App-settings defaults (config_qt.json) --------------------------------
 
 SETTINGS_DEFAULTS = {
-    "lang_code": "a",
-    "voice": "af_heart",
     "filename": "output",
     "format": "wav",
     "out_dir": "audio_output",
@@ -154,7 +170,11 @@ SETTINGS_DEFAULTS = {
     "volume": 1.0,
     "pitch": 0.0,
     "num_threads": 1,
-    "split_pattern": r"\n+",
+    # Where text is cut before synthesis (kokoro_gui/engine/segmenting.py).
+    "segment_target_words": 40,
+    "segment_at_paragraphs": True,
+    "segment_at_sentences": True,
+    "segment_at_pauses": True,
     "separate": True,
     "combine": True,
     "export_subtitles": False,
@@ -163,6 +183,13 @@ SETTINGS_DEFAULTS = {
     "auto_split_by_paragraph": False,
     "character_fx_paste_splits": True,
     "character_fx_copy": True,
+    # Options > Transcript details: the master switch, then one toggle per
+    # overlay (each counts only while the master is on).
+    "transcript_details": False,
+    "details_segments": True,
+    "details_clip_info": True,
+    "details_lexicon": True,
+    "details_gaps": True,
     "theme": "dark",            # Options > Theme: "light" | "dark"
     "device": "auto",           # Options > Device: "auto" | "cpu" | "cuda"
     "last_project": None,       # File menu: the project launch reopens
@@ -214,8 +241,15 @@ SETTINGS_DEFAULTS = {
     "limiter_release": 100.0,
     "gain_enabled": False,
     "gain_db": 0.0,
-    "engine_id": "kokoro",
-    "asr_engine": "audio8",
+    "convolution_ir": "",
+    "convolution_mix": 0.5,
+    # The engine new characters get (grill EN1/EN4); the Settings tab's
+    # project scope sets it.
+    "default_engine": "kokoro",
+    # Per-engine settings (lang_code, num_threads, a backend's "Model"
+    # group): {engine_id: {key: value}} (grill EN5, `QtTTSApp.engine_settings`).
+    "engines": {},
+    "asr_engine": "whisper",
     "lexicon": {},
     # Workspace layouts: {"Advanced": {"state": b64, "geometry": b64}, ...}
     # (kokoro_gui/qt/workspace.py). The old flat dock_state/geometry keys

@@ -14,4 +14,4 @@
 
 - [ ] `pytest` passes locally (the fast suite; CI runs it on Windows and Linux)
 - [ ] New settings are threaded through `_assemble_config` and `tests/gui_qt/test_qt_config_assembly.py`
-- [ ] README's Features list and "New in" section updated if a user can see the change
+- [ ] README's "What's new" (one line) and `docs/changes.html` (full entry) updated if a user can see the change

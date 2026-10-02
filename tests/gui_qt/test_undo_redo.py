@@ -40,6 +40,18 @@ def test_typing_then_undo_restores_previous_text_in_document_and_widget(qt_app):
     assert editor.toPlainText() == ""
 
 
+def test_reloading_the_editor_text_forgets_the_native_steps_it_wiped(qt_app):
+    """setPlainText clears Qt's own undo history; the coordinator's log
+    drops those steps too, so Ctrl+Z never lands on a step that is gone."""
+    editor = _editor(qt_app)
+    _set_text_via_real_edit(editor, "hello world")
+    assert editor.undo_coordinator.can_undo()
+
+    editor.load_text(qt_app.document.text)
+
+    assert not editor.undo_coordinator.can_undo()
+
+
 def test_undo_then_redo_reapplies_the_typed_text(qt_app):
     editor = _editor(qt_app)
     _set_text_via_real_edit(editor, "hello world")

@@ -16,13 +16,21 @@ What's left is a header row with two combos above the editor:
   Changing it sets the caret clip's `fx_override` (resolved values) and
   records the preset name in `clip.overrides["fx_preset"]` through
   `SetClipFxCommand`, so the choice is undoable and the gutter can name it.
+- Variant: shown only when the caret clip's character has variants
+  (`Character.variants`, a cloning backend's alternate references). Sets
+  `clip.overrides["variant"]` through `SetFieldCommand`; "(default)" clears
+  it.
 """
 from __future__ import annotations
 
-from PySide6.QtWidgets import QComboBox, QDockWidget, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QComboBox, QDockWidget, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+)
 
-from kokoro_gui.daw.undo import SetClipFxCommand
-from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, filter_allowed_keys
+from kokoro_gui.daw.undo import SetClipFxCommand, SetFieldCommand
+from kokoro_gui.engine import presets
+from kokoro_gui.engine.presets import filter_fx_preset_values
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
 from kokoro_gui.qt.transcript_editor import TranscriptEditor, clip_fx_name
 
@@ -30,6 +38,7 @@ FX_NONE_LABEL = "(none)"
 FX_EDIT_LABEL = "Edit in FX tab..."
 CHARACTER_MANAGE_LABEL = "Manage characters..."
 _MIXED_LABEL = "(mixed)"
+VARIANT_DEFAULT_LABEL = "(default)"
 
 
 class TranscriptDock(QDockWidget):
@@ -44,6 +53,20 @@ class TranscriptDock(QDockWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
+        # Phase 4 (NP1): shown while the transcript shows a subproject the
+        # timeline isn't in.
+        self.scope_bar = QWidget()
+        scope_layout = QHBoxLayout(self.scope_bar)
+        scope_layout.setContentsMargins(0, 0, 0, 0)
+        self.scope_label = QLabel()
+        self.scope_back_btn = QPushButton("Back")
+        self.scope_back_btn.setToolTip("Show the project the timeline is in.")
+        self.scope_back_btn.clicked.connect(lambda: self.app.set_focus(self.app.level))
+        scope_layout.addWidget(self.scope_label, 1)
+        scope_layout.addWidget(self.scope_back_btn)
+        self.scope_bar.hide()
+        layout.addWidget(self.scope_bar)
+
         header = QHBoxLayout()
         header.addWidget(QLabel("Character:"))
         self.character_combo = QComboBox()
@@ -54,18 +77,42 @@ class TranscriptDock(QDockWidget):
         self.fx_combo = QComboBox()
         self.fx_combo.setMinimumWidth(120)
         header.addWidget(self.fx_combo, 1)
+        self.variant_label = QLabel("Variant:")
+        self.variant_combo = QComboBox()
+        self.variant_combo.setMinimumWidth(100)
+        header.addSpacing(8)
+        header.addWidget(self.variant_label)
+        header.addWidget(self.variant_combo, 1)
         header.addStretch(1)
         layout.addLayout(header)
 
         self.editor = TranscriptEditor(self.app)
         layout.addWidget(self.editor, 1)
+
+        # Transcript details (grill TE10): one line on the caret's clip,
+        # shown while details and Clip info are on.
+        self.info_strip = QLabel()
+        self.info_strip.setProperty("muted", True)
+        self.info_strip.setTextFormat(Qt.TextFormat.PlainText)
+        self.info_strip.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.info_strip.hide()
+        layout.addWidget(self.info_strip)
         self.setWidget(content)
 
         self.refresh_character_choices()
         self.refresh_fx_choices()
         self.character_combo.activated.connect(self._on_character_activated)
         self.fx_combo.activated.connect(self._on_fx_activated)
+        self.variant_combo.activated.connect(self._on_variant_activated)
         self.editor.cursorPositionChanged.connect(self.sync_header)
+
+    def refresh_scope(self) -> None:
+        """The subproject bar: its title and a way back to the level."""
+        text = self.app.scope_text() if hasattr(self.app, "scope_text") else None
+        self.scope_bar.setVisible(bool(text))
+        if text:
+            self.scope_label.setText(text)
+            self.scope_back_btn.setText(f"Back to {self.app.level.title()}")
         self.app.selection.changed.connect(self.sync_header)
         self.sync_header()
 
@@ -122,8 +169,38 @@ class TranscriptDock(QDockWidget):
             else:
                 fx_index = self.fx_combo.findData(fx_name)
             self.fx_combo.setCurrentIndex(fx_index if fx_index >= 0 else 0)
+            self._sync_variants(clip)
         finally:
             self._syncing = False
+        self.refresh_info_strip()
+
+    def refresh_info_strip(self) -> None:
+        """The caret strip: `app.clip_info_text` for the clip under the
+        caret, shown while details and Clip info are on."""
+        flags = self.app.details_flags() if hasattr(self.app, "details_flags") else {}
+        clip = self.editor.current_clip() if flags.get("details_clip_info") else None
+        text = ""
+        if clip is not None:
+            try:
+                text = self.app.clip_info_text(clip, self.editor.textCursor().position())
+            except Exception:
+                text = ""
+        self.info_strip.setText(text)
+        self.info_strip.setToolTip(text)
+        self.info_strip.setVisible(bool(flags.get("details_clip_info")))
+
+    def _sync_variants(self, clip) -> None:
+        character = self.app.document.get_character(clip.character_id) if clip is not None else None
+        variants = sorted((character.variants or {}).keys()) if character is not None else []
+        self.variant_combo.clear()
+        self.variant_combo.addItem(VARIANT_DEFAULT_LABEL, "")
+        for name in variants:
+            self.variant_combo.addItem(name, name)
+        current = (clip.overrides or {}).get("variant", "") if clip is not None else ""
+        index = self.variant_combo.findData(current or "")
+        self.variant_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.variant_label.setVisible(bool(variants))
+        self.variant_combo.setVisible(bool(variants))
 
     # -- header -> document ------------------------------------------------
 
@@ -157,6 +234,27 @@ class TranscriptDock(QDockWidget):
             return
         self.apply_fx_preset_to_clip(clip.id, data or "")
 
+    def _on_variant_activated(self, index: int) -> None:
+        if self._syncing:
+            return
+        clip = self.editor.current_clip()
+        if clip is None:
+            return
+        self.set_clip_variant(clip.id, self.variant_combo.itemData(index) or None)
+
+    def set_clip_variant(self, clip_id: str, variant) -> None:
+        """Undoable `clip.overrides["variant"]`; None clears it. A variant
+        is a generation input (a different reference), so the clip goes
+        stale."""
+        clip = self.app.document.get_clip(clip_id)
+        if clip is None or (clip.overrides or {}).get("variant") == variant:
+            return
+        self.app.document.undo_stack.push(SetFieldCommand("clip", clip_id, "overrides", variant, key="variant"))
+        self.editor.rehighlight()
+        self.app.schedule_save()
+        self.app.refresh_timeline()
+        self.sync_header()
+
     def apply_fx_preset_to_clip(self, clip_id: str, preset_name: str) -> None:
         """Shared with the timeline's FX menu (`TimelineDock.on_fx_preset_requested`
         delegates here). Empty `preset_name` clears the override."""
@@ -166,8 +264,8 @@ class TranscriptDock(QDockWidget):
         if not preset_name:
             fx_values = None
         else:
-            preset = self.app.engine.load_fx_preset(preset_name, self.app.project_dir)
-            fx_values = filter_allowed_keys(preset, ALLOWED_FX_PRESET_KEYS) if preset else None
+            preset = presets.load_fx_preset(preset_name, self.app.project_dir)
+            fx_values = filter_fx_preset_values(preset) if preset else None
         self.app.document.undo_stack.push(SetClipFxCommand(clip_id, fx_values, preset_name=preset_name or None))
         self.editor.rehighlight()
         self.app.schedule_save()

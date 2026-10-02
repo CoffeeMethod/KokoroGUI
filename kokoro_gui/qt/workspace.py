@@ -6,9 +6,9 @@ b64}}` plus `"active_workspace"`. Two names have programmatic defaults:
 
 - Advanced: the drawing's 2x2 grid (transcript | settings tabs over
   timeline | transport). Built by `QtTTSApp.arrange_docks_default()`.
-- Simple: the same grid with the timeline dock hidden, so the transcript
-  takes the whole left column. Layout only - same document, same Generate
-  behavior (UI8).
+- Simple: the same grid with the timeline and video docks hidden, so the
+  transcript takes the whole left column. Layout only - same document,
+  same Generate behavior (UI8).
 
 Choosing a workspace restores its saved state if the user has ever dragged
 something while it was active, else the programmatic default. Reset
@@ -87,9 +87,10 @@ class WorkspaceManager:
 
     def apply_default(self, name: str) -> None:
         self._window.arrange_docks_default()
-        timeline = getattr(self._window, "timeline_dock", None)
-        if timeline is not None:
-            timeline.setVisible(name != SIMPLE)
+        for attr in ("timeline_dock", "video_dock"):
+            dock = getattr(self._window, attr, None)
+            if dock is not None:
+                dock.setVisible(name != SIMPLE)
         if name == SIMPLE and hasattr(self._window, "apply_simple_proportions"):
             self._window.apply_simple_proportions()
 

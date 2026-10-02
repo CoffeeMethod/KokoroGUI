@@ -24,11 +24,12 @@ plan's version policy depends on this). `Character.preset_data` is filtered
 through `ALLOWED_PRESET_KEYS` on the way in, and the stripped keys ride in
 `extra["preset_data"]`.
 """
+import copy
 import dataclasses
 import json
 import os
 
-from kokoro_gui.daw.models import Character, Clip, Document, Run, Segment, Track
+from kokoro_gui.daw.models import SOURCES_KEY, Character, Clip, Document, Run, Segment, Track, clean_words
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys
 
 
@@ -62,6 +63,24 @@ def _to_dict(obj) -> dict:
     return {**extra, **data}
 
 
+def _segment_to_dict(segment: Segment) -> dict:
+    """A segment's dict, without `range` when it is None, so a document
+    with no sliced segments saves exactly as it did before the field."""
+    data = _to_dict(segment)
+    if data.get("range") is None:
+        data.pop("range", None)
+    return data
+
+
+def _run_to_dict(run: Run) -> dict:
+    """A run's dict, without `words` when it has none, so a document with
+    no imported text saves exactly as it did before the field."""
+    data = _to_dict(run)
+    if not data.get("words"):
+        data.pop("words", None)
+    return data
+
+
 def _character_to_dict(character: Character) -> dict:
     data = _to_dict(character)
     stripped = (character.extra or {}).get("preset_data")
@@ -69,6 +88,25 @@ def _character_to_dict(character: Character) -> dict:
         data.pop("preset_data", None)
         data["preset_data"] = {**stripped, **character.preset_data}
     return data
+
+
+def character_from_dict(data: dict) -> Character:
+    """One `Character` from its `document.json` dict: `preset_data` through
+    the `ALLOWED_PRESET_KEYS` whitelist, the keys it strips kept in
+    `extra["preset_data"]`. Also reads a character library file
+    (kokoro_gui/daw/library.py), which holds the same shape."""
+    known, extra = _split_unknown(Character, data)
+    preset_data = known.get("preset_data") or {}
+    if isinstance(preset_data, dict):
+        stripped = {k: v for k, v in preset_data.items() if k not in ALLOWED_PRESET_KEYS}
+        known["preset_data"] = filter_allowed_keys(preset_data, ALLOWED_PRESET_KEYS)
+        if stripped:
+            extra["preset_data"] = stripped
+    return Character(extra=extra, **known)
+
+
+# The writer's name for the library module, alongside `character_from_dict`.
+character_to_dict = _character_to_dict
 
 
 def document_to_dict(doc: Document) -> dict:
@@ -81,28 +119,48 @@ def document_to_dict(doc: Document) -> dict:
     clips = []
     for clip in doc.clips:
         data = _to_dict(clip)
-        data["segments"] = [_to_dict(s) for s in clip.segments]
+        data["segments"] = [_segment_to_dict(s) for s in clip.segments]
+        data["takes"] = {str(index): [_segment_to_dict(s) for s in segments]
+                         for index, segments in sorted(clip.takes.items())}
         clips.append(data)
     return {
-        "runs": [_to_dict(r) for r in doc.runs],
+        "runs": [_run_to_dict(r) for r in doc.runs],
         "clips": clips,
         "tracks": [_to_dict(t) for t in doc.tracks],
         "characters": [_character_to_dict(c) for c in doc.characters],
-        "settings": dict(doc.settings),
+        # A deep copy: `rewrite_audio_paths` edits the source paths inside
+        # it in place, and they must not reach the live document.
+        "settings": copy.deepcopy(dict(doc.settings)),
     }
 
 
-def rewrite_audio_paths(data: dict, fn) -> dict:
-    """Applies `fn(path) -> path` to every `Segment.audio_path` and
-    `Clip.original_audio_path` in a `document_to_dict`-shaped dict, in
-    place, skipping `None`. Used in both directions by the `.tbaw` bundle
-    (absolute inside the project dir <-> bundle-relative)."""
+def rewrite_audio_paths(data: dict, fn, imported_fn=None) -> dict:
+    """Applies `fn(path) -> path` to every `Segment.audio_path`,
+    `Clip.original_audio_path` and imported recording source path
+    (`settings["sources"][name]["path"]`, phase 5 P3) in a
+    `document_to_dict`-shaped dict, in place, skipping `None`. Used in both
+    directions by the `.tbaw` bundle (absolute inside the project dir <->
+    bundle-relative). `imported_fn`, when given, replaces `fn` for the
+    imported files (source paths and `original_audio_path`), which the
+    bundle keeps to a narrower folder than segments."""
+    imported_fn = imported_fn or fn
+    settings = data.get("settings")
+    sources = settings.get(SOURCES_KEY) if isinstance(settings, dict) else None
+    if isinstance(sources, dict):
+        for entry in sources.values():
+            if isinstance(entry, dict) and isinstance(entry.get("path"), str) and entry["path"]:
+                entry["path"] = imported_fn(entry["path"])
     for clip in data.get("clips", []):
         if clip.get("original_audio_path"):
-            clip["original_audio_path"] = fn(clip["original_audio_path"])
-        for segment in clip.get("segments", []):
-            if segment.get("audio_path"):
-                segment["audio_path"] = fn(segment["audio_path"])
+            clip["original_audio_path"] = imported_fn(clip["original_audio_path"])
+        segment_lists = [clip.get("segments", [])]
+        takes = clip.get("takes")
+        if isinstance(takes, dict):
+            segment_lists.extend(v for v in takes.values() if isinstance(v, list))
+        for segments in segment_lists:
+            for segment in segments:
+                if isinstance(segment, dict) and segment.get("audio_path"):
+                    segment["audio_path"] = fn(segment["audio_path"])
     return data
 
 
@@ -135,6 +193,20 @@ def _runs_from_legacy_offsets(text: str, clips: list, legacy_offsets: dict) -> l
     return runs
 
 
+def _segments_from_list(items) -> list:
+    """`Segment`s from a saved list. A saved segment without "raw" predates
+    read-time FX: its file has FX baked in, so it must not be
+    post-processed again (see Segment's docstring; dirty.is_clip_dirty
+    regenerates it)."""
+    segments = []
+    for seg in items if isinstance(items, list) else []:
+        if not isinstance(seg, dict):
+            continue
+        known, extra = _split_unknown(Segment, {"raw": False, **seg})
+        segments.append(Segment(extra=extra, **known))
+    return segments
+
+
 def document_from_dict(data: dict) -> Document:
     """Inverse of `document_to_dict`. Tolerant of missing keys (an older or
     hand-edited `document.json`) the same way the rest of this codebase reads
@@ -145,17 +217,19 @@ def document_from_dict(data: dict) -> Document:
     legacy_offsets = {}
     for clip_data in data.get("clips", []):
         clip_data = dict(clip_data)
-        # A saved segment without "raw" predates read-time FX: its file has
-        # FX baked in, so it must not be post-processed again (see
-        # Segment's docstring; dirty.is_clip_dirty regenerates it).
-        segments = []
-        for seg in clip_data.pop("segments", []):
-            known, extra = _split_unknown(Segment, {"raw": False, **seg})
-            segments.append(Segment(extra=extra, **known))
+        segments = _segments_from_list(clip_data.pop("segments", []))
+        takes = {}
+        raw_takes = clip_data.pop("takes", None)
+        if isinstance(raw_takes, dict):
+            for index, seg_list in raw_takes.items():
+                try:
+                    takes[int(index)] = _segments_from_list(seg_list)
+                except (TypeError, ValueError):
+                    continue
         start_offset = clip_data.pop("start_offset", None)
         end_offset = clip_data.pop("end_offset", None)
         known, extra = _split_unknown(Clip, clip_data)
-        clip = Clip(segments=segments, extra=extra, **known)
+        clip = Clip(segments=segments, takes=takes, extra=extra, **known)
         clips.append(clip)
         if start_offset is not None and end_offset is not None:
             legacy_offsets[clip.id] = (start_offset, end_offset)
@@ -165,32 +239,33 @@ def document_from_dict(data: dict) -> Document:
         known, extra = _split_unknown(Track, t)
         tracks.append(Track(extra=extra, **known))
 
-    characters = []
-    for c in data.get("characters", []):
-        known, extra = _split_unknown(Character, c)
-        preset_data = known.get("preset_data") or {}
-        if isinstance(preset_data, dict):
-            stripped = {k: v for k, v in preset_data.items() if k not in ALLOWED_PRESET_KEYS}
-            known["preset_data"] = filter_allowed_keys(preset_data, ALLOWED_PRESET_KEYS)
-            if stripped:
-                extra["preset_data"] = stripped
-        characters.append(Character(extra=extra, **known))
+    characters = [character_from_dict(c) for c in data.get("characters", [])]
 
     if "runs" in data:
         runs = []
         for r in data["runs"]:
             known, extra = _split_unknown(Run, r)
+            if "words" in known:
+                # Untrusted like the rest of the file: keep well-formed
+                # entries inside the run's text only.
+                known["words"] = clean_words(known["words"] if isinstance(known["words"], list) else [],
+                                              len(known.get("text") or ""))
             runs.append(Run(extra=extra, **known))
     else:
         runs = _runs_from_legacy_offsets(data.get("text", ""), clips, legacy_offsets)
 
-    return Document(
+    document = Document(
         runs=runs,
         clips=clips,
         tracks=tracks,
         characters=characters,
         settings=dict(data.get("settings", {})),
     )
+    # An imported recording clip's saved segments are a cache of its words;
+    # rebuild it so it never disagrees with them (a hand edit, a source
+    # file missing on open).
+    document.refresh_imported_segments()
+    return document
 
 
 def save_document(doc: Document, path: str) -> None:

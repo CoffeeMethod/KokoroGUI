@@ -23,6 +23,8 @@ import torch
 
 import kokoro_engine
 from kokoro_engine import KokoroEngine
+from kokoro_gui.engine import runtime
+from kokoro_gui.engine.wordtiming import TimedResult, even_tokens
 
 # One shared timestamp per pytest invocation, mirroring the Qt frontend's
 # "%Y%m%d%H%M%S" timecode convention (kokoro_gui/qt/app.py).
@@ -33,28 +35,46 @@ _RUN_TS = time.strftime("%Y%m%d%H%M%S")
 # Engine-level fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True, scope="session")
+def _verify_derived_state():
+    """Verify mode for the whole suite (kokoro_gui/daw/revision.py): every
+    cached index or dirty set is also computed from scratch, and a mismatch
+    raises `derived.StaleCacheError`. Every test that edits a document and
+    then reads a highlight, a stale flag or a placement is also a test that
+    the edit invalidated the caches."""
+    from kokoro_gui.daw import revision
+
+    revision.set_verify(True)
+    yield
+    revision.set_verify(False)
+
+
 @pytest.fixture
 def isolated_dirs(tmp_path, monkeypatch):
-    """Redirect kokoro_engine's module-level storage dirs into tmp_path."""
+    """Redirect the shared storage dirs (`kokoro_gui/engine/runtime.py`) into
+    tmp_path."""
     custom_voices = tmp_path / "custom_voices"
     cache_dir = tmp_path / "cache"
     out_dir = tmp_path / "out"
     for d in (custom_voices, cache_dir, out_dir):
         d.mkdir()
-    monkeypatch.setattr(kokoro_engine, "CUSTOM_VOICES_DIR", str(custom_voices))
-    monkeypatch.setattr(kokoro_engine, "CACHE_DIR", str(cache_dir))
-    # generation_stats.py reads/writes this qualified through kokoro_engine
-    # (same convention as CACHE_DIR above) - redirect it too, or every real
+    monkeypatch.setattr(runtime, "CUSTOM_VOICES_DIR", str(custom_voices))
+    monkeypatch.setattr(runtime, "CACHE_DIR", str(cache_dir))
+    # generation_stats.py reads/writes this qualified through runtime (same
+    # convention as CACHE_DIR above) - redirect it too, or every real
     # _process_text_async run in the suite would write a real
     # generation_stats.json into the repo working directory.
-    monkeypatch.setattr(kokoro_engine, "STATS_FILE", str(tmp_path / "generation_stats.json"))
+    monkeypatch.setattr(runtime, "STATS_FILE", str(tmp_path / "generation_stats.json"))
+    # The global character library (kokoro_gui/daw/library.py), same idea.
+    from kokoro_gui.daw import library as library_module
+    monkeypatch.setattr(library_module, "LIBRARY_DIR", str(tmp_path / "characters"))
     return SimpleNamespace(custom_voices=custom_voices, cache_dir=cache_dir, out_dir=out_dir)
 
 
 @pytest.fixture
 def engine(isolated_dirs, monkeypatch):
     # Never touch the real audio device from a test.
-    monkeypatch.setattr(kokoro_engine, "playback", MagicMock())
+    monkeypatch.setattr(runtime, "playback", MagicMock())
     e = KokoroEngine()
     yield e
     e.worker.stop()
@@ -67,7 +87,7 @@ def real_engine(isolated_dirs, monkeypatch):
     playback so audio never touches the real audio device) but never
     combined with `fake_pipeline` - get_thread_pipeline/KPipeline resolve to
     the real kokoro.KPipeline, so synthesis actually runs torch + espeak-ng."""
-    monkeypatch.setattr(kokoro_engine, "playback", MagicMock())
+    monkeypatch.setattr(runtime, "playback", MagicMock())
     e = KokoroEngine()
     yield e
     e.worker.stop()
@@ -84,7 +104,8 @@ class FakePipeline:
 
     def __call__(self, text, voice=None, speed=1.0, split_pattern=r"\n+"):
         try:
-            parts = [t.strip() for t in re.split(split_pattern, text) if t.strip()]
+            pieces = re.split(split_pattern, text) if split_pattern else [text]
+            parts = [t.strip() for t in pieces if t.strip()]
         except re.error:
             parts = []
         if not parts:
@@ -92,7 +113,8 @@ class FakePipeline:
         n = max(1, int(self._sr * self._dur))
         for p in parts:
             audio = (0.1 * np.sin(2 * np.pi * 220 * np.arange(n) / self._sr)).astype(np.float32)
-            yield p, "", audio
+            # Unpacks as the triple and carries `tokens`, like KPipeline's Result.
+            yield TimedResult(p, "", audio, even_tokens(p, n / self._sr))
 
     def load_voice(self, name):
         return torch.zeros(510, 1, 256)
@@ -126,7 +148,7 @@ def make_config(isolated_dirs):
             "voice": "af_heart",
             "speed": 1.0,
             "lang_code": "a",
-            "split_pattern": r"\n+",
+            "segment_target_words": 40,
             "out_dir": str(isolated_dirs.out_dir),
             "filename": "output",
             "time_id": "0",
@@ -241,3 +263,30 @@ class StubEngine:
     def resolve_voice_file(self, name, project_dir=None):
         resolved = self.resolve_voice_path(name, project_dir)
         return resolved if os.path.isabs(resolved) and os.path.isfile(resolved) else None
+
+
+@pytest.fixture
+def toneclone_plugin(monkeypatch):
+    """Registers tests/plugins/toneclone.py through the real discovery path:
+    `importlib.metadata.entry_points` hands out a `kokorogui.engines` entry
+    point for it and `load_engines()` loads it. Unregistered afterwards, so
+    no other test sees a fourth engine."""
+    import importlib.metadata
+
+    from kokoro_gui import engines
+    from kokoro_gui.engines import registry
+
+    entry_point = importlib.metadata.EntryPoint(
+        name="toneclone", value="tests.plugins.toneclone:ToneCloneAdapter", group=engines.ENTRY_POINT_GROUP)
+    real_entry_points = importlib.metadata.entry_points
+
+    def entry_points(**params):
+        if params.get("group") == engines.ENTRY_POINT_GROUP:
+            return [entry_point]
+        return real_entry_points(**params)
+
+    monkeypatch.setattr(importlib.metadata, "entry_points", entry_points)
+    registry.list_engines()  # the built-ins first, as at startup
+    engines.load_engines()
+    yield entry_point
+    registry.unregister_engine("toneclone")

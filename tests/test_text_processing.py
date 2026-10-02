@@ -4,7 +4,7 @@
 parse_multispeaker_text, used by the Qt transcript editor's highlighter)."""
 import pytest
 
-import kokoro_engine
+from kokoro_gui.engine import text_extraction
 from kokoro_gui.engine.text_extraction import find_character_fx_spans
 
 
@@ -145,7 +145,7 @@ def test_extract_text_from_file_pdf(engine, tmp_path, monkeypatch):
         def __init__(self, path):
             self.pages = [FakePage(), FakePage()]
 
-    monkeypatch.setattr(kokoro_engine.pypdf, "PdfReader", FakeReader)
+    monkeypatch.setattr(text_extraction.pypdf, "PdfReader", FakeReader)
     p = tmp_path / "sample.pdf"
     p.write_bytes(b"%PDF-fake")
 
@@ -156,7 +156,7 @@ def test_extract_text_from_file_pdf(engine, tmp_path, monkeypatch):
 def test_extract_text_from_file_epub(engine, tmp_path, monkeypatch):
     class FakeItem:
         def get_type(self):
-            return kokoro_engine.ebooklib.ITEM_DOCUMENT
+            return text_extraction.ebooklib.ITEM_DOCUMENT
 
         def get_content(self):
             return b"<html><body><p>Chapter text.</p></body></html>"
@@ -165,9 +165,157 @@ def test_extract_text_from_file_epub(engine, tmp_path, monkeypatch):
         def get_items(self):
             return [FakeItem()]
 
-    monkeypatch.setattr(kokoro_engine.epub, "read_epub", lambda path, options=None: FakeBook())
+    monkeypatch.setattr(text_extraction.epub, "read_epub", lambda path, options=None: FakeBook())
     p = tmp_path / "sample.epub"
     p.write_bytes(b"fake-epub")
 
     text = engine.extract_text_from_file(str(p))
     assert "Chapter text." in text
+
+
+def test_parse_multispeaker_drops_pause_markers(engine):
+    result = engine.parse_multispeaker_text("[Narrator]: Hello. [pause:1.5]\n[Bob]: Hi.")
+    assert result == [("Narrator", None, "Hello."), ("Bob", None, "Hi.")]
+
+
+# --- extract_sections (phase 4, New from eBook: one subproject per chapter) ---
+
+def _fake_epub(monkeypatch, documents, spine=None):
+    class FakeItem:
+        def __init__(self, item_id, html):
+            self.id = item_id
+            self._html = html
+
+        def get_type(self):
+            return text_extraction.ebooklib.ITEM_DOCUMENT
+
+        def get_content(self):
+            return self._html.encode("utf-8")
+
+        def get_id(self):
+            return self.id
+
+    class FakeBook:
+        def __init__(self):
+            self.spine = spine or []
+
+        def get_items(self):
+            return [FakeItem(i, h) for i, h in documents]
+
+    monkeypatch.setattr(text_extraction.epub, "read_epub", lambda path, options=None: FakeBook())
+
+
+def test_extract_sections_epub_titles_from_headings_in_spine_order(tmp_path, monkeypatch):
+    from kokoro_gui.engine.text_extraction import extract_sections
+
+    _fake_epub(monkeypatch, [
+        ("c2", "<html><body><h2>The Storm</h2><p>Rain fell.</p></body></html>"),
+        ("c1", "<html><body><h1>Arrival</h1><p>She came home.</p></body></html>"),
+        ("blank", "<html><body></body></html>"),
+        ("c3", "<html><body><p>No heading here.</p></body></html>"),
+    ], spine=[("c1", "yes"), ("c2", "yes"), ("blank", "yes"), ("c3", "yes")])
+    p = tmp_path / "book.epub"
+    p.write_bytes(b"fake-epub")
+
+    sections = extract_sections(str(p))
+
+    assert [t for t, _ in sections] == ["Arrival", "The Storm", "Chapter 3"]
+    assert "She came home." in sections[0][1]
+    assert "Rain fell." in sections[1][1]
+
+
+def test_extract_sections_pdf_by_outline_page_ranges(tmp_path, monkeypatch):
+    from kokoro_gui.engine.text_extraction import extract_sections
+
+    class Page:
+        def __init__(self, text):
+            self._text = text
+
+        def extract_text(self):
+            return self._text
+
+    class Entry:
+        def __init__(self, title, page):
+            self.title = title
+            self.page = page
+
+    class Reader:
+        def __init__(self, path):
+            self.pages = [Page("One a."), Page("One b."), Page("Two a.")]
+            self.outline = [Entry("One", 0), [Entry("One sub", 1)], Entry("Two", 2)]
+
+        def get_destination_page_number(self, entry):
+            return entry.page
+
+    monkeypatch.setattr(text_extraction.pypdf, "PdfReader", Reader)
+    p = tmp_path / "book.pdf"
+    p.write_bytes(b"%PDF-fake")
+
+    sections = extract_sections(str(p))
+
+    assert [t for t, _ in sections] == ["One", "Two"]
+    assert "One a." in sections[0][1] and "One b." in sections[0][1]
+    assert sections[1][1] == "Two a."
+
+
+def test_extract_sections_pdf_without_outline_and_txt_are_one_section(tmp_path, monkeypatch):
+    from kokoro_gui.engine.text_extraction import extract_sections
+
+    class Reader:
+        def __init__(self, path):
+            self.pages = [type("P", (), {"extract_text": lambda self: "All of it."})()]
+            self.outline = []
+
+    monkeypatch.setattr(text_extraction.pypdf, "PdfReader", Reader)
+    pdf = tmp_path / "flat.pdf"
+    pdf.write_bytes(b"%PDF-fake")
+    assert extract_sections(str(pdf)) == [("flat", "All of it.")]
+
+    txt = tmp_path / "notes.txt"
+    txt.write_text("Plain words.", encoding="utf-8")
+    assert extract_sections(str(txt)) == [("notes", "Plain words.")]
+
+
+# --- strip_markup (grill TE11) ---
+
+
+def test_strip_markup_drops_a_leading_tag_and_its_space():
+    assert text_extraction.strip_markup("[Alice:Radio]: Hello there.") == "Hello there."
+
+
+def test_strip_markup_handles_a_name_with_spaces_and_a_mid_line_tag():
+    text = "[Old Man:Big Hall]: Come in. [Alice]: Thanks."
+    assert text_extraction.strip_markup(text) == "Come in. Thanks."
+
+
+def test_strip_markup_keeps_words_apart_around_a_glued_pause_marker():
+    assert text_extraction.strip_markup("Hello.[pause:1.5]Next.") == "Hello. Next."
+    assert text_extraction.strip_markup("Hello. [pause:1.5] Next.") == "Hello.  Next."
+
+
+def test_strip_markup_leaves_other_brackets_alone():
+    text = "He said [sic] it twice."
+    assert text_extraction.strip_markup(text) == text
+
+
+def test_strip_markup_origin_maps_each_character_back():
+    text = "[Bob]: Hi.[pause:1]Go."
+    stripped, origin = text_extraction.strip_markup(text, with_origin=True)
+    assert stripped == "Hi. Go."
+    assert len(origin) == len(stripped)
+    assert origin[0][:2] == (7, 8)  # the "H" after the tag
+    assert origin[3][:2] == (10, 19)  # the space that stands in for the marker
+    assert text[origin[4][0]] == "G"
+
+
+def test_lexicon_spoken_chains_markup_and_lexicon_spans():
+    from kokoro_gui.engine.lexicon import original_span, spoken
+
+    text = "[Alice:Radio]: Mr Nguyen arrived."
+    out, spans = spoken(text, {"Nguyen": "Win"}, with_spans=True)
+    assert out == "Mr Win arrived."
+    assert spoken(text, {"Nguyen": "Win"}) == out
+    win = out.index("Win")
+    assert text[slice(*original_span(spans, win, win + 3))] == "Nguyen"
+    arrived = out.index("arrived")
+    assert text[slice(*original_span(spans, arrived, arrived + 7))] == "arrived"

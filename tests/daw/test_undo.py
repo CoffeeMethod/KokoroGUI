@@ -381,3 +381,88 @@ def test_save_and_load_document_round_trip_excludes_undo_stack(tmp_path):
     assert reloaded is not None
     assert len(reloaded.clips) == 1
     assert reloaded.undo_stack.can_undo() is False
+
+
+# ---------------------------------------------------------------------------
+# SetFieldCommand / takes commands (phase 2)
+# ---------------------------------------------------------------------------
+
+def test_set_field_command_sets_and_restores_a_clip_field():
+    from kokoro_gui.daw.undo import SetFieldCommand
+
+    doc, alice, _ = _document_with_characters()
+    doc.undo_stack.push(AssignCharacterCommand(0, 5, alice.id))
+    clip = doc.clips[0]
+
+    doc.undo_stack.push(SetFieldCommand("clip", clip.id, "fade_in_s", 0.25))
+    assert clip.fade_in_s == 0.25
+    doc.undo_stack.undo()
+    assert clip.fade_in_s == 0.0
+    doc.undo_stack.redo()
+    assert clip.fade_in_s == 0.25
+
+
+def test_set_field_command_with_key_adds_and_removes_a_dict_entry():
+    from kokoro_gui.daw.undo import SetFieldCommand
+
+    doc, _, _ = _document_with_characters()
+    doc.undo_stack.push(SetFieldCommand("document", None, "settings", 0.5, key="gap_s"))
+    assert doc.settings["gap_s"] == 0.5
+    doc.undo_stack.undo()
+    assert "gap_s" not in doc.settings
+
+    doc.settings["gap_s"] = 0.2
+    doc.undo_stack.push(SetFieldCommand("document", None, "settings", None, key="gap_s"))
+    assert "gap_s" not in doc.settings
+    doc.undo_stack.undo()
+    assert doc.settings["gap_s"] == 0.2
+
+
+def test_set_field_command_copies_list_values():
+    from kokoro_gui.daw.undo import SetFieldCommand
+
+    doc, _, _ = _document_with_characters()
+    track = doc.tracks[0]
+    points = [[0.0, 1.0]]
+    doc.undo_stack.push(SetFieldCommand("track", track.id, "automation", points))
+    points.append([1.0, 0.0])
+    assert track.automation == [[0.0, 1.0]]
+    doc.undo_stack.undo()
+    assert track.automation == []
+
+
+def test_assign_character_command_sets_clip_fields_on_redo_too():
+    doc, alice, _ = _document_with_characters()
+    doc.undo_stack.push(AssignCharacterCommand(0, 5, alice.id, clip_fields={"gap_before_s": 1.5}))
+    assert doc.clips[0].gap_before_s == 1.5
+    doc.undo_stack.undo()
+    doc.undo_stack.redo()
+    assert doc.clips[0].gap_before_s == 1.5
+
+
+def test_set_active_take_swaps_segments_and_undoes():
+    from kokoro_gui.daw.models import Segment
+    from kokoro_gui.daw.undo import DeleteTakeCommand, SetActiveTakeCommand
+
+    doc, alice, _ = _document_with_characters()
+    doc.undo_stack.push(AssignCharacterCommand(0, 5, alice.id))
+    clip = doc.clips[0]
+    first, second = [Segment(text="a", audio_path="t0.wav")], [Segment(text="a", audio_path="t1.wav")]
+    clip.segments = second
+    clip.overrides["take"] = 1
+    clip.takes = {0: first}
+
+    doc.undo_stack.push(SetActiveTakeCommand(clip.id, 0))
+    assert clip.segments is first
+    assert clip.takes == {1: second}
+    assert "take" not in clip.overrides
+
+    doc.undo_stack.undo()
+    assert clip.segments is second
+    assert clip.overrides["take"] == 1
+    assert clip.takes == {0: first}
+
+    doc.undo_stack.push(DeleteTakeCommand(clip.id, 0))
+    assert clip.takes == {}
+    doc.undo_stack.undo()
+    assert clip.takes == {0: first}

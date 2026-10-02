@@ -2,6 +2,7 @@
 segments, and process_chunk_task's `raw_output` contract that feeds it.
 No Qt, no audio device."""
 import numpy as np
+import pytest
 import soundfile as sf
 
 from kokoro_gui.audio import post
@@ -28,6 +29,11 @@ def test_post_key_changes_when_any_post_key_changes():
                        ("normalize", True), ("trim_silence", True), ("pitch", 2.0), ("apply_fx", False)):
         changed = dict(base, **{key: value})
         assert post.post_key(changed) != post.post_key(base), key
+
+
+def test_post_key_survives_an_ir_name_with_a_nul():
+    key = post.post_key({"convolution_ir": "a\x00", "project_dir": "/tmp"})
+    assert key != post.post_key({"convolution_ir": "b"})
 
 
 def test_extract_post_config_keeps_only_post_keys():
@@ -76,6 +82,53 @@ def test_trim_changes_rendered_duration(tmp_path):
     assert post.rendered_duration_s(str(path), {"trim_silence": True}, rate) == 0.5
 
 
+def _ir(path, samples, rate=8000):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(path), np.asarray(samples, dtype=np.float32), rate, subtype="FLOAT")
+
+
+def test_extract_post_config_carries_project_dir_only_for_an_impulse_response():
+    cfg = {"volume": 1.0, "project_dir": "/p"}
+    assert "project_dir" not in post.extract_post_config(cfg)
+    assert post.extract_post_config(dict(cfg, convolution_ir="Hall"))["project_dir"] == "/p"
+    assert "project_dir" not in post.extract_post_config(dict(cfg, convolution_ir=""))
+
+
+def test_render_re_renders_when_the_impulse_response_file_changes(tmp_path):
+    import os
+
+    path = _tone(tmp_path / "a.wav")
+    raw, _rate = sf.read(path, dtype="float32")
+    project_dir = tmp_path / "project"
+    ir_path = project_dir / "fx" / "ir" / "Room.wav"
+    _ir(ir_path, [1.0])
+    config = post.extract_post_config({"apply_fx": True, "convolution_ir": "Room", "convolution_mix": 1.0,
+                                       "project_dir": str(project_dir)})
+    assert not post.is_identity(config)
+
+    first = post.render(path, config, 8000)
+    assert np.allclose(first, raw, atol=1e-4)
+    key_before = post.post_key(config)
+
+    # Same name, new file: a 1 ms echo instead of the identity.
+    echo = np.zeros(9)
+    echo[8] = 1.0
+    _ir(ir_path, echo)
+    stat = os.stat(ir_path)
+    os.utime(ir_path, (stat.st_atime, stat.st_mtime + 5))
+    assert post.post_key(config) != key_before
+    second = post.render(path, config, 8000)
+    assert second is not first
+    assert np.allclose(second[8:], raw[:-8], atol=1e-4)
+
+
+def test_render_with_a_missing_impulse_response_plays_dry(tmp_path):
+    path = _tone(tmp_path / "a.wav")
+    raw, _rate = sf.read(path, dtype="float32")
+    config = {"apply_fx": True, "convolution_ir": "Gone", "convolution_mix": 1.0, "project_dir": str(tmp_path)}
+    assert np.allclose(post.render(path, config, 8000), raw, atol=1e-6)
+
+
 def test_mixer_load_clip_samples_goes_through_post(tmp_path):
     path = _tone(tmp_path / "a.wav")
     raw, _rate = sf.read(path, dtype="float32")
@@ -107,3 +160,196 @@ def test_generate_clip_audio_marks_segments_raw(engine, fake_pipeline, make_conf
     assert results and all(r["raw"] is True for r in results)
     # The caller's dict is untouched (generate_clip_audio copies it).
     assert "raw_output" not in config
+
+
+# -- duration hint (phase 2, C1) -------------------------------------------------
+
+
+def test_duration_hint_accounts_for_trim_and_pitch():
+    from kokoro_gui.audio.post import duration_hint
+    from kokoro_gui.daw.models import Segment
+
+    segment = Segment(duration=2.0, onset_s=0.1, tail_s=0.3)
+    assert duration_hint(segment, {}) == 2.0
+    assert duration_hint(segment, {"trim_silence": True}) == pytest.approx(1.6)
+    assert duration_hint(segment, {"trim_silence": True, "pitch": 12}) == pytest.approx(0.8)
+    assert duration_hint(Segment(duration=2.0), {}) is None
+
+
+def test_rendered_duration_uses_the_hint_without_reading_the_file(tmp_path, monkeypatch):
+    from kokoro_gui.audio import post
+
+    post.clear_render_cache()
+
+    def no_reads(_path, _range_s=None):
+        raise AssertionError("read the file")
+
+    monkeypatch.setattr(post, "_read_mono", no_reads)
+    assert post.rendered_duration_s(str(tmp_path / "never.wav"), {}, 24000, hint=1.25) == 1.25
+
+
+def test_rendered_duration_prefers_a_memoized_render_over_the_hint(tmp_path):
+    import soundfile as sf
+
+    from kokoro_gui.audio import post
+
+    path = str(tmp_path / "a.wav")
+    sf.write(path, np.full(8000, 0.5, dtype=np.float32), 8000)
+    post.clear_render_cache()
+    post.render(path, {}, 8000)
+    assert post.rendered_duration_s(path, {}, 8000, hint=9.0) == 1.0
+
+
+# -- slices (Segment.range, render_slice) -------------------------------------------
+
+
+def _ramp(path, frames=8000, rate=8000):
+    """Sample i holds i / frames, so a slice's first value names its frame."""
+    sf.write(str(path), (np.arange(frames) / frames).astype(np.float32), rate, subtype="FLOAT")
+    return str(path)
+
+
+def test_render_with_a_range_reads_only_those_frames(tmp_path):
+    path = _ramp(tmp_path / "ramp.wav")
+    raw, _rate = sf.read(path, dtype="float32")
+
+    part = post.render(path, None, 8000, range_s=(0.25, 0.5))
+    assert np.array_equal(part, raw[2000:4000])
+    assert np.array_equal(post.render_slice(path, 0.25, 0.5, None, 8000), part)
+    assert np.array_equal(load_clip_samples(path, 8000, None, range_s=[0.25, 0.5]), part)
+
+
+def test_a_slice_never_decodes_the_whole_file(tmp_path, monkeypatch):
+    path = _ramp(tmp_path / "ramp.wav")
+
+    def whole_file_read(*_args, **_kwargs):
+        raise AssertionError("read the whole file")
+
+    monkeypatch.setattr(sf, "read", whole_file_read)
+    assert len(post.render(path, None, 8000, range_s=(0.0, 0.1))) == 800
+
+
+def test_render_memo_is_keyed_by_range(tmp_path):
+    path = _ramp(tmp_path / "ramp.wav")
+    whole = post.render(path, None, 8000)
+    first = post.render(path, None, 8000, range_s=(0.0, 0.25))
+    second = post.render(path, None, 8000, range_s=(0.25, 0.5))
+
+    assert len(whole) == 8000 and len(first) == len(second) == 2000
+    assert not np.array_equal(first, second)
+    assert post.render(path, None, 8000, range_s=[0.0, 0.25]) is first
+    assert post.render(path, None, 8000) is whole
+
+
+def test_a_range_is_clamped_to_the_file_and_an_empty_one_is_empty(tmp_path):
+    path = _ramp(tmp_path / "ramp.wav")  # 1 s
+    raw, _rate = sf.read(path, dtype="float32")
+
+    assert np.array_equal(post.render(path, None, 8000, range_s=(0.75, 3.0)), raw[6000:])
+    assert np.array_equal(post.render(path, None, 8000, range_s=(-1.0, 0.1)), raw[:800])
+    for empty in ((0.5, 0.5), (0.6, 0.4), (2.0, 3.0)):
+        out = post.render(path, {"volume": 2.0, "apply_fx": False}, 8000, range_s=empty)
+        assert out.dtype == np.float32 and len(out) == 0, empty
+
+
+def test_a_slice_is_post_processed_and_resampled(tmp_path):
+    path = _ramp(tmp_path / "ramp.wav")
+    raw, _rate = sf.read(path, dtype="float32")
+
+    loud = post.render(path, {"volume": 2.0, "apply_fx": False}, 8000, range_s=(0.25, 0.5))
+    assert np.allclose(loud, raw[2000:4000] * 2.0, atol=1e-6)
+    assert len(post.render(path, None, 16000, range_s=(0.25, 0.5))) == 4000
+
+
+def test_trim_silence_does_not_apply_inside_a_slice(tmp_path):
+    rate = 8000
+    silence = np.zeros(rate // 2, dtype=np.float32)
+    tone = np.full(rate // 2, 0.3, dtype=np.float32)
+    path = tmp_path / "padded.wav"
+    sf.write(str(path), np.concatenate([silence, tone, silence]), rate)
+
+    # The range says where the audio starts; trim would move it.
+    sliced = post.render(str(path), {"trim_silence": True}, rate, range_s=(0.25, 1.25))
+    assert len(sliced) == rate
+    assert post.rendered_duration_s(str(path), {"trim_silence": True}, rate, range_s=(0.25, 1.25)) == 1.0
+
+
+def test_duration_hint_with_a_range_is_its_length_over_pitch():
+    from kokoro_gui.daw.models import Segment
+
+    segment = Segment(duration=9.0, range=[1.0, 3.0])
+    assert post.duration_hint(segment, {}) == 2.0
+    # Trim leaves a slice alone, so the hint does too.
+    assert post.duration_hint(segment, {"trim_silence": True}) == 2.0
+    assert post.duration_hint(segment, {"pitch": 12}) == pytest.approx(1.0)
+    assert post.duration_hint(Segment(range=[3.0, 1.0]), {}) == 0.0
+
+
+def test_segment_range_rejects_malformed_values():
+    from kokoro_gui.daw.models import Segment
+
+    assert post.segment_range(Segment(range=[1, 2.5])) == (1.0, 2.5)
+    assert post.segment_range(Segment()) is None
+    for bad in ([1.0], ["a", "b"], "12", [float("nan"), 1.0]):
+        assert post.segment_range(Segment(range=bad)) is None, bad
+
+
+def test_rendered_duration_of_a_range_reads_only_the_slice(tmp_path):
+    path = _ramp(tmp_path / "ramp.wav")
+    post.clear_render_cache()
+    assert post.rendered_duration_s(path, None, 8000, range_s=(0.5, 0.75)) == 0.25
+    assert post.rendered_duration_s(path, None, 8000) == 1.0
+
+
+# -- time stretch (phase 5, D4) -----------------------------------------------------
+
+
+def test_time_stretch_is_a_post_key():
+    assert "time_stretch" in post.POST_KEYS
+    assert post.post_key({"time_stretch": 1.1}) != post.post_key({})
+    assert post.extract_post_config({"time_stretch": 1.1, "speed": 1.2}) == {"time_stretch": 1.1}
+
+
+def test_time_stretch_divides_the_rendered_length_and_keeps_1_as_identity(tmp_path):
+    path = _tone(tmp_path / "a.wav", seconds=1.0)
+    raw, _rate = sf.read(path, dtype="float32")
+    post.clear_render_cache()
+
+    assert post.is_identity({"time_stretch": 1.0, "apply_fx": False})
+    assert not post.is_identity({"time_stretch": 1.1, "apply_fx": False})
+    assert np.array_equal(post.render(path, {"time_stretch": 1.0, "apply_fx": False}, 8000), raw)
+
+    faster = post.render(path, {"time_stretch": 1.25, "apply_fx": False}, 8000)
+    slower = post.render(path, {"time_stretch": 0.8, "apply_fx": False}, 8000)
+    assert faster.ndim == 1 and faster.dtype == np.float32
+    assert len(faster) == pytest.approx(len(raw) / 1.25, abs=2)
+    assert len(slower) == pytest.approx(len(raw) / 0.8, abs=2)
+
+
+def test_time_stretch_is_clamped_and_tolerates_junk(tmp_path):
+    from kokoro_gui.engine.audio_fx import TIME_STRETCH_MAX, clamp_time_stretch
+
+    assert clamp_time_stretch(None) == 1.0
+    assert clamp_time_stretch("fast") == 1.0
+    assert clamp_time_stretch(float("nan")) == 1.0
+    assert clamp_time_stretch(1000) == TIME_STRETCH_MAX
+    path = _tone(tmp_path / "a.wav", seconds=1.0)
+    post.clear_render_cache()
+    assert len(post.render(path, {"time_stretch": "fast", "apply_fx": False}, 8000)) == 8000
+
+
+def test_duration_hint_divides_by_the_stretch_after_trim_and_pitch(tmp_path):
+    from kokoro_gui.daw.models import Segment
+
+    segment = Segment(duration=2.0, onset_s=0.1, tail_s=0.3)
+    assert post.duration_hint(segment, {"time_stretch": 1.25}) == pytest.approx(1.6)
+    assert post.duration_hint(segment, {"trim_silence": True, "pitch": 12, "time_stretch": 0.8}) \
+        == pytest.approx(1.0)
+    ranged = Segment(duration=5.0, range=[1.0, 3.0])
+    assert post.duration_hint(ranged, {"time_stretch": 2.0}) == pytest.approx(1.0)
+    # The hint agrees with what a render measures.
+    path = _tone(tmp_path / "b.wav", seconds=1.0)
+    post.clear_render_cache()
+    measured = post.rendered_duration_s(path, {"time_stretch": 1.1, "apply_fx": False}, 8000)
+    assert measured == pytest.approx(post.duration_hint(Segment(duration=1.0, onset_s=0.0, tail_s=0.0),
+                                                        {"time_stretch": 1.1}), abs=1e-3)

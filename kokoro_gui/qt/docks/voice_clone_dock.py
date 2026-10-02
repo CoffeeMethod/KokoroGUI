@@ -4,12 +4,15 @@ so it shows up as a selectable "voice" for any backend whose
 `capabilities.supports_voice_cloning` is true (today: Audio8BackendAdapter -
 kokoro_gui/engines/audio8_tts.py). Shown only for such a backend - see
 app.py's `_sync_voice_clone_dock`, the same show/hide-on-engine-switch
-pattern `_sync_mixing_dock` uses for the Mixing dock.
+pattern `_sync_mixing_dock` uses for the Mixing dock. It edits the Voices
+tab's engine (`app.voices_backend()`), which an Engine row on top can move
+to any engine with a voice editor without touching a character (grill EN3).
 
-The auto-transcribe step itself can run on either of `kokoro_gui.engine.asr`'s
-two registered engines (`ASR_ENGINES`) - the default "Audio8-ASR-0.1B"
-(online, higher quality) or "Vosk" (fully offline, needs a model folder
-downloaded by hand). The engine choice is persisted in `app.settings`
+The auto-transcribe step itself can run on any of `kokoro_gui.engine.asr`'s
+registered engines (`ASR_ENGINES`): the default "Whisper" (local, downloads
+its model on first use after asking, see `kokoro_gui/qt/asr_prompt.py`),
+"Audio8-ASR-0.1B" or "Vosk" (fully offline, needs a model folder downloaded
+by hand). The engine choice is persisted in `app.settings`
 (`asr_engine`, pulled via `get_state()` the same way `FXDock`/
 `GenerationDock` persist their own widget state) - but Vosk's model folder
 is *not*: it lives in the `VOSK_MODEL_PATH` environment variable, normally
@@ -23,11 +26,13 @@ or Reload to discard an unsaved edit and re-read whatever's actually in
 running).
 
 Saving is required before a reference can be used for generation - there is
-no "generate with an unsaved wav" path, deliberately: the Generation dock's
+no "generate with an unsaved wav" path, deliberately: the Settings tab's
 Voice dropdown is the single source of truth for which reference gets used
-(populated from `Audio8ReferenceStore.list_references()` via
-`app.backend.get_voices()`), so there is never a question of whether a
-freshly-browsed-but-unsaved wav or the dropdown's selection "wins".
+(the engine's `ReferenceStore` via `backend.get_voices()`), so there is never
+a question of whether a freshly-browsed-but-unsaved wav or the dropdown's
+selection "wins". The store is the Voices tab's engine's
+(`voices_backend().voice_store`), so any engine whose `voice_kind` is
+"reference" gets this editor.
 """
 from __future__ import annotations
 
@@ -43,8 +48,9 @@ from PySide6.QtWidgets import (
 from kokoro_gui.engine.asr import (
     ASR_ENGINES, get_vosk_model_path, reload_vosk_model_path, set_vosk_model_path, transcribe_wav,
 )
-from kokoro_gui.engines import audio8_tts
-from kokoro_gui.engines.audio8_tts import Audio8ReferenceStore
+from kokoro_gui.qt import asr_prompt
+from kokoro_gui.qt.docks.scrolling import scrollable
+from kokoro_gui.qt.docks.voice_header import engine_header
 
 
 class VoiceCloneDock(QDockWidget):
@@ -55,11 +61,18 @@ class VoiceCloneDock(QDockWidget):
         super().__init__("Voice Reference", parent)
         self.setObjectName("dock_voice_clone")
         self.app = app
+        # The engine this editor was built for, and its reference store;
+        # app.py rebuilds the dock when the Voices tab moves to another
+        # cloning engine.
+        self.backend_id = app.voices_backend().id
+        self.store = app.voices_backend().voice_store
         self.transcribeFinished.connect(self._on_transcribe_finished)
         self.saveFinished.connect(self._on_save_finished)
 
         content = QWidget()
         layout = QVBoxLayout(content)
+        header, self.engine_combo = engine_header(app, self.backend_id)
+        layout.addLayout(header)
 
         layout.addWidget(QLabel("<b>Reference Audio</b>"))
         wav_row = QHBoxLayout()
@@ -132,14 +145,13 @@ class VoiceCloneDock(QDockWidget):
         layout.addWidget(QLabel("<b>Saved References:</b>"))
         self.list_scroll = QScrollArea()
         self.list_scroll.setWidgetResizable(True)
-        self.list_scroll.setFixedHeight(180)
+        self.list_scroll.setMinimumHeight(120)
         self._list_container = QWidget()
         self._list_layout = QVBoxLayout(self._list_container)
         self.list_scroll.setWidget(self._list_container)
-        layout.addWidget(self.list_scroll)
+        layout.addWidget(self.list_scroll, 1)
 
-        layout.addStretch(1)
-        self.setWidget(content)
+        self.setWidget(scrollable(content))
         self.refresh_list()
 
     # --- reference audio / transcript -----------------------------------
@@ -194,8 +206,21 @@ class VoiceCloneDock(QDockWidget):
             QMessageBox.warning(self, "Error", "Enter a Vosk model folder first.")
             return
 
+        downloading = False
+        if engine == "whisper":
+            choice, downloading = asr_prompt.confirm_whisper_download(self)
+            if choice == asr_prompt.CANCEL:
+                return
+            if choice == asr_prompt.OTHER_ENGINE:
+                other = next(i for i in range(self.asr_engine_combo.count())
+                             if self.asr_engine_combo.itemData(i) != "whisper")
+                self.asr_engine_combo.setCurrentIndex(other)
+                self.status_label.setText(
+                    f"Switched to {self.asr_engine_combo.currentText()}. Click Auto-Transcribe to use it.")
+                return
+
         self.transcribe_btn.setEnabled(False)
-        self.status_label.setText("Transcribing...")
+        self.status_label.setText("Downloading Whisper model..." if downloading else "Transcribing...")
 
         def _done(future):
             try:
@@ -207,7 +232,7 @@ class VoiceCloneDock(QDockWidget):
         # Uses whatever's currently typed in the Vosk model field, whether or
         # not it's been Saved yet - transcribing shouldn't require a save
         # first, only persisting the path for next run/the standalone CLI does.
-        future = self.app.engine.worker.run_coro(
+        future = self.app.voices_backend().run(
             asyncio.to_thread(transcribe_wav, wav_path, engine=engine, model_path=vosk_model_path or None)
         )
         future.add_done_callback(_done)
@@ -218,7 +243,9 @@ class VoiceCloneDock(QDockWidget):
             self.transcript_edit.setPlainText(payload)
             self.status_label.setText("Transcribed - review/edit before saving.")
         else:
-            self.status_label.setText(f"Transcription failed: {payload}")
+            # The asr module's own errors already say "Transcription failed".
+            prefix = "" if payload.startswith("Transcription failed") else "Transcription failed: "
+            self.status_label.setText(f"{prefix}{payload}")
 
     # --- saved references (name -> wav+transcript sidecar pair) ---------
 
@@ -236,12 +263,12 @@ class VoiceCloneDock(QDockWidget):
         if not transcript:
             QMessageBox.warning(self, "Error", "Enter or auto-transcribe a transcript first.")
             return
-        if name in Audio8ReferenceStore.list_references():
+        if name in self.store.list_references():
             if QMessageBox.question(self, "Overwrite", f"Reference '{name}' exists. Overwrite?") != QMessageBox.StandardButton.Yes:
                 return
 
         try:
-            Audio8ReferenceStore.save_reference(name, wav_path, transcript)
+            self.store.save_reference(name, wav_path, transcript)
             self.saveFinished.emit(True, name)
         except Exception as e:
             self.saveFinished.emit(False, str(e))
@@ -258,14 +285,12 @@ class VoiceCloneDock(QDockWidget):
         review/edit/re-save (the user's "edit after if needed" path)."""
         self.name_edit.setText(name)
         project_dir = getattr(self.app, "project_dir", None)
-        wav = Audio8ReferenceStore.find_wav(name, project_dir) or os.path.abspath(
-            os.path.join(audio8_tts.AUDIO8_REFS_DIR, f"{name}.wav"))
+        wav = self.store.find_wav(name, project_dir) or self.store.global_wav_path(name)
         self.wav_path_edit.setText(wav)
-        self.transcript_edit.setPlainText(Audio8ReferenceStore.get_transcript(name, project_dir))
+        self.transcript_edit.setPlainText(self.store.get_transcript(name, project_dir))
 
     def refresh_list(self) -> None:
-        if hasattr(self.app, "settings_dock") and self.app.settings_dock is not None:
-            self.app.settings_dock.refresh_voice_choices()
+        self.app.refresh_voice_choices()
 
         while self._list_layout.count():
             item = self._list_layout.takeAt(0)
@@ -275,7 +300,7 @@ class VoiceCloneDock(QDockWidget):
 
         # Project-local references (a .tbaw's engines/audio8/refs/) show
         # alongside the global store; a name in both is the project's.
-        names = Audio8ReferenceStore.list_references(getattr(self.app, "project_dir", None))
+        names = self.store.list_references(getattr(self.app, "project_dir", None))
         if not names:
             self._list_layout.addWidget(QLabel("No saved voice references yet."))
             return
@@ -296,7 +321,7 @@ class VoiceCloneDock(QDockWidget):
         if QMessageBox.question(self, "Confirm", f"Delete voice reference '{name}'?") != QMessageBox.StandardButton.Yes:
             return
         try:
-            Audio8ReferenceStore.delete_reference(name)
+            self.store.delete_reference(name)
             self.refresh_list()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to delete: {e}")

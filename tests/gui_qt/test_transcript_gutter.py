@@ -197,3 +197,73 @@ def test_gutter_resizes_with_the_editor(qt_app):
 
     assert gutter.geometry().width() == GUTTER_WIDTH_PX
     assert gutter.geometry().height() == editor.height()
+
+
+# -- imported recordings (phase 5 P3) ------------------------------------------------
+
+
+def _tall(editor):
+    from PySide6.QtCore import QSize
+    from PySide6.QtGui import QResizeEvent
+
+    old_size = editor.size()
+    editor.resize(QSize(600, 600))
+    editor.resizeEvent(QResizeEvent(editor.size(), old_size))
+
+
+def _click(gutter, rect):
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    pos = QPointF(rect.center())
+    gutter.mousePressEvent(QMouseEvent(QEvent.Type.MouseButtonPress, pos, pos, Qt.MouseButton.LeftButton,
+                                       Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+
+
+def test_a_recording_clip_gets_a_play_only_button_that_plays_from_its_start(qt_app, tmp_path):
+    from tests.gui_qt.test_transcript_editor import HELLO, SECOND, _recording
+
+    editor, gutter = _editor(qt_app), _gutter(qt_app)
+    _tall(editor)
+    _set_text(editor, "Intro line.")
+    _source, (first_id, second_id) = _recording(qt_app, tmp_path, [HELLO, SECOND])
+    _repaint(gutter)
+
+    assert gutter.button_rects() == []  # never stale, so never Generate
+    assert [cid for _rect, cid in gutter.play_rects()] == [first_id, second_id]
+
+    played = []
+    qt_app.transport.seek = lambda s: played.append(("seek", s))
+    qt_app.transport.play = lambda: played.append(("play",))
+    generated = []
+    qt_app.generate_clip = generated.append
+    _click(gutter, gutter.play_rects()[1][0])
+
+    placed = qt_app.current_arrangement().by_clip_id()[second_id]
+    assert placed.start_s > 0.0
+    assert played == [("seek", placed.start_s), ("play",)] and generated == []
+
+
+def test_text_typed_into_a_recording_gets_a_hollow_no_character_mark(qt_app, tmp_path):
+    from tests.gui_qt.test_transcript_editor import HELLO, _recording
+
+    editor, gutter = _editor(qt_app), _gutter(qt_app)
+    _tall(editor)
+    _set_text(editor, "Plain line, no mark.")
+    _recording(qt_app, tmp_path, [HELLO])
+    _repaint(gutter)
+    assert gutter.mark_rects() == []  # plain untagged text has no mark
+
+    at = qt_app.document.text.index(" friend")
+    cursor = editor.textCursor()
+    cursor.setPosition(at)
+    cursor.insertText(" my")
+    _repaint(gutter)
+
+    (rect, line_start, line_end), = gutter.mark_rects()
+    assert line_start <= at < line_end
+    assert "No character" in gutter.tooltip_at(rect.center())
+
+    qt_app.document.assign_character_to_range(at, at + 3, qt_app.document.characters[0].id)
+    _repaint(gutter)
+    assert gutter.mark_rects() == []

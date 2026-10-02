@@ -68,6 +68,7 @@ def test_clicking_lane_label_selects_character(qtbot):
     alice = Character.from_preset_dict("Alice", {})
     track = Track(name="Alice", character_id=alice.id)
     doc = Document.from_plain_text("x" * 40, characters=[alice], tracks=[track], clips=[])
+    doc.assign_character_to_range(0, 10, alice.id)  # a track is drawn once it has a clip
     widget.render_document(doc)
 
     # The label is drawn at (22, lane_top + 5); click inside its glyph area.

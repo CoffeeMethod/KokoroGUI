@@ -17,4 +17,6 @@ torchaudio>=2.5.0
 safetensors>=0.4
 librosa==0.11.0
 vosk
+# Whisper ASR (kokoro_gui/engine/asr.py); weights download on first use.
+faster-whisper==1.2.1
 python-dotenv

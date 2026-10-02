@@ -32,7 +32,9 @@ def test_generation_dock_state_covers_base_keys_minus_settings_owned(qt_app):
     # Output/format/subtitles/keep-segments live in the Export dialog now
     # (kokoro_gui/qt/docks/export_dialog.py), not the Settings tab.
     export_owned = {"filename", "out_dir", "separate", "combine", "export_subtitles"}
-    assert set(state.keys()) | settings_owned | export_owned == set(spec.GENERATION_BASE_KEYS)
+    # Kept per engine (grill EN5): `app.engine_settings(engine_id)`.
+    engine_owned = {"lang_code", "num_threads", "voice"}
+    assert set(state.keys()) | settings_owned | export_owned | engine_owned == set(spec.GENERATION_BASE_KEYS)
 
 
 def test_fx_dock_state_covers_all_fx_preset_keys(qt_app):
@@ -81,12 +83,12 @@ def test_generation_config_reads_take_off_the_clip_and_carries_project_dir(qt_ap
 def test_segment_key_fn_is_memoized_and_notices_a_rewritten_voice_file(qt_app, tmp_path, monkeypatch):
     import os
 
-    import kokoro_engine
+    from kokoro_gui.engine import runtime
     from kokoro_gui.engine import caching
 
     voices = tmp_path / "custom_voices"
     voices.mkdir(exist_ok=True)
-    monkeypatch.setattr(kokoro_engine, "CUSTOM_VOICES_DIR", str(voices))
+    monkeypatch.setattr(runtime, "CUSTOM_VOICES_DIR", str(voices))
     mix = voices / "Mix.pt"
     mix.write_bytes(b"v1")
     clip = _clip_for(qt_app, preset={"voice": "Mix"})
@@ -103,6 +105,9 @@ def test_segment_key_fn_is_memoized_and_notices_a_rewritten_voice_file(qt_app, t
     mix.write_bytes(b"v2 longer")
     future = os.path.getmtime(mix) + 5
     os.utime(mix, (future, future))
+    # What the Voices tab runs after a save (and window activation after a
+    # save elsewhere): the remembered mtimes start over.
+    qt_app.refresh_voice_choices()
     assert qt_app.document.segment_key_fn(text, clip) != first
     assert len(calls) == 2
 
@@ -138,3 +143,152 @@ def test_dirty_clips_on_many_clips_reads_no_files(qt_app, tmp_path, monkeypatch)
     assert qt_app.document.dirty_clips() == []
     assert opened == []
     assert os.path.isfile(str(tmp_path / "seg0.wav"))
+
+
+def test_generation_config_carries_the_lexicon(qt_app):
+    qt_app.settings["lexicon"] = {"Nguyen": "Win"}
+    clip = _clip_for(qt_app)
+    assert qt_app._assemble_generation_config(clip)["lexicon"] == {"Nguyen": "Win"}
+
+
+def test_lexicon_rule_dirties_only_the_clip_it_rewrites(qt_app, tmp_path):
+    from kokoro_gui.daw.dirty import build_segments_from_results, compute_expected_cache_hash
+
+    text = "Mr Nguyen arrived. Nobody else."
+    qt_app.document.text = text
+    character = qt_app.document.characters[0]
+    first = qt_app.document.assign_character_to_range(0, 18, character.id)
+    second = qt_app.document.assign_character_to_range(19, len(text), character.id)
+    for i, clip in enumerate((first, second)):
+        path = tmp_path / f"seg{i}.wav"
+        path.write_bytes(b"RIFF")
+        clip_text = qt_app.document.clip_text(clip)
+        key = compute_expected_cache_hash(clip_text, qt_app._assemble_generation_config(clip),
+                                          key_fn=qt_app.document.segment_key_fn, clip=clip)
+        clip.segments = build_segments_from_results(key, [{
+            "text": clip_text, "path": str(path), "duration": 1.0, "cache_key": key,
+        }])
+    assert qt_app.document.dirty_clips() == []
+
+    qt_app.lexicon_dock.orig_edit.setText("Nguyen")
+    qt_app.lexicon_dock.replace_edit.setText("Win")
+    qt_app.lexicon_dock.add_rule()
+
+    assert qt_app.document.dirty_clips() == [first]
+
+
+def test_both_paths_carry_the_segmentation_settings(qt_app):
+    from kokoro_gui.qt import spec
+
+    qt_app.settings["segment_target_words"] = 25
+    qt_app.settings["segment_at_pauses"] = False
+    qt_app.settings_dock._build_schema_form()
+    clip = _clip_for(qt_app)
+    for config in (qt_app._assemble_generation_config(clip), qt_app._assemble_config()):
+        assert {k: config[k] for k in spec.SEGMENTATION_KEYS} == {
+            "segment_target_words": 25, "segment_at_paragraphs": True,
+            "segment_at_sentences": True, "segment_at_pauses": False,
+        }
+    assert "split_pattern" not in qt_app._assemble_generation_config(clip)
+
+
+def test_changing_the_word_target_restales_clips_whose_pieces_move(qt_app, tmp_path):
+    from kokoro_gui.daw.dirty import build_segments_from_results, compute_expected_cache_hash, predict_segment_texts
+
+    text = "w1 w2 w3 w4. w5 w6. w7 w8 w9 w10."
+    qt_app.settings["segment_target_words"] = 5
+    qt_app.settings_dock._build_schema_form()
+    clip = _clip_for(qt_app, text=text)
+    config = qt_app._assemble_generation_config(clip)
+    key = compute_expected_cache_hash(text, config, key_fn=qt_app.document.segment_key_fn, clip=clip)
+    results = []
+    for i, piece in enumerate(predict_segment_texts(text, config)):
+        path = tmp_path / f"seg{i}.wav"
+        path.write_bytes(b"RIFF")
+        results.append({"text": piece, "path": str(path), "duration": 1.0, "cache_key": key})
+    clip.segments = build_segments_from_results(key, results)
+    assert qt_app.document.dirty_clips() == []
+
+    window = qt_app.open_settings_window("Generation")
+    window.generation_form.widget_for("segment_target_words").setValue(6)
+    window.apply()
+    window.reject()
+
+    assert qt_app.document.dirty_clips() == [clip]
+
+
+
+def test_variant_override_swaps_the_voice_on_a_cloning_backend(qt_app, monkeypatch):
+    import dataclasses
+
+    qt_app.document.text = "hello"
+    character = qt_app.document.characters[0]
+    character.preset_data["voice"] = "calm_ref"
+    character.variants = {"angry": "angry_ref"}
+    clip = qt_app.document.assign_character_to_range(0, 5, character.id)
+    clip.overrides["variant"] = "angry"
+
+    # Kokoro has no variants: the override is ignored.
+    assert qt_app._assemble_generation_config(clip)["voice"] == "calm_ref"
+
+    cloning = dataclasses.replace(qt_app.backend.capabilities, supports_voice_cloning=True)
+    monkeypatch.setattr(qt_app.backend, "capabilities", cloning)
+    assert qt_app._assemble_generation_config(clip)["voice"] == "angry_ref"
+    assert qt_app._assemble_clip_config(clip)["voice"] == "angry_ref"
+
+    clip.overrides["variant"] = "missing"
+    assert qt_app._assemble_generation_config(clip)["voice"] == "calm_ref"
+
+
+# --- mixed-engine projects (ENGINE_AGNOSTIC plan, A3) ------------------------
+
+def _mixed_engine_project(qt_app, monkeypatch):
+    """An Audio8 character first (so it's the active engine with nothing
+    selected) and a Kokoro one, each with a clip."""
+    from kokoro_gui.daw.models import Character
+    from kokoro_gui.engines import audio8_tts
+
+    monkeypatch.setattr(audio8_tts, "_get_model", lambda: (object(), object()))
+    document = qt_app.document
+    document.text = "Nia speaks. Kira answers."
+    audio8_character = document.characters[0]
+    audio8_character.preset_data["voice"] = "narrator"
+    assert qt_app.set_character_engine(audio8_character, "audio8")
+    kokoro_character = Character.from_preset_dict("Kira", {"voice": "af_sarah"})
+    document.characters.append(kokoro_character)
+    audio8_clip = document.assign_character_to_range(0, 11, audio8_character.id)
+    kokoro_clip = document.assign_character_to_range(12, len(document.text), kokoro_character.id)
+    return audio8_clip, kokoro_clip
+
+
+def test_each_clip_generates_with_its_own_engines_language(qt_app, monkeypatch):
+    from kokoro_gui.engines.audio8_tts import AUDIO8_LANGUAGE_CHOICES
+
+    audio8_clip, kokoro_clip = _mixed_engine_project(qt_app, monkeypatch)
+    kokoro_languages = {code for _label, code in qt_app.backend_for(kokoro_clip).get_languages()}
+    audio8_languages = {code for _label, code in AUDIO8_LANGUAGE_CHOICES}
+
+    assert qt_app._assemble_generation_config(kokoro_clip)["lang_code"] in kokoro_languages
+    assert qt_app._assemble_generation_config(audio8_clip)["lang_code"] in audio8_languages
+
+
+def test_an_engines_model_settings_survive_selecting_another_engines_clip(qt_app, monkeypatch):
+    audio8_clip, kokoro_clip = _mixed_engine_project(qt_app, monkeypatch)
+    qt_app.selection.clear()
+    # With nothing selected the tab shows the engine for new characters (grill UI16).
+    qt_app.set_default_engine("audio8")
+    qt_app.settings_dock.rebuild_schema_form()
+    assert qt_app.settings_dock.shown_backend().id == "audio8" and qt_app.settings_dock._mode == "none"
+    qt_app.settings_dock.schema_form.widget_for("temperature").setValue(0.5)
+    text = qt_app.document.clip_text(audio8_clip)
+    before = qt_app.document.segment_key_fn(text, audio8_clip)
+    assert qt_app._assemble_generation_config(audio8_clip)["temperature"] == 0.5
+
+    qt_app.selection.select_clip(kokoro_clip.id)
+    qt_app.selection.clear()
+    qt_app.set_default_engine("kokoro")  # Kokoro is now the engine shown with nothing selected
+    qt_app.settings_dock.rebuild_schema_form()
+    qt_app.save_settings()
+
+    assert qt_app._assemble_generation_config(audio8_clip)["temperature"] == 0.5
+    assert qt_app.document.segment_key_fn(text, audio8_clip) == before

@@ -101,13 +101,17 @@ def test_choose_opens_other_and_resume_is_noop(qt_app, tmp_path):
     assert qt_app.windowTitle().startswith("story")
 
 
-def test_new_project_inherits_characters(qt_app):
-    qt_app.document.characters.append(Character.from_preset_dict("Bob", {}))
+def test_new_project_starts_with_the_library_characters(qt_app):
+    bob = Character.from_preset_dict("Bob", {})
+    qt_app.document.characters.append(bob)
+    bob.library_id = qt_app.character_library.save(bob)
     dialog = qt_app.show_welcome()
     dialog.new_project()
     assert not dialog.isVisible()
     assert qt_app.project_path is None
-    assert [c.name for c in qt_app.document.characters] == ["Default", "Bob"]
+    # The library's characters, linked; the old project's local "Default" stays behind.
+    assert [c.name for c in qt_app.document.characters] == ["Bob"]
+    assert qt_app.document.characters[0].library_id == bob.library_id
 
 
 def test_new_from_text_starts_fresh_project_with_the_text(qt_app, tmp_path):

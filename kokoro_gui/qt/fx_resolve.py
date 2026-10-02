@@ -22,7 +22,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
-from kokoro_gui.engine.presets import ALLOWED_FX_PRESET_KEYS, filter_allowed_keys
+from kokoro_gui.engine import presets
+from kokoro_gui.engine.presets import filter_fx_preset_values
 
 PLACEHOLDER = "Select FX Preset..."
 
@@ -40,14 +41,15 @@ def real_preset_name(name) -> Optional[str]:
     return name if name and name != PLACEHOLDER else None
 
 
-def load_fx_preset_values(app, name) -> Optional[dict]:
+def load_fx_preset_values(app, name, project=None) -> Optional[dict]:
     """The whitelisted values of `presets/fx/<name>.json`, via the engine
-    first, then the file directly (tests stub `load_fx_preset` to None)."""
+    first, then the file directly (tests stub `load_fx_preset` to None).
+    Project-local first, in `project`'s dir (default: the app's focus)."""
     name = real_preset_name(name)
     if not name:
         return None
-    project_dir = getattr(app, "project_dir", None)
-    preset = app.engine.load_fx_preset(name, project_dir)
+    project_dir = project.project_dir if project is not None else getattr(app, "project_dir", None)
+    preset = presets.load_fx_preset(name, project_dir)
     if not preset:
         import kokoro_gui.qt.app as qt_app_module
 
@@ -62,12 +64,13 @@ def load_fx_preset_values(app, name) -> Optional[dict]:
                     preset = json.load(fh)
             except Exception:
                 preset = None
-    return filter_allowed_keys(preset, ALLOWED_FX_PRESET_KEYS) if preset else None
+    return filter_fx_preset_values(preset) if preset else None
 
 
-def resolve_fx(app, clip=None, character=None) -> FxResolution:
-    """Resolve for a clip (its character is looked up), for a character
-    alone, or for the project when both are None."""
+def resolve_fx(app, clip=None, character=None, project=None) -> FxResolution:
+    """Resolve for a clip (its character is looked up in `project`'s
+    document, default the app's focus), for a character alone, or for the
+    project when both are None."""
     fx_dock = getattr(app, "fx_dock", None)
     settings_dock = getattr(app, "settings_dock", None)
     values = dict(fx_dock.project_fx_state()) if fx_dock is not None else {}
@@ -76,13 +79,14 @@ def resolve_fx(app, clip=None, character=None) -> FxResolution:
     # character or clip without a preset of its own shows none (placeholder).
     preset_name = real_preset_name(app.settings.get("fx_preset")) if clip is None and character is None else None
 
+    document = project.document if project is not None else app.document
     if clip is not None and character is None:
-        character = app.document.get_character(clip.character_id)
+        character = document.get_character(clip.character_id)
 
     scope_apply = True
     if character is not None:
         name = real_preset_name(character.preset_data.get("fx_preset"))
-        preset = load_fx_preset_values(app, name)
+        preset = load_fx_preset_values(app, name, project)
         if preset:
             values.update(preset)
         if name:
@@ -91,13 +95,13 @@ def resolve_fx(app, clip=None, character=None) -> FxResolution:
 
     if clip is not None:
         own_name = real_preset_name(clip.overrides.get("fx_preset"))
-        own = load_fx_preset_values(app, own_name)
+        own = load_fx_preset_values(app, own_name, project)
         if own:
             values.update(own)
         if own_name:
             preset_name = own_name
         if clip.fx_override:
-            values.update(filter_allowed_keys(clip.fx_override, ALLOWED_FX_PRESET_KEYS))
+            values.update(filter_fx_preset_values(clip.fx_override))
             scope_apply = True
             if not own_name:
                 preset_name = "custom"

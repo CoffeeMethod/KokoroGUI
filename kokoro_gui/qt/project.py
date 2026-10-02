@@ -6,9 +6,13 @@ TB1-TB15): one zip holding `manifest.json`, `document.json`
 `project_settings` block: export defaults, workspace override, bundle
 options), every generated segment under `audio/generated/` named by its
 segment key, and every named asset a character or clip points at (`fx/`,
-`engines/<id>/...`). A `.json` project (the 4.0-preview format, the document
-shape plus a top-level `"project_settings"`) still opens and is migrated to
-`.tbaw` on open (`migrate_json_project`).
+`engines/<id>/...`, with convolution impulse responses under `fx/ir/`),
+imported audio under `audio/imported/` (the source track
+`Document.settings["source_track"]` names included, phase 5 D5), and, when
+`include_video` is on, the reference video under `video/` (phase 5, TB16).
+A `.json` project (the 4.0-preview format, the document shape plus a
+top-level `"project_settings"`) still opens and is migrated to `.tbaw` on
+open (`migrate_json_project`).
 
 The live project is a directory, `cache/projects/<project_id>/` (the
 "project dir"), extracted from the zip on Open and written by autosave
@@ -40,43 +44,76 @@ import time
 import zipfile
 from dataclasses import dataclass, field
 
-import kokoro_engine
 from kokoro_gui import APP_VERSION
 from kokoro_gui.daw import serialization
 from kokoro_gui.daw.models import Document
+from kokoro_gui.daw.reference import source_track_settings
+from kokoro_gui.engine import runtime
+from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
 from kokoro_gui.engine.caching import RESERVED_SUFFIX, compute_cache_key, effective_speed
+from kokoro_gui.engine.presets import filter_fx_preset_values, ir_safe_name, resolve_ir
 
 MAX_RECENT = 10
 PROJECT_FILTER = "KokoroGUI project (*.tbaw *.json)"
+VIDEO_FILTER = "Video (*.mp4 *.mov *.mkv *.webm *.avi *.m4v);;All files (*)"
+AUDIO_FILTER = "Audio (*.wav *.flac *.ogg *.mp3 *.aiff *.aif);;All files (*)"
 DEFAULT_EXTENSION = ".tbaw"
 
 FORMAT = "tbaw"
 SUPPORTED_VERSION = 1
 # Content features this reader implements; a bundle whose `requires` names
 # one that isn't here is refused by name (section 8 of the plan).
-SUPPORTED_FEATURES: frozenset = frozenset()
+SUPPORTED_FEATURES: frozenset = frozenset({"takes", "nested", "imported"})
 
 MANIFEST = "manifest.json"
 DOCUMENT = "document.json"
 PROJECT_JSON = "project.json"
 SESSION = "session.json"
 LOCK = "lock"
+# Every segment's file lives under `audio/`: generated ones in
+# `audio/generated/`, a recording's or a bed's in `audio/imported/`.
+AUDIO_DIR = "audio"
 AUDIO_GENERATED = "audio/generated"
 AUDIO_IMPORTED = "audio/imported"
 FX_DIR = "fx"
+FX_IR_NAME = "ir"  # fx/ir/<name>.wav: convolution impulse responses (grill Q31)
 ENGINES_DIR = "engines"
+# Embedded subprojects (phase 4): `projects/<child project_id>.tbaw`, each a
+# complete bundle, stored uncompressed.
+PROJECTS_DIR = "projects"
+# The reference video (phase 5, TB16), when the `include_video` bundle
+# option is on: `video/<sha256[:16]>.<ext>`, stored uncompressed.
+VIDEO_DIR = "video"
+# `session.json` key: the reference video the user picked on this machine.
+VIDEO_TRUST_KEY = "video_trusted"
+# A subproject's rendered mix, in its own project dir (phase 4, NP2):
+# `mixdown.<fmt>` plus `mixdown.json` recording the document digest it was
+# rendered from, its length and rate. Derived data: never bundled, always
+# rebuildable.
+MIXDOWN = "mixdown"
+_MIXDOWN_NAMES = tuple(f"{MIXDOWN}.{fmt}" for fmt in ("wav", "flac", "mp3", "ogg"))
+MIXDOWN_JSON = "mixdown.json"
+# A child project dir's `session.json` names its source as
+# `<parent source>#<child id>`, so `choose_project_dir` and
+# `sweep_orphan_dirs` can tell an embedded child from a root.
+CHILD_SOURCE_SEP = "#"
 
 # Entry prefixes this version owns and rewrites on every Save. Anything else
 # in a bundle (a directory a newer KokoroGUI or a fourth engine added) is
 # copied through byte for byte so a file survives a round trip.
 _OWNED_FILES = {MANIFEST, DOCUMENT, PROJECT_JSON}
-_OWNED_DIRS = (FX_DIR + "/", AUDIO_GENERATED + "/", AUDIO_IMPORTED + "/")
+_OWNED_DIRS = (FX_DIR + "/", AUDIO_GENERATED + "/", AUDIO_IMPORTED + "/", PROJECTS_DIR + "/", VIDEO_DIR + "/")
+# Entries extracted with the audio on the worker thread, not before the
+# first paint: the audio, embedded children (each carries its own) and the
+# reference video.
+_HEAVY_PREFIXES = ("audio/", PROJECTS_DIR + "/", VIDEO_DIR + "/")
 # The project dir's own bookkeeping. A bundle carrying one of these names is
 # never extracted over it: `lock` is held open while Open runs, and
 # `session.json` is what the sweep and the recover prompt trust.
 _DIR_PRIVATE = {SESSION, LOCK, SESSION + ".tmp", DOCUMENT + ".tmp", PROJECT_JSON + ".tmp"}
 
-DEFAULT_BUNDLE_OPTIONS = {"include_generated_audio": True, "include_imported_audio": True, "audio_format": "wav"}
+DEFAULT_BUNDLE_OPTIONS = {"include_generated_audio": True, "include_imported_audio": True, "include_video": False,
+                          "audio_format": "wav"}
 
 # `torch.load` defaults to `weights_only=True` from 2.6, which is what makes
 # a `.pt` from someone else's bundle safe to load. Checked once at import.
@@ -101,12 +138,16 @@ class LoadedProject:
     # One-line notices for the status bar (a missing audio file, a version
     # difference), not errors.
     notices: list = field(default_factory=list)
+    # The reference video to play (`video_source`): the settings path when
+    # that file exists, else the bundled copy in the project dir, else None.
+    video_path: str | None = None
 
 
 @dataclass
 class BundleInfo:
     """What `inspect_bundle` learns from a zip's central directory without
-    extracting a byte."""
+    extracting a byte. `audio_bytes` counts everything extracted on the
+    worker thread: `audio/` and embedded `projects/`."""
     path: str
     manifest: dict
     project_id: str
@@ -135,11 +176,11 @@ def format_for_path(path: str) -> str:
 
 
 def projects_root() -> str:
-    """`cache/projects/` under `kokoro_engine.CACHE_DIR`, read at call time
+    """`cache/projects/` under `runtime.CACHE_DIR`, read at call time
     so the `isolated_dirs` fixture redirects it. Absolute: every
     `audio_path` is built on it and Save tells project-dir files from
     outside ones by prefix."""
-    return os.path.abspath(os.path.join(kokoro_engine.CACHE_DIR, "projects"))
+    return os.path.abspath(os.path.join(runtime.CACHE_DIR, "projects"))
 
 
 def new_project_id() -> str:
@@ -150,6 +191,18 @@ def project_title(path: str | None) -> str:
     if not path:
         return "Untitled"
     return os.path.splitext(os.path.basename(path))[0] or "Untitled"
+
+
+def display_title(project_settings: dict | None, path: str | None, fallback: str = "Untitled") -> str:
+    """A project's name as the parent, the breadcrumb and a placeholder run
+    show it: `project_settings["title"]` (phase 4; `project.json`, not the
+    document, so 4.0 keeps it), else the file stem, else `fallback`."""
+    title = (project_settings or {}).get("title")
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    if path:
+        return project_title(path)
+    return fallback
 
 
 def bundle_path_for(path: str) -> str:
@@ -358,7 +411,7 @@ def inspect_bundle(path: str) -> BundleInfo:
         if any(e.filename.endswith(".pt") for e in entries) and not torch_weights_only_available():
             raise ProjectError("This bundle carries a voice mix (.pt) and this machine's torch is older than 2.6, "
                                "which can't load it safely. Upgrade torch to open it.")
-        audio_bytes = sum(e.file_size for e in entries if e.filename.startswith("audio/"))
+        audio_bytes = sum(e.file_size for e in entries if e.filename.replace("\\", "/").startswith(_HEAVY_PREFIXES))
     stat = os.stat(path)
     return BundleInfo(path=os.path.abspath(path), manifest=manifest, project_id=project_id, entries=entries,
                       audio_bytes=audio_bytes, zip_size=stat.st_size, zip_mtime=stat.st_mtime)
@@ -514,6 +567,135 @@ def create_project_dir(project_id: str | None = None) -> tuple:
     return project_dir, project_id
 
 
+def safe_child_id(child_id) -> str | None:
+    """A child project id as a bare file stem, or None."""
+    if not isinstance(child_id, str):
+        return None
+    stem = os.path.basename(child_id.strip())
+    if not stem or stem.startswith(".") or CHILD_SOURCE_SEP in stem:
+        return None
+    return stem
+
+
+def embedded_child_path(project_dir: str, child_id: str) -> str | None:
+    """`<project_dir>/projects/<child_id>.tbaw`: where an embedded child's
+    bundle sits in its parent's project dir."""
+    stem = safe_child_id(child_id)
+    if stem is None or not project_dir:
+        return None
+    return os.path.join(project_dir, PROJECTS_DIR, f"{stem}{DEFAULT_EXTENSION}")
+
+
+def embedded_child_ids(document: Document) -> list:
+    """The project ids of `document`'s embedded subprojects, in clip order."""
+    out = []
+    for clip in document.clips:
+        child = clip.child if clip.source == "nested" else None
+        if isinstance(child, dict) and child.get("kind") == "embedded":
+            stem = safe_child_id(child.get("id"))
+            if stem and stem not in out:
+                out.append(stem)
+    return out
+
+
+def parent_source_of(source: str) -> str:
+    """The root file of a `<parent>#<child id>[#<grandchild id>...]`
+    source; `source` itself for a root's."""
+    while CHILD_SOURCE_SEP in source:
+        head, tail = source.rsplit(CHILD_SOURCE_SEP, 1)
+        if safe_child_id(tail) != tail:
+            break
+        source = head
+    return source
+
+
+def child_dirs_of(source_path: str | None) -> list:
+    """Every project dir under `cache/projects/` whose session names an
+    embedded child (at any depth) of the project whose source is
+    `source_path`."""
+    if not source_path:
+        return []
+    root = projects_root()
+    if not os.path.isdir(root):
+        return []
+    prefix = os.path.abspath(source_path) + CHILD_SOURCE_SEP
+    out = []
+    for name in sorted(os.listdir(root)):
+        full = os.path.join(root, name)
+        session = read_session(full) if os.path.isdir(full) else None
+        source = (session or {}).get("source_path")
+        if isinstance(source, str) and source.startswith(prefix):
+            out.append(full)
+    return out
+
+
+def child_source_path(parent_source: str | None, child_id: str) -> str | None:
+    """`session.json`'s `source_path` for an embedded child of a parent
+    whose own source is `parent_source` (its `.tbaw`, or None while
+    Untitled)."""
+    if not parent_source:
+        return None
+    return f"{os.path.abspath(parent_source)}{CHILD_SOURCE_SEP}{child_id}"
+
+
+def mixdown_file(project_dir: str, fmt: str = "wav") -> str:
+    return os.path.join(project_dir, f"{MIXDOWN}.{fmt}")
+
+
+def read_mixdown_info(project_dir: str | None) -> dict | None:
+    """`mixdown.json` when it names a mixdown file that exists: `{"file",
+    "digest", "duration_s", "sample_rate"}` with `file` absolute. None
+    otherwise."""
+    if not project_dir:
+        return None
+    path = os.path.join(project_dir, MIXDOWN_JSON)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            info = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(info, dict):
+        return None
+    # Only a name this app writes, taken from the constants rather than the
+    # file: a bundle from elsewhere can put anything in mixdown.json.
+    named = str(info.get("file") or "")
+    name = next((n for n in _MIXDOWN_NAMES if n == named), None)
+    if name is None:
+        return None
+    full = os.path.join(project_dir, name)
+    if not os.path.isfile(full):
+        return None
+    try:
+        duration = float(info.get("duration_s") or 0.0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    return {"file": full, "digest": info.get("digest"), "duration_s": duration,
+            "sample_rate": info.get("sample_rate")}
+
+
+def write_mixdown_info(project_dir: str, file_path: str, digest: str, duration_s: float, sample_rate: int) -> None:
+    tmp = os.path.join(project_dir, MIXDOWN_JSON + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"file": os.path.basename(file_path), "digest": digest, "duration_s": round(float(duration_s), 6),
+                   "sample_rate": int(sample_rate)}, f, indent=2)
+    os.replace(tmp, os.path.join(project_dir, MIXDOWN_JSON))
+
+
+def remove_mixdown(project_dir: str) -> None:
+    info = read_mixdown_info(project_dir)
+    for path in ((info or {}).get("file"), os.path.join(project_dir, MIXDOWN_JSON)):
+        if path:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+def project_digest(document: Document, project_settings: dict, project_dir: str) -> str:
+    """The digest autosave would record for the project as it is now."""
+    return document_digest(*serialize_for_dir(document, project_settings, project_dir))
+
+
 def document_digest(document_bytes: bytes, project_bytes: bytes) -> str:
     return hashlib.sha256(document_bytes + b"\n" + project_bytes).hexdigest()
 
@@ -557,26 +739,33 @@ def _extract_entry(zf: zipfile.ZipFile, info: zipfile.ZipInfo, project_dir: str)
 
 
 def extract_small(info: BundleInfo, project_dir: str) -> None:
-    """Step 4: everything but `audio/`. Small, needed before the first paint."""
+    """Step 4: everything but `audio/` and `projects/`. Small, needed
+    before the first paint."""
     os.makedirs(project_dir, exist_ok=True)
     with zipfile.ZipFile(info.path) as zf:
         for entry in info.entries:
             name = entry.filename.replace("\\", "/")
-            if name.startswith("audio/") or name in _DIR_PRIVATE:
+            if name.startswith(_HEAVY_PREFIXES) or name in _DIR_PRIVATE:
                 continue
             _extract_entry(zf, entry, project_dir)
 
 
 def extract_audio(info: BundleInfo, project_dir: str, progress=None, cancelled=None) -> None:
-    """Step 5: `audio/`, eagerly, meant for a worker thread. `progress(done,
-    total)` in bytes; `cancelled()` is polled between entries."""
-    total = max(1, info.audio_bytes)
+    """Step 5: `audio/`, embedded `projects/` and `video/`, eagerly, meant
+    for a worker thread. The video is skipped when the path in
+    `project.json` is a file here (`bundled_video_needed`).
+    `progress(done, total)` in bytes; `cancelled()` is polled between
+    entries."""
+    skip_video = not bundled_video_needed(info)
+    total = max(1, heavy_bytes(info))
     done = 0
     with zipfile.ZipFile(info.path) as zf:
         for entry in info.entries:
             if cancelled is not None and cancelled():
                 return
-            if not entry.filename.replace("\\", "/").startswith("audio/"):
+            if not entry.filename.replace("\\", "/").startswith(_HEAVY_PREFIXES):
+                continue
+            if skip_video and _is_video_entry(entry):
                 continue
             _extract_entry(zf, entry, project_dir)
             done += entry.file_size
@@ -584,13 +773,41 @@ def extract_audio(info: BundleInfo, project_dir: str, progress=None, cancelled=N
                 progress(done, total)
 
 
-def finish_open(info: BundleInfo, project_dir: str, engine_versions: dict | None = None,
-                recovered: bool = False) -> LoadedProject:
-    """Steps 6 and 7: the document from the project dir with paths made
-    absolute (a missing file becomes `None`, so the clip reads as dirty),
-    `project.json`, a fresh `session.json` unless the session was recovered
-    (then it stays as it is, `dirty` included), and the TB9 notice when a
-    manifest engine version differs from `engine_versions[id]`."""
+def _is_imported_path(path: str) -> bool:
+    """True for a path (bundle-relative or absolute) under an
+    `audio/imported/` dir."""
+    return f"/{AUDIO_IMPORTED}/" in "/" + path.replace("\\", "/")
+
+
+def audio_file_under(project_dir: str | None, path, folder: str = AUDIO_DIR) -> str | None:
+    """The real path of `path` (absolute, or relative to `project_dir`) when
+    it names a file under `<project_dir>/<folder>/`, else None.
+    `document.json` is untrusted input: a segment's file has to be under
+    `audio/` (generated or imported), an imported file (a recording source,
+    a music bed, the source track) under `audio/imported/`. Anything else,
+    including the dir's own `session.json`, `lock` and `document.json`,
+    would otherwise be read back as audio and copied into the next Save."""
+    if not project_dir or not isinstance(path, str) or not path:
+        return None
+    root = os.path.realpath(project_dir)
+    base = os.path.join(root, *folder.split("/"))
+    try:
+        if os.path.isabs(path):
+            candidate = path
+        else:
+            candidate = os.path.join(root, *path.replace("\\", "/").split("/"))
+        real = os.path.realpath(candidate)
+        if real.startswith(base + os.sep) and os.path.isfile(real) and os.path.basename(real) not in _DIR_PRIVATE:
+            return real
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _load_dir(project_dir: str) -> tuple:
+    """`(document, project_settings, notices)` from a project dir's
+    `document.json` and `project.json`, audio paths made absolute (a file
+    that isn't inside the dir becomes `None`, so its clip reads as dirty)."""
     with open(os.path.join(project_dir, DOCUMENT), "r", encoding="utf-8") as f:
         data = json.load(f)
     project_settings = {}
@@ -606,27 +823,65 @@ def finish_open(info: BundleInfo, project_dir: str, engine_versions: dict | None
 
     notices = []
     missing = []
-    project_root = os.path.realpath(project_dir)
+    missing_imported = set()
 
-    def to_absolute(rel):
+    def to_absolute(rel, folder=AUDIO_DIR):
         # A bundle names its audio relative to the bundle; the dir's own
-        # autosave names it absolute. Either way the file has to sit inside
-        # the project dir: `document.json` is untrusted input, and a path
+        # autosave names it absolute. Either way the file has to sit under
+        # the project dir's audio folder (`audio_file_under`): a path
         # pointing anywhere else would pull that file into the next Save.
-        if os.path.isabs(rel):
-            candidate = rel
-        else:
-            candidate = os.path.join(project_dir, *rel.replace("\\", "/").split("/"))
-        real = os.path.realpath(candidate)
-        if real.startswith(project_root + os.sep) and os.path.isfile(real):
-            return os.path.abspath(candidate)
+        if audio_file_under(project_dir, rel, folder) is not None:
+            if os.path.isabs(rel):
+                return os.path.abspath(rel)
+            return os.path.abspath(os.path.join(project_dir, *rel.replace("\\", "/").split("/")))
         missing.append(rel)
         return None
 
-    serialization.rewrite_audio_paths(data, to_absolute)
+    def imported_to_absolute(rel):
+        path = to_absolute(rel, AUDIO_IMPORTED)
+        if path is None:
+            missing_imported.add(rel)
+        return path
+
+    serialization.rewrite_audio_paths(data, to_absolute, imported_to_absolute)
     document = serialization.document_from_dict(data)
-    if missing:
-        notices.append(f"{len(missing)} audio file(s) missing from the bundle; those clips will regenerate.")
+    # An imported file (a recording, a music bed) can't be regenerated, so
+    # it gets its own count; a recording's segments name its file too, so
+    # each file counts once.
+    imported_missing = {rel for rel in missing if _is_imported_path(rel) or rel in missing_imported}
+    generated_missing = [rel for rel in missing if rel not in imported_missing]
+    if generated_missing:
+        notices.append(f"{len(generated_missing)} audio file(s) missing from the bundle; "
+                       f"those clips will regenerate.")
+    if imported_missing:
+        notices.append(f"{len(imported_missing)} imported audio file(s) missing from the bundle; "
+                       f"their clips play nothing until the file is imported again.")
+    # The source track stays project-relative in the document and resolves
+    # at use time (`source_track_path`); a missing one is only a notice.
+    if source_track_settings(document.settings) is not None and source_track_path(document, project_dir) is None:
+        notices.append("the source track is missing from the bundle; import it again to hear the original")
+    return document, project_settings, notices
+
+
+def load_project_dir(project_dir: str, project_id: str | None = None, manifest: dict | None = None) -> LoadedProject:
+    """A project straight from its project dir, with no bundle and no
+    session change: a subproject made this session, or one whose dir is
+    already extracted (clean, or ahead of its bundle)."""
+    document, project_settings, notices = _load_dir(project_dir)
+    return LoadedProject(document=document, project_settings=project_settings, project_dir=project_dir,
+                         project_id=project_id, manifest=dict(manifest or {}), notices=notices,
+                         video_path=video_source(project_settings, None, project_dir, manifest))
+
+
+def finish_open(info: BundleInfo, project_dir: str, engine_versions: dict | None = None,
+                recovered: bool = False, source_path: str | None = None) -> LoadedProject:
+    """Steps 6 and 7: the document from the project dir with paths made
+    absolute (a missing file becomes `None`, so the clip reads as dirty),
+    `project.json`, a fresh `session.json` unless the session was recovered
+    (then it stays as it is, `dirty` included), and the TB9 notice when a
+    manifest engine version differs from `engine_versions[id]`. An embedded
+    child passes its `<parent>#<id>` `source_path`."""
+    document, project_settings, notices = _load_dir(project_dir)
 
     for engine_id, block in (info.manifest.get("engines") or {}).items():
         if not isinstance(block, dict):
@@ -640,17 +895,23 @@ def finish_open(info: BundleInfo, project_dir: str, engine_versions: dict | None
     if not recovered:
         document_bytes, project_bytes = serialize_for_dir(document, project_settings, project_dir)
         previous = read_session(project_dir) or {}
-        write_session(project_dir, {
-            "source_path": info.path,
+        session = {
+            "source_path": source_path or info.path,
             "zip_size": info.zip_size,
             "zip_mtime": info.zip_mtime,
             "saved_digest": document_digest(document_bytes, project_bytes),
             "dirty": False,
             "asset_index": previous.get("asset_index", {}) if isinstance(previous.get("asset_index"), dict) else {},
-        })
+        }
+        # The video the user picked stays trusted when the same file is
+        # reopened into its own dir; any other bundle starts untrusted.
+        if previous.get(VIDEO_TRUST_KEY) and previous.get("source_path") == session["source_path"]:
+            session[VIDEO_TRUST_KEY] = previous[VIDEO_TRUST_KEY]
+        write_session(project_dir, session)
 
     return LoadedProject(document=document, project_settings=project_settings, project_dir=project_dir,
-                         project_id=info.project_id, manifest=info.manifest, notices=notices)
+                         project_id=info.project_id, manifest=info.manifest, notices=notices,
+                         video_path=video_source(project_settings, info.path, project_dir, info.manifest))
 
 
 def session_matches_file(session: dict | None, info: BundleInfo) -> bool:
@@ -676,19 +937,264 @@ def _sha256_file(path: str) -> str:
     return "sha256:" + h.hexdigest()
 
 
+# --- imported audio ----------------------------------------------------------------
+
+# The largest file `import_audio_file` copies into a project dir.
+MAX_IMPORT_BYTES = 2 * 1024 ** 3
+
+
+def _import_extension(path: str) -> str:
+    """The source's extension, lowercased, letters and digits only, at most
+    eight characters: it becomes part of a file name in the project dir.
+    `bin` when nothing is left."""
+    ext = os.path.splitext(path)[1][1:].lower()
+    ext = "".join(ch for ch in ext if ch.isascii() and ch.isalnum())[:8]
+    return ext or "bin"
+
+
+def import_audio_file(src_path: str, project_dir: str, max_bytes: int = MAX_IMPORT_BYTES) -> str:
+    """Copies `src_path` to `<project_dir>/audio/imported/<sha256[:16]>.<ext>`
+    and returns the copy's absolute path. The name is the content hash, so a
+    second import of the same bytes finds the copy and skips the write.
+    Refuses a file over `max_bytes` or anything that isn't a regular file.
+    Every writer of imported audio (music bed, source track, recording
+    import) goes through here and stores the result on the clip."""
+    source = os.path.realpath(os.path.abspath(src_path))
+    drive = os.path.splitdrive(source)[0]
+    if not source.startswith(drive + os.sep) or not os.path.isfile(source):
+        raise ProjectError(f"Not a file: {src_path}")
+    size = os.path.getsize(source)
+    if size > max_bytes:
+        raise ProjectError(f"{os.path.basename(source)} is {size / 1024 ** 3:.1f} GB; "
+                           f"the import limit is {max_bytes / 1024 ** 3:.1f} GB.")
+    h = hashlib.sha256()
+    with open(source, "rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(block)
+    imported = os.path.join(os.path.abspath(project_dir), *AUDIO_IMPORTED.split("/"))
+    os.makedirs(imported, exist_ok=True)
+    target = os.path.join(imported, f"{h.hexdigest()[:16]}.{_import_extension(source)}")
+    if os.path.isfile(target):
+        return target
+    tmp = target + ".tmp"
+    shutil.copyfile(source, tmp)
+    _replace_with_retries(tmp, target)
+    return target
+
+
+# --- source track (phase 5, D5) ------------------------------------------------------
+
+
+def source_track_relpath(abs_path: str, project_dir: str) -> str | None:
+    """`abs_path` (an `import_audio_file` result) as the project-relative
+    path `Document.settings["source_track"]["path"]` stores, or None when
+    it isn't inside `project_dir`."""
+    root = os.path.realpath(project_dir)
+    real = os.path.realpath(abs_path)
+    if not real.startswith(root + os.sep):
+        return None
+    return os.path.relpath(real, root).replace("\\", "/")
+
+
+def source_track_path(document: Document, project_dir: str | None) -> str | None:
+    """The absolute path of the document's source track
+    (`kokoro_gui.daw.reference`), or None when none is set, the project has
+    no dir, or the file isn't there. `document.json` is untrusted input: the
+    path has to resolve to a file under the project dir's `audio/imported/`,
+    whatever it says."""
+    block = source_track_settings(document.settings)
+    if block is None or not project_dir:
+        return None
+    return audio_file_under(project_dir, block["path"], AUDIO_IMPORTED)
+
+
+# --- reference video (phase 5, TB16) -----------------------------------------------
+
+
+def video_settings(project_settings) -> dict | None:
+    """`project_settings["video"]` as `{"path": str, "offset_s": float}`, or
+    None when the project has no reference video."""
+    block = project_settings.get("video") if isinstance(project_settings, dict) else None
+    if not isinstance(block, dict):
+        return None
+    path = block.get("path")
+    if not isinstance(path, str) or not path.strip():
+        return None
+    try:
+        offset = float(block.get("offset_s") or 0.0)
+    except (TypeError, ValueError):
+        offset = 0.0
+    if offset != offset or offset in (float("inf"), float("-inf")):
+        offset = 0.0
+    return {"path": path, "offset_s": offset}
+
+
+def video_path_for(file_path: str, project_file: str | None) -> str:
+    """`file_path` as `project_settings["video"]["path"]`: relative to the
+    project's `.tbaw` when there is one on the same drive, else absolute
+    (the rule a linked subproject's path follows, NP4)."""
+    file_path = os.path.abspath(file_path)
+    if project_file:
+        base_dir = os.path.dirname(os.path.abspath(project_file))
+        if os.path.splitdrive(base_dir)[0].lower() == os.path.splitdrive(file_path)[0].lower():
+            return os.path.relpath(file_path, base_dir).replace("\\", "/")
+    return file_path
+
+
+def resolve_video_path(project_settings, project_file: str | None) -> str | None:
+    """The absolute path `project_settings["video"]["path"]` names, a
+    relative one taken from the folder of `project_file` (the `.tbaw`),
+    whether or not the file is there. None when there's no video, or a
+    relative path and no file to be relative to. The path comes from
+    `project.json`, so it's normalised and checked before anything reads it."""
+    block = video_settings(project_settings)
+    if block is None:
+        return None
+    raw = block["path"]
+    if os.path.isabs(raw):
+        candidate = raw
+    elif project_file:
+        candidate = os.path.join(os.path.dirname(os.path.abspath(project_file)), *raw.replace("\\", "/").split("/"))
+    else:
+        return None
+    real = os.path.realpath(os.path.abspath(candidate))
+    drive = os.path.splitdrive(real)[0]
+    if not real.startswith(drive + os.sep):
+        return None
+    return real
+
+
+def bundled_video_path(project_dir: str | None, manifest: dict | None = None) -> str | None:
+    """The reference video Open extracted into `<project_dir>/video/`: the
+    one `manifest.assets` names when it's there, else the first file in the
+    folder by name. None when there is none."""
+    if not project_dir:
+        return None
+    folder = os.path.realpath(os.path.join(project_dir, VIDEO_DIR))
+    if not os.path.isdir(folder):
+        return None
+    # The manifest's names are bundle data: each is checked to stay inside
+    # the folder like any other path read from a file.
+    assets = manifest.get("assets") if isinstance(manifest, dict) else None
+    names = [os.path.basename(k) for k in assets if isinstance(k, str) and k.startswith(VIDEO_DIR + "/")] \
+        if isinstance(assets, dict) else []
+    names += sorted(os.listdir(folder))
+    for name in names:
+        if not name or name.startswith(".") or name.endswith(".tmp"):
+            continue
+        full = os.path.realpath(os.path.join(folder, name))
+        if full.startswith(folder + os.sep) and os.path.isfile(full):
+            return full
+    return None
+
+
+def video_source(project_settings, project_file: str | None, project_dir: str | None,
+                 manifest: dict | None = None) -> str | None:
+    """The file the video dock plays and Save bundles: the settings path
+    when that file exists (TB16: it always wins), else the bundled copy in
+    the project dir, else None."""
+    if video_settings(project_settings) is None:
+        return None
+    path = resolve_video_path(project_settings, project_file)
+    if path and os.path.isfile(path):
+        return path
+    return bundled_video_path(project_dir, manifest)
+
+
+def trust_video(project_dir: str | None, path: str) -> None:
+    """Records in `session.json` that the user picked `path` as the
+    reference video on this machine (File > Load Video, or the relink
+    prompt). Save copies a video from outside the project dir only when it
+    is this file: `project.json` comes from the bundle, so without the
+    check a crafted bundle could name any file and the next Save would copy
+    it into the project."""
+    if not project_dir:
+        return
+    session = read_session(project_dir) or {}
+    session[VIDEO_TRUST_KEY] = os.path.realpath(os.path.abspath(path))
+    write_session(project_dir, session)
+
+
+def video_to_bundle(project_settings, project_file: str | None, project_dir: str | None,
+                    manifest: dict | None = None, session: dict | None = None) -> str | None:
+    """The file Save puts under `video/`: the settings path when it exists
+    and is the one `trust_video` recorded for this project dir, else the
+    copy the bundle already carried (extracted into the project dir), else
+    None."""
+    if video_settings(project_settings) is None:
+        return None
+    path = resolve_video_path(project_settings, project_file)
+    trusted = (session or {}).get(VIDEO_TRUST_KEY)
+    if path and isinstance(trusted, str) and path == trusted and os.path.isfile(path):
+        return path
+    return bundled_video_path(project_dir, manifest)
+
+
+def _is_video_entry(info: zipfile.ZipInfo) -> bool:
+    return info.filename.replace("\\", "/").startswith(VIDEO_DIR + "/")
+
+
+def bundled_video_needed(info: BundleInfo) -> bool:
+    """Whether Open extracts the bundle's `video/` entry: only when the
+    bundle has one and the path its `project.json` names isn't a file on
+    this machine. Re-opening a bundle where the video already is skips
+    gigabytes (TB16)."""
+    if not any(_is_video_entry(e) for e in info.entries):
+        return False
+    try:
+        with zipfile.ZipFile(info.path) as zf:
+            settings = json.loads(zf.read(PROJECT_JSON).decode("utf-8"))
+    except (OSError, zipfile.BadZipFile, KeyError, json.JSONDecodeError, UnicodeDecodeError):
+        return True
+    path = resolve_video_path(settings, info.path)
+    return not (path and os.path.isfile(path))
+
+
+def heavy_bytes(info: BundleInfo) -> int:
+    """What `extract_audio` will write: `info.audio_bytes`, less the video
+    entry when Open skips it."""
+    if bundled_video_needed(info):
+        return info.audio_bytes
+    return info.audio_bytes - sum(e.file_size for e in info.entries if _is_video_entry(e))
+
+
+def video_extract_pending(info: BundleInfo, project_dir: str) -> bool:
+    """True when Open needs the bundled video and the project dir doesn't
+    hold it (an earlier Open skipped it because the path was there then),
+    so a clean dir can't be reused as it is."""
+    return bundled_video_needed(info) and bundled_video_path(project_dir, info.manifest) is None
+
+
+def _cached_video_digest(previous_index: dict, source: str, stat) -> str | None:
+    """The digest the last Save recorded for `source` when its size and
+    mtime haven't changed. Video entries are keyed by their bundle name,
+    which is the hash, so the lookup goes by the source path stored with them."""
+    for name, entry in (previous_index or {}).items():
+        if not (isinstance(name, str) and name.startswith(VIDEO_DIR + "/")):
+            continue
+        if isinstance(entry, list) and len(entry) == 4 and entry[3] == source and entry[0] == stat.st_size \
+                and abs(float(entry[1]) - stat.st_mtime) < 1e-6:
+            return entry[2]
+    return None
+
+
 def used_voice_names(document: Document) -> dict:
     """`{backend_id: {voice name, ...}}` from every character's preset and
-    every clip override, grouped by the clip's character's backend."""
+    every clip override, grouped by the clip's character's backend. A
+    character's variants count too, so every reference they name is bundled."""
     names: dict = {}
     for character in document.characters:
         voice = (character.preset_data or {}).get("voice")
         if voice:
-            names.setdefault(character.backend_id or "kokoro", set()).add(str(voice))
+            names.setdefault(character.backend_id or DEFAULT_ENGINE_ID, set()).add(str(voice))
+        for variant_voice in (character.variants or {}).values():
+            if variant_voice:
+                names.setdefault(character.backend_id or DEFAULT_ENGINE_ID, set()).add(str(variant_voice))
     for clip in document.clips:
         voice = (clip.overrides or {}).get("voice")
         if voice:
             character = document.get_character(clip.character_id)
-            backend_id = (character.backend_id if character else None) or "kokoro"
+            backend_id = (character.backend_id if character else None) or DEFAULT_ENGINE_ID
             names.setdefault(backend_id, set()).add(str(voice))
     return names
 
@@ -706,11 +1212,68 @@ def used_fx_preset_names(document: Document) -> set:
     return names
 
 
-def collect_assets(document: Document, backend_for, project_dir: str | None, fx_presets_dir: str) -> tuple:
+def _fx_preset_source(name: str, project_dir: str | None, fx_presets_dir: str) -> str | None:
+    """The file FX preset `name` loads from: the project's `fx/<name>.json`
+    first, then `<fx_presets_dir>/<name>.json`, else None. The name comes
+    from the document, so it's reduced to its basename and the result must
+    stay inside the directory it was looked up in."""
+    safe = os.path.basename(name)
+    directories = [os.path.join(project_dir, FX_DIR)] if project_dir else []
+    directories.append(fx_presets_dir)
+    for directory in directories:
+        root = os.path.realpath(directory)
+        candidate = os.path.realpath(os.path.join(root, f"{safe}.json"))
+        if candidate.startswith(root + os.sep) and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _preset_ir_name(name: str, project_dir: str | None, fx_presets_dir: str) -> str | None:
+    source = _fx_preset_source(name, project_dir, fx_presets_dir)
+    if source is None:
+        return None
+    try:
+        with open(source, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return filter_fx_preset_values(data).get("convolution_ir") or None
+
+
+def used_fx_ir_names(document: Document, project_dir: str | None = None,
+                     fx_presets_dir: str = os.path.join("presets", "fx"), project_fx: dict | None = None) -> set:
+    """Every convolution impulse-response name (grill Q31) the project plays:
+    from the project-scope FX values (`project_fx`, the Audio FX tab's "none"
+    state), from each FX preset a character or clip names (read from the
+    project's `fx/` first, then `fx_presets_dir`), and from each clip's
+    `fx_override`. Values go through `filter_fx_preset_values`, so a
+    non-string `convolution_ir` names nothing."""
+    names = set()
+    ir = filter_fx_preset_values(project_fx or {}).get("convolution_ir")
+    if ir:
+        names.add(ir)
+    for preset_name in used_fx_preset_names(document):
+        ir = _preset_ir_name(preset_name, project_dir, fx_presets_dir)
+        if ir:
+            names.add(ir)
+    for clip in document.clips:
+        if isinstance(clip.fx_override, dict):
+            ir = filter_fx_preset_values(clip.fx_override).get("convolution_ir")
+            if ir:
+                names.add(ir)
+    return {n for n in names if ir_safe_name(n)}
+
+
+def collect_assets(document: Document, backend_for, project_dir: str | None, fx_presets_dir: str,
+                   project_fx: dict | None = None) -> tuple:
     """`(assets, engines, warnings)`: every `(bundle_path, source_path)` the
     document needs, the `manifest.engines` block (version + meta per used
     backend), and one warning per asset that resolves nowhere. `backend_for(id)`
-    returns an adapter or `None` for an engine that isn't registered."""
+    returns an adapter or `None` for an engine that isn't registered.
+    Impulse responses land at `fx/ir/<name>.wav`, the project's copy first,
+    then `<fx_presets_dir>/ir/`."""
     assets = []
     engines = {}
     warnings = []
@@ -733,15 +1296,18 @@ def collect_assets(document: Document, backend_for, project_dir: str | None, fx_
         engines[backend_id] = {"version": backend.engine_version(), "meta": dict(meta or {})}
     for name in sorted(used_fx_preset_names(document)):
         safe = os.path.basename(name)
-        candidates = []
-        if project_dir:
-            candidates.append(os.path.join(project_dir, FX_DIR, f"{safe}.json"))
-        candidates.append(os.path.join(fx_presets_dir, f"{safe}.json"))
-        source = next((c for c in candidates if os.path.isfile(c)), None)
+        source = _fx_preset_source(name, project_dir, fx_presets_dir)
         if source is None:
             warnings.append(f"FX preset {name!r} not found; not bundled")
             continue
         assets.append((f"{FX_DIR}/{safe}.json", os.path.abspath(source)))
+    ir_dir = os.path.join(fx_presets_dir, FX_IR_NAME)
+    for name in sorted(used_fx_ir_names(document, project_dir, fx_presets_dir, project_fx)):
+        source = resolve_ir(name, project_dir, ir_dir)
+        if source is None:
+            warnings.append(f"impulse response {name!r} not found; not bundled")
+            continue
+        assets.append((f"{FX_DIR}/{FX_IR_NAME}/{ir_safe_name(name)}.wav", source))
     return assets, engines, warnings
 
 
@@ -755,6 +1321,32 @@ def bundle_options(project_settings: dict) -> dict:
     return options
 
 
+def required_features(document: Document) -> list:
+    """`manifest.requires`: the content features a v1 reader would lose or
+    misplay (section 8 of the bundle plan). Parked takes (an older reader
+    would drop them on its next Save and GC their files) and subprojects
+    (it would read a nested clip's source as unknown and refuse the
+    document), and imported audio (grill Q30: it would find a clip with no
+    segments and push its file name back through TTS)."""
+    requires = []
+    if any(clip.takes for clip in document.clips):
+        requires.append("takes")
+    if any(clip.source == "nested" for clip in document.clips):
+        requires.append("nested")
+    # A bed or a recording clip, or timed words left on text whose clip is
+    # gone: "imported" once either way.
+    if any(clip.source == "imported" for clip in document.clips) or has_imported_text(document):
+        requires.append("imported")
+    return requires
+
+
+def has_imported_text(document: Document) -> bool:
+    """True when a run carries imported word timing (phase 5 P3). An older
+    reader would keep the words but play the clip as text it can't
+    generate, so the bundle `requires` "imported"."""
+    return any(run.words for run in document.runs)
+
+
 def project_stats(document: Document) -> dict:
     """Cosmetic, for the welcome dialog: list lengths and the sum of
     `Segment.duration`. Nothing here reads audio."""
@@ -762,7 +1354,11 @@ def project_stats(document: Document) -> dict:
     for clip in document.clips:
         for segment in clip.segments:
             duration += float(segment.duration or 0.0)
-    return {"clips": len(document.clips), "characters": len(document.characters), "duration_s": round(duration, 3)}
+    stats = {"clips": len(document.clips), "characters": len(document.characters), "duration_s": round(duration, 3)}
+    subprojects = sum(1 for clip in document.clips if clip.source == "nested")
+    if subprojects:
+        stats["subprojects"] = subprojects
+    return stats
 
 
 @dataclass
@@ -782,29 +1378,43 @@ class SavePlan:
     # (absolute paths), which is what `session.json`'s `saved_digest`
     # compares against; the zip's copy has bundle-relative paths.
     dir_digest: str = ""
+    # The reference video to store under `video/` (`include_video` on), or
+    # None. Hashed by `write_bundle`, on the worker thread.
+    video_file: str | None = None
+    # The bundle this working copy was opened from or last saved to
+    # (`session.json`'s `source_path`), when that is a file other than
+    # `path`. `write_bundle` copies unknown entries through from it instead
+    # of from the file being overwritten, so Save As keeps them.
+    carry_from: str | None = None
 
 
 def plan_save(document: Document, project_settings: dict, path: str, project_dir: str, project_id: str,
               backend_for, fx_presets_dir: str, previous_session: dict | None = None,
-              previous_manifest: dict | None = None) -> tuple:
+              previous_manifest: dict | None = None, pending_children=(),
+              project_fx: dict | None = None) -> tuple:
     """`(SavePlan, warnings)`. Serializes the document with bundle-relative
-    audio paths, collects assets and the referenced audio files."""
+    audio paths, collects assets and the referenced audio files.
+    `pending_children` are embedded child ids whose bundle the same Save
+    writes into the project dir before this plan is written. `project_fx`
+    is the project-scope FX values, read for the impulse response they
+    name."""
     options = bundle_options(project_settings)
     data = serialization.document_to_dict(document)
     audio_files = []
     seen = set()
     project_root = os.path.realpath(project_dir) if project_dir else None
 
-    def to_relative(abs_path):
-        # Only a file inside the project dir goes into the bundle. Every
-        # generated or migrated segment lives there; a path anywhere else
-        # can only have come from a hand-edited or crafted document, and
-        # bundling it would ship that file. It's left as written, so Open
-        # reports it missing.
+    def to_relative(abs_path, folder=AUDIO_DIR):
+        # Only a file under the project dir's audio folder goes into the
+        # bundle (`audio_file_under`). Every generated or migrated segment
+        # lives in `audio/generated/`, every imported file in
+        # `audio/imported/`; a path anywhere else can only have come from a
+        # hand-edited or crafted document, and bundling it would ship that
+        # file. It's left as written, so Open reports it missing.
         if not os.path.isabs(abs_path):
             return abs_path.replace("\\", "/")
-        real = os.path.realpath(abs_path)
-        if project_root and real.startswith(project_root + os.sep) and os.path.isfile(real):
+        real = audio_file_under(project_dir, abs_path, folder)
+        if project_root and real is not None:
             rel = os.path.relpath(real, project_root).replace("\\", "/")
             if rel not in seen:
                 seen.add(rel)
@@ -812,26 +1422,48 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
             return rel
         return abs_path.replace("\\", "/")
 
-    serialization.rewrite_audio_paths(data, to_relative)
+    serialization.rewrite_audio_paths(data, to_relative, lambda path: to_relative(path, AUDIO_IMPORTED))
+    # The source track (D5) is already project-relative in the document;
+    # its file goes in with the rest of the imported audio.
+    source_track = source_track_path(document, project_dir)
+    if source_track is not None:
+        to_relative(source_track, AUDIO_IMPORTED)
+    # Embedded subprojects: each child's bundle as its parent's project dir
+    # holds it (the app writes an open child's bundle there first).
+    embedded = []
+    for child_id in embedded_child_ids(document):
+        child_path = embedded_child_path(project_dir, child_id)
+        if child_path and (os.path.isfile(child_path) or child_id in pending_children):
+            audio_files.append((f"{PROJECTS_DIR}/{child_id}{DEFAULT_EXTENSION}", os.path.abspath(child_path)))
+            embedded.append(child_id)
     if not options["include_generated_audio"]:
         audio_files = [a for a in audio_files if not a[0].startswith(AUDIO_GENERATED + "/")]
     if not options["include_imported_audio"]:
         audio_files = [a for a in audio_files if not a[0].startswith(AUDIO_IMPORTED + "/")]
 
-    assets, engines, warnings = collect_assets(document, backend_for, project_dir, fx_presets_dir)
+    assets, engines, warnings = collect_assets(document, backend_for, project_dir, fx_presets_dir, project_fx)
+    video_file = None
+    if options["include_video"] and video_settings(project_settings) is not None:
+        video_file = video_to_bundle(project_settings, path, project_dir, previous_manifest, previous_session)
+        if video_file is None:
+            warnings.append("reference video not found or not picked on this machine (File > Load Video); "
+                            "not bundled")
     now = datetime.datetime.now().replace(microsecond=0).isoformat()
     created = (previous_manifest or {}).get("created") or now
     manifest = {
         "format": FORMAT,
         "version": SUPPORTED_VERSION,
-        "requires": [],
+        "requires": required_features(document),
         "project_id": project_id,
         "created_by": f"KokoroGUI {APP_VERSION}",
         "created": created,
         "modified": now,
         "includes": {
             "generated_audio": bool(options["include_generated_audio"]),
-            "imported_audio": bool(options["include_imported_audio"]),
+            "imported_audio": bool(options["include_imported_audio"])
+            and any(name.startswith(AUDIO_IMPORTED + "/") for name, _src in audio_files),
+            "projects": embedded,
+            "video": video_file is not None,
         },
         "audio": {"format": options["audio_format"]},
         "stats": project_stats(document),
@@ -845,9 +1477,40 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
         project_bytes=json.dumps(dict(project_settings or {}), indent=2).encode("utf-8"),
         assets=assets, audio_files=audio_files,
         previous_asset_index=dict((previous_session or {}).get("asset_index") or {}),
-        dir_digest=document_digest(dir_document, dir_project),
+        dir_digest=document_digest(dir_document, dir_project), video_file=video_file,
+        carry_from=_carry_candidate(path, previous_session),
     )
     return plan, warnings
+
+
+def _carry_candidate(path: str, previous_session: dict | None) -> str | None:
+    """`SavePlan.carry_from`: the session's `source_path` when it names an
+    existing file other than `path`, else None (carry from `path`, as a Save
+    over the same file does). An embedded child's `<parent>#<id>` source is
+    never a file, so a child keeps carrying from its own bundle."""
+    source = (previous_session or {}).get("source_path")
+    if not isinstance(source, str) or not source:
+        return None
+    source = os.path.abspath(source)
+    if source == os.path.abspath(path) or not os.path.isfile(source):
+        return None
+    return source
+
+
+def _carry_source(plan: SavePlan) -> str | None:
+    """The old bundle whose unknown entries `write_bundle` copies through:
+    `plan.carry_from` when it is still a bundle of this project (its
+    manifest's `project_id` matches; anything else, such as a file replaced
+    by another project since, is ignored), else the file being overwritten,
+    else none."""
+    if plan.carry_from and os.path.isfile(plan.carry_from):
+        try:
+            with zipfile.ZipFile(plan.carry_from) as zf:
+                if read_manifest_from(zf).get("project_id") == plan.project_id:
+                    return plan.carry_from
+        except (OSError, zipfile.BadZipFile, ProjectError):
+            pass
+    return plan.path if os.path.isfile(plan.path) else None
 
 
 def _owned_entry(name: str, known_engine_ids) -> bool:
@@ -874,16 +1537,41 @@ def _replace_with_retries(src: str, dst: str) -> None:
             time.sleep(0.25)
 
 
+def _refused_entry(bundle_path: str, source: str, project_dir: str | None) -> bool:
+    """True for a file `write_bundle` must not store: an entry named like
+    the project dir's bookkeeping or one of the JSON files Save writes
+    itself, or a source that is the project dir's own `session.json`,
+    `lock`, `document.json` or `project.json`. `plan_save` never lists
+    one (`audio_file_under`); this is the second check."""
+    name = bundle_path.replace("\\", "/")
+    if name in _DIR_PRIVATE or name in _OWNED_FILES:
+        return True
+    if not project_dir:
+        return False
+    try:
+        real = os.path.realpath(source)
+    except (OSError, ValueError):
+        return True
+    root = os.path.realpath(project_dir)
+    return os.path.dirname(real) == root and os.path.basename(real) in _DIR_PRIVATE | _OWNED_FILES
+
+
 def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
     """Steps 1-4 of Save, meant for a worker thread: hash assets not in the
     previous index, check free space, write `<path>.tmp` (JSON deflated,
     audio stored, unknown entries from the old file copied through), then
     replace. A crash mid-save leaves the old file intact; a replace that
-    keeps failing leaves the `.tmp` and says where it is."""
+    keeps failing leaves the `.tmp` and says where it is. An entry
+    `_refused_entry` names is left out. The old file is `_carry_source`'s:
+    for Save As, the bundle the project came from, not whatever file sits
+    at the new path."""
+    assets = [(name, src) for name, src in plan.assets if not _refused_entry(name, src, plan.project_dir)]
+    audio_files = [(name, src) for name, src in plan.audio_files
+                   if not _refused_entry(name, src, plan.project_dir)]
     asset_index = {}
     manifest = dict(plan.manifest)
     manifest["assets"] = {}
-    for bundle_path, source in plan.assets:
+    for bundle_path, source in assets:
         try:
             stat = os.stat(source)
         except OSError:
@@ -897,19 +1585,40 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
         asset_index[bundle_path] = [stat.st_size, stat.st_mtime, digest]
         manifest["assets"][bundle_path] = digest
 
+    # The reference video: named by its hash, which is only recomputed when
+    # the file's size or mtime changed since the last Save.
+    video = None
+    if plan.video_file and not _refused_entry(VIDEO_DIR + "/", plan.video_file, plan.project_dir):
+        try:
+            stat = os.stat(plan.video_file)
+        except OSError:
+            stat = None
+        if stat is not None:
+            digest = _cached_video_digest(plan.previous_asset_index, plan.video_file, stat) \
+                or _sha256_file(plan.video_file)
+            name = f"{VIDEO_DIR}/{digest.split(':', 1)[-1][:16]}.{_import_extension(plan.video_file)}"
+            video = (name, plan.video_file)
+            asset_index[name] = [stat.st_size, stat.st_mtime, digest, plan.video_file]
+            manifest["assets"][name] = digest
+    manifest["includes"] = dict(manifest.get("includes") or {}, video=video is not None)
+
     needed = len(plan.document_bytes) + len(plan.project_bytes)
-    for _bundle_path, source in plan.assets + plan.audio_files:
+    for _bundle_path, source in assets + audio_files + ([video] if video else []):
         try:
             needed += os.path.getsize(source)
         except OSError:
             pass
-    previous_path = plan.path if os.path.isfile(plan.path) else None
+    previous_path = _carry_source(plan)
     carried = []
+    # Never an entry this Save writes itself (a caller that names no engines
+    # as known would otherwise copy an asset in twice).
+    written = {name.replace("\\", "/") for name, _src in assets + audio_files + ([video] if video else [])}
     if previous_path:
         try:
             with zipfile.ZipFile(previous_path) as old:
                 for info in old.infolist():
-                    if not _owned_entry(info.filename, known_engine_ids):
+                    if not _owned_entry(info.filename, known_engine_ids) \
+                            and info.filename.replace("\\", "/") not in written:
                         carried.append(info.filename)
                         needed += info.file_size
         except (OSError, zipfile.BadZipFile):
@@ -927,11 +1636,11 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
             zf.writestr(MANIFEST, json.dumps(manifest, indent=2))
             zf.writestr(DOCUMENT, plan.document_bytes)
             zf.writestr(PROJECT_JSON, plan.project_bytes)
-            for bundle_path, source in plan.assets:
+            for bundle_path, source in assets:
                 if os.path.isfile(source):
                     zf.write(source, bundle_path, compress_type=zipfile.ZIP_DEFLATED)
                     done += os.path.getsize(source)
-            for bundle_path, source in plan.audio_files:
+            for bundle_path, source in audio_files + ([video] if video else []):
                 if not os.path.isfile(source):
                     continue
                 zf.write(source, bundle_path, compress_type=zipfile.ZIP_STORED)
@@ -963,11 +1672,14 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
                       saved_digest=plan.dir_digest)
 
 
-def record_save(project_dir: str, path: str, result: SaveResult) -> None:
-    """Step 5, on the GUI thread: `session.json` after a Save."""
+def record_save(project_dir: str, path: str, result: SaveResult, source_path: str | None = None) -> None:
+    """Step 5, on the GUI thread: `session.json` after a Save. An embedded
+    child passes its `<parent>#<id>` `source_path`; `path` is then the
+    bundle inside the parent's project dir."""
     session = read_session(project_dir) or {}
     session.update({
-        "source_path": os.path.abspath(path), "zip_size": result.zip_size, "zip_mtime": result.zip_mtime,
+        "source_path": source_path or os.path.abspath(path), "zip_size": result.zip_size,
+        "zip_mtime": result.zip_mtime,
         "saved_digest": result.saved_digest, "dirty": False, "asset_index": result.asset_index,
     })
     write_session(project_dir, session)
@@ -976,7 +1688,7 @@ def record_save(project_dir: str, path: str, result: SaveResult) -> None:
 def save_project(document: Document, path: str, project_settings: dict | None = None,
                  project_dir: str | None = None, project_id: str | None = None,
                  backend_for=None, fx_presets_dir: str = os.path.join("presets", "fx"),
-                 known_engine_ids=()) -> SaveResult:
+                 known_engine_ids=(), project_fx: dict | None = None) -> SaveResult:
     """Synchronous Save for callers without an app (tests, tooling): plans
     and writes in one go. A `.json` path is written in the legacy shape."""
     if format_for_path(path) != "tbaw":
@@ -987,7 +1699,8 @@ def save_project(document: Document, path: str, project_settings: dict | None = 
     if project_dir is None:
         project_dir, project_id = create_project_dir(project_id)
     plan, _warnings = plan_save(document, project_settings, path, project_dir, project_id or new_project_id(),
-                                backend_for or (lambda _id: None), fx_presets_dir, read_session(project_dir))
+                                backend_for or (lambda _id: None), fx_presets_dir, read_session(project_dir),
+                                project_fx=project_fx)
     result = write_bundle(plan, known_engine_ids)
     record_save(project_dir, path, result)
     return result
@@ -996,28 +1709,59 @@ def save_project(document: Document, path: str, project_settings: dict | None = 
 # --- close-time GC, eviction, sweep ---------------------------------------------
 
 
-def referenced_audio_paths(document: Document) -> set:
+def referenced_audio_paths(document: Document, project_dir: str | None = None) -> set:
+    """Every file a clip points at: its original audio, its active take's
+    segments and every parked take's, and every imported recording source
+    (`Document.sources`), so close-time GC keeps them all. With
+    `project_dir`, the document's source track (D5) too."""
     paths = set()
+    source_track = source_track_path(document, project_dir)
+    if source_track is not None:
+        paths.add(os.path.realpath(source_track))
+    for entry in document.sources.values():
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str) and entry["path"]:
+            paths.add(os.path.realpath(entry["path"]))
     for clip in document.clips:
         if clip.original_audio_path:
             paths.add(os.path.realpath(clip.original_audio_path))
-        for segment in clip.segments:
-            if segment.audio_path:
-                paths.add(os.path.realpath(segment.audio_path))
+        for segments in (clip.segments, *clip.takes.values()):
+            for segment in segments:
+                if segment.audio_path:
+                    paths.add(os.path.realpath(segment.audio_path))
     return paths
 
 
 def gc_project_dir(project_dir: str, document: Document) -> list:
     """Deletes every file under `audio/generated/` that no segment
     references (regenerated-over takes, cancelled attempts, stale
-    reservation markers). Only at a clean close: the undo stack may still
-    point at any of them while the session lives (TB11). Returns what it
+    reservation markers), and a subproject's mixdown that no longer matches
+    its document (autosave's digest of the dir's `document.json` and
+    `project.json`). Only at a clean close: the undo stack may still point
+    at any of them while the session lives (TB11). Returns what it
     removed."""
+    removed = []
+    # A subproject's mixdown older than its document is dead weight: it
+    # re-renders from the document anyway (phase 4).
+    info = read_mixdown_info(project_dir)
+    if info is not None:
+        try:
+            with open(os.path.join(project_dir, DOCUMENT), "rb") as f:
+                document_bytes = f.read()
+            project_json = os.path.join(project_dir, PROJECT_JSON)
+            project_bytes = b"{}"
+            if os.path.isfile(project_json):
+                with open(project_json, "rb") as f:
+                    project_bytes = f.read()
+            current = document_digest(document_bytes, project_bytes)
+        except OSError:
+            current = None
+        if current is not None and info.get("digest") != current:
+            remove_mixdown(project_dir)
+            removed.append(info["file"])
     generated = os.path.join(project_dir, *AUDIO_GENERATED.split("/"))
     if not os.path.isdir(generated):
-        return []
-    keep = referenced_audio_paths(document)
-    removed = []
+        return removed
+    keep = referenced_audio_paths(document, project_dir)
     for name in os.listdir(generated):
         full = os.path.join(generated, name)
         if not os.path.isfile(full):
@@ -1034,17 +1778,26 @@ def gc_project_dir(project_dir: str, document: Document) -> list:
 
 def evict_project_dirs(keep_project_dir: str | None) -> list:
     """TB13: on a clean close every dir under `cache/projects/` except the
-    one to keep (the `last_project`'s) is deleted, unless it's locked by
-    another window or dirty (a crash's recovery data). Returns the removed
-    dirs."""
+    one to keep (the `last_project`'s) and its subprojects' is deleted,
+    unless it's locked by another window or dirty (a crash's recovery
+    data). Returns the removed dirs."""
     root = projects_root()
     if not os.path.isdir(root):
         return []
     keep = os.path.realpath(keep_project_dir) if keep_project_dir else None
+    # The kept project's subprojects stay with it (phase 4): their dirs
+    # carry their mixdowns, which aren't in any bundle.
+    keep_children = set()
+    keep_session = read_session(keep_project_dir) if keep_project_dir else None
+    keep_source = (keep_session or {}).get("source_path")
+    if isinstance(keep_source, str) and keep_source:
+        keep_children = {os.path.realpath(d) for d in child_dirs_of(keep_source)}
     removed = []
     for name in os.listdir(root):
         full = os.path.join(root, name)
         if not os.path.isdir(full) or (keep and os.path.realpath(full) == keep):
+            continue
+        if os.path.realpath(full) in keep_children:
             continue
         session = read_session(full)
         if session and session.get("dirty"):
@@ -1073,6 +1826,9 @@ def sweep_orphan_dirs() -> list:
         source = session.get("source_path")
         if not isinstance(source, str) or not source:
             continue
+        # An embedded child's source is `<parent file>#<id>`: it's an orphan
+        # when the parent file is gone.
+        source = parent_source_of(source)
         # `record_save` and `finish_open` write an absolute path; a relative
         # or drive-relative one is a corrupt session, not grounds to delete.
         norm = os.path.normpath(source)
@@ -1092,7 +1848,7 @@ def legacy_segment_key(text: str, config: dict) -> str:
     """What `dirty.py` stamped before the schema bump: the voice *name*, no
     extra inputs, `CACHE_SCHEMA_VERSION` 2."""
     return compute_cache_key(text, config.get("voice"), effective_speed(config), config.get("lang_code", "a"),
-                             config.get("engine_id", "kokoro"), schema_version=2)
+                             config.get("engine_id", DEFAULT_ENGINE_ID), schema_version=2)
 
 
 def migrate_segments(document: Document, project_dir: str, generation_config_for, key_fn,
@@ -1132,6 +1888,35 @@ def migrate_segments(document: Document, project_dir: str, generation_config_for
 # --- welcome dialog ------------------------------------------------------------------
 
 
+def _embedded_duration_s(path: str) -> float:
+    """The summed `stats.duration_s` of every embedded child (and theirs),
+    read from the manifests inside the bundle without extracting."""
+    try:
+        with zipfile.ZipFile(path) as zf:
+            return _embedded_duration_in(zf, 0)
+    except (OSError, zipfile.BadZipFile):
+        return 0.0
+
+
+def _embedded_duration_in(zf: zipfile.ZipFile, depth: int) -> float:
+    if depth > 8:
+        return 0.0
+    total = 0.0
+    for name in zf.namelist():
+        if not (name.startswith(PROJECTS_DIR + "/") and name.endswith(DEFAULT_EXTENSION)):
+            continue
+        try:
+            with zf.open(name) as inner_file, zipfile.ZipFile(inner_file) as inner:
+                manifest = json.loads(inner.read(MANIFEST).decode("utf-8"))
+                stats = manifest.get("stats") if isinstance(manifest, dict) else None
+                if isinstance(stats, dict):
+                    total += float(stats.get("duration_s", 0.0) or 0.0)
+                total += _embedded_duration_in(inner, depth + 1)
+        except (OSError, zipfile.BadZipFile, KeyError, ValueError, json.JSONDecodeError):
+            continue
+    return total
+
+
 def project_summary(path: str) -> dict | None:
     """What the welcome dialog's details pane shows for a row. A `.tbaw`
     answers from `manifest.json` alone (`ZipFile.read`, no extraction, no
@@ -1160,12 +1945,16 @@ def project_summary(path: str) -> dict | None:
                 modified = datetime.datetime.fromisoformat(stamp)
             except ValueError:
                 pass
+        duration = float(stats.get("duration_s", 0.0) or 0.0)
+        # Embedded subprojects' audio, from their own manifests (phase 4).
+        duration += _embedded_duration_s(path)
         return {
             "path": os.path.abspath(path),
             "modified": modified,
             "characters": int(stats.get("characters", 0) or 0),
             "clips": int(stats.get("clips", 0) or 0),
-            "duration_s": float(stats.get("duration_s", 0.0) or 0.0),
+            "subprojects": int(stats.get("subprojects", 0) or 0),
+            "duration_s": duration,
             "engines": sorted(engines.keys()),
         }
     try:
@@ -1187,16 +1976,12 @@ def project_summary(path: str) -> dict | None:
     }
 
 
-def new_document_from(previous: Document | None) -> Document:
-    """WF3: a new project inherits the previous project's characters (a
-    copy for now - the global library from WF4-WF7 is future work) and one
-    track per character."""
-    import copy
+def new_document_from(library, settings: dict | None = None) -> Document:
+    """File > New: an empty document seeded with every character library
+    entry, linked (WF3 through the WF4-WF7 library), and no tracks; a
+    character gets its track the first time the transcript uses it (grill
+    PR4). An empty library gives one local "Default" character from
+    `settings`. The previous project's characters are not copied."""
+    from kokoro_gui.daw.migration import migrate_legacy_settings_to_document
 
-    from kokoro_gui.daw.models import Track
-
-    if previous is None or not previous.characters:
-        return Document(runs=[], clips=[], tracks=[], characters=[], settings={})
-    characters = copy.deepcopy(previous.characters)
-    tracks = [Track(name=c.name, character_id=c.id, order_index=i) for i, c in enumerate(characters)]
-    return Document(runs=[], clips=[], tracks=tracks, characters=characters, settings={})
+    return migrate_legacy_settings_to_document(settings or {}, library)

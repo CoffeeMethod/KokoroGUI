@@ -79,3 +79,29 @@ def test_set_clip_fx_records_and_clears_the_preset_name():
     doc.undo_stack.undo()
     assert a.fx_override is None
     assert "fx_preset" not in a.overrides
+
+
+def test_ripple_command_shifts_timestamps_and_undo_restores_them():
+    from kokoro_gui.daw.undo import RippleCommand
+
+    doc, a, b, c = _doc()
+    b.timeline_timestamp = 3.0
+    c.timeline_timestamp = 0.2
+    doc.undo_stack.push(RippleCommand({b.id: 0.5, c.id: -1.0, a.id: 2.0}))
+
+    assert b.timeline_timestamp == 3.5
+    assert c.timeline_timestamp == 0.0  # never below zero
+    assert a.timeline_timestamp is None  # text-ordered clips aren't touched
+
+    doc.undo_stack.undo()
+    assert (b.timeline_timestamp, c.timeline_timestamp) == (3.0, 0.2)
+
+
+def test_clip_pinned_round_trips():
+    from kokoro_gui.daw.serialization import document_from_dict, document_to_dict
+
+    doc, a, _b, _c = _doc()
+    a.pinned = True
+    restored = document_from_dict(document_to_dict(doc))
+    assert restored.get_clip(a.id).pinned is True
+    assert all(not c.pinned for c in restored.clips if c.id != a.id)

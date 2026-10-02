@@ -1,0 +1,21 @@
+WEBVTT - an interview
+
+NOTE This block is a comment
+and it spans two lines.
+
+STYLE
+::cue { color: yellow }
+
+REGION
+id:top width:40%
+
+intro
+00:01.000 --> 00:03.500 align:start position:10%
+<v Alice>Hello &amp; welcome.</v>
+
+00:00:04.000 --> 00:00:05.000
+<v.loud Bob Smith><b>Thanks</b> for having me.
+
+00:00:06.000 --> 00:00:07.250 line:0
+Nobody in <c.yellow>particular</c>
+said <00:00:06.500>this.

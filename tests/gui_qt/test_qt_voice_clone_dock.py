@@ -27,8 +27,10 @@ _TRANSCRIBE_TARGET = "kokoro_gui.qt.docks.voice_clone_dock.transcribe_wav"
 
 
 def _switch_to_audio8(qt_app, monkeypatch):
+    """The first character generates with Audio8 (engine follows the
+    character), which makes Audio8 the active backend."""
     monkeypatch.setattr(audio8_tts, "_get_model", lambda: (object(), object()))
-    qt_app.switch_engine("audio8")
+    assert qt_app.set_character_engine(qt_app.document.characters[0], "audio8")
 
 
 def _write_wav(path):
@@ -48,7 +50,7 @@ def test_audio8_backend_shows_voice_clone_dock_and_hides_mixing(qt_app, monkeypa
 
 def test_switch_back_to_kokoro_hides_voice_clone_dock_and_restores_mixing(qt_app, monkeypatch):
     _switch_to_audio8(qt_app, monkeypatch)
-    qt_app.switch_engine("kokoro")
+    assert qt_app.set_character_engine(qt_app.document.characters[0], "kokoro")
     assert qt_app.voice_clone_dock is None
     assert qt_app.mixing_dock is not None
 
@@ -83,6 +85,7 @@ def test_save_reference_appears_in_generation_voice_dropdown(qt_app, monkeypatch
 
     assert Audio8ReferenceStore.list_references() == ["Fred"]
 
+    qt_app.selection.select_character(qt_app.document.characters[0].id)
     combo = qt_app.settings_dock.schema_form.widget_for("voice")
     items = [combo.itemData(i) for i in range(combo.count())]
     assert "Fred" in items
@@ -178,11 +181,11 @@ def test_auto_transcribe_without_wav_selected_is_a_noop(qt_app, monkeypatch):
 
 # --- ASR engine picker ----------------------------------------------------
 
-def test_default_engine_is_audio8_and_vosk_row_hidden(qt_app, monkeypatch):
+def test_default_engine_is_whisper_and_vosk_row_hidden(qt_app, monkeypatch):
     _switch_to_audio8(qt_app, monkeypatch)
     dock = qt_app.voice_clone_dock
 
-    assert dock.asr_engine_combo.currentData() == "audio8"
+    assert dock.asr_engine_combo.currentData() == "whisper"
     # isHidden() (not isVisible()) - the dock's never .show()n in this
     # offscreen test, so isVisible() would be False for everything
     # regardless of our explicit setVisible() calls.
@@ -309,3 +312,138 @@ def test_asr_engine_choice_persists_via_get_state(qt_app, monkeypatch):
 
     qt_app.save_settings()
     assert qt_app.settings["asr_engine"] == "vosk"
+
+
+# --- Whisper first-use download prompt (grill PR5) --------------------------
+
+def _whisper_not_cached(monkeypatch, answer):
+    from kokoro_gui.engine import asr
+    from kokoro_gui.qt import asr_prompt
+
+    asked = []
+    monkeypatch.setattr(asr, "whisper_model_cached", lambda name=None: False)
+    monkeypatch.setattr(asr_prompt, "ask_whisper_download",
+                        lambda parent, name, size: (asked.append((name, size)), answer)[1])
+    return asked
+
+
+def test_whisper_download_prompt_names_the_size_and_says_downloading(qt_app, monkeypatch, tmp_path, qtbot):
+    from kokoro_gui.qt import asr_prompt
+
+    monkeypatch.delenv("WHISPER_MODEL", raising=False)
+    _switch_to_audio8(qt_app, monkeypatch)
+    asked = _whisper_not_cached(monkeypatch, asr_prompt.PROCEED)
+    statuses = []
+    monkeypatch.setattr(_TRANSCRIBE_TARGET,
+                        lambda path, **kwargs: (statuses.append(dock.status_label.text()), "Words.")[1])
+    dock = qt_app.voice_clone_dock
+    dock.wav_path_edit.setText(_write_wav(tmp_path / "ref.wav"))
+
+    dock._on_transcribe_clicked()
+
+    qtbot.waitUntil(lambda: dock.transcript_edit.toPlainText() == "Words.", timeout=5000)
+    assert asked == [("large-v3-turbo", "1.6 GB")]
+    assert statuses == ["Downloading Whisper model..."]
+
+
+def test_whisper_download_prompt_use_another_engine_switches_without_transcribing(qt_app, monkeypatch, tmp_path):
+    from kokoro_gui.qt import asr_prompt
+
+    _switch_to_audio8(qt_app, monkeypatch)
+    _whisper_not_cached(monkeypatch, asr_prompt.OTHER_ENGINE)
+    called = []
+    monkeypatch.setattr(_TRANSCRIBE_TARGET, lambda path, **kwargs: called.append(path) or "x")
+    dock = qt_app.voice_clone_dock
+    dock.wav_path_edit.setText(_write_wav(tmp_path / "ref.wav"))
+
+    dock._on_transcribe_clicked()
+
+    assert dock.asr_engine_combo.currentData() != "whisper"
+    assert called == []
+    assert dock.transcribe_btn.isEnabled()
+
+
+def test_whisper_download_prompt_cancel_does_nothing(qt_app, monkeypatch, tmp_path):
+    from kokoro_gui.qt import asr_prompt
+
+    _switch_to_audio8(qt_app, monkeypatch)
+    _whisper_not_cached(monkeypatch, asr_prompt.CANCEL)
+    called = []
+    monkeypatch.setattr(_TRANSCRIBE_TARGET, lambda path, **kwargs: called.append(path) or "x")
+    dock = qt_app.voice_clone_dock
+    dock.wav_path_edit.setText(_write_wav(tmp_path / "ref.wav"))
+
+    dock._on_transcribe_clicked()
+
+    assert dock.asr_engine_combo.currentData() == "whisper"
+    assert called == []
+
+
+# --- the Voices tab's own engine (grill EN3) ----------------------------------
+
+def test_the_audio8_editor_opens_with_only_kokoro_characters(qt_app, monkeypatch, tmp_path):
+    monkeypatch.setattr(audio8_tts, "_get_model", lambda: (object(), object()))
+    character = qt_app.document.characters[0]
+    assert qt_app.voice_clone_dock is None and qt_app.mixing_dock is not None
+
+    qt_app.set_voices_engine("audio8")
+
+    dock = qt_app.voice_clone_dock
+    assert dock is not None and qt_app.mixing_dock is None
+    assert dock.engine_combo.currentData() == "audio8"
+    assert character.backend_id == "kokoro" and qt_app.backend.id == "kokoro"
+
+    dock.wav_path_edit.setText(_write_wav(tmp_path / "ref.wav"))
+    dock.transcript_edit.setPlainText("Hello world reference.")
+    dock.name_edit.setText("Fred")
+    dock._on_save_clicked()
+    assert Audio8ReferenceStore.list_references() == ["Fred"]
+
+    assert qt_app.set_character_engine(character, "audio8")
+    assert character.preset_data["voice"] == "Fred"  # the one reference it lists
+    qt_app.selection.select_character(character.id)
+    combo = qt_app.settings_dock.schema_form.widget_for("voice")
+    assert "Fred" in [combo.itemData(i) for i in range(combo.count())]
+
+
+def test_the_next_selection_puts_the_voices_tab_back_on_the_active_engine(qt_app):
+    character = qt_app.document.characters[0]
+    qt_app.set_voices_engine("audio8")
+    assert qt_app.voice_clone_dock is not None
+
+    qt_app.selection.select_character(character.id)
+
+    assert qt_app.voices_engine_id == "kokoro"
+    assert qt_app.mixing_dock is not None and qt_app.voice_clone_dock is None
+
+
+def test_picking_in_the_voices_engine_combo_is_deferred(qt_app, qtbot):
+    combo = qt_app.mixing_dock.engine_combo
+    assert [combo.itemData(i) for i in range(combo.count())] == qt_app.voice_editor_engines() == ["audio8", "kokoro"]
+
+    combo.setCurrentIndex(combo.findData("audio8"))
+    combo.activated.emit(combo.currentIndex())
+    assert qt_app.voices_engine_id == "kokoro"  # not from inside the signal
+
+    qtbot.waitUntil(lambda: qt_app.voice_clone_dock is not None)
+    assert qt_app.voices_engine_id == "audio8"
+
+
+def test_voice_tools_run_on_the_voices_engines_worker(qt_app, monkeypatch, tmp_path):
+    qt_app.set_voices_engine("audio8")
+    dock = qt_app.voice_clone_dock
+    audio8_worker = qt_app.voices_backend().engine.worker
+    calls = []
+    monkeypatch.setattr(audio8_worker, "run_coro", lambda coro: (calls.append(coro), coro.close())[0] or _Done())
+    dock.wav_path_edit.setText(_write_wav(tmp_path / "ref.wav"))
+    dock.asr_engine_combo.setCurrentIndex(dock.asr_engine_combo.findData("vosk"))
+    dock.vosk_model_edit.setText(str(tmp_path))
+
+    dock._on_transcribe_clicked()
+
+    assert len(calls) == 1
+
+
+class _Done:
+    def add_done_callback(self, _cb):
+        pass

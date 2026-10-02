@@ -2,6 +2,7 @@
 1): menu bar, 2x2 dock grid, Transport dock, workspaces, theme, Options."""
 from PySide6.QtCore import Qt
 
+from kokoro_gui.engines import audio8_tts
 from kokoro_gui.qt import theme
 from kokoro_gui.qt.workspace import ADVANCED, SIMPLE
 
@@ -20,19 +21,21 @@ def test_menu_bar_has_the_four_menus(qt_app):
 
 def test_file_menu_actions(qt_app):
     texts = _action_texts(qt_app.file_menu)
-    assert texts == ["New", "Open...", "Recent", "Welcome...", "Save", "Save As...", "Import Text...",
-                     "Import Audio...", "Export...", "Quit"]
-    assert qt_app.import_audio_action.isEnabled() is False
-    assert "ASR" in qt_app.import_audio_action.toolTip()
+    assert texts == ["New", "New Subproject", "Add Subproject...", "Open...", "Recent", "Welcome...", "Save", "Save As...", "Import Text...",
+                     "Import Subtitles...", "Import Audio...", "Import Source Track...", "Load Video...", "Export...",
+                     "Quit"]
+    assert qt_app.import_audio_action.isEnabled() is True
+    assert "music bed" in qt_app.import_audio_action.toolTip()
 
 
 def test_edit_menu_actions(qt_app):
     assert _action_texts(qt_app.edit_menu) == ["Undo", "Redo", "Cut", "Copy", "Paste", "Characters..."]
 
 
-def test_options_menu_holds_engine_device_theme_and_toggles(qt_app):
+def test_options_menu_holds_settings_device_theme_and_toggles(qt_app):
+    # No Engine menu: each character picks its engine (grill V3).
     texts = _action_texts(qt_app.options_menu)
-    assert texts[:3] == ["Engine", "Device", "Theme"]
+    assert texts[:3] == ["Settings...", "Device", "Theme"]
     assert "Copy carries character/FX" in texts
     assert "Paste splits character/FX" in texts
     assert any(t.startswith("JIT streaming") for t in texts)
@@ -62,6 +65,40 @@ def test_timeline_row_can_be_made_taller(qt_app, qtbot):
     assert qt_app.timeline_dock.height() > before + 100
 
 
+# A tab group takes the largest minimum of its tabs, hidden ones included,
+# so one tall dock sets how short its whole column can get and with it how
+# tall the timeline can be dragged. 200 px leaves the timeline most of a
+# 1000 px window under any arrangement of the top row.
+MAX_DOCK_MIN_HEIGHT_PX = 200
+
+
+def _tall_docks(app):
+    return {d.objectName(): d.minimumSizeHint().height() for d in app._all_docks()
+            if d.minimumSizeHint().height() > MAX_DOCK_MIN_HEIGHT_PX}
+
+
+def test_no_dock_needs_more_height_than_the_timeline_can_spare(qt_app, monkeypatch):
+    assert qt_app.mixing_dock is not None
+    assert _tall_docks(qt_app) == {}
+
+    monkeypatch.setattr(audio8_tts, "_get_model", lambda: (object(), object()))
+    assert qt_app.set_character_engine(qt_app.document.characters[0], "audio8")
+    assert qt_app.voice_clone_dock is not None
+    assert _tall_docks(qt_app) == {}
+
+
+def test_timeline_can_take_most_of_the_window(qt_app, qtbot):
+    qt_app.resize(1600, 1000)
+    qt_app.show()
+    qtbot.waitExposed(qt_app)
+    qtbot.wait(50)
+    for _ in range(3):
+        qt_app.resizeDocks([qt_app.transcript_dock, qt_app.timeline_dock], [100, 900], Qt.Orientation.Vertical)
+        qt_app.resizeDocks([qt_app.settings_dock, qt_app.timeline_dock], [100, 900], Qt.Orientation.Vertical)
+        qtbot.wait(20)
+    assert qt_app.timeline_dock.height() >= 600
+
+
 def test_all_panels_are_docks_in_the_grid(qt_app):
     top, bottom = Qt.DockWidgetArea.TopDockWidgetArea, Qt.DockWidgetArea.LeftDockWidgetArea
     for dock in (qt_app.transcript_dock, qt_app.settings_dock, qt_app.fx_dock, qt_app.lexicon_dock):
@@ -78,11 +115,29 @@ def test_all_panels_are_docks_in_the_grid(qt_app):
 
 
 def test_voices_tab_keeps_its_title_across_engines(qt_app):
-    qt_app.switch_engine("dummy")
-    assert qt_app.mixing_dock is None and qt_app.voice_clone_dock is None
-    qt_app.switch_engine("kokoro")
+    character = qt_app.document.characters[0]
+    assert qt_app.set_character_engine(character, "dummy")
+    # Dummy has no voice editor: the tab stays on the last one (grill EN3),
+    # so its Engine combo stays reachable.
+    assert qt_app.voices_engine_id == "kokoro" and qt_app.mixing_dock is not None
+    qt_app.set_voices_engine("audio8")
+    assert qt_app.mixing_dock is None
+    assert qt_app.voice_clone_dock.windowTitle() == "Voices"
+    assert qt_app.set_character_engine(character, "kokoro")
     assert qt_app.mixing_dock.windowTitle() == "Voices"
     assert qt_app.mixing_dock in qt_app.tabifiedDockWidgets(qt_app.settings_dock)
+
+
+def test_a_saved_voices_layout_restores_whichever_editor_is_shown(qt_app):
+    qt_app.save_settings()  # captures the layout with the Mixing editor in it
+    qt_app.set_voices_engine("audio8")
+
+    qt_app.activate_workspace(ADVANCED)
+
+    dock = qt_app.voice_clone_dock
+    assert dock.objectName() == "dock_voices"
+    assert not dock.isFloating()
+    assert dock in qt_app.tabifiedDockWidgets(qt_app.settings_dock)
 
 
 # -- transport dock -----------------------------------------------------------

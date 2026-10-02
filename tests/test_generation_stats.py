@@ -2,12 +2,12 @@
 seeds/refines the batch conversion ETA (kokoro_gui/engine/conversion.py).
 
 Uses the `isolated_dirs` fixture (tests/conftest.py) purely for its
-monkeypatched `kokoro_engine.STATS_FILE`, so these tests never touch a real
+monkeypatched `runtime.STATS_FILE`, so these tests never touch a real
 generation_stats.json in the repo working directory.
 """
 import json
 
-import kokoro_engine
+from kokoro_gui.engine import runtime
 from kokoro_gui.engine import stats as generation_stats
 
 
@@ -57,7 +57,7 @@ def test_record_generation_trims_to_history_limit(isolated_dirs):
     for i in range(generation_stats.HISTORY_LIMIT + 5):
         generation_stats.record_generation("kokoro", chars=100, words=20, duration=1.0)
 
-    with open(kokoro_engine.STATS_FILE, "r", encoding="utf-8") as f:
+    with open(runtime.STATS_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
     assert len(data["kokoro"]) == generation_stats.HISTORY_LIMIT
 

@@ -27,6 +27,12 @@ complexity.
 from __future__ import annotations
 
 import copy
+import uuid
+from bisect import bisect_right
+
+# An edit that reaches more clips than this snapshots the whole run and clip
+# lists, as every command used to.
+SNAPSHOT_CLIP_LIMIT = 50
 
 
 class Command:
@@ -58,15 +64,27 @@ class UndoStack:
         # anything Qt-related itself. `None` (the default) means nobody's
         # listening - `push`/`clear_redo` stay plain no-ops toward it.
         self.on_push = None
+        # Optional `(document, command) -> Command | None`, asked after each
+        # push for a command that has to ride along in the same undo step
+        # (kokoro_gui/daw/lanes.py's relane). A module-level function, so a
+        # deep copy of the stack never captures a bound object.
+        self.follow_up = None
 
     def push(self, command: Command) -> None:
         """Runs `command.do(document)`, records it as the most recent undoable
         action, and invalidates any redo history - a new action after an
         undo makes the undone-and-now-abandoned branch unreachable, the same
-        behavior every standard undo stack has."""
+        behavior every standard undo stack has. A `follow_up` command runs
+        right after and is recorded with it as one `CompositeCommand`."""
         command.do(self._document)
+        if self.follow_up is not None:
+            extra = self.follow_up(self._document, command)
+            if extra is not None:
+                extra.do(self._document)
+                command = CompositeCommand([command, extra])
         self._undo.append(command)
         self._redo.clear()
+        self._touch()
         if self.on_push is not None:
             self.on_push()
 
@@ -86,6 +104,7 @@ class UndoStack:
         command = self._undo.pop()
         command.undo(self._document)
         self._redo.append(command)
+        self._touch()
 
     def redo(self) -> None:
         """No-op if there's nothing to redo."""
@@ -94,6 +113,18 @@ class UndoStack:
         command = self._redo.pop()
         command.do(self._document)
         self._undo.append(command)
+        self._touch()
+
+    @staticmethod
+    def _touch() -> None:
+        """A command may edit a list or dict field in place (a
+        `SetFieldCommand` with a `key`), which no attribute set reports, so
+        every push, undo and redo moves the revision counters
+        (kokoro_gui/daw/revision.py)."""
+        from kokoro_gui.daw import revision
+
+        revision.bump_text()
+        revision.bump_model()
 
     def can_undo(self) -> bool:
         return bool(self._undo)
@@ -102,15 +133,141 @@ class UndoStack:
         return bool(self._redo)
 
 
+class CompositeCommand(Command):
+    """Several commands as one undo step: `do` runs them in order, `undo`
+    in reverse."""
+
+    def __init__(self, commands):
+        self.commands = list(commands)
+
+    def do(self, document) -> None:
+        for command in self.commands:
+            command.do(document)
+
+    def undo(self, document) -> None:
+        for command in reversed(self.commands):
+            command.undo(document)
+
+
+class _EditSnapshot:
+    """What `Document.replace_text` or `assign_character_to_range` over
+    `[lo, hi]` can change, copied before it runs, so undoing one edit in a
+    book-length document doesn't deep-copy every run and clip.
+
+    The runs overlapping or touching `[lo, hi]`, one more on each side (a
+    merge of equal-tagged neighbours can reach that far), widened to the full
+    extent of every clip the range overlaps (the split rule retags each
+    clip's leftover text), and the clips those runs name, with their list
+    positions. The edits create new runs and clips and drop old ones; they
+    change nothing else, so `restore` puts the copies back and removes
+    what the edit made. It relies on the document being as the edit left it
+    (the undo stack's order guarantees that).
+
+    The whole lists are copied instead, as before, when the edit reaches more
+    than `SNAPSHOT_CLIP_LIMIT` clips or the document holds imported recording
+    clips (their words and segments change in place, in clips and runs
+    outside any range). `seal` checks that the edit stayed inside the slice
+    and, if it didn't, `restore` puts back the objects the document started
+    with."""
+
+    def __init__(self, document, lo: int, hi: int):
+        from kokoro_gui.daw.models import IMPORTED
+
+        self.whole = None
+        self.fallback = None
+        self.slice = None
+        index = document.index()
+        clips = document.clips
+        if any(clip.source == IMPORTED for clip in clips):
+            self._copy_whole(document)
+            return
+        bounds = self._bounds(index, lo, hi)
+        ids = self._clip_ids(index.runs, bounds)
+        for clip_id in ids:
+            extent = index.extent(clip_id)
+            if extent is not None:
+                lo, hi = min(lo, extent[0]), max(hi, extent[1])
+        bounds = self._bounds(index, lo, hi)
+        ids = self._clip_ids(index.runs, bounds)
+        if len(ids) > SNAPSHOT_CLIP_LIMIT:
+            self._copy_whole(document)
+            return
+        first, stop = bounds
+        self.first = first
+        self.suffix = len(index.runs) - stop
+        self.slice = copy.deepcopy(index.runs[first:stop])
+        self.clip_ids = {clip.id for clip in clips}
+        self.clips = [(i, copy.deepcopy(clip)) for i, clip in enumerate(clips) if clip.id in ids]
+        self.touched_ids = ids
+        # What the document held, for `restore` if the edit strays.
+        self._refs = (index.runs, list(clips))
+
+    def _copy_whole(self, document) -> None:
+        self.whole = (copy.deepcopy(document.runs), copy.deepcopy(document.clips))
+
+    @staticmethod
+    def _bounds(index, lo: int, hi: int) -> tuple:
+        """`(first, stop)` run indices: the runs overlapping or touching
+        `[lo, hi]` and one more run each side."""
+        count = len(index.runs)
+        if not count:
+            return 0, 0
+        left = bisect_right(index.starts, max(lo - 1, 0)) - 1
+        right = bisect_right(index.starts, hi) - 1
+        return max(left - 1, 0), min(right + 2, count)
+
+    @staticmethod
+    def _clip_ids(runs, bounds) -> set:
+        return {run.clip_id for run in runs[bounds[0]:bounds[1]] if run.clip_id is not None}
+
+    def seal(self, document) -> None:
+        """Called after the edit: gives up the slice if the edit changed a run
+        or a clip outside it."""
+        if self.whole is not None:
+            return
+        runs, now = self._refs[0], document.runs
+        stop = len(runs) - self.suffix
+        outside_runs = (all(a is b for a, b in zip(runs[:self.first], now[:self.first]))
+                        and len(now) >= self.suffix
+                        and all(a is b for a, b in zip(runs[stop:], now[len(now) - self.suffix:])))
+        kept = {clip.id for clip in document.clips}
+        if not outside_runs or not (self.clip_ids - self.touched_ids) <= kept:
+            self.fallback, self.slice = self._refs, None
+
+    def restore(self, document) -> None:
+        if self.whole is not None:
+            runs, clips = self.whole
+            document.runs = copy.deepcopy(runs)
+            document.clips = copy.deepcopy(clips)
+        elif self.slice is None:
+            runs, clips = self.fallback
+            document.runs = list(runs)
+            document.clips = list(clips)
+        else:
+            runs = document.runs
+            document.runs = [*runs[:self.first], *copy.deepcopy(self.slice),
+                             *runs[len(runs) - self.suffix:]]
+            gone = self.touched_ids | (self._ids_now(document) - self.clip_ids)
+            clips = [clip for clip in document.clips if clip.id not in gone]
+            for position, clip in self.clips:
+                clips.insert(position, copy.deepcopy(clip))
+            document.clips = clips
+
+    @staticmethod
+    def _ids_now(document) -> set:
+        return {clip.id for clip in document.clips}
+
+
 class AssignCharacterCommand(Command):
     """Wraps `Document.assign_character_to_range` (the Characters-menu /
     gutter-dropdown / paste-splitting primitive). Rather than trying to
     reconstruct exactly which runs/clips a split touched, `do()` snapshots
-    (deep-copies) the WHOLE `document.runs`/`document.clips` lists BEFORE
-    calling it, and `undo()` restores both verbatim - `Run`/`Clip` are small
-    plain-data dataclasses, so a full deep copy is cheap, and it sidesteps
-    the lossy-reconstruction trap the retired offset-based version had to
-    work around with a partial-snapshot-plus-reverse-replay (see
+    them BEFORE calling it (`_EditSnapshot`: the runs around the range and
+    the clips they name, deep-copied; the whole lists when the range reaches
+    more than `SNAPSHOT_CLIP_LIMIT` clips), and `undo()` restores them
+    verbatim - `Run`/`Clip` are small plain-data dataclasses, and it
+    sidesteps the lossy-reconstruction trap the retired offset-based version
+    had to work around with a partial-snapshot-plus-reverse-replay (see
     `TextEditCommand` below for the same reasoning applied to text edits).
 
     `redo()` re-runs `do()` from the (now-restored) pre-split state, so it
@@ -118,23 +275,40 @@ class AssignCharacterCommand(Command):
     time - correct across any number of undo/redo cycles.
     """
 
-    def __init__(self, start: int, end: int, character_id):
+    def __init__(self, start: int, end: int, character_id, clip_fields: "dict | None" = None,
+                 clip_overrides: "dict | None" = None):
         self.start = start
         self.end = end
         self.character_id = character_id
-        self._pre_runs: "list | None" = None
-        self._pre_clips: "list | None" = None
+        # Set on the new clip after the split, e.g. `{"gap_before_s": 1.5}`
+        # from a `[pause:x]` marker, so a redo recreates it too.
+        self.clip_fields = dict(clip_fields or {})
+        # Entries merged into the new clip's `overrides`, e.g.
+        # `{"fx_preset": "Radio"}` from a `[Name:Radio]:` tag (grill TE12).
+        self.clip_overrides = dict(clip_overrides or {})
+        self._snapshot: "_EditSnapshot | None" = None
+        self._created_track_ids: list = []
         self.new_clip_id: "str | None" = None
 
     def do(self, document) -> None:
-        self._pre_runs = copy.deepcopy(document.runs)
-        self._pre_clips = copy.deepcopy(document.clips)
+        self._snapshot = snapshot = _EditSnapshot(document, self.start, self.end)
+        track_ids = {t.id for t in document.tracks}
         new_clip = document.assign_character_to_range(self.start, self.end, self.character_id)
+        for name, value in self.clip_fields.items():
+            setattr(new_clip, name, copy.deepcopy(value))
+        for key, value in self.clip_overrides.items():
+            new_clip.overrides[key] = copy.deepcopy(value)
         self.new_clip_id = new_clip.id
+        # A character's first use makes its track (grill PR4); undo takes it
+        # away again.
+        self._created_track_ids = [t.id for t in document.tracks if t.id not in track_ids]
+        snapshot.seal(document)
 
     def undo(self, document) -> None:
-        document.runs = copy.deepcopy(self._pre_runs)
-        document.clips = copy.deepcopy(self._pre_clips)
+        self._snapshot.restore(document)
+        created = set(self._created_track_ids)
+        if created:
+            document.tracks = [t for t in document.tracks if t.id not in created]
 
 
 class TextEditCommand(Command):
@@ -144,13 +318,12 @@ class TextEditCommand(Command):
     transcript editor, which now rides Qt's own native `QTextDocument` undo
     instead (see this module's docstring).
 
-    Same snapshot-the-whole-run-list strategy as `AssignCharacterCommand`,
-    for the same reason: once an edit fully consumes a clip, there's no
-    longer enough information left in `position`/`chars_removed`/
-    `chars_added` alone to know which of the surviving text's *other* runs
-    that clip's characters used to belong to, so a naive "replay the edit in
-    reverse" can mis-tag the restored text. Snapshotting avoids the problem
-    entirely instead of solving it.
+    Same snapshot strategy as `AssignCharacterCommand`, for the same reason:
+    once an edit fully consumes a clip, there's no longer enough information
+    left in `position`/`chars_removed`/`chars_added` alone to know which of
+    the surviving text's *other* runs that clip's characters used to belong
+    to, so a naive "replay the edit in reverse" can mis-tag the restored
+    text. Snapshotting avoids the problem entirely instead of solving it.
     """
 
     def __init__(self, position: int, chars_removed: int, chars_added: int, new_text: str):
@@ -158,17 +331,15 @@ class TextEditCommand(Command):
         self.chars_removed = chars_removed
         self.chars_added = chars_added
         self.new_text = new_text
-        self._pre_runs: "list | None" = None
-        self._pre_clips: "list | None" = None
+        self._snapshot: "_EditSnapshot | None" = None
 
     def do(self, document) -> None:
-        self._pre_runs = copy.deepcopy(document.runs)
-        self._pre_clips = copy.deepcopy(document.clips)
+        self._snapshot = snapshot = _EditSnapshot(document, self.position, self.position + self.chars_removed)
         document.replace_text(self.position, self.chars_removed, self.chars_added, self.new_text)
+        snapshot.seal(document)
 
     def undo(self, document) -> None:
-        document.runs = copy.deepcopy(self._pre_runs)
-        document.clips = copy.deepcopy(self._pre_clips)
+        self._snapshot.restore(document)
 
 
 class MoveClipCommand(Command):
@@ -307,6 +478,32 @@ class SetClipTimestampCommand(Command):
         clip.timeline_timestamp = self._previous
 
 
+class RippleCommand(Command):
+    """Ripple on regenerate: moves each clip in `shifts` (`{clip_id:
+    seconds}`, from `arrangement.plan_ripple`) along the timeline by adding
+    to its `timeline_timestamp`, never below 0. Undo puts back the exact
+    previous values."""
+
+    def __init__(self, shifts: dict):
+        self.shifts = dict(shifts)
+        self._previous: dict = {}
+
+    def do(self, document) -> None:
+        self._previous = {}
+        for clip_id, shift in self.shifts.items():
+            clip = document.get_clip(clip_id)
+            if clip is None or clip.timeline_timestamp is None:
+                continue
+            self._previous[clip_id] = clip.timeline_timestamp
+            clip.timeline_timestamp = max(0.0, float(clip.timeline_timestamp) + float(shift))
+
+    def undo(self, document) -> None:
+        for clip_id, timestamp in self._previous.items():
+            clip = document.get_clip(clip_id)
+            if clip is not None:
+                clip.timeline_timestamp = timestamp
+
+
 class MoveClipBeforeCommand(Command):
     """UI9 / grill Q13: dragging a clip to before another clip on the
     timeline also moves its text to just before that clip's text. Moves
@@ -349,6 +546,474 @@ class MoveClipBeforeCommand(Command):
     def undo(self, document) -> None:
         document.runs = copy.deepcopy(self._pre_runs)
         document.clips = copy.deepcopy(self._pre_clips)
+
+
+_MISSING = object()
+
+
+def _field_target(document, target_kind: str, target_id):
+    """The object a `SetFieldCommand` edits: a clip, track or character by
+    id, or the document itself for `"document"` (whose `settings` dict is
+    where project-level values live)."""
+    if target_kind == "clip":
+        return document.get_clip(target_id)
+    if target_kind == "track":
+        return document.get_track(target_id)
+    if target_kind == "character":
+        return document.get_character(target_id)
+    if target_kind == "document":
+        return document
+    raise ValueError(f"unknown SetFieldCommand target kind {target_kind!r}")
+
+
+class SetFieldCommand(Command):
+    """Sets one field on a clip, track, character or the document, undoably.
+    With `key`, the field is a dict (`clip.overrides`, `document.settings`)
+    and the command sets `field[key]`; `value=None` with a key removes the
+    entry. Values are deep-copied both ways, so a caller mutating its list
+    afterwards (a marker list, an automation lane) can't reach the history.
+
+    `SetFieldCommand("clip", id, "fade_in_s", 0.2)`,
+    `SetFieldCommand("document", None, "settings", 0.5, key="gap_s")`."""
+
+    def __init__(self, target_kind: str, target_id, field: str, value, key=None):
+        self.target_kind = target_kind
+        self.target_id = target_id
+        self.field = field
+        self.key = key
+        self.value = copy.deepcopy(value)
+        self._previous = _MISSING
+
+    def do(self, document) -> None:
+        target = _field_target(document, self.target_kind, self.target_id)
+        if target is None:
+            return
+        if self.key is None:
+            self._previous = copy.deepcopy(getattr(target, self.field))
+            setattr(target, self.field, copy.deepcopy(self.value))
+            return
+        container = getattr(target, self.field)
+        previous = container.get(self.key, _MISSING)
+        self._previous = previous if previous is _MISSING else copy.deepcopy(previous)
+        if self.value is None:
+            container.pop(self.key, None)
+        else:
+            container[self.key] = copy.deepcopy(self.value)
+
+    def undo(self, document) -> None:
+        target = _field_target(document, self.target_kind, self.target_id)
+        if target is None:
+            return
+        if self.key is None:
+            if self._previous is not _MISSING:
+                setattr(target, self.field, copy.deepcopy(self._previous))
+            return
+        container = getattr(target, self.field)
+        if self._previous is _MISSING:
+            container.pop(self.key, None)
+        else:
+            container[self.key] = copy.deepcopy(self._previous)
+
+
+class SetActiveTakeCommand(Command):
+    """Makes parked take `index` a clip's active take: its segment list
+    swaps with `clip.segments`, the outgoing list is parked under the
+    outgoing take index, and `clip.overrides["take"]` follows."""
+
+    def __init__(self, clip_id: str, index: int):
+        self.clip_id = clip_id
+        self.index = int(index)
+        self._previous_index = None
+
+    def _swap(self, clip, to_index: int) -> int:
+        from_index = int(clip.overrides.get("take", 0) or 0)
+        incoming = clip.takes.pop(to_index, None)
+        if incoming is None:
+            return from_index
+        if clip.segments:
+            clip.takes[from_index] = clip.segments
+        clip.segments = incoming
+        if to_index:
+            clip.overrides["take"] = to_index
+        else:
+            clip.overrides.pop("take", None)
+        return from_index
+
+    def do(self, document) -> None:
+        clip = document.get_clip(self.clip_id)
+        if clip is None or self.index not in clip.takes:
+            self._previous_index = None
+            return
+        self._previous_index = self._swap(clip, self.index)
+
+    def undo(self, document) -> None:
+        clip = document.get_clip(self.clip_id)
+        if clip is None or self._previous_index is None:
+            return
+        self._swap(clip, self._previous_index)
+
+
+class DeleteTakeCommand(Command):
+    """Drops parked take `index` from a clip. The files stay until
+    close-time GC finds nothing referencing them, so undo can bring the
+    take back."""
+
+    def __init__(self, clip_id: str, index: int):
+        self.clip_id = clip_id
+        self.index = int(index)
+        self._segments = None
+
+    def do(self, document) -> None:
+        clip = document.get_clip(self.clip_id)
+        self._segments = clip.takes.pop(self.index, None) if clip is not None else None
+
+    def undo(self, document) -> None:
+        clip = document.get_clip(self.clip_id)
+        if clip is not None and self._segments is not None:
+            clip.takes[self.index] = self._segments
+
+
+class ReplaceWithNestedCommand(Command):
+    """New Subproject (phase 4): `[start, end)` of the text, with the clips
+    inside it, leaves this document (the app has already copied them into
+    the child) and one placeholder run for the child takes its place, on
+    the "Subprojects" track. The nested clip keeps `clip_id` across redo, so
+    the open child stays attached. Same whole-list snapshot as
+    `AssignCharacterCommand`; undo brings the text back and leaves the
+    child's project dir for close-time eviction."""
+
+    def __init__(self, start: int, end: int, child: dict, title: str, clip_id: str):
+        self.start = start
+        self.end = end
+        self.child = dict(child)
+        self.title = title
+        self.clip_id = clip_id
+        self._pre = None
+
+    def do(self, document) -> None:
+        self._pre = (copy.deepcopy(document.runs), copy.deepcopy(document.clips), copy.deepcopy(document.tracks))
+        if self.end > self.start:
+            text = document.text
+            document.replace_text(self.start, self.end - self.start, 0, text[:self.start] + text[self.end:])
+        clip = document.insert_nested_clip(self.start, self.child, self.title)
+        # The id is the command's, so redo re-creates the same clip.
+        for run in document.runs:
+            if run.clip_id == clip.id:
+                run.clip_id = self.clip_id
+        clip.id = self.clip_id
+        clip.track_id = document.subprojects_track(create=True)
+
+    def undo(self, document) -> None:
+        runs, clips, tracks = self._pre
+        document.runs = copy.deepcopy(runs)
+        document.clips = copy.deepcopy(clips)
+        document.tracks = copy.deepcopy(tracks)
+
+
+class ImportCuesCommand(Command):
+    """Subtitle import (phase 5 D2): each cue becomes a paragraph appended
+    to the end of the text (a blank line before it) and a clip over it,
+    locked in time at the cue's start (`timeline_timestamp`, `pinned`),
+    with the cue's text as `source_text`, its length as
+    `overrides["target_duration_s"]` and its times as
+    `overrides["reference_range"]` (the slice of the source track the
+    clip dubs, kokoro_gui/daw/reference.py). The transcript line is the cue's text
+    on one line (a subtitle's line breaks are layout); `source_text` keeps
+    them.
+
+    `cues` are `kokoro_gui.daw.subtitles.Cue`s, `character_ids` the
+    character for each, and `new_characters` the `Character`s the speaker
+    mapping made, added to the document in the same step. Clip ids are
+    fixed here, so a redo recreates the same clips. Undo restores the runs
+    and clips and removes the characters and tracks `do` added."""
+
+    def __init__(self, cues, character_ids, new_characters=()):
+        import uuid
+
+        cues = list(cues)
+        character_ids = list(character_ids)
+        if len(cues) != len(character_ids):
+            raise ValueError("ImportCuesCommand needs one character id per cue")
+        self.rows = [
+            (" ".join(cue.text.split()), cue.text, float(cue.start_s), float(cue.end_s), character_id,
+             uuid.uuid4().hex)
+            for cue, character_id in zip(cues, character_ids)
+        ]
+        self.new_characters = [copy.deepcopy(c) for c in new_characters]
+        self._pre = None
+        self._created_track_ids: list = []
+        self._added_character_ids: list = []
+
+    @property
+    def clip_ids(self) -> list:
+        return [row[-1] for row in self.rows]
+
+    def do(self, document) -> None:
+        from kokoro_gui.daw.models import Clip, Run
+
+        self._pre = (copy.deepcopy(document.runs), copy.deepcopy(document.clips))
+        track_ids = {t.id for t in document.tracks}
+        known = {c.id for c in document.characters}
+        self._added_character_ids = []
+        for character in self.new_characters:
+            if character.id not in known:
+                document.characters.append(copy.deepcopy(character))
+                self._added_character_ids.append(character.id)
+
+        tail = document.text[-2:]
+        for line, source_text, start_s, end_s, character_id, clip_id in self.rows:
+            if not tail or tail == "\n\n":
+                separator = ""
+            elif tail.endswith("\n"):
+                separator = "\n"
+            else:
+                separator = "\n\n"
+            if separator:
+                document.runs.append(Run(text=separator))
+            clip = Clip(
+                character_id=character_id, track_id=document.track_for_character(character_id, create=True),
+                timeline_timestamp=start_s, pinned=True, source_text=source_text,
+                overrides={"target_duration_s": max(0.0, end_s - start_s),
+                           "reference_range": [start_s, max(start_s, end_s)]},
+                id=clip_id,
+            )
+            document.clips.append(clip)
+            document.runs.append(Run(text=line, clip_id=clip.id, kind=clip.run_kind))
+            tail = line[-2:]
+        document._normalize_runs()
+        self._created_track_ids = [t.id for t in document.tracks if t.id not in track_ids]
+
+    def undo(self, document) -> None:
+        runs, clips = self._pre
+        document.runs = copy.deepcopy(runs)
+        document.clips = copy.deepcopy(clips)
+        created = set(self._created_track_ids)
+        if created:
+            document.tracks = [t for t in document.tracks if t.id not in created]
+        added = set(self._added_character_ids)
+        if added:
+            document.characters = [c for c in document.characters if c.id not in added]
+
+
+def _sources_snapshot(document):
+    """A deep copy of `settings["sources"]`, or `_MISSING` when unset."""
+    from kokoro_gui.daw.models import SOURCES_KEY
+
+    value = document.settings.get(SOURCES_KEY, _MISSING)
+    return value if value is _MISSING else copy.deepcopy(value)
+
+
+def _restore_sources(document, snapshot) -> None:
+    from kokoro_gui.daw.models import SOURCES_KEY
+
+    if snapshot is _MISSING:
+        document.settings.pop(SOURCES_KEY, None)
+    else:
+        document.settings[SOURCES_KEY] = copy.deepcopy(snapshot)
+
+
+class ApplyWordsCommand(Command):
+    """Wraps `Document.apply_words`: tags an already-inserted span (a paste
+    or drop of timed text, phase 5 P3) as imported recording text. The
+    plain insert rides the editor's native undo; this is the custom-stack
+    step after it. Snapshots runs, clips and `settings["sources"]` like
+    `AssignCharacterCommand`, and removes a track the new clip's character
+    got for it. `clip_id` is the clip the span joined, or None when no word
+    had a known source (nothing changed)."""
+
+    def __init__(self, position: int, length: int, words, sources=None, character_id=None):
+        self.position = position
+        self.length = length
+        self.words = copy.deepcopy(list(words or []))
+        self.sources = copy.deepcopy(dict(sources or {}))
+        self.character_id = character_id
+        self.clip_id = None
+        self._pre = None
+        self._created_track_ids: list = []
+
+    def do(self, document) -> None:
+        self._pre = (copy.deepcopy(document.runs), copy.deepcopy(document.clips), _sources_snapshot(document))
+        track_ids = {t.id for t in document.tracks}
+        self.clip_id = document.apply_words(self.position, self.length, self.words, self.sources,
+                                            character_id=self.character_id)
+        self._created_track_ids = [t.id for t in document.tracks if t.id not in track_ids]
+
+    def undo(self, document) -> None:
+        runs, clips, sources = self._pre
+        document.runs = copy.deepcopy(runs)
+        document.clips = copy.deepcopy(clips)
+        _restore_sources(document, sources)
+        created = set(self._created_track_ids)
+        if created:
+            document.tracks = [t for t in document.tracks if t.id not in created]
+
+
+class ImportRecordingCommand(Command):
+    """Import Recording's commit (phase 5 P3, grill Q19/Q32): each row
+    becomes a paragraph appended to the end of the text (a blank line
+    before it) and an imported recording clip over it whose run carries the
+    row's words. A row is a dict: `"text"`, `"words"` (`Run.words` for
+    that text, from `imported.run_from_asr_words` or
+    `imported.words_from_cue`), `"character_id"`, and optionally
+    `"gap_before_s"`. Without it, a row whose first word follows the
+    previous row's last word in the same source gets the pause between
+    them, so the recording keeps its pacing; the first row gets the
+    document's gap. `sources` are added to `Document.sources` and
+    `new_characters` (an "Unknown speaker" with no voice, or the caption
+    speakers the mapping made) to the document, in the same step.
+
+    Clip ids are fixed here, so a redo recreates the same clips. Undo
+    restores runs, clips and sources and removes the characters and tracks
+    `do` added."""
+
+    def __init__(self, rows, sources, new_characters=()):
+        import uuid
+
+        self.rows = []
+        previous = None
+        for row in rows:
+            words = copy.deepcopy(list(row.get("words") or []))
+            gap = row.get("gap_before_s")
+            if "gap_before_s" not in row and previous and words and previous[2] == words[0][2]:
+                gap = round(max(0.0, float(words[0][3]) - float(previous[4])), 6)
+            self.rows.append((str(row.get("text") or ""), words, row.get("character_id"), gap, uuid.uuid4().hex))
+            if words:
+                previous = words[-1]
+        self.sources = copy.deepcopy(dict(sources or {}))
+        self.new_characters = [copy.deepcopy(c) for c in new_characters]
+        self._pre = None
+        self._created_track_ids: list = []
+        self._added_character_ids: list = []
+
+    @property
+    def clip_ids(self) -> list:
+        return [row[-1] for row in self.rows]
+
+    def do(self, document) -> None:
+        from kokoro_gui.daw.models import IMPORTED, Clip, Run
+
+        self._pre = (copy.deepcopy(document.runs), copy.deepcopy(document.clips), _sources_snapshot(document))
+        track_ids = {t.id for t in document.tracks}
+        known = {c.id for c in document.characters}
+        self._added_character_ids = []
+        for character in self.new_characters:
+            if character.id not in known:
+                document.characters.append(copy.deepcopy(character))
+                self._added_character_ids.append(character.id)
+        document.add_sources(self.sources)
+
+        tail = document.text[-2:]
+        for text, words, character_id, gap, clip_id in self.rows:
+            if not text:
+                continue
+            if not tail or tail == "\n\n":
+                separator = ""
+            elif tail.endswith("\n"):
+                separator = "\n"
+            else:
+                separator = "\n\n"
+            if separator:
+                document.runs.append(Run(text=separator))
+            clip = Clip(character_id=character_id, track_id=document.track_for_character(character_id, create=True),
+                        source=IMPORTED, gap_before_s=gap, id=clip_id)
+            document.clips.append(clip)
+            document.runs.append(Run(text=text, clip_id=clip.id, kind=IMPORTED, words=copy.deepcopy(words)))
+            tail = text[-2:]
+        document._normalize_runs()
+        document.refresh_imported_segments(set(self.clip_ids))
+        self._created_track_ids = [t.id for t in document.tracks if t.id not in track_ids]
+
+    def undo(self, document) -> None:
+        runs, clips, sources = self._pre
+        document.runs = copy.deepcopy(runs)
+        document.clips = copy.deepcopy(clips)
+        _restore_sources(document, sources)
+        created = set(self._created_track_ids)
+        if created:
+            document.tracks = [t for t in document.tracks if t.id not in created]
+        added = set(self._added_character_ids)
+        if added:
+            document.characters = [c for c in document.characters if c.id not in added]
+
+
+class ImportBedCommand(Command):
+    """File > Import Audio's music bed (phase 5 P2, grill Q30): a paragraph
+    at the end of the transcript holding the file's name as a placeholder
+    run, and an imported clip playing `path` on the "Music" track (made
+    when there is none), pinned at `at_s`. `undo` restores the runs and
+    clips and removes the track if this command made it. The clip's and
+    the track's ids are fixed here, so a redo recreates the same ones."""
+
+    def __init__(self, path: str, title: str, at_s: float = 0.0):
+        self.path = path
+        self.title = title or "Audio"
+        self.at_s = max(0.0, float(at_s))
+        self.clip_id = uuid.uuid4().hex
+        self._new_track_id = uuid.uuid4().hex
+        self._pre = None
+        self._created_track_id = None
+
+    def do(self, document) -> None:
+        from kokoro_gui.daw.models import Clip, Run, Track
+
+        self._pre = (copy.deepcopy(document.runs), copy.deepcopy(document.clips))
+        track_id = document.music_track()
+        self._created_track_id = None
+        if track_id is None:
+            order = max((t.order_index for t in document.tracks), default=-1) + 1
+            document.tracks.append(Track(name="Music", order_index=order, role="music", id=self._new_track_id))
+            track_id = self._created_track_id = self._new_track_id
+        tail = document.text[-2:]
+        if tail and tail != "\n\n":
+            document.runs.append(Run(text="\n" if tail.endswith("\n") else "\n\n"))
+        clip = Clip(source="imported", original_audio_path=self.path, track_id=track_id,
+                    timeline_timestamp=self.at_s, pinned=True, id=self.clip_id)
+        document.clips.append(clip)
+        document.runs.append(Run(text=self.title, clip_id=clip.id, kind=clip.run_kind))
+        document._normalize_runs()
+
+    def undo(self, document) -> None:
+        runs, clips = self._pre
+        document.runs = copy.deepcopy(runs)
+        document.clips = copy.deepcopy(clips)
+        if self._created_track_id is not None:
+            document.tracks = [t for t in document.tracks if t.id != self._created_track_id]
+
+
+class RelaneCommand(Command):
+    """Puts every clip on the track the document's track layout says
+    (kokoro_gui/daw/lanes.py): the unified layout's lane rule, or each
+    clip's own character track. Creates the tracks that needs. The plan is
+    made in `do`, so a redo after an undone split (whose new clip gets a
+    fresh id) lanes what is there; `undo` restores each clip's previous
+    `track_id` and removes the tracks `do` created (grill PR4)."""
+
+    def __init__(self):
+        self._previous: dict = {}
+        self._created_track_ids: list = []
+
+    def do(self, document) -> None:
+        from kokoro_gui.daw.lanes import plan_relane
+
+        plan = plan_relane(document)
+        document.tracks.extend(plan.new_tracks)
+        self._created_track_ids = [t.id for t in plan.new_tracks]
+        self._previous = {}
+        for clip_id, track_id in plan.assignments.items():
+            clip = document.get_clip(clip_id)
+            if clip is None:
+                continue
+            self._previous[clip_id] = clip.track_id
+            clip.track_id = track_id
+
+    def undo(self, document) -> None:
+        for clip_id, track_id in self._previous.items():
+            clip = document.get_clip(clip_id)
+            if clip is not None:
+                clip.track_id = track_id
+        created = set(self._created_track_ids)
+        if created:
+            document.tracks = [t for t in document.tracks if t.id not in created]
 
 
 # The split-or-create primitive item 7 ("Auto-split on generation") and

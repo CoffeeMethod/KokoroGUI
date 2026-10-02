@@ -73,7 +73,7 @@ def test_config_schema_shape(audio8_engine):
 
     keys = {f.key for f in schema}
     assert keys == {
-        "lang_code", "voice", "speed", "split_pattern", "format", "num_threads",
+        "lang_code", "voice", "speed", "segment_target_words", "segment_at_paragraphs", "segment_at_sentences", "segment_at_pauses", "format", "num_threads",
         "caching", "cache_reference_codes",
         "max_new_tokens", "temperature", "top_p", "top_k",
     }
@@ -188,7 +188,7 @@ def test_process_chunk_task_writes_44100hz_audio(audio8_engine, isolated_audio8_
 
     config = {
         "lang_code": "English", "voice": audio8_engine.resolve_voice_path("Dana"),
-        "speed": 1.0, "split_pattern": r"\n+", "filename": "out", "time_id": "1",
+        "speed": 1.0, "filename": "out", "time_id": "1",
         "out_dir": str(isolated_dirs.out_dir), "format": "wav", "caching": False,
         "apply_fx": False,
     }
@@ -331,7 +331,7 @@ def test_process_chunk_task_reads_sampling_knobs_from_config(audio8_engine, isol
 
     config = {
         "lang_code": "English", "voice": audio8_engine.resolve_voice_path("Dana"),
-        "speed": 1.0, "split_pattern": r"\n+", "filename": "out", "time_id": "1",
+        "speed": 1.0, "filename": "out", "time_id": "1",
         "out_dir": str(isolated_dirs.out_dir), "format": "wav", "caching": False,
         "apply_fx": False, "max_new_tokens": 256, "temperature": 1.1, "top_p": 0.5, "top_k": 10,
     }
@@ -355,7 +355,7 @@ def test_process_chunk_task_reads_cache_reference_codes_from_config(audio8_engin
 
     config = {
         "lang_code": "English", "voice": audio8_engine.resolve_voice_path("Dana"),
-        "speed": 1.0, "split_pattern": r"\n+", "filename": "out", "time_id": "1",
+        "speed": 1.0, "filename": "out", "time_id": "1",
         "out_dir": str(isolated_dirs.out_dir), "format": "wav", "caching": False,
         "apply_fx": False, "cache_reference_codes": False,
     }

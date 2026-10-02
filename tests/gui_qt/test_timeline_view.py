@@ -3,6 +3,8 @@ qtbot-only, no full qt_app (QtTTSApp) fixture, mirroring
 test_waveform_view.py's app-independence, since this widget has no
 dependency on the running app - it only needs a kokoro_gui.daw.models.Document."""
 import numpy as np
+import pytest
+import shiboken6
 import soundfile as sf
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QMessageBox
@@ -51,6 +53,8 @@ def _tagged_doc(text, tagged=(), **kwargs):
     clips = kwargs.pop("clips", None)
     if clips is None:
         clips = [clip for _start, _end, clip in tagged]
+    # Placement tests here predate gaps; test_arrangement.py covers those.
+    kwargs.setdefault("settings", {"gap_s": 0.0, "paragraph_gap_s": 0.0})
     return Document(runs=runs, clips=clips, **kwargs)
 
 
@@ -63,7 +67,10 @@ def test_lanes_match_track_count_and_order_index_ordering(qtbot):
     # insertion order, drives lane position.
     track_bob = Track(name="Bob", character_id=bob.id, order_index=1)
     track_alice = Track(name="Alice", character_id=alice.id, order_index=0)
-    doc = Document.from_plain_text("", characters=[alice, bob], tracks=[track_bob, track_alice])
+    clip_bob = Clip(character_id=bob.id, track_id=track_bob.id)
+    clip_alice = Clip(character_id=alice.id, track_id=track_alice.id)
+    doc = _tagged_doc("bob alice", [(0, 3, clip_bob), (4, 9, clip_alice)], characters=[alice, bob],
+                      tracks=[track_bob, track_alice])
 
     widget.render_document(doc)
 
@@ -71,6 +78,30 @@ def test_lanes_match_track_count_and_order_index_ordering(qtbot):
     label_by_text = {label.text(): label for label in labels}
     assert label_by_text["Alice"].pos().y() < label_by_text["Bob"].pos().y()
     assert label_by_text["Alice"].pos().y() >= RULER_HEIGHT_PX
+
+
+def test_a_track_without_clips_is_not_drawn(qtbot):
+    """Grill PR4: an unused track stays in the model (with its mixer
+    settings) but gets no lane or header row."""
+    widget = TimelineWidget()
+    qtbot.addWidget(widget)
+    alice = Character.from_preset_dict("Alice", {})
+    bob = Character.from_preset_dict("Bob", {})
+    track_alice = Track(name="Alice", character_id=alice.id, order_index=0)
+    track_bob = Track(name="Bob", character_id=bob.id, order_index=1, gain=0.5)
+    clip = Clip(character_id=bob.id, track_id=track_bob.id)
+    doc = _tagged_doc("bob", [(0, 3, clip)], characters=[alice, bob], tracks=[track_alice, track_bob])
+
+    widget.render_document(doc, compute_arrangement(doc, chars_per_second=CPS))
+
+    names = {item.text() for item in widget.header._scene.items() if hasattr(item, "text")}
+    assert "Bob" in names and "Alice" not in names
+    assert list(widget.header.controls) == [track_bob.id]
+    block = widget.view._blocks_by_clip_id[clip.id]
+    assert block.pos().y() < lane_top(1)  # Bob takes the first lane
+    assert widget.view._track_at_y(doc, lane_top(0) + 5) is track_bob
+    assert widget.view._track_at_y(doc, lane_top(1) + 5) is None
+    assert track_alice in doc.tracks
 
 
 def test_first_clip_starts_at_zero_seconds_and_is_as_wide_as_its_estimate(qtbot):
@@ -236,7 +267,7 @@ def test_clip_with_real_audio_path_renders_waveform(qtbot, tmp_path):
 
     block = _clip_block_items(view)[0]
     assert block._waveform_item is not None
-    assert block._waveform_item._peaks is not None
+    assert block._waveform_item.loaded_peaks() is not None  # decoded on first paint, or on asking
 
 
 def test_clip_with_missing_audio_path_falls_back_to_flat_block(qtbot, tmp_path):
@@ -278,7 +309,8 @@ def test_context_menu_over_clip_with_audio_shows_generate_and_play(qtbot, tmp_pa
     pos = view.mapFromScene(block.mapToScene(0, 0))
     menu = view._build_context_menu(pos)
 
-    assert _menu_action_texts(menu) == ["Generate", "Play"]
+    # Status is always there; Align words needs audio.
+    assert _menu_action_texts(menu) == ["Generate", "Play", "Lock in time", "", "Status", "Align words"]
 
 
 def test_context_menu_over_clip_without_audio_shows_generate_only(qtbot):
@@ -294,7 +326,7 @@ def test_context_menu_over_clip_without_audio_shows_generate_only(qtbot):
     pos = view.mapFromScene(block.mapToScene(0, 0))
     menu = view._build_context_menu(pos)
 
-    assert _menu_action_texts(menu) == ["Generate"]
+    assert _menu_action_texts(menu) == ["Generate", "Lock in time", "", "Status"]
 
 
 def test_triggering_play_emits_play_clip_requested(qtbot, tmp_path):
@@ -598,7 +630,10 @@ def _build_doc_two_tracks_same_character():
     track_a = Track(name="Alice A", character_id=alice.id, order_index=0)
     track_b = Track(name="Alice B", character_id=alice.id, order_index=1)
     clip = Clip(character_id=alice.id, track_id=track_a.id)
-    doc = _tagged_doc("x" * 40, [(0, 10, clip)], characters=[alice], tracks=[track_a, track_b])
+    # Only a track with clips is drawn (grill PR4), so lane B holds one too,
+    # far to the right of where the drags land.
+    other = Clip(character_id=alice.id, track_id=track_b.id, timeline_timestamp=20.0)
+    doc = _tagged_doc("x" * 40, [(0, 10, clip), (30, 40, other)], characters=[alice], tracks=[track_a, track_b])
     return doc, clip, track_a, track_b
 
 
@@ -682,7 +717,7 @@ def test_drag_release_on_different_track_with_matching_character_emits_signal_no
     qtbot.addWidget(view)
     doc, clip, track_a, track_b = _build_doc_two_tracks_same_character()
     _render(view, doc)
-    block = _clip_block_items(view)[0]
+    block = view._blocks_by_clip_id[clip.id]
 
     def _fail_exec(self):
         raise AssertionError("QMessageBox.exec must not be called when there's no ambiguity")
@@ -708,7 +743,7 @@ def test_drag_release_on_same_track_emits_clip_moved_not_reassigned(qtbot):
     qtbot.addWidget(view)
     doc, clip, track_a, _track_b = _build_doc_two_tracks_same_character()
     _render(view, doc)
-    block = _clip_block_items(view)[0]
+    block = view._blocks_by_clip_id[clip.id]
 
     received = []
     moved = []
@@ -762,7 +797,7 @@ def test_drag_release_off_all_lanes_is_a_noop(qtbot):
     qtbot.addWidget(view)
     doc, clip, track_a, _track_b = _build_doc_two_tracks_same_character()
     _render(view, doc)
-    block = _clip_block_items(view)[0]
+    block = view._blocks_by_clip_id[clip.id]
 
     received = []
     view.clipDragReassigned.connect(lambda *a: received.append(a))
@@ -837,7 +872,7 @@ def test_shift_drag_exiting_block_bounds_emits_nothing(qtbot):
     qtbot.addWidget(view)
     doc, clip, track_a, _track_b = _build_doc_two_tracks_same_character()
     _render(view, doc)
-    block = _clip_block_items(view)[0]
+    block = view._blocks_by_clip_id[clip.id]
 
     drag_received = []
     sub_range_received = []
@@ -862,7 +897,7 @@ def test_different_track_drag_emits_drag_reassigned_not_sub_range_tts(qtbot):
     qtbot.addWidget(view)
     doc, clip, _track_a, track_b = _build_doc_two_tracks_same_character()
     _render(view, doc)
-    block = _clip_block_items(view)[0]
+    block = view._blocks_by_clip_id[clip.id]
 
     drag_received = []
     sub_range_received = []
@@ -903,3 +938,356 @@ def test_sub_range_drag_too_small_to_select_a_character_emits_nothing(qtbot):
 
     assert sub_range_received == []
     assert drag_received == []
+
+
+# --- phase 2: track header, fades, markers, loop, automation, filter, takes -----
+
+
+def _generated_doc(tmp_path):
+    """One generated 1 s clip on one track (so it's not estimated and has
+    fade handles)."""
+    alice = Character.from_preset_dict("Alice", {})
+    track = Track(name="Alice", character_id=alice.id)
+    path = tmp_path / "a.wav"
+    _write_tone_wav(path, seconds=1.0)
+    clip = Clip(character_id=alice.id, track_id=track.id,
+                segments=[Segment(order_index=0, text="x" * 10, audio_path=str(path), duration=1.0)])
+    doc = _tagged_doc("x" * 10, [(0, 10, clip)], characters=[alice], tracks=[track])
+    return doc, clip, track
+
+
+def test_header_controls_emit_track_field_changes(qtbot):
+    widget = TimelineWidget()
+    qtbot.addWidget(widget)
+    doc, _clip, track = _build_doc_with_one_clip()
+    widget.render_document(doc, compute_arrangement(doc, chars_per_second=CPS))
+    received = []
+    widget.header.trackFieldChanged.connect(lambda tid, field, value: received.append((tid, field, value)))
+
+    controls = widget.header.controls[track.id]
+    controls["mute"].click()
+    controls["solo"].click()
+    controls["gain"].setValue(50)
+    controls["gain"].sliderReleased.emit()
+    controls["pan"].setValue(3)  # inside the centre detent
+    controls["pan"].sliderReleased.emit()
+
+    qtbot.waitUntil(lambda: len(received) == 4)
+    assert received == [(track.id, "mute", True), (track.id, "solo", True), (track.id, "gain", 0.5),
+                        (track.id, "pan", 0.0)]
+    assert controls["pan"].value() == 0
+
+
+def test_header_a_toggle_shows_the_automation_lane(qtbot):
+    widget = TimelineWidget()
+    qtbot.addWidget(widget)
+    doc, _clip, track = _build_doc_with_one_clip()
+    track.automation = [[0.0, 1.0], [1.0, 0.5]]
+    widget.render_document(doc, compute_arrangement(doc, chars_per_second=CPS))
+
+    widget.header.controls[track.id]["auto"].click()
+
+    qtbot.waitUntil(lambda: widget.view.automation_item(track.id) is not None)
+    lane = widget.view.automation_item(track.id)
+    assert lane.points == [[0.0, 1.0], [1.0, 0.5]]
+    assert widget.header.controls[track.id]["auto"].isChecked()
+
+
+@pytest.mark.parametrize("name", ["mute", "solo", "auto", "duck"])
+def test_a_header_toggle_outlives_the_click_that_rebuilds_the_header(qtbot, name):
+    """Every receiver re-renders the header. A real click has to return
+    before that happens, or Qt finishes the release handler on a deleted
+    button (0xC0000005 on Windows)."""
+    widget = TimelineWidget()
+    qtbot.addWidget(widget)
+    widget.resize(800, 300)
+    widget.show()
+    doc, _clip, track = _build_doc_with_one_clip()
+    arrangement = compute_arrangement(doc, chars_per_second=CPS)
+    widget.render_document(doc, arrangement)
+    header = widget.header
+    rendered = []
+
+    def rerender(*_args):
+        widget.render_document(doc, arrangement)
+        rendered.append(True)
+
+    header.trackFieldChanged.connect(rerender)
+    header.automationToggled.connect(rerender)
+    button = header.controls[track.id][name]
+    pos = header.mapFromScene(button.graphicsProxyWidget().mapToScene(QPointF(8, 8)))
+
+    qtbot.mouseClick(header.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+
+    assert shiboken6.isValid(button) and not rendered
+    qtbot.waitUntil(lambda: bool(rendered))
+    assert not shiboken6.isValid(button)
+
+
+def test_dragging_the_fade_in_handle_emits_fade_changed(qtbot, tmp_path):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    view.resize(800, 300)
+    doc, clip, _track = _generated_doc(tmp_path)
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+    received = []
+    view.fadeChanged.connect(lambda cid, field, seconds: received.append((cid, field, seconds)))
+
+    press = view.mapFromScene(block.mapToScene(block.fade_in_handle_rect().center()))
+    release = view.mapFromScene(block.mapToScene(QPointF(25.0, 4.0)))  # 25 px = 0.5 s at 50 px/s
+    _press_release(view, qtbot, press, release)
+
+    assert received == [(clip.id, "fade_in_s", 0.5)]
+
+
+def test_fades_draw_as_handle_positions(qtbot, tmp_path):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _generated_doc(tmp_path)
+    clip.fade_out_s = 0.2
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+    width = block.boundingRect().width()
+    assert block.fade_out_handle_rect().right() == width - seconds_to_x(0.2, DEFAULT_PIXELS_PER_SECOND)
+
+
+def test_ruler_menu_adds_a_marker_and_a_flag_menu_offers_rename_and_delete(qtbot):
+    from kokoro_gui.daw import markers
+
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, _clip, _track = _build_doc_with_one_clip()
+    _render(view, doc)
+    added = []
+    view.markerAddRequested.connect(added.append)
+
+    menu = view._build_ruler_menu(seconds_to_x(2.0, DEFAULT_PIXELS_PER_SECOND))
+    assert [a.text() for a in menu.actions()] == ["Add marker here"]
+    menu.actions()[0].trigger()
+    assert added == [2.0]
+
+    doc.settings["markers"], m = markers.add_marker(doc.settings, 2.0, name="Intro")
+    doc.settings["markers"], _later = markers.add_marker(doc.settings, 4.0)
+    _render(view, doc)
+    menu = view._build_ruler_menu(seconds_to_x(2.0, DEFAULT_PIXELS_PER_SECOND) + 2)
+    assert [a.text() for a in menu.actions()] == ["Rename marker...", "Delete marker", "Loop to next marker"]
+    loops = []
+    view.loopRangeRequested.connect(lambda a, b: loops.append((a, b)))
+    menu.actions()[2].trigger()
+    assert loops == [(2.0, 4.0)]
+
+
+def test_dragging_a_marker_flag_moves_it_and_shift_drag_sets_a_loop(qtbot):
+    from kokoro_gui.daw import markers
+
+    view = TimelineView()
+    qtbot.addWidget(view)
+    view.resize(800, 300)
+    doc, _clip, _track = _build_doc_with_one_clip()
+    doc.settings["markers"], m = markers.add_marker(doc.settings, 1.0)
+    _render(view, doc)
+    moved, loops = [], []
+    view.markerMoved.connect(lambda mid, s: moved.append((mid, s)))
+    view.loopRangeRequested.connect(lambda a, b: loops.append((a, b)))
+
+    y = RULER_HEIGHT_PX / 2
+    press = view.mapFromScene(QPointF(seconds_to_x(1.0, DEFAULT_PIXELS_PER_SECOND), y))
+    release = view.mapFromScene(QPointF(seconds_to_x(3.0, DEFAULT_PIXELS_PER_SECOND), y))
+    _press_release(view, qtbot, press, release)
+    assert moved == [(m["id"], 3.0)]
+
+    press = view.mapFromScene(QPointF(seconds_to_x(5.0, DEFAULT_PIXELS_PER_SECOND), y))
+    release = view.mapFromScene(QPointF(seconds_to_x(7.0, DEFAULT_PIXELS_PER_SECOND), y))
+    _press_release(view, qtbot, press, release, SHIFT)
+    assert loops == [(5.0, 7.0)]
+
+
+def test_automation_double_click_adds_a_point_and_right_click_deletes_it(qtbot):
+    widget = TimelineWidget()
+    qtbot.addWidget(widget)
+    widget.resize(900, 300)
+    view = widget.view
+    doc, _clip, track = _build_doc_with_one_clip()
+    widget.render_document(doc, compute_arrangement(doc, chars_per_second=CPS))
+    view.set_automation_visible(track.id, True)
+    changes = []
+    view.automationChanged.connect(lambda tid, points: changes.append((tid, points)))
+
+    lane = view.automation_item(track.id)
+    scene = QPointF(seconds_to_x(2.0, DEFAULT_PIXELS_PER_SECOND), lane.gain_to_y(1.0))
+    qtbot.mouseDClick(view.viewport(), Qt.MouseButton.LeftButton, pos=view.mapFromScene(scene))
+    assert changes[-1][0] == track.id
+    assert changes[-1][1] == [[2.0, 1.0]]
+
+    track.automation = [[2.0, 1.0]]
+    widget.render_document(doc, compute_arrangement(doc, chars_per_second=CPS))
+    assert view._delete_automation_point_at(scene)
+    assert changes[-1][1] == []
+
+
+def test_dragging_an_automation_point_is_clamped_between_its_neighbours(qtbot):
+    widget = TimelineWidget()
+    qtbot.addWidget(widget)
+    widget.resize(900, 300)
+    view = widget.view
+    doc, _clip, track = _build_doc_with_one_clip()
+    track.automation = [[1.0, 1.0], [2.0, 1.0], [3.0, 1.0]]
+    view.set_automation_visible(track.id, True)
+    widget.render_document(doc, compute_arrangement(doc, chars_per_second=CPS))
+    changes = []
+    view.automationChanged.connect(lambda tid, points: changes.append(points))
+
+    lane = view.automation_item(track.id)
+    press = view.mapFromScene(lane.point_pos([2.0, 1.0]))
+    release = view.mapFromScene(QPointF(seconds_to_x(5.0, DEFAULT_PIXELS_PER_SECOND), lane.gain_to_y(2.0)))
+    _press_release(view, qtbot, press, release)
+
+    assert changes[-1][1] == [3.0, 2.0]
+
+
+def test_status_filter_dims_blocks_that_do_not_match(qtbot):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _build_doc_with_one_clip()
+    clip.status = "approved"
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+
+    view.set_status_filter("not_approved")
+    assert block.opacity() < 1.0
+    view.set_status_filter("all")
+    assert block.opacity() == 1.0
+
+
+def test_take_menu_lists_takes_and_marks_old_text(qtbot):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _build_doc_with_one_clip()
+    clip.segments = [Segment(text="x" * 10, audio_path="t1.wav", duration=1.0)]
+    clip.overrides["take"] = 1
+    clip.takes = {0: [Segment(text="something else", audio_path="t0.wav", duration=2.0)]}
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+    menu = view._build_context_menu(view.mapFromScene(block.mapToScene(10, 30)))
+
+    take_menu = next(a.menu() for a in menu.actions() if a.text() == "Take")
+    labels = [a.text() for a in take_menu.actions()]
+    assert labels == ["Take 1 (2.0s) - old text", "Take 2 (1.0s)"]
+    picked = []
+    view.takeSelected.connect(lambda cid, i: picked.append((cid, i)))
+    take_menu.actions()[0].trigger()
+    assert picked == [(clip.id, 0)]
+
+
+def test_ruler_labels_in_timecode_when_enabled(qtbot):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, _clip, _track = _build_doc_with_one_clip()
+    doc.settings["timecode"] = {"enabled": True, "frame_rate": 25.0, "start": "01:00:00:00"}
+    _render(view, doc)
+    assert view._ruler.label_for(2.0) == "01:00:02:00"
+
+
+# --- phase 5, D4: duration target, slot bracket, fit tint ---------------------------
+
+
+def _paint(view):
+    """Runs every item's paint() once, offscreen."""
+    from PySide6.QtGui import QImage, QPainter
+
+    image = QImage(800, 300, QImage.Format.Format_ARGB32)
+    painter = QPainter(image)
+    view._scene.render(painter)
+    painter.end()
+
+
+def test_a_clip_over_its_target_tints_and_labels_its_fit(qtbot, tmp_path):
+    from kokoro_gui.qt import theme
+    from kokoro_gui.qt.timeline_view import FIT_TINT_TOKENS
+
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _generated_doc(tmp_path)  # 1.0 s of audio
+    zoom = DEFAULT_PIXELS_PER_SECOND
+
+    for target, level, percent in ((0.8, "far_over", "125%"), (0.95, "over", "105%"), (1.0, "fit", "100%"),
+                                   (2.0, "fit", "50%")):
+        clip.overrides["target_duration_s"] = target
+        _render(view, doc)
+        block = _clip_block_items(view)[0]
+        assert block.fit_ratio == 1.0 / target
+        assert block.fit_level == level
+        assert block.fit_tint == FIT_TINT_TOKENS.get(level)
+        assert block.label.endswith(percent)
+        assert block.slot_px == (0.0, seconds_to_x(target, zoom))
+        _paint(view)
+
+    # The tint tokens exist in both palettes and aren't the overlap border.
+    for name in theme.THEME_NAMES:
+        pal = theme.palette_for(name)
+        assert pal.fit_far_over != pal.overlap_border
+        assert pal.fit_over and pal.fit_far_over
+
+
+def test_the_slot_bracket_can_run_past_the_block_but_clicks_stay_on_it(qtbot, tmp_path):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _generated_doc(tmp_path)
+    clip.overrides["target_duration_s"] = 2.0
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+    block_width = seconds_to_x(1.0, DEFAULT_PIXELS_PER_SECOND)
+
+    assert block.slot_px[1] == seconds_to_x(2.0, DEFAULT_PIXELS_PER_SECOND)
+    assert block.boundingRect().width() > block_width
+    assert block.shape().boundingRect().width() == block_width
+    # Past the block, over the bracket: no block there.
+    assert view._clip_block_at(view.mapFromScene(block.mapToScene(block_width + 20, 30))) is None
+
+
+def test_the_slot_starts_at_the_timestamp_not_the_aligned_start(qtbot, tmp_path):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _generated_doc(tmp_path)
+    clip.segments[0].onset_s = 0.2
+    clip.timeline_timestamp = 2.0
+    clip.pinned = True
+    clip.overrides["target_duration_s"] = 1.0
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+
+    assert block.start_s == 1.8  # onset aligned: the first word lands on 2.0
+    zoom = DEFAULT_PIXELS_PER_SECOND
+    assert block.slot_px == pytest.approx((seconds_to_x(0.2, zoom), seconds_to_x(1.2, zoom)))
+
+
+def test_an_estimated_clip_shows_its_slot_without_a_fit(qtbot):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _build_doc_with_one_clip()
+    clip.overrides["target_duration_s"] = 0.5
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+
+    assert block.slot_px is not None
+    assert block.fit_ratio is None and block.fit_tint is None
+    assert block.label == "Alice"
+
+
+def test_fit_to_slot_is_in_the_menu_only_for_a_clip_with_a_target(qtbot, tmp_path):
+    view = TimelineView()
+    qtbot.addWidget(view)
+    doc, clip, _track = _generated_doc(tmp_path)
+    _render(view, doc)
+    block = _clip_block_items(view)[0]
+    pos = view.mapFromScene(block.mapToScene(10, 30))
+    assert "Fit to slot" not in [a.text() for a in view._build_context_menu(pos).actions()]
+
+    clip.overrides["target_duration_s"] = 0.8
+    _render(view, doc)
+    menu = view._build_context_menu(pos)
+    received = []
+    view.fitToSlotRequested.connect(received.append)
+    next(a for a in menu.actions() if a.text() == "Fit to slot").trigger()
+    assert received == [clip.id]
