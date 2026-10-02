@@ -51,6 +51,8 @@ Unreleased:
 -   An Outline tab that lists a book's chapters with a status and a length, and proofs one in a click
 -   Importing a book opens a wizard: tick the sections to keep, pick cleanup rules for page numbers, split words
     and scene breaks, and check the result before it lands in the project
+-   A Zoom to fit button, a timeline that zooms out to ten hours in one screen, and a project that reopens at its
+    last playhead, zoom, scroll and selected clip
 
 In 4.0.0-beta.2:
 
