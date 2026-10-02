@@ -123,9 +123,8 @@ def test_import_text_with_a_target_still_inserts_the_whole_text_without_the_wiza
     src.write_text("Line one.\n12\nLine two.", encoding="utf-8")
     monkeypatch.setattr(ImportDialog, "exec", lambda self: (_ for _ in ()).throw(AssertionError("wizard opened")))
     _type_old(qt_app)
-    qt_app.engine.extract_text_from_file.return_value = "Line one.
-12
-Line two."  # the fixture's stub reader
+    # The fixture routes the reader to the stub engine.
+    qt_app.engine.extract_text_from_file.return_value = "Line one.\n12\nLine two."
     qt_app.import_text(str(src), target="new")
     qt_app.wait_for_text_import()
     assert qt_app.document.text == "Line one.\n12\nLine two."
