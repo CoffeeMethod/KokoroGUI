@@ -110,6 +110,8 @@ def test_run_export_schedules_mixdown_on_the_worker_and_writes_the_file(qt_app, 
     future.set_result(result)
     assert not qt_app.is_busy()
     assert "Exported" in qt_app.transport_dock.status_text()
+    assert qt_app._last_export_path == result.audio_path
+    assert qt_app.show_last_export_action.isEnabled()
 
 
 # -- characters dialog ------------------------------------------------------------------

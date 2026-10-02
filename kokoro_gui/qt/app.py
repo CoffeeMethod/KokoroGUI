@@ -38,8 +38,8 @@ import threading
 import time
 
 import playback
-from PySide6.QtCore import QEvent, QFileSystemWatcher, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, QFileSystemWatcher, QTimer, QUrl, Qt, Signal
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QWidget
 
 from kokoro_gui.daw import library as character_library, revision, wordalign
@@ -57,6 +57,7 @@ from kokoro_gui.daw.reference import SOURCE_TRACK_KEY, reference_slices, source_
 from kokoro_gui.daw.undo import (
     AssignCharacterCommand, ImportBedCommand, ImportCuesCommand, ImportRecordingCommand, SetFieldCommand,
 )
+from kokoro_gui import logging_setup
 from kokoro_gui.engine import caching, runtime, text_extraction
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.engines.base import per_engine_fields
@@ -64,6 +65,10 @@ from kokoro_gui.engines.missing import MissingBackend
 from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
 from kokoro_gui.qt import settings as qt_settings
 from kokoro_gui.qt.open_projects import OpenProject
+from kokoro_gui.qt.reveal import reveal
+from kokoro_gui.qt.about_dialog import (
+    SHORTCUT_DESCRIPTION_PROPERTY, AboutDialog, ShortcutsDialog, device_summary,
+)
 from kokoro_gui.qt import recording_import
 from kokoro_gui.qt.subprojects import ParentStore, SubprojectsMixin
 from kokoro_gui.qt.selection import SelectionModel
@@ -74,6 +79,7 @@ from kokoro_gui.qt.signals import EngineSignalBridge, wire_engine
 from kokoro_gui.qt.workspace import ADVANCED, SIMPLE, WorkspaceManager
 
 CONFIG_FILE = "config_qt.json"
+DOCS_URL = "https://coffeemethod.github.io/KokoroGUI/"
 PRESETS_DIR = "presets"
 FX_PRESETS_DIR = os.path.join(PRESETS_DIR, "fx")
 # The project a fresh install (or a config with no last_project) opens.
@@ -109,6 +115,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     themeChanged = Signal()
     exportProgress = Signal(float, str)
     exportFinished = Signal(bool, str)
+    exportWrote = Signal(str)  # the mix's path, just before a successful exportFinished
     # Background project I/O (Open's audio extraction, Save's zip write):
     # progress as (percent, detail), completion as (callback, result, error)
     # marshalled onto the GUI thread.
@@ -290,6 +297,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.previewFinished.connect(self._on_preview_finished)
         self.exportProgress.connect(self._on_export_progress)
         self.exportFinished.connect(self._on_export_finished)
+        self.exportWrote.connect(self._on_export_wrote)
+        self._last_export_path: str | None = None
 
         # Theme before any custom-painted widget exists, so their first
         # paint already reads the right palette.
@@ -313,7 +322,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self._rebuild_transport_schedule()
         self._update_window_title()
 
-        self.set_status("Initializing engine...")
+        self.set_status(self._first_launch_device_notice() or "Initializing engine...")
         # Focus first: a nested block's child becomes the docks' document
         # before the active engine is read.
         self.selection.changed.connect(self._on_selection_for_focus)
@@ -900,6 +909,18 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.file_menu.addSeparator()
         self.file_menu.addAction(self.save_action)
         self.file_menu.addAction(self.save_as_action)
+        self.show_in_folder_menu = self.file_menu.addMenu("Show in Fol&der")
+        self.show_project_file_action = self._action(
+            "&Project File", lambda: self._reveal_path(self.project_path))
+        self.show_working_folder_action = self._action(
+            "&Working Folder", lambda: self._reveal_path(self.root.project_dir))
+        self.show_last_export_action = self._action(
+            "Last &Export", lambda: self._reveal_path(self._last_export_path))
+        for action in (self.show_project_file_action, self.show_working_folder_action,
+                       self.show_last_export_action):
+            self.show_in_folder_menu.addAction(action)
+        self.show_in_folder_menu.aboutToShow.connect(self._sync_show_in_folder_actions)
+        self._sync_show_in_folder_actions()
         self.file_menu.addSeparator()
         self.import_text_action = self._action("Import &Text...", self.import_text_dialog)
         self.file_menu.addAction(self.import_text_action)
@@ -948,6 +969,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.device_group = QActionGroup(self)
         self.device_group.setExclusive(True)
         self.device_actions: dict = {}
+        self.detected_device_action = self.device_menu.addAction(f"Detected: {device_summary()}")
+        self.detected_device_action.setEnabled(False)
+        self.device_menu.addSeparator()
         cuda_ok = self._cuda_available()
         for device_id, label in (("auto", "Auto"), ("cpu", "CPU"), ("cuda", "CUDA")):
             action = QAction(label, self)
@@ -1040,6 +1064,38 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.reset_layout_action = self._action("Reset layout", self.reset_workspace)
         self.workspace_menu.addAction(self.reset_layout_action)
 
+        # Help
+        self.help_menu = bar.addMenu("&Help")
+        self.documentation_action = self._action("&Documentation", self.open_documentation)
+        self.shortcuts_action = self._action("&Keyboard Shortcuts", self.show_shortcuts)
+        self.open_log_folder_action = self._action("Open &Log Folder", self.open_log_folder)
+        self.about_action = self._action("&About KokoroGUI", self.show_about)
+        self.help_menu.addAction(self.documentation_action)
+        self.help_menu.addAction(self.shortcuts_action)
+        self.help_menu.addAction(self.open_log_folder_action)
+        self.help_menu.addSeparator()
+        self.help_menu.addAction(self.about_action)
+
+    def open_documentation(self) -> None:
+        QDesktopServices.openUrl(QUrl(DOCS_URL))
+
+    def open_log_folder(self) -> None:
+        log_path = logging_setup.resolve_log_path(runtime.CACHE_DIR)
+        if not reveal(os.path.dirname(log_path)):
+            self.set_status("No log folder yet. It is created when the app starts from main.py.", "warning")
+
+    def show_shortcuts(self) -> ShortcutsDialog:
+        dialog = ShortcutsDialog(self)
+        dialog.open()
+        self._shortcuts_dialog = dialog
+        return dialog
+
+    def show_about(self) -> AboutDialog:
+        dialog = AboutDialog(self, CONFIG_FILE)
+        dialog.open()
+        self._about_dialog = dialog
+        return dialog
+
     def _action(self, text: str, slot, shortcut=None) -> QAction:
         action = QAction(text, self)
         if shortcut is not None:
@@ -1055,6 +1111,29 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             return bool(torch.cuda.is_available())
         except Exception:
             return False
+
+    def device_notice(self) -> str:
+        """Which device the engines run on, given what's detected and the
+        Options > Device choice. The engines pick CUDA or the CPU only, so an
+        Apple GPU reads as detected but unused."""
+        detected = device_summary()
+        chosen = self.settings.get("device", "auto")
+        if chosen == "cpu":
+            return f"Engines will run on the CPU (detected: {detected}). Change it in Options > Device."
+        if detected.startswith("MPS"):
+            return (f"Detected {detected}. Engines run on the CPU, since they don't support MPS. "
+                    "Change it in Options > Device.")
+        return f"Engines will run on {detected}. Change it in Options > Device."
+
+    def _first_launch_device_notice(self) -> str | None:
+        """The device line for the status bar, once per install: None after
+        the first launch that showed it."""
+        if self.settings.get("device_notice_shown"):
+            return None
+        # Saved with the next settings write (or on close), not scheduled here:
+        # a scheduled save would put a "*" on a project nobody has touched.
+        self.settings["device_notice_shown"] = True
+        return self.device_notice()
 
     def _build_docks(self) -> None:
         self.transcript_dock = TranscriptDock(self)
@@ -1165,9 +1244,11 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
         self.space_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         self.space_shortcut.activated.connect(self.transport.toggle)
+        self.space_shortcut.setProperty(SHORTCUT_DESCRIPTION_PROPERTY, "Play / pause")
         self.ctrl_space_shortcut = QShortcut(QKeySequence("Ctrl+Space"), self)
         self.ctrl_space_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.ctrl_space_shortcut.activated.connect(self.transport.toggle)
+        self.ctrl_space_shortcut.setProperty(SHORTCUT_DESCRIPTION_PROPERTY, "Play / pause (works in any panel)")
 
     # --- status helpers ---------------------------------------------------
 
@@ -2137,6 +2218,25 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             action = self.recent_menu.addAction(project_io.project_title(path))
             action.setToolTip(path)
             action.triggered.connect(lambda checked=False, p=path: self.open_project(p))
+        self.recent_menu.addSeparator()
+        self.recent_menu.addAction("Clear list").triggered.connect(self._clear_recent_projects)
+
+    def _clear_recent_projects(self) -> None:
+        project_io.clear_recent(self.settings)
+        self.schedule_save()
+        self._rebuild_recent_menu()
+
+    def _sync_show_in_folder_actions(self) -> None:
+        """Each entry is enabled only while its target exists on disk."""
+        self.show_project_file_action.setEnabled(bool(self.project_path) and os.path.exists(self.project_path))
+        working = self.root.project_dir
+        self.show_working_folder_action.setEnabled(bool(working) and os.path.isdir(working))
+        last = self._last_export_path
+        self.show_last_export_action.setEnabled(bool(last) and os.path.exists(last))
+
+    def _reveal_path(self, path: str | None) -> None:
+        if not reveal(path):
+            self.set_status("Nothing to show: that file or folder is gone.", "warning")
 
     def show_welcome(self) -> WelcomeDialog:
         """Window-modal via `open()`, not `exec()`, so engine init keeps
@@ -3256,6 +3356,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def _on_export_progress(self, percent: float, detail: str) -> None:
         self.transport_dock.set_progress(percent, detail)
+
+    def _on_export_wrote(self, path: str) -> None:
+        self._last_export_path = path
+        self._sync_show_in_folder_actions()
 
     def _on_export_finished(self, success: bool, message: str) -> None:
         self.transport_dock.set_busy(False)

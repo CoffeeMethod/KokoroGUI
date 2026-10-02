@@ -15,13 +15,13 @@ def _action_texts(menu):
     return [a.text().replace("&", "") for a in menu.actions() if not a.isSeparator()]
 
 
-def test_menu_bar_has_the_four_menus(qt_app):
-    assert _menu_titles(qt_app) == ["File", "Edit", "Options", "Workspace"]
+def test_menu_bar_has_the_five_menus(qt_app):
+    assert _menu_titles(qt_app) == ["File", "Edit", "Options", "Workspace", "Help"]
 
 
 def test_file_menu_actions(qt_app):
     texts = _action_texts(qt_app.file_menu)
-    assert texts == ["New", "New Subproject", "Add Subproject...", "Open...", "Recent", "Welcome...", "Save", "Save As...", "Import Text...",
+    assert texts == ["New", "New Subproject", "Add Subproject...", "Open...", "Recent", "Welcome...", "Save", "Save As...", "Show in Folder", "Import Text...",
                      "Import Subtitles...", "Import Audio...", "Import Source Track...", "Load Video...", "Export...",
                      "Quit"]
     assert qt_app.import_audio_action.isEnabled() is True

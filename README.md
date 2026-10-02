@@ -36,6 +36,13 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 ## What's new
 
+Unreleased:
+
+-   A Help menu with Documentation, Keyboard Shortcuts and About, and File > Show in Folder
+-   A log file, and a dialog with the traceback when something crashes
+-   Generate stale clips in the selection only, a taskbar alert when a long job finishes, and a
+    prompt before closing mid-generate
+
 In 4.0.0-beta.2:
 
 -   Subtitle import, Fit to slot, the original dialogue and a reference video, for dubbing
@@ -60,8 +67,6 @@ In 4.0.0-beta.2:
     Settings tab keeps only the voice
 -   An FX change in a long project renders in the background instead of freezing the window, and
     undoing a character change or a text replace copies only what the edit touched
--   Generate stale clips in the selection only, a taskbar alert when a long job finishes, and a
-    prompt before closing mid-generate
 
 The [changes page](docs/changes.html) has the full detail for every version, including what the
 update does to existing projects.

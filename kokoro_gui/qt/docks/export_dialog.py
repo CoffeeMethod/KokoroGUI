@@ -264,6 +264,7 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
             if result.cue_sheet_path:
                 extras.append("cue sheet")
             suffix = f" (+ {', '.join(extras)})" if extras else ""
+            app.exportWrote.emit(result.audio_path)
             app.exportFinished.emit(True, f"Exported {result.audio_path}{suffix}")
         except Exception as e:  # noqa: BLE001 - surfaced to the status line
             app.exportFinished.emit(False, f"Export failed: {e}")
