@@ -77,7 +77,7 @@ source .venv/bin/activate       # macOS / Linux
 pip install -r requirements.txt
 ```
 
-`4.0.0-beta.2` is the latest beta. Drop `--branch` for the development branch. If `torch` gives you trouble, follow
+`4.0.0-beta.2` is the latest beta tag. `--branch` takes a tag name, and dropping it gets the default branch. If `torch` gives you trouble, follow
 [pytorch.org](https://pytorch.org/get-started/locally/) for your OS and GPU.
 
 Kokoro is optional. Without the `kokoro` package (and eSpeak NG) the app
@@ -88,7 +88,7 @@ Models download from Hugging Face the first time you use them. Whisper, the tran
 `WHISPER_MODEL` to `small`, `base` or `tiny`. `VOSK_MODEL_PATH` there switches on the offline
 Vosk engine.
 
-Looking for 3.2.0, the old one-text-box app? It's frozen. Clone with `--branch 3.2.0` and follow
+Looking for 3.2.0, the old one-text-box app? It's frozen. Clone the `3.2.0` tag with `--branch 3.2.0` and follow
 the README in that checkout. Only `presets/` and `custom_voices/` carry over between the two.
 
 ## Usage

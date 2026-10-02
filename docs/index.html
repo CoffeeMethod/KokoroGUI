@@ -713,15 +713,15 @@
       <div class="callout reveal" style="max-width:860px; margin-bottom:1.6rem;">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
         <div>
-          <p><strong>4.0 is a beta.</strong> <code>4.0.0-beta.2</code> is the latest release; drop <code>--branch</code> for the development branch. The aim is for every 4.x release to open a <code>.tbaw</code> from any earlier 4.x.</p>
-          <p>Looking for 3.2.0, the old one-text-box app? It's frozen. Clone it with <code>--branch 3.2.0</code> and follow its own README. Only <code>presets/</code> and <code>custom_voices/</code> carry over.</p>
+          <p><strong>4.0 is a beta.</strong> <code>4.0.0-beta.2</code> is the latest release tag. <code>--branch</code> takes a tag name, and dropping it gets the default branch. The aim is for every 4.x release to open a <code>.tbaw</code> from any earlier 4.x.</p>
+          <p>Looking for 3.2.0, the old one-text-box app? It's frozen. Clone the <code>3.2.0</code> tag with <code>--branch 3.2.0</code> and follow its own README. Only <code>presets/</code> and <code>custom_voices/</code> carry over.</p>
         </div>
       </div>
       <div class="install-grid">
         <div style="display:flex; flex-direction:column; gap:1rem;">
           <div class="code-block reveal" data-copy>
             <div class="head"><span>Terminal</span></div>
-            <pre><span class="c1"># clone the latest beta</span>
+            <pre><span class="c1"># clone the latest beta tag</span>
 git clone --branch 4.0.0-beta.2 --depth 1 https://github.com/CoffeeMethod/KokoroGUI.git
 cd KokoroGUI
 
