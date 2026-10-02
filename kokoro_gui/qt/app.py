@@ -71,7 +71,7 @@ from kokoro_gui.qt.reveal import reveal
 from kokoro_gui.qt.about_dialog import (
     SHORTCUT_DESCRIPTION_PROPERTY, AboutDialog, ShortcutsDialog, device_summary,
 )
-from kokoro_gui.qt import recording_import
+from kokoro_gui.qt import recording_import, resume_view
 from kokoro_gui.qt.subprojects import ParentStore, SubprojectsMixin
 from kokoro_gui.qt.selection import SelectionModel
 from kokoro_gui.qt.speaker_mapping_dialog import (
@@ -107,6 +107,8 @@ from kokoro_gui.qt.import_dialog import (  # noqa: E402
 
 APP_NAME = "KokoroGUI"
 SCHEDULE_REBUILD_DEBOUNCE_MS = 100
+# A zoom or selection change writes the resume view after this long.
+VIEW_REMEMBER_DEBOUNCE_MS = 2000
 # The schedule rebuild waits for the render pool to go idle, at most this long.
 SCHEDULE_PREWARM_WAIT_MS = 15_000
 # A generate or export that ran longer than this alerts the taskbar (and
@@ -257,6 +259,16 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.timeout.connect(self.save_settings)
+
+        # Writes `session.json["view"]` (`_remember_view`).
+        self._view_timer = QTimer(self)
+        self._view_timer.setSingleShot(True)
+        self._view_timer.setInterval(VIEW_REMEMBER_DEBOUNCE_MS)
+        self._view_timer.timeout.connect(self._remember_view)
+        # The playhead a reopened project resumes at, applied once the
+        # transport has its schedule (`_rebuild_transport_schedule`).
+        self._resume_playhead_s: float | None = None
+        self._view_saved_on_close = False
 
         self._schedule_timer = QTimer(self)
         self._schedule_timer.setSingleShot(True)
@@ -1178,6 +1190,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.timeline_dock.batchGenerationProgress.connect(self.on_batch_generation_progress)
         self.timeline_dock.batchGenerationFinished.connect(self.on_batch_generation_finished)
         self.timeline_dock.timeline_view.seekRequested.connect(self.transport.seek)
+        self.timeline_dock.timeline_view.zoomChanged.connect(lambda _zoom: self._view_timer.start())
+        self.selection.changed.connect(self._view_timer.start)
         self.timeline_dock.timeline_view.splitRequested.connect(self.split_clip_at)
         self.timeline_dock.timeline_view.joinRequested.connect(self.join_clip_with_next)
 
@@ -2355,8 +2369,19 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             self.set_loop_range(None, None, remember=False)
         monitor = (session or {}).get("monitor")
         self.set_monitor_mode(monitor if monitor in MONITOR_MODES else "dub", remember=False)
+        self._restore_view(session)
         self._update_window_title()
         self.schedule_save()
+
+    def _remember_view(self, keep_playhead: bool = False) -> None:
+        """Writes the playhead, zoom, scrolls and selection to
+        `session.json["view"]` (`resume_view.remember`)."""
+        self._view_timer.stop()
+        resume_view.remember(self, keep_playhead)
+
+    def _restore_view(self, session) -> None:
+        """Applies `session["view"]` after Open (`resume_view.restore`)."""
+        resume_view.restore(self, session)
 
     def set_loop_range(self, start_s, end_s, remember: bool = True) -> None:
         """The transport's loop region (phase 2, A3), shaded on the ruler.
@@ -2464,6 +2489,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         if not self.root.project_dir:
             then()
             return
+        self._remember_view()
         if not self.is_project_dirty():
             self._teardown_project(discard=False)
             then()
@@ -3931,6 +3957,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                             alt_schedule=self._original_schedule(level, self._arrangement),
                             duck_db=duck_db_setting(level.document))
         self._apply_monitor_mode()
+        if self._resume_playhead_s is not None:
+            self.transport.seek(self._resume_playhead_s)
+            self._resume_playhead_s = None
         if self.timeline_dock is not None:
             self.timeline_dock.timeline_view.set_arrangement(self._arrangement)
         self.transport_dock.set_position(self.transport.position(), self.transport.duration())
@@ -4282,6 +4311,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         in the background and closes the window when it succeeds; a failure
         keeps the window open with the error. Then close-time GC, and
         eviction of every project dir but the one launch resumes (TB13)."""
+        if not self._closed:
+            # Before the transport stops and rewinds.
+            self._remember_view(keep_playhead=self._view_saved_on_close)
+            self._view_saved_on_close = True
         try:
             self.transport.stop()
         except Exception:
@@ -4294,10 +4327,13 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             # engines to stop, so the window closes again from the finish
             # handler (`set_ui_state`) instead of blocking the GUI thread.
             event.ignore()
-            if not self._close_after_cancel and self._ask_cancel_generate_to_quit():
-                self._close_after_cancel = True
-                self._subproject_queue.clear()
-                self.cancel_conversion()
+            if not self._close_after_cancel:
+                if self._ask_cancel_generate_to_quit():
+                    self._close_after_cancel = True
+                    self._subproject_queue.clear()
+                    self.cancel_conversion()
+                else:
+                    self._view_saved_on_close = False
             return
         if self._io_thread is not None and not self._closing_after_save:
             event.ignore()
@@ -4306,6 +4342,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         if self.root.project_dir and not self._closing_after_save and self.any_project_dirty():
             choice = self._ask_close_choice()
             if choice == "cancel":
+                self._view_saved_on_close = False
                 event.ignore()
                 return
             if choice == "save":

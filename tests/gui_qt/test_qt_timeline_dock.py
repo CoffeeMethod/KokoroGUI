@@ -116,3 +116,22 @@ def test_paste_without_split_still_refreshes_via_text_edit_path(qt_app, monkeypa
     # for a refresh_timeline() once typing pauses.
     qt_app.flush_updates()
     assert calls
+
+
+def test_zoom_to_fit_button_fits_the_arrangement(qt_app):
+    dock = qt_app.timeline_dock
+    view = dock.timeline_view
+    character = qt_app.document.characters[0]
+    qt_app.document.text = "x" * 3000
+    qt_app.document.assign_character_to_range(0, 3000, character.id)
+    qt_app.refresh_timeline()
+    view.resize(800, 300)
+    assert dock.zoom_fit_button.text() == "Zoom to fit"
+    before = view.zoom
+    total = qt_app.build_arrangement().total_duration_s
+    assert total * before > view.viewport().width()  # too long for the window at the default zoom
+
+    dock.zoom_fit_button.click()
+
+    assert view.zoom < before
+    assert total * view.zoom <= view.viewport().width()

@@ -17,6 +17,8 @@ from shiboken6 import isValid
 from kokoro_gui.qt import waveform_data
 
 WAVEFORM_BRUSH_COLOR = "#4a90d9"
+# Narrower than this a block draws no waveform and never loads its peaks.
+WAVEFORM_MIN_WIDTH_PX = 4.0
 
 
 class WaveformItem(QGraphicsItem):
@@ -136,6 +138,9 @@ class WaveformItem(QGraphicsItem):
         self.update()
 
     def paint(self, painter, option, widget=None) -> None:  # noqa: N802 (Qt override)
+        if self._width < WAVEFORM_MIN_WIDTH_PX:
+            # Too narrow to read: don't decode the audio for it.
+            return
         self._painting = True
         try:
             if self._loader is not None or (self._request is not None and self._ticket is None):

@@ -227,6 +227,22 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Timeline and view</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Zoom to fit, and a timeline that zooms out to ten hours</h4>
+            <p>The Zoom to fit button in the timeline header sets the zoom so the whole arrangement fills the window, and scrolls to the start. The zoom floor is now 0.05 pixels per second instead of 20, so ten hours fit in 1,800 px. The ruler's tick steps reach two hours and its labels read <code>h:mm:ss</code> past an hour.</p>
+            <p>Zoomed out, a block narrower than 24 px shows no label, and one narrower than 4 px draws no waveform and never decodes its audio. The 20 px minimum block width shrinks with the zoom below 20 pixels per second, down to 1 px at the floor, so a book's blocks don't pile on top of each other. A block under 20 px wide has no fade handles or FX chip. From 20 pixels per second up nothing changes.</p>
+          </li>
+          <li>
+            <h4>Reopening a project returns you to where you left off</h4>
+            <p>The playhead, the timeline zoom and scroll, the transcript scroll and the selected clip are written to the project's <code>session.json</code>, which is never part of the <code>.tbaw</code>. They are saved two seconds after a zoom or selection change, when you close the project, and when you close the window. Open restores them. A value that is missing or damaged is skipped, and a selected clip that no longer exists is ignored.</p>
+            <p>The saved view comes back while the project's working folder under <code>cache/projects/</code> still exists, which is when you relaunch on the last project. Opening or creating a different project deletes the folders of the other closed projects, and their saved view goes with them. Only the root project is remembered; nothing is written while a subproject is open on the timeline.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Chapters</h3>
         <ul class="change-list">
           <li>
@@ -290,6 +306,10 @@
       <div class="change-group reveal">
         <h3>Fixes</h3>
         <ul class="change-list">
+          <li>
+            <h4>The loop region and the monitor choice survive reopening a project</h4>
+            <p>Open rewrote <code>session.json</code> from scratch, so the loop region and the Dub / Original / Both choice were lost each time a project was reopened from its working folder, including on relaunch. They now carry over when the same file reopens into its own folder.</p>
+          </li>
           <li>
             <h4>A tag no longer adds length to a clip's estimate</h4>
             <p>A clip that isn't generated yet is placed on the timeline by its text length, and Fit to slot learns each character's speaking rate from text length over audio length. Both counted the <code>[Name:FX]:</code> tag and any <code>[pause:x]</code> marker, which the engine never speaks, so a tagged clip looked about 15 characters too long. They now leave the markup out, and so does the dub syllable count in Settings &gt; Clip. Clip audio and cache keys don't change.</p>
