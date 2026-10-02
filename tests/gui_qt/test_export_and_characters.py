@@ -23,8 +23,8 @@ def _type(editor, text):
     cursor.insertText(text)
 
 
-def _generated_clip(qt_app, tmp_path, start, end, seconds=1.0, name="a", tone_hz=None):
-    alice = qt_app.document.characters[0]
+def _generated_clip(qt_app, tmp_path, start, end, seconds=1.0, name="a", tone_hz=None, character=None):
+    alice = character or qt_app.document.characters[0]
     clip = qt_app.document.assign_character_to_range(start, end, alice.id)
     path = str(tmp_path / f"{name}.wav")
     if tone_hz:  # loudness tests need something K-weighting does not remove
@@ -66,7 +66,8 @@ def test_export_dialog_reads_back_sanitized_values(qt_app):
                       "channels": 2, "srt_words": False, "cue_sheet": False,
                       "normalize_loudness": False, "target_lufs": -16.0, "ceiling_dbtp": -1.0,
                       "bitrate_kbps": 192, "sample_rate": None, "normalize_mode": "lufs", "target_rms_dbfs": -20.0,
-                      "limiter_dbfs": -3.5, "head_s": 0.0, "tail_s": 0.0, "split": None, "preset": "custom"}
+                      "limiter_dbfs": -3.5, "head_s": 0.0, "tail_s": 0.0, "split": None, "preset": "custom",
+                      "stems": None, "dialogue_stem": False}
 
 
 def test_run_export_refuses_without_clips(qt_app, monkeypatch):
@@ -714,3 +715,70 @@ def test_run_export_add_number_keeps_the_old_file_and_numbers_the_extras(qt_app,
 def test_a_filename_template_reaches_the_engine_config_expanded(qt_app):
     qt_app.project_settings["export"] = {"filename": "{project}-{range}"}
     assert qt_app._assemble_config()["filename"] == "Untitled-full"
+
+
+# -- stems (plan 15) ------------------------------------------------------------------------
+
+
+def _two_voices(qt_app, tmp_path):
+    """The default character says "hello", Bob says "world"; both rendered, one second each."""
+    from kokoro_gui.daw.models import Character
+
+    qt_app.document.settings["gap_s"] = 0.0
+    _type(qt_app.editor, "hello world")
+    _generated_clip(qt_app, tmp_path, 0, 5, seconds=1.0, name="a")
+    bob = Character.from_preset_dict("Bob", {"voice": "am_michael"})
+    qt_app.document.characters.append(bob)
+    _generated_clip(qt_app, tmp_path, 6, 11, seconds=1.0, name="b", character=bob)
+
+
+def test_export_dialog_has_the_stem_fields_on_the_extras_tab_and_remembers_them(qt_app):
+    dialog = ExportDialog(qt_app)
+    assert dialog.stems_combo.currentData() is None and not dialog.dialogue_stem_check.isChecked()
+    assert [dialog.stems_combo.itemData(i) for i in range(dialog.stems_combo.count())] == [None, "track", "character"]
+    for widget in (dialog.stems_combo, dialog.dialogue_stem_check):
+        page = widget
+        while page is not None and dialog.tabs.indexOf(page) < 0:
+            page = page.parentWidget()
+        assert dialog.tabs.tabText(dialog.tabs.indexOf(page)) == "Extras"
+
+    dialog.stems_combo.setCurrentIndex(dialog.stems_combo.findData("character"))
+    dialog.dialogue_stem_check.setChecked(True)
+    qt_app.project_settings["export"] = dialog.values()
+
+    again = ExportDialog(qt_app)
+    assert again.stems_combo.currentData() == "character" and again.dialogue_stem_check.isChecked()
+
+
+def test_export_defaults_ignore_a_bad_stems_value(qt_app):
+    qt_app.project_settings["export"] = {"stems": "drums", "dialogue_stem": "yes"}
+    values = export_defaults(qt_app)
+    assert values["stems"] is None and values["dialogue_stem"] is True
+
+
+@pytest.mark.parametrize("mode, names", [
+    ("track", None),
+    ("character", ["mix_Default.wav", "mix_Bob.wav", "mix_Dialogue.wav"]),
+])
+def test_a_stem_export_writes_the_expected_files(qt_app, tmp_path, mode, names):
+    _two_voices(qt_app, tmp_path)
+    values = dict(export_defaults(qt_app), out_dir=str(tmp_path / "out"), filename="mix", format="wav",
+                  srt=False, keep_clip_files=False, stems=mode, dialogue_stem=True)
+
+    assert not qt_app.document.dirty_clips(), [(c.character_id, c.segments) for c in qt_app.document.dirty_clips()]
+    assert run_export(qt_app, values) is True
+    assert qt_app.project_settings["export"] == values
+
+    import asyncio
+
+    result = asyncio.run(qt_app.engine.worker.run_coro.call_args[0][0])
+    qt_app.engine.worker.run_coro.return_value.set_result(result)
+    written = sorted(os.listdir(tmp_path / "out"))
+    stems = [os.path.basename(p) for p in result.stem_files]
+    if names is not None:
+        assert stems == names
+    else:
+        assert len(stems) >= 3 and stems[-1] == "mix_Dialogue.wav"
+    assert written == sorted(["mix.wav", *stems])
+    assert {sf.info(p).frames for p in result.stem_files} == {sf.info(result.audio_path).frames}
+    assert f"{len(stems)} stems" in qt_app.transport_dock.status_text()

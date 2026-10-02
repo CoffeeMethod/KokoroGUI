@@ -25,6 +25,15 @@ averages the two channels. `range_s` renders only a region (between two
 markers): clips outside it are skipped, and the output, SRT and cue sheet
 start at the region's start.
 
+`render_mix(stems="track" | "character", dialogue_stem=True)` also returns one
+`MixResult.stems` entry per group of clips: the same mix with every other
+group's clips left out, the same length, so the stems line up at 0. The
+speech outside a stem still feeds the ducking sidechain
+(`LoadedClip.sidechain_only`), so a ducked bed stem is ducked as in the full
+mix. `mixdown` gives the stems the full mix's normalize gain (and, in RMS
+mode, its limiter gain), pads them alike and writes
+`<base>_<stem>[_<timecode>].<ext>` beside the mixdown.
+
 `mixdown(out_rate=...)` resamples the whole mix once (`resample_mix`) before
 the loudness step, and `bitrate_kbps` sets the mp3 bitrate (`write_audio`).
 `expand_name` turns the dialog's file-name template (`{project}`, `{date}`,
@@ -99,6 +108,8 @@ class ExportResult:
     # `audio_path` is the first); `warnings` are sentences for the status line.
     files: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
+    # The stem files written, in the order of `render_mix`'s stems.
+    stem_files: list = field(default_factory=list)
 
 
 def _format_srt_time(seconds: float) -> str:
@@ -328,12 +339,52 @@ def write_audio(path: str, samples: np.ndarray, sample_rate: int, fmt: str,
         out_f.write(samples.reshape(1, -1) if samples.ndim == 1 else samples.T)
 
 
+def _start_timecode(document, range_s: Optional[tuple]) -> str:
+    """The timecode of where the export starts (the project start, or the
+    range's), as digits only (`01000000`), or "" when the project's timecode
+    is off."""
+    start = min(max(0.0, float(range_s[0])), max(0.0, float(range_s[1]))) if range_s else 0.0
+    return re.sub(r"\D", "", format_position(document.settings, start) or "")
+
+
+def stem_path(out_dir: str, base: str, stem_name: str, timecode: str = "", ext: str = "wav",
+              used: Optional[set] = None) -> str:
+    """`<out_dir>/<base>_<stem>[_<timecode>].<ext>`, the stem name made safe
+    (`_safe_component`). A name already in `used` (lower case, because
+    Windows doesn't tell the case apart) gets `_2`, `_3`... and the name is
+    added to `used`."""
+    stem = _safe_component(stem_name)
+    tail = f"_{timecode}" if timecode else ""
+    name = f"{base}_{stem}{tail}.{ext}"
+    if used is not None:
+        number = 2
+        while name.lower() in used:
+            name = f"{base}_{stem}_{number}{tail}.{ext}"
+            number += 1
+        used.add(name.lower())
+    return os.path.join(out_dir, name)
+
+
 def _in_range(arrangement: Arrangement, range_s: tuple) -> Arrangement:
     """The placed clips overlapping `range_s`, shifted so the range starts
     at 0; the total is the range's length."""
     lo, hi = sorted((max(0.0, float(range_s[0])), max(0.0, float(range_s[1]))))
     placed = [replace(p, start_s=p.start_s - lo) for p in arrangement.placed if p.end_s > lo and p.start_s < hi]
     return Arrangement(placed=placed, total_duration_s=hi - lo)
+
+
+STEM_MODES = (None, "track", "character")
+DIALOGUE_STEM = "Dialogue"
+UNASSIGNED_STEM = "Unassigned"
+MUSIC_STEM = "Music"
+
+
+@dataclass
+class Stem:
+    """One stem of `render_mix`: its name (a track, a character, "Dialogue"),
+    and the `MixResult.samples` shape of the mix with only its clips."""
+    name: str
+    samples: np.ndarray
 
 
 @dataclass
@@ -350,6 +401,7 @@ class MixResult:
     per_clip: list
     skipped: list
     sample_rate: int
+    stems: list = field(default_factory=list)
 
     @property
     def duration_s(self) -> float:
@@ -359,9 +411,19 @@ class MixResult:
 def render_mix(document, sample_rate: int = 24000, arrangement: Optional[Arrangement] = None,
                engine_id: Optional[str] = None, progress: Optional[Callable[[float, str], None]] = None,
                post_config_for_clip: Optional[Callable] = None, channels: int = 2,
-               range_s: Optional[tuple] = None, nested_audio_path: Optional[Callable] = None) -> MixResult:
+               range_s: Optional[tuple] = None, nested_audio_path: Optional[Callable] = None,
+               stems: Optional[str] = None, dialogue_stem: bool = False) -> MixResult:
     """Reads every audible clip and sums them at their start times, writing
     nothing. `progress` runs over 0.0 to 0.8; the rest is `mixdown`'s.
+
+    `stems` is "track" or "character": the result's `stems` then holds one
+    entry for each track (or character) that has an audible clip. A track
+    stem is that track's clips; a character stem is the clips of that
+    character, with music beds together in "Music" and clips of no character
+    in "Unassigned". `dialogue_stem` adds a "Dialogue" stem, every audible
+    clip except the music beds. Muted and soloed-out tracks have no stem, as
+    they have no clips in the mix. Each stem has the mix's length and the
+    same ducking.
 
     `post_config_for_clip(clip)` returns the clip's resolved read-time
     post-processing config (the app passes `QtTTSApp.post_config_for_clip`);
@@ -374,7 +436,10 @@ def render_mix(document, sample_rate: int = 24000, arrangement: Optional[Arrange
         arrangement = _in_range(arrangement, range_s)
     sample_rate = int(sample_rate)
 
+    if stems not in STEM_MODES:
+        raise ValueError(f"unknown stem mode {stems!r}")
     loaded: list = []
+    loaded_clips: list = []
     skipped: list = []
     per_clip: list = []
     total = max(1, len(arrangement.placed))
@@ -390,20 +455,81 @@ def render_mix(document, sample_rate: int = 24000, arrangement: Optional[Arrange
             skipped.append(placed.clip.id)
             continue
         loaded.append(_loaded(placed, samples, mix, sample_rate, range_s))
+        loaded_clips.append(placed.clip)
         per_clip.append((index, placed, samples))
 
     total_frames = int(round(arrangement.total_duration_s * sample_rate))
     if range_s is None:
         total_frames = max(mixer.total_frames(loaded), total_frames)
+    duck_db = duck_db_setting(document)
+    mixed = _mix_clips(loaded, total_frames, sample_rate, duck_db, channels)
+    stem_list = []
+    groups = _stem_groups(document, loaded_clips, stems) if stems else []
+    if dialogue_stem:
+        groups.append((DIALOGUE_STEM, [i for i, clip in enumerate(loaded_clips) if not clip.is_bed]))
+    for number, (name, indices) in enumerate(groups):
+        if not indices:
+            continue
+        if progress:
+            progress(0.8 + 0.01 * number / len(groups), f"Mixing stem {name}")
+        stem_list.append(Stem(name, _mix_clips(_stem_clips(loaded, set(indices)), total_frames, sample_rate,
+                                               duck_db, channels)))
+    return MixResult(samples=mixed, arrangement=arrangement, per_clip=per_clip, skipped=skipped,
+                     sample_rate=sample_rate, stems=stem_list)
+
+
+def _mix_clips(loaded: list, total_frames: int, sample_rate: int, duck_db: float, channels: int) -> np.ndarray:
+    """`loaded` summed block by block into `(frames, 2)`, or `(frames,)` for
+    mono; one `DuckState` runs through when any clip is ducked."""
     mixed = np.zeros((max(0, total_frames), mixer.CHANNELS), dtype=np.float32)
-    duck = mixer.DuckState(sample_rate, duck_db_setting(document)) if any(c.duck for c in loaded) else None
+    duck = mixer.DuckState(sample_rate, duck_db) if any(c.duck for c in loaded) else None
     for start in range(0, max(0, total_frames), EXPORT_BLOCK_FRAMES):
         frames = min(EXPORT_BLOCK_FRAMES, total_frames - start)
         mixer.mix_block(loaded, start, frames, out=mixed[start:start + frames], duck=duck)
     if int(channels) == 1:
         mixed = mixed.mean(axis=1).astype(np.float32)
-    return MixResult(samples=mixed, arrangement=arrangement, per_clip=per_clip, skipped=skipped,
-                     sample_rate=sample_rate)
+    return mixed
+
+
+def _stem_groups(document, clips: list, mode: str) -> list:
+    """`[(name, [indices into clips])]` for a stem mode, in track order or
+    character order, the leftovers last."""
+    if mode == "track":
+        by_key: dict = {}
+        for index, clip in enumerate(clips):
+            by_key.setdefault(clip.track_id, []).append(index)
+        groups = []
+        for track in sorted(document.tracks, key=lambda t: t.order_index):
+            if track.id in by_key:
+                groups.append((track.name or "Track", by_key.pop(track.id)))
+        rest = sorted(i for indices in by_key.values() for i in indices)
+        return groups + ([(UNASSIGNED_STEM, rest)] if rest else [])
+    if mode == "character":
+        by_key = {}
+        music = []
+        for index, clip in enumerate(clips):
+            if clip.is_bed:
+                music.append(index)
+            else:
+                by_key.setdefault(clip.character_id, []).append(index)
+        groups = []
+        for character in document.characters:
+            if character.id in by_key:
+                groups.append((character.name or "Character", by_key.pop(character.id)))
+        rest = sorted(i for indices in by_key.values() for i in indices)
+        return (groups + ([(UNASSIGNED_STEM, rest)] if rest else []) + ([(MUSIC_STEM, music)] if music else []))
+    raise ValueError(f"unknown stem mode {mode!r}")
+
+
+def _stem_clips(loaded: list, chosen: set) -> list:
+    """The clips one stem mixes: those at the `chosen` indices, plus, when
+    one of them is ducked, the rest of the speech as sidechain-only clips so
+    the stem ducks exactly as the full mix does."""
+    members = [c for i, c in enumerate(loaded) if i in chosen]
+    if not any(c.duck for c in members):
+        return members
+    return [c if i in chosen else replace(c, sidechain_only=True)
+            for i, c in enumerate(loaded) if i in chosen or (c.sidechain and not c.duck)]
 
 
 def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
@@ -415,9 +541,17 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
             include_cue_sheet: bool = False, nested_audio_path: Optional[Callable] = None,
             loudness: Optional[dict] = None, bitrate_kbps: Optional[int] = None,
             out_rate: Optional[int] = None, head_s: float = 0.0, tail_s: float = 0.0,
-            checks: tuple = ()) -> ExportResult:
+            checks: tuple = (), stems: Optional[str] = None, dialogue_stem: bool = False) -> ExportResult:
     """`render_mix`, then an optional resample, an optional loudness
     normalize, optional head and tail silence, then the writes.
+
+    `stems` ("track" or "character") and `dialogue_stem` write the stems
+    `render_mix` makes as `<base>_<stem>[_<timecode>].<ext>` next to the
+    mixdown (`stem_path`; the paths land in `ExportResult.stem_files`). A stem
+    is resampled, given the full mix's normalize gain, padded and written like
+    the mixdown, so every stem starts at the same sample and they sum to it.
+    In RMS mode the peak limiter's gain is applied to the stems too. A stem is
+    not measured and the preset checks don't run on it.
 
     `out_rate` writes the mixdown at that rate instead of `sample_rate`: the
     whole mix is resampled once before the loudness step, so what gets
@@ -449,24 +583,27 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
 
     mix = render_mix(document, sample_rate, arrangement=arrangement, engine_id=engine_id, progress=progress,
                      post_config_for_clip=post_config_for_clip, channels=channels, range_s=range_s,
-                     nested_audio_path=nested_audio_path)
+                     nested_audio_path=nested_audio_path, stems=stems, dialogue_stem=dialogue_stem)
     mixed = mix.samples
+    stem_samples = [stem.samples for stem in mix.stems]
     mix_rate = int(out_rate) if out_rate else sample_rate
     if mix_rate != sample_rate:
         if progress:
             progress(0.81, f"Resampling to {mix_rate} Hz")
         mixed = resample_mix(mixed, sample_rate, mix_rate)
+        stem_samples = [resample_mix(s, sample_rate, mix_rate) for s in stem_samples]
     result = ExportResult(audio_path=out_path, skipped_clip_ids=mix.skipped)
     if loudness is not None:
         if progress:
             progress(0.82, "Measuring loudness")
-        mixed, result.loudness_before, result.loudness_after, result.loudness_limited = _normalized(
-            mixed, mix_rate, loudness)
+        mixed, result.loudness_before, result.loudness_after, result.loudness_limited, stem_samples = _normalized(
+            mixed, mix_rate, loudness, stem_samples)
     head_s, tail_s = max(0.0, float(head_s or 0.0)), max(0.0, float(tail_s or 0.0))
     arrangement_out = mix.arrangement
     report = result.loudness_after
     if head_s or tail_s:
         mixed = _padded(mixed, mix_rate, head_s, tail_s)
+        stem_samples = [_padded(s, mix_rate, head_s, tail_s) for s in stem_samples]
         arrangement_out = replace(arrangement_out, placed=[
             replace(p, start_s=p.start_s + head_s) for p in arrangement_out.placed])
         if loudness is not None or checks:
@@ -479,6 +616,16 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
     write_audio(out_path, mixed, mix_rate, ext, bitrate_kbps=bitrate_kbps)
     failed = [c.describe(report) for c in checks if not c.passed(report)] if checks else []
     result.files.append(ExportFile(out_path, base, result.duration_s, report, failed))
+
+    if stem_samples:
+        used = {os.path.basename(out_path).lower()}
+        timecode = _start_timecode(document, range_s)
+        for number, (stem, samples) in enumerate(zip(mix.stems, stem_samples)):
+            if progress:
+                progress(0.85 + 0.1 * number / len(stem_samples), f"Writing stem {stem.name}")
+            stem_file = stem_path(out_dir, base, stem.name, timecode, ext, used)
+            write_audio(stem_file, np.clip(samples, -1.0, 1.0), mix_rate, ext, bitrate_kbps=bitrate_kbps)
+            result.stem_files.append(stem_file)
 
     if keep_clip_files:
         for index, placed, samples in mix.per_clip:
@@ -597,6 +744,7 @@ def mixdown_chapters(document, out_dir: str, plan: ChapterPlan, fmt: str = "wav"
         one = mixdown(document, path, fmt=fmt, range_s=chapter.range_s, progress=_chapter_progress, **options)
         result.files.extend(one.files)
         result.clip_files.extend(one.clip_files)
+        result.stem_files.extend(one.stem_files)
         result.duration_s += one.duration_s
         result.skipped_clip_ids.extend(c for c in one.skipped_clip_ids if c not in result.skipped_clip_ids)
         result.audio_path = result.audio_path or one.audio_path
@@ -615,32 +763,38 @@ def _padded(samples: np.ndarray, rate: int, head_s: float, tail_s: float) -> np.
 RMS_TOLERANCE_DB = 0.5
 
 
-def _normalized(samples: np.ndarray, sample_rate: int, options: dict) -> tuple:
-    """`(samples, before, after, limited)` for `mixdown`'s `loudness` option."""
+def _normalized(samples: np.ndarray, sample_rate: int, options: dict, companions: list = ()) -> tuple:
+    """`(samples, before, after, limited, companions)` for `mixdown`'s
+    `loudness` option. `companions` (the stems) get the gain, and the limiter's
+    gain in RMS mode, that the mix got; they aren't measured."""
     if options.get("mode", "lufs") == "rms":
-        return _normalized_rms(samples, sample_rate, options)
+        return _normalized_rms(samples, sample_rate, options, companions)
     before = loudness_mod.measure(samples, sample_rate)
     gain_db, limited = loudness_mod.gain_to_target(
         before, float(options["target_lufs"]), float(options.get("ceiling_dbtp", 0.0)))
     if gain_db == 0.0:
-        return samples, before, before, limited
+        return samples, before, before, limited, list(companions)
     samples = loudness_mod.apply_gain(samples, gain_db)
-    return samples, before, loudness_mod.measure(samples, sample_rate), limited
+    return (samples, before, loudness_mod.measure(samples, sample_rate), limited,
+            [loudness_mod.apply_gain(c, gain_db) for c in companions])
 
 
-def _normalized_rms(samples: np.ndarray, sample_rate: int, options: dict) -> tuple:
+def _normalized_rms(samples: np.ndarray, sample_rate: int, options: dict, companions: list = ()) -> tuple:
     """RMS mode: the gain that brings the whole-file RMS to `target_rms_dbfs`,
     then the peak limiter at `limiter_dbfs` (none when it's absent). `limited`
     is True when the limiter left the RMS more than `RMS_TOLERANCE_DB` short."""
     before = loudness_mod.measure(samples, sample_rate)
     if not math.isfinite(before.rms_dbfs):
-        return samples, before, before, False
+        return samples, before, before, False, list(companions)
     target = float(options["target_rms_dbfs"])
-    samples = loudness_mod.apply_gain(samples, target - before.rms_dbfs)
+    gain_db = target - before.rms_dbfs
+    samples = loudness_mod.apply_gain(samples, gain_db)
+    companions = [loudness_mod.apply_gain(c, gain_db) for c in companions]
     if options.get("limiter_dbfs") is not None:
-        samples = limiter.limit_peaks(samples, sample_rate, float(options["limiter_dbfs"]))
+        samples, *companions = limiter.limit_peaks_together(
+            samples, companions, sample_rate, float(options["limiter_dbfs"]))
     after = loudness_mod.measure(samples, sample_rate)
-    return samples, before, after, after.rms_dbfs < target - RMS_TOLERANCE_DB
+    return samples, before, after, after.rms_dbfs < target - RMS_TOLERANCE_DB, companions
 
 
 def _loaded(placed, samples: np.ndarray, mix: ClipMix, sample_rate: int, range_s) -> "mixer.LoadedClip":

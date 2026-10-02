@@ -417,7 +417,7 @@
   <section class="doc-section" id="processing">
     <div class="wrap">
       <h2><span class="idx">File &gt; Export</span>Export</h2>
-      <p class="dek">Generate only fills the per-clip cache. Export is what produces a deliverable: every clip mixed down at its timeline position into one file, using the same summing rule the transport plays. It refuses with a count when clips are stale and offers to generate first. The dialog has three tabs: Audio (preset, folder, name, format, bitrate, rate, channels, loudness, silence, range, split), Extras (subtitles, cue sheet, per-clip files) and Project file (the bundle options).</p>
+      <p class="dek">Generate only fills the per-clip cache. Export is what produces a deliverable: every clip mixed down at its timeline position into one file, using the same summing rule the transport plays. It refuses with a count when clips are stale and offers to generate first. The dialog has three tabs: Audio (preset, folder, name, format, bitrate, rate, channels, loudness, silence, range, split), Extras (subtitles, cue sheet, per-clip files, stems) and Project file (the bundle options).</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Export dialog</caption>
@@ -440,6 +440,7 @@
             <tr><td>Also write .srt</td><td>Subtitles timed from each clip's timeline start and duration, one row per generated clip. "One subtitle per word" writes a row per spoken word instead, from the stored word timings.</td></tr>
             <tr><td>Also write a cue sheet (.csv)</td><td>One row per clip: start, end (timecode when it's on), character, source text, text, status and note.</td></tr>
             <tr><td>Keep per-clip files</td><td>Writes each clip next to the exported file as <code>&lt;base&gt;_001_&lt;Character&gt;.&lt;ext&gt;</code>, numbered in timeline order.</td></tr>
+            <tr><td>Stems / Also a dialogue stem</td><td>None, One per track or One per character writes one more file per group next to the mixdown, <code>&lt;base&gt;_&lt;stem&gt;.&lt;ext&gt;</code>, and the checkbox adds <code>&lt;base&gt;_Dialogue.&lt;ext&gt;</code>, every clip except the music beds. Each stem is the mix with only that group's clips, as long as the mix, so they line up at 0 in an editor and add up to it. They get the mix's loudness gain (and, in RMS mode, its limiter). A bed under ducking is ducked by the speech of the whole mix. Beds are the "Music" stem per character; clips with no character are "Unassigned". With timecode on, the project's start timecode is added to each name (<code>episode_Alice_01000000.wav</code>); the audio still starts at 0. Muted tracks have no stem. Remembered per project.</td></tr>
           </tbody>
         </table>
       </div>

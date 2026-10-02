@@ -24,7 +24,9 @@ of a one-pole filter (attack 10 ms when the peak is above `env`, release
 value the new `env` gives. The state (`env`, the ramp's ends, the partial
 hop) lives on the `DuckState` the caller keeps between blocks, and hops
 don't depend on where blocks start or end, so the transport's device-sized
-blocks and the exporter's larger ones give the same samples.
+blocks and the exporter's larger ones give the same samples. A clip with
+`sidechain_only` adds to that level but not to the output: a stem export
+renders one group of clips and keeps the rest of the speech as the sidechain.
 
 `load_clip_samples` reads a wav (or anything soundfile can open), applies
 the clip's post-processing config (`kokoro_gui.audio.post`), downmixes to
@@ -76,6 +78,10 @@ class LoadedClip:
     duck: bool = False
     # Feeds the sidechain: speech. False for a music bed and a ducked clip.
     sidechain: bool = True
+    # Feeds the sidechain but isn't written to the output. A stem export
+    # uses it for the speech that isn't in the stem, so the stem's ducking
+    # follows the whole mix's speech (`mix_block`).
+    sidechain_only: bool = False
 
     @property
     def end_frame(self) -> int:
@@ -281,12 +287,22 @@ def mix_block(clips: list, frame: int, frames: int, out: np.ndarray | None = Non
     active = [c for c in clips if c.end_frame > frame and c.start_frame < block_end]
     if duck is None:
         for clip in active:
-            _add_clip(out, clip, frame, block_end)
+            if not clip.sidechain_only:
+                _add_clip(out, clip, frame, block_end)
     else:
+        unheard = []
         for clip in active:
             if clip.sidechain and not clip.duck:
-                _add_clip(out, clip, frame, block_end)
-        gains = duck.gains(np.abs(out).max(axis=1) if frames else np.zeros(0, dtype=np.float32))
+                if clip.sidechain_only:
+                    unheard.append(clip)
+                else:
+                    _add_clip(out, clip, frame, block_end)
+        level = out
+        if unheard:
+            level = out.copy()
+            for clip in unheard:
+                _add_clip(level, clip, frame, block_end)
+        gains = duck.gains(np.abs(level).max(axis=1) if frames else np.zeros(0, dtype=np.float32))
         for clip in active:
             if not clip.sidechain and not clip.duck:
                 _add_clip(out, clip, frame, block_end)

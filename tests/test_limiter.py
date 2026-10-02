@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from kokoro_gui.audio.limiter import limit_peaks
+from kokoro_gui.audio.limiter import limit_peaks, limit_peaks_together
 
 
 def _db(x):
@@ -63,3 +63,20 @@ def test_chunk_edges_are_seamless(monkeypatch):
 
 def test_empty_input_is_fine():
     assert limit_peaks(np.zeros((0, 2), dtype=np.float32), 8000, -3.0).shape == (0, 2)
+
+
+def test_companions_get_the_gain_of_the_main_signal():
+    """Two halves that add up to the main signal still add up to it after the limiter."""
+    x = _speechlike()
+    part = x * np.float32(0.4)
+    limited, limited_part = limit_peaks_together(x, [part], 8000, -3.5)
+    assert np.array_equal(limited, limit_peaks(x, 8000, -3.5))
+    assert np.allclose(limited_part, limited * 0.4, atol=1e-6)
+    assert np.array_equal(part, x * np.float32(0.4))  # the input isn't touched
+
+
+def test_companions_of_silence_come_back_as_they_were():
+    silent = np.zeros((100, 2), dtype=np.float32)
+    other = np.ones((100, 2), dtype=np.float32) * 0.5
+    out = limit_peaks_together(silent, [other], 8000, -3.5)
+    assert len(out) == 2 and np.array_equal(out[1], other)
