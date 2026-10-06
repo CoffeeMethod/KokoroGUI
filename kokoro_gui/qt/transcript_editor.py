@@ -1565,7 +1565,17 @@ class TranscriptEditor(QTextEdit):
             action = characters_menu.addAction(character.name)
             action.triggered.connect(lambda checked=False, cid=character.id: self._assign_character(cid))
 
+        explain = menu.addAction("How will this be read?")
+        explain.setEnabled(self.textCursor().hasSelection() and getattr(self.app, "lexicon_dock", None) is not None)
+        explain.triggered.connect(self._explain_selection)
+
         return menu
+
+    def _explain_selection(self) -> None:
+        """Puts the selected text in the Lexicon tab's Test field."""
+        text = self.textCursor().selectedText()
+        if text.strip() and self.app.lexicon_dock is not None:
+            self.app.lexicon_dock.show_text(text)
 
     def _assign_character(self, character_id: str) -> None:
         cursor = self.textCursor()

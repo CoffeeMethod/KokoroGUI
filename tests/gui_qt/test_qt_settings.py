@@ -158,12 +158,12 @@ def _write_config(tmp_path, content):
 def test_load_settings_resets_a_wrong_typed_value_to_its_default(tmp_path, capsys):
     from kokoro_gui.qt import spec
 
-    cfg = _write_config(tmp_path, {"speed": "fast", "lexicon": [], "num_threads": 2.5, "caching": "false",
+    cfg = _write_config(tmp_path, {"speed": "fast", "lexicon": "none", "num_threads": 2.5, "caching": "false",
                                    "volume": 2, "voice_note": "unknown keys pass through"})
     settings = qt_settings.load_settings(cfg)
 
     assert settings["speed"] == spec.SETTINGS_DEFAULTS["speed"]
-    assert settings["lexicon"] == {}
+    assert settings["lexicon"] == []
     assert settings["num_threads"] == spec.SETTINGS_DEFAULTS["num_threads"]
     assert settings["caching"] == spec.SETTINGS_DEFAULTS["caching"]
     assert settings["volume"] == 2  # an int where a float is expected is fine
@@ -202,7 +202,7 @@ def test_a_config_that_is_not_json_loads_the_defaults(tmp_path):
 @pytest.fixture
 def wrong_typed_config(tmp_path):
     """On disk before `qt_app` builds (a fixture listed first is set up first)."""
-    return _write_config(tmp_path, {"speed": "fast", "lexicon": [], "volume": "loud", "reverb_room_size": "big",
+    return _write_config(tmp_path, {"speed": "fast", "lexicon": "none", "volume": "loud", "reverb_room_size": "big",
                                     "gain_db": None, "comp_enabled": "yes", "convolution_ir": ["x"],
                                     "highpass_freq": {"a": 1}, "gsm_enabled": 3})
 
@@ -212,7 +212,7 @@ def test_the_app_starts_with_wrong_typed_settings(wrong_typed_config, qt_app):
     from kokoro_gui.qt import spec
 
     assert qt_app.settings["speed"] == spec.SETTINGS_DEFAULTS["speed"]
-    assert qt_app.settings["lexicon"] == {}
+    assert qt_app.settings["lexicon"] == []
     assert qt_app.settings_dock.volume_spin.value() == spec.SETTINGS_DEFAULTS["volume"]
     assert qt_app.fx_dock._value_widgets["gain_db"].value() == spec.SETTINGS_DEFAULTS["gain_db"]
 
@@ -252,3 +252,27 @@ def test_a_write_that_fails_midway_keeps_the_old_file(tmp_path, monkeypatch):
     with open(cfg, "r", encoding="utf-8") as f:
         assert json.load(f) == {"speed": 1.2}
     assert sorted(os.listdir(tmp_path)) == ["config_qt.json"]
+
+
+def test_an_old_dict_lexicon_loads_as_the_same_rules_in_a_list(tmp_path):
+    cfg = _write_config(tmp_path, {"lexicon": {"Dr": "Doctor", "": "dropped", "TTS": "Tee Tee Ess"}})
+    settings = qt_settings.load_settings(cfg)
+    assert settings["lexicon"] == [
+        {"find": "Dr", "replace": "Doctor", "mode": "literal", "case": False},
+        {"find": "TTS", "replace": "Tee Tee Ess", "mode": "literal", "case": False},
+    ]
+
+
+def test_a_list_lexicon_is_cleaned_on_load(tmp_path):
+    cfg = _write_config(tmp_path, {"lexicon": [{"find": "a", "replace": "b", "mode": "word", "case": True},
+                                               "junk", {"replace": "x"}, {"find": "c"}]})
+    assert qt_settings.load_settings(cfg)["lexicon"] == [
+        {"find": "a", "replace": "b", "mode": "word", "case": True},
+        {"find": "c", "replace": "", "mode": "literal", "case": False},
+    ]
+
+
+def test_the_default_lexicon_is_not_shared_between_loads(tmp_path):
+    first = qt_settings.load_settings(str(tmp_path / "missing.json"))
+    first["lexicon"].append({"find": "a", "replace": "b", "mode": "literal", "case": False})
+    assert qt_settings.load_settings(str(tmp_path / "missing.json"))["lexicon"] == []

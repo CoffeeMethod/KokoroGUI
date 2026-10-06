@@ -58,16 +58,36 @@ def clean_loaded_settings(loaded, defaults: dict) -> dict:
     return merged
 
 
+def migrate_lexicon(settings: dict) -> dict:
+    """Turns `settings["lexicon"]`, in place, into the list of rules
+    (`lexicon.normalize_rules`): an older file holds a `{find: replace}` dict,
+    which becomes literal, case-insensitive rules in the same order and speaks
+    the same text. A list is cleaned the same way (an entry that is no rule is
+    dropped). Any other type is left for `clean_loaded_settings` to reset.
+    Returns `settings`."""
+    if isinstance(settings.get("lexicon"), (dict, list)):
+        from kokoro_gui.engine.lexicon import normalize_rules
+
+        settings["lexicon"] = normalize_rules(settings["lexicon"])
+    return settings
+
+
 def load_settings(config_file: str) -> dict:
-    # deepcopy, not dict(...): SETTINGS_DEFAULTS["lexicon"] is a mutable {}
+    # deepcopy, not dict(...): SETTINGS_DEFAULTS["lexicon"] is a mutable []
     # shared across every call - a shallow copy would let one instance's
-    # in-place `settings["lexicon"][k] = v` (lexicon_dock.py's add_rule)
-    # leak into every other instance/test that reads the same defaults.
+    # in-place `settings["lexicon"].append(rule)` (lexicon_dock.py's
+    # add_rule) leak into every other instance/test that reads the same
+    # defaults.
     defaults = copy.deepcopy(spec.SETTINGS_DEFAULTS)
     if os.path.exists(config_file):
         try:
             with open(config_file, "r", encoding="utf-8") as f:
-                return clean_loaded_settings(json.load(f), defaults)
+                loaded = json.load(f)
+            # Before the type check: it would reset an old file's dict
+            # lexicon to the default list and lose every rule.
+            if isinstance(loaded, dict):
+                migrate_lexicon(loaded)
+            return clean_loaded_settings(loaded, defaults)
         except Exception as e:
             print(f"Couldn't read {config_file}, using the defaults: {e}")
     return defaults

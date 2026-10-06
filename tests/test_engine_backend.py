@@ -260,3 +260,56 @@ def test_a_missing_engine_says_it_isnt_installed():
             backend.generate_clip((0, "hello", {})).result()
     finally:
         registry.unregister_engine("gone")
+
+
+# -- explain_text: how a model reads a sentence (plan 23) ------------------------
+
+
+def test_a_backend_without_a_g2p_does_not_explain(engine):
+    dummy = DummyBackendAdapter(engine=DummyEngine())
+    assert dummy.explains_text is False
+    assert dummy.explain_text("hello", "a") is None
+    assert dummy.explain("hello", "a") is None
+
+
+def test_kokoro_explains_a_sentence_token_by_token(engine, fake_pipeline):
+    backend = registry.get_engine("kokoro", engine=engine)
+    assert backend.explains_text is True
+    assert backend.explain_text("in 1999", "a") == [("in", "IN"), ("1999", "NUM")]
+
+
+def test_explain_runs_on_the_engine_worker_and_resolves_to_the_pairs(engine, fake_pipeline):
+    import threading
+
+    backend = registry.get_engine("kokoro", engine=engine)
+    threads = []
+    real = fake_pipeline.g2p
+    fake_pipeline.g2p = lambda text: (threads.append(threading.current_thread()), real(text))[1]
+
+    future = backend.explain("Dr. Who", "a")
+
+    assert future.result(timeout=10) == [("Dr.", "DR."), ("Who", "WHO")]
+    assert threads and threads[0] is not threading.main_thread()
+
+
+def test_explain_text_keeps_one_g2p_pipeline_per_language(engine, fake_pipeline):
+    import kokoro_engine
+
+    made = []
+    kokoro_engine.explain_text("a", "a")
+    made.append(dict(kokoro_engine._G2P_PIPELINES))
+    kokoro_engine.explain_text("b", "a")
+    assert kokoro_engine._G2P_PIPELINES == made[0]
+    assert list(kokoro_engine._G2P_PIPELINES) == ["a"]
+
+
+def test_explain_text_for_a_language_whose_g2p_returns_phonemes_only(monkeypatch):
+    import kokoro_engine
+
+    class StringG2P:
+        def g2p(self, text):
+            return "fonemz"
+
+    monkeypatch.setattr(kokoro_engine, "_G2P_PIPELINES", {})
+    monkeypatch.setattr(kokoro_engine, "KPipeline", lambda lang_code="a", **kwargs: StringG2P())
+    assert kokoro_engine.explain_text("hola", "e") == [("hola", "fonemz")]

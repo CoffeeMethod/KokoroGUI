@@ -79,6 +79,7 @@ class KokoroBackendAdapter(BackendHooksMixin):
 
     voice_kind = "embedding"
     voice_store = KOKORO_VOICES
+    explains_text = True
 
     def __init__(self, engine=None):
         """`engine`, when given, is an existing `KokoroEngine` instance the
@@ -110,7 +111,7 @@ class KokoroBackendAdapter(BackendHooksMixin):
                         default="af_heart", group="Generation"),
             *common_fields(),
             ConfigField("lexicon", "Lexicon Substitutions", ConfigFieldType.TEXT,
-                        default={}, group="Advanced"),
+                        default=[], group="Advanced"),
         ]
 
     def builtin_voices(self, lang_code: Optional[str] = None) -> list:
@@ -125,6 +126,10 @@ class KokoroBackendAdapter(BackendHooksMixin):
 
     def preview_text(self, lang_code: Optional[str] = None) -> str:
         return MIX_PREVIEW_TEXT.get(lang_code, MIX_PREVIEW_TEXT_DEFAULT)
+
+    def explain_text(self, text: str, lang_code: Optional[str]) -> Optional[list]:
+        """`(token, phonemes)` from misaki (`kokoro_engine.explain_text`)."""
+        return kokoro_engine.explain_text(text, lang_code)
 
     def word_timing_for(self, lang_code: Optional[str]) -> bool:
         """KPipeline yields token timings for English only."""

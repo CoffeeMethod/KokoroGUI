@@ -83,7 +83,7 @@ def build_app(workdir: str, theme_name: str, workspace: str, subproject: bool = 
     if details:
         settings["transcript_details"] = True
         settings["segment_target_words"] = 6
-        settings["lexicon"] = {"Marta": "Marrta"}
+        settings["lexicon"] = [{"find": "Marta", "replace": "Marrta", "mode": "literal", "case": False}]
     qt_settings.save_settings(qt_app_module.CONFIG_FILE, settings)
 
     app = qt_app_module.QtTTSApp()

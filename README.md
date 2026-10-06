@@ -64,6 +64,8 @@ Unreleased:
 -   Sliders for compressor and limiter release, compressor attack, reverb dry level, chorus mix and phaser depth and mix
 -   Export writes tags and a cover image into mp3, flac and ogg files, and markers as chapters in an mp3
 -   Export can write an audiobook as one M4B with a chapter per subproject, the tags and the cover (needs ffmpeg on PATH)
+-   Lexicon rules can match a whole word or a regex pattern and run in an order you set, and a Test field shows a
+    sentence after the rules and how Kokoro will read it
 
 In 4.0.0-beta.2:
 
