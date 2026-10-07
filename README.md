@@ -70,6 +70,9 @@ Unreleased:
 -   Export can write an audiobook as one M4B with a chapter per subproject, the tags and the cover (needs ffmpeg on PATH)
 -   Lexicon rules can match a whole word or a regex pattern and run in an order you set, and a Test field shows a
     sentence after the rules and how Kokoro will read it
+-   Lexicon > Find words to check lists the names, acronyms and numbers in a book, plays each in its sentence, and adds
+    a whole-word rule for every answer you type
+-   Options > Spellcheck underlines words the dictionary doesn't know, in the language of each clip's character
 -   The window says FX, Character, Reference, Mix and stale where it said FX Preset, Preset, voice reference, custom voice and dirty
 
 In 4.0.0-beta.2:
