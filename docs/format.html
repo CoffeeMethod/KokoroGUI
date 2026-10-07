@@ -271,7 +271,7 @@
           <caption>Bundle paths by engine</caption>
           <thead><tr><th>Path</th><th>What it is</th></tr></thead>
           <tbody>
-            <tr><td>fx/&lt;name&gt;.json</td><td>A saved FX a character's <code>fx_preset</code> or a clip's override names. What the Audio FX tab's "Save FX Preset..." writes.</td></tr>
+            <tr><td>fx/&lt;name&gt;.json</td><td>A saved FX a character's <code>fx_preset</code> or a clip's override names. What the Audio FX tab's "Save FX..." writes.</td></tr>
             <tr><td>fx/ir/&lt;name&gt;.wav</td><td>An impulse response the convolution reverb's <code>convolution_ir</code> names in the project's FX, in a saved FX a character or clip names, or in a clip's FX override. On open it takes priority over the library's file of the same name (<code>presets/fx/ir/</code>).</td></tr>
             <tr><td>engines/kokoro/voices/&lt;name&gt;.pt</td><td>A Mix made in the Voices tab: a saved voice tensor. Loaded with <code>torch.load(weights_only=True)</code>, see <a href="#safety" class="link">safety</a>.</td></tr>
             <tr><td>engines/audio8/refs/&lt;name&gt;.wav + .txt</td><td>A Reference and its word-for-word transcript. The encoded reference codes are derived data and stay in the machine's own cache; the app warms them on the first generate after open.</td></tr>

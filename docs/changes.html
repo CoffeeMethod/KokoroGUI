@@ -402,6 +402,10 @@
             <h4>A log file, and a crash dialog</h4>
             <p>Starting the app from <code>main.py</code> (or <code>run.bat</code>) now writes <code>cache/logs/kokorogui.log</code>, 2 MB per file with 5 older files kept. Each line has the time, the level, the thread and the logger. Everything the app prints goes into the same file as well, so the existing messages need no change, and the console still gets them. An exception nobody caught, on the main thread or a worker, is logged with its traceback and opens a dialog saying "Something went wrong. The details are saved in the log." The dialog shows the traceback, with Copy, Open Log Folder and Close. It never quits the app and doesn't block the window, so you can still save. Only one dialog is open at a time, and a second exception while it's open is only logged. Help &gt; Open Log Folder opens the folder, and About has a Log file line. The log can hold file paths from your machine, so look through it before you attach it to a bug report.</p>
           </li>
+          <li>
+            <h4>One word for each idea in the window</h4>
+            <p>The window drops words the docs had already dropped. A saved FX is "FX", not "FX Preset": the Audio FX tab has "Save FX...", the Settings tab and the Characters dialog have an "FX" row, and a clip with no FX shows "No FX". The Generate menu says "Generate stale clips", and the Export dialog calls a clip that needs generating "stale" instead of "out of date". The Voices tab says Reference and Mix. Its Reference editor asks for a "WAV file", and the mixing editor lists "Mixes" and asks for a "Mix name". About shows the "Mixes folder". A subproject's block menu says "Generate", and its status line says "Exporting" for the mixdown it writes. JIT status lines say "segment" where they said "chunk". Kokoro reports "Kokoro ready" and "Kokoro failed to load". Saved projects and <code>config_qt.json</code> load as before. The stored value of a clip's or character's FX did not change, only what the combo shows.</p>
+          </li>
         </ul>
       </div>
 

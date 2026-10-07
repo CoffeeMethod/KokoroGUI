@@ -170,7 +170,7 @@
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">05 · The FX half</span>Where <code>[Name:FX]</code> applies</h2>
-        <p>The part after the second colon names an FX saved from the Audio FX tab with its "Save FX Preset..." button. When a tag makes a clip, by typing the line and pressing Enter or by Auto-split, the clip gets that FX, the same as picking it in the FX box above the transcript. It's set in the same undo step as the clip, so one undo removes both. The tag text is read once, when the clip is made. Editing it later doesn't change the FX, but the FX box does. If no FX has that name, the clip is still made with its character's FX. Auto-split lists the missing names in a warning and the typed line says so in the status bar.</p>
+        <p>The part after the second colon names an FX saved from the Audio FX tab with its "Save FX..." button. When a tag makes a clip, by typing the line and pressing Enter or by Auto-split, the clip gets that FX, the same as picking it in the FX box above the transcript. It's set in the same undo step as the clip, so one undo removes both. The tag text is read once, when the clip is made. Editing it later doesn't change the FX, but the FX box does. If no FX has that name, the clip is still made with its character's FX. Auto-split lists the missing names in a warning and the typed line says so in the status bar.</p>
         <p>A project with no clips yet reads the FX differently (see <a class="link" href="#whole-document">below</a>).</p>
         <p>The gutter shows <code>FX: Radio</code> under the speaker's name. To give a line without an FX tag an effect, put the caret in it and pick the FX from the FX box. That sets it for that clip alone.</p>
       </div>
@@ -211,7 +211,7 @@
             <tr><td><code>[Name]:</code></td><td>Loads <code>presets/Name.json</code> over the Settings tab's project values for that block. Blocks don't inherit from each other: each starts from the project values again.</td></tr>
             <tr><td><code>[Name:FX]:</code></td><td>The same, plus the FX named <code>FX</code>, from the project's own <code>fx/</code> first, then <code>presets/fx/</code>.</td></tr>
             <tr><td><code>[:FX]:</code></td><td>No preset file, only the FX: the project's voice with an effect on it.</td></tr>
-            <tr><td>A missing preset</td><td>That block uses the project values and the status line says <code>Warning: Preset 'Name' not found.</code> A missing FX says the same and the block plays dry.</td></tr>
+            <tr><td>A missing character</td><td>That block uses the project values and the status line says <code>Warning: Character 'Name' not found.</code> A missing FX says the same and the block plays dry.</td></tr>
             <tr><td><code>[pause:x]</code></td><td>Dropped, and no silence is added.</td></tr>
           </tbody>
         </table>

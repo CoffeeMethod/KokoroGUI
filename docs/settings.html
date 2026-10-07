@@ -226,7 +226,7 @@
           <tbody>
             <tr><td>Parallel threads <span class="engine-note">per engine</span></td><td>Kokoro: 1-32. Each thread runs its own pipeline, so more threads generate more pieces at once. Audio8: 1-4, but one shared model generates one piece at a time, so more threads don't speed up the model itself. LuxTTS: one shared model and one segment at a time.</td></tr>
             <tr><td>Enable segment cache</td><td>For whole-document and JIT generation: keeps each generated piece under <code>cache/</code>, keyed by a hash of what produced it, so a re-run with the same text and settings skips it. Clips don't need it: each clip's audio is written once into the project, under a name made from the same hash.</td></tr>
-            <tr><td>Cache reference encoding <span class="engine-note">Audio8 only</span></td><td>A second, separate cache that stores the model's encoded reference audio, keyed by the reference file's contents. Repeated segments against the same Reference skip re-running the audio encoder, independent of the segment cache above.</td></tr>
+            <tr><td>Cache reference encoding <span class="engine-note">Audio8 only</span></td><td>A second, separate cache that stores the model's encoding of each Reference's WAV, keyed by the file's contents. Repeated segments against the same Reference skip re-running the audio encoder, independent of the segment cache above.</td></tr>
           </tbody>
         </table>
       </div>
@@ -277,7 +277,7 @@
           <tbody>
             <tr><td>Volume</td><td>0.1x-2.0x. A plain multiply on the waveform, applied second in the chain, after Trim and before Pitch.</td></tr>
             <tr><td>Pitch (st)</td><td>-12 to +12 semitones, shifted by resampling to a new length. This changes duration along with pitch, the classic "chipmunk" effect: raise the pitch and playback gets faster, lower it and playback gets slower. For pitch without a duration change, use the Audio FX tab's separate Pitch Shift effect instead.</td></tr>
-            <tr><td>FX Preset / Apply</td><td>Loads a saved FX into the Audio FX tab's sliders. The Apply checkbox is the master switch for the whole FX chain below; unchecked, none of the Audio FX tab's effects run even if individually enabled.</td></tr>
+            <tr><td>FX / Apply</td><td>Loads a saved FX into the Audio FX tab's sliders. The Apply checkbox is the master switch for the whole FX chain below; unchecked, none of the Audio FX tab's effects run even if individually enabled.</td></tr>
             <tr><td>Normalize</td><td>Scales the segment so its loudest peak sits at 98% of full scale. A simple peak normalize, not a loudness (LUFS) normalize. Runs last in the chain, after FX.</td></tr>
             <tr><td>Trim silence</td><td>Strips leading and trailing audio below a fixed amplitude threshold. Runs first in the chain, before Volume.</td></tr>
           </tbody>
@@ -310,7 +310,7 @@
             <tr><td>Right-click a clip &gt; Fit to slot</td><td>Shown for a clip with a target. Changes the clip until it's within 3% of the target, as one undo step. Kokoro and LuxTTS regenerate it at a new speed, from 0.7x to 1.6x, up to three times. Audio8 has no speed control, so its playback is time-stretched instead, between 0.87x and 1.15x, without changing the pitch. A line still too long at 1.6x or 1.15x is set to Needs rewrite. Clips placed after it ripple as they do after a regenerate.</td></tr>
             <tr><td>Fit all over slot</td><td>The button above the timeline, shown once any clip has a target. Fits every clip that runs more than 3% past its target.</td></tr>
             <tr><td>A music bed's block</td><td>A file added with File &gt; Import Audio&hellip;, on the Music track. Drag its left or right edge to trim the file; the audio stays where it was on the timeline. Right-click: Play, Loop (repeat the trimmed part; the right edge then sets how long it runs), Reset trim, Unpin from timeline, Lock in time, Remove. A bed has no Generate, Take or Align words.</td></tr>
-            <tr><td>A subproject's block</td><td>A folder glyph and its title. It plays the subproject's exported mix, hatched while that's stale and crossed out when the subproject can't be opened. Click it: the transcript, Settings and Audio FX tabs show the subproject ("Subproject: …" at the top, Back returns). Double-click it (or its line in the transcript) to enter it: the timeline shows it and a breadcrumb above goes back up. Right-click: Enter, Generate and render, Detach to file… / Embed, Relink…, Remove.</td></tr>
+            <tr><td>A subproject's block</td><td>A folder glyph and its title. It plays the subproject's exported mix, hatched while that's stale and crossed out when the subproject can't be opened. Click it: the transcript, Settings and Audio FX tabs show the subproject ("Subproject: …" at the top, Back returns). Double-click it (or its line in the transcript) to enter it: the timeline shows it and a breadcrumb above goes back up. Right-click: Enter, Generate, Detach to file… / Embed, Relink…, Remove.</td></tr>
             <tr><td>Right-click a clip &gt; Take</td><td>Every take the clip has, the active one ticked, with its length. Regenerating keeps the old take. A take made from text you've since changed says "old text"; picking it marks the clip stale. Delete take drops one.</td></tr>
             <tr><td>Right-click a clip &gt; Status</td><td>To do, Generated, Approved or Needs rewrite. Generating sets Generated. The Show box above the timeline dims clips that don't match (All, Not approved, Needs rewrite).</td></tr>
             <tr><td>Right-click a clip &gt; Align words</td><td>Runs Whisper over the clip's audio to work out when each word is spoken. This runs by itself after generating with Audio8 or LuxTTS, or with Kokoro outside English.</td></tr>
@@ -450,7 +450,7 @@
       </div>
       <div class="prose reveal">
         <h3>Delivering to ACX and podcast hosts</h3>
-        <p>Make each chapter a subproject, which the import wizard does for a book, generate and render them all, then open Export and pick ACX (Audible). It fills in mono, 192 kbps mp3 at 44100 Hz, RMS normalization to -20 dBFS with a limiter at -3.5 dBFS, a second of silence before and two after, and one file per subproject. After the export the report lists every file with its RMS, peak, noise floor and length, and names each check it failed. ACX asks for room tone at both ends and the padding here is digital silence, so listen to the first and last seconds before you upload. A podcast preset writes one file for the whole project at the platform's loudness: -16 LUFS for Apple Podcasts (-19 mono), -14 for Spotify and YouTube, all under -1 dBTP. The limiter only exists in RMS mode, so a peaky mix in a LUFS preset stops short of its target and the check fails by name; lower the target and export again.</p>
+        <p>Make each chapter a subproject, which the import wizard does for a book, generate them all, then open Export and pick ACX (Audible). It fills in mono, 192 kbps mp3 at 44100 Hz, RMS normalization to -20 dBFS with a limiter at -3.5 dBFS, a second of silence before and two after, and one file per subproject. After the export the report lists every file with its RMS, peak, noise floor and length, and names each check it failed. ACX asks for room tone at both ends and the padding here is digital silence, so listen to the first and last seconds before you upload. A podcast preset writes one file for the whole project at the platform's loudness: -16 LUFS for Apple Podcasts (-19 mono), -14 for Spotify and YouTube, all under -1 dBTP. The limiter only exists in RMS mode, so a peaky mix in a LUFS preset stops short of its target and the check fails by name; lower the target and export again.</p>
       </div>
     </div>
   </section>
@@ -564,7 +564,7 @@
             <tr><td>Operation</td><td>Mix, Add, Subtract, Multiply, or Divide, applied directly to the two voices' underlying tensors.</td></tr>
             <tr><td>Mix slider</td><td>0-100%. For Mix, a straight blend of the two: 0% is all Voice A, 100% is all Voice B. For the other four operations it's an influence amount, not a ratio, and the app's own label warns that Divide is "unstable and VERY LOUD."</td></tr>
             <tr><td>Preview language / Preview</td><td>Speaks a short preview line in the chosen language using the in-progress mix, before you commit to saving it.</td></tr>
-            <tr><td>New voice name / Create &amp; Save</td><td>Saves the result as a Mix, which then shows up in the Voice dropdown alongside the built-in voices.</td></tr>
+            <tr><td>Mix name / Create &amp; Save</td><td>Saves the result as a Mix, which then shows up in the Voice dropdown alongside the built-in voices.</td></tr>
           </tbody>
         </table>
       </div>
@@ -579,7 +579,7 @@
           <caption>References</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Reference audio</td><td>Browse to a WAV file of the voice to clone.</td></tr>
+            <tr><td>WAV file</td><td>Browse to a WAV file of the voice you want.</td></tr>
             <tr><td>Transcript</td><td>What's actually said in that WAV, word for word. The cloning model uses this alongside the audio itself.</td></tr>
             <tr><td>Auto-transcribe</td><td>Runs the reference clip through the chosen ASR engine to pre-fill the transcript, in the background, so the app stays responsive. Whisper (the default, local, MIT) asks before its first download, about 1.6 GB, and offers another engine instead; <code>WHISPER_MODEL</code> in <code>.env</code> picks a smaller model. Audio8-ASR-0.1B is non-commercial; Vosk is offline and needs a model folder. Always worth proofreading the result before saving.</td></tr>
             <tr><td>Save as / Saved references</td><td>Saves the WAV and transcript as a named pair. Save assigns it to the active character when the editor and character use the same engine. Click a saved name to edit it, or Use to assign it to the active character; Use also switches that character to the editor's engine if needed. Settings shows the assigned name.</td></tr>
@@ -633,7 +633,7 @@
     <div class="wrap">
       <h2><span class="idx">Files on disk</span>Preset files</h2>
       <div class="prose reveal">
-        <p><strong>Saved FX</strong> are <code>presets/fx/&lt;name&gt;.json</code>, written by "Save FX Preset..." in the Audio FX tab. A project bundles the ones it uses under <code>fx/</code>, and its own copy wins over yours.</p>
+        <p><strong>Saved FX</strong> are <code>presets/fx/&lt;name&gt;.json</code>, written by "Save FX..." in the Audio FX tab. A project bundles the ones it uses under <code>fx/</code>, and its own copy wins over yours.</p>
         <p><strong>Character presets</strong>, <code>presets/&lt;name&gt;.json</code>, are from before characters existed. Nothing in the app writes them now. The first launch with the character library copies each one into <code>characters/</code> and links matching characters in the open project. After that, only the <a class="link" href="scripting.html#whole-document">whole-document path</a> reads them, for <code>[Name]:</code> tags in a project with no clips.</p>
       </div>
     </div>

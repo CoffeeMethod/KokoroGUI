@@ -67,6 +67,7 @@ Unreleased:
 -   Export can write an audiobook as one M4B with a chapter per subproject, the tags and the cover (needs ffmpeg on PATH)
 -   Lexicon rules can match a whole word or a regex pattern and run in an order you set, and a Test field shows a
     sentence after the rules and how Kokoro will read it
+-   The window says FX, Character, Reference, Mix and stale where it said FX Preset, Preset, voice reference, custom voice and dirty
 
 In 4.0.0-beta.2:
 
