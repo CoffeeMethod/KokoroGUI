@@ -304,6 +304,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.outline_dock: OutlineDock | None = None
         self.mixing_dock: MixingDock | None = None
         self._preview_path: str | None = None
+        self._spell_cache: dict = {}  # (language, extra words) -> daw.spell.Dictionary or None
         self.voice_clone_dock: VoiceCloneDock | None = None
         self.timeline_dock: TimelineDock | None = None
         self.transport_dock: TransportDock | None = None
@@ -3685,6 +3686,41 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         future = backend.preview(text, state["voice"], state["speed"], tmp_path,
                                  extra_config, lang_code=state["lang_code"])
         future.add_done_callback(_done)
+
+    # --- spelling ----------------------------------------------------------
+
+    def character_lang_code(self, character) -> str | None:
+        """The language `character` speaks: its own `lang_code`, else its
+        engine's language setting."""
+        code = (character.preset_data or {}).get("lang_code") if character is not None else None
+        if code:
+            return code
+        return self.engine_settings(self.backend_for_character(character).id).get("lang_code")
+
+    def spell_dictionary_for(self, character=None):
+        """The spelling dictionary for the language `character` speaks (the
+        active character when None), with every open project's character
+        names and the lexicon's plain finds counted as known words. None
+        when `pyspellchecker` is missing or the language has no word list.
+        One dictionary is kept per language and extra-word set."""
+        from kokoro_gui.daw import spell
+
+        if character is None:
+            character = self.active_character()
+        language = spell.language_for(self.character_lang_code(character))
+        if language is None:
+            return None
+        extra = set()
+        for project in self.open_projects():
+            extra.update(c.name for c in project.document.characters)
+        extra.update(rule["find"] for rule in normalize_rules(self.settings.get("lexicon")) if rule["mode"] != "regex")
+        key = (language, frozenset(extra))
+        cache = self._spell_cache
+        if key not in cache:
+            if len(cache) >= 6:
+                cache.clear()
+            cache[key] = spell.dictionary_for(language, extra)
+        return cache[key]
 
     def _remove_preview_file(self) -> None:
         """Deletes the last preview's temp file. The next preview and

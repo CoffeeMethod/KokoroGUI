@@ -49,6 +49,7 @@ class LexiconDock(QDockWidget):
         self.setObjectName("dock_lexicon")
         self.app = app
         self._populating = False
+        self.harvest_dialog = None
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -101,6 +102,12 @@ class LexiconDock(QDockWidget):
         add_btn.clicked.connect(self.add_rule)
         add_row.addWidget(add_btn)
         layout.addLayout(add_row)
+
+        self.harvest_button = QPushButton("Find words to check...")
+        self.harvest_button.setToolTip("List the names, acronyms, numbers and unknown words in the transcript "
+                                       "and add a rule for each one you answer.")
+        self.harvest_button.clicked.connect(lambda _c=False: self.open_harvest())
+        layout.addWidget(self.harvest_button, 0, Qt.AlignmentFlag.AlignLeft)
 
         # Why the last edit was refused (an invalid pattern, an empty Find).
         self.error_label = QLabel("")
@@ -187,6 +194,24 @@ class LexiconDock(QDockWidget):
         self.orig_edit.clear()
         self.replace_edit.clear()
         self._rules_changed()
+
+    def add_rules(self, new_rules: list) -> None:
+        """Appends `new_rules` (rule dicts, already valid) and saves,
+        repaints and re-runs the stale check once for all of them."""
+        if not new_rules:
+            return
+        self.rules().extend(dict(rule) for rule in new_rules)
+        self._rules_changed()
+
+    def open_harvest(self):
+        """Lexicon > Find words to check: the dialog over the open projects'
+        transcripts. Window-modal and non-blocking; the reference is kept
+        for tests and so the dialog isn't collected while it is open."""
+        from kokoro_gui.qt.harvest_dialog import HarvestDialog
+
+        self.harvest_dialog = HarvestDialog(self.app, self)
+        self.harvest_dialog.open()
+        return self.harvest_dialog
 
     def delete_rule(self, index: int) -> None:
         rules = self.rules()
