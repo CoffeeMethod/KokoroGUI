@@ -270,7 +270,7 @@ class BackendHooksMixin:
 
     def preview_text(self, lang_code: Optional[str] = None) -> str:
         """A short sentence to preview a voice with in `lang_code`."""
-        return "This is a preview of your custom voice."
+        return "This is a preview of your voice."
 
     # Whether `explain_text` answers (the Lexicon tab's "how it will be read"
     # line shows only for a backend that does).

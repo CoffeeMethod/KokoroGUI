@@ -85,7 +85,7 @@ class VoiceCloneDock(QDockWidget):
     saveFinished = Signal(bool, str)
 
     def __init__(self, app, parent=None):
-        super().__init__("Voice Reference", parent)
+        super().__init__("Voices", parent)
         self.setObjectName("dock_voice_clone")
         self.app = app
         # The engine this editor was built for, and its reference store;
@@ -104,7 +104,7 @@ class VoiceCloneDock(QDockWidget):
         header, self.engine_combo = engine_header(app, self.backend_id)
         layout.addLayout(header)
 
-        layout.addWidget(QLabel("<b>Reference Audio</b>"))
+        layout.addWidget(QLabel("<b>WAV file</b>"))
         wav_row = QHBoxLayout()
         self.wav_path_edit = QLineEdit()
         wav_row.addWidget(self.wav_path_edit, 1)
@@ -189,7 +189,7 @@ class VoiceCloneDock(QDockWidget):
     # --- reference audio / transcript -----------------------------------
 
     def _browse_wav(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select reference audio", filter="Audio (*.wav)")
+        path, _ = QFileDialog.getOpenFileName(self, "Select a WAV file", filter="Audio (*.wav)")
         if path:
             self.wav_path_edit.setText(path)
 
@@ -233,7 +233,7 @@ class VoiceCloneDock(QDockWidget):
         non-file, a file over `MAX_REFERENCE_BYTES` and a non-.wav name."""
         path = path.strip()
         if not path:
-            QMessageBox.warning(self, "Error", "Select a reference audio file first.")
+            QMessageBox.warning(self, "Error", "Select a WAV file first.")
             return None
         if _is_network_path(path):
             QMessageBox.warning(self, "Error", "Network paths aren't supported; copy the file locally first.")
@@ -243,13 +243,13 @@ class VoiceCloneDock(QDockWidget):
             QMessageBox.warning(self, "Error", "Network paths aren't supported; copy the file locally first.")
             return None
         if not os.path.isfile(real):
-            QMessageBox.warning(self, "Error", "Select a reference audio file first.")
+            QMessageBox.warning(self, "Error", "Select a WAV file first.")
             return None
         if os.path.splitext(real)[1].lower() != ".wav":
-            QMessageBox.warning(self, "Error", "The reference audio must be a .wav file.")
+            QMessageBox.warning(self, "Error", "The file must be a .wav file.")
             return None
         if os.path.getsize(real) > MAX_REFERENCE_BYTES:
-            QMessageBox.warning(self, "Error", f"The reference audio is over {MAX_REFERENCE_BYTES // (1024 * 1024)} MB.")
+            QMessageBox.warning(self, "Error", f"The WAV file is over {MAX_REFERENCE_BYTES // (1024 * 1024)} MB.")
             return None
         return real
 
@@ -334,7 +334,7 @@ class VoiceCloneDock(QDockWidget):
         transcript = self.transcript_edit.toPlainText().strip()
 
         if not name:
-            QMessageBox.warning(self, "Error", "Enter a name for this voice reference.")
+            QMessageBox.warning(self, "Error", "Enter a name for this Reference.")
             return
         wav_path = self._checked_wav_path(self.wav_path_edit.text())
         if wav_path is None:
@@ -401,7 +401,7 @@ class VoiceCloneDock(QDockWidget):
         # alongside the global store; a name in both is the project's.
         names = self.store.list_references(getattr(self.app, "project_dir", None))
         if not names:
-            self._list_layout.addWidget(QLabel("No saved voice references yet."))
+            self._list_layout.addWidget(QLabel("No saved References yet."))
             return
 
         for name in names:
@@ -421,7 +421,7 @@ class VoiceCloneDock(QDockWidget):
             self._list_layout.addWidget(row)
 
     def delete_reference(self, name: str) -> None:
-        if QMessageBox.question(self, "Confirm", f"Delete voice reference '{name}'?") != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, "Confirm", f"Delete Reference '{name}'?") != QMessageBox.StandardButton.Yes:
             return
         try:
             self.store.delete_reference(name)

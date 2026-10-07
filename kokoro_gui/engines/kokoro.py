@@ -62,7 +62,7 @@ MIX_PREVIEW_TEXT = {
     "j": "これはカスタム合成音声のプレビューです。",
     "z": "这是您的自定义混合语音预览。",
 }
-MIX_PREVIEW_TEXT_DEFAULT = "This is a preview of your custom mixed voice."
+MIX_PREVIEW_TEXT_DEFAULT = "This is a preview of your Mix."
 
 
 class KokoroBackendAdapter(BackendHooksMixin):

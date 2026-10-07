@@ -125,12 +125,12 @@ class LuxTTSModel(ModelBase):
         import soundfile as sf
 
         if not path or not os.path.isfile(path):
-            raise ValueError("Select and save a LuxTTS voice reference before generating.")
+            raise ValueError("Select and save a LuxTTS Reference before generating.")
         if os.path.getsize(path) > 200 * 1024 * 1024:
-            raise ValueError("LuxTTS reference audio must be no larger than 200 MB.")
+            raise ValueError("A LuxTTS Reference's WAV must be no larger than 200 MB.")
         info = sf.info(path)
         if info.duration < 3:
-            raise ValueError("LuxTTS reference audio must contain at least 3 seconds of speech.")
+            raise ValueError("A LuxTTS Reference's WAV must contain at least 3 seconds of speech.")
 
     def synthesize(self, text, voice, speed, lang_code, params):
         if not text or not text.strip():
@@ -209,7 +209,7 @@ class LuxTTSBackendAdapter(BackendHooksMixin):
         return [
             ConfigField("lang_code", "Language", ConfigFieldType.CHOICE,
                         default="en", choices=[("English", "en")], group="Generation"),
-            ConfigField("voice", "Voice Reference", ConfigFieldType.CHOICE, group="Generation"),
+            ConfigField("voice", "Reference", ConfigFieldType.CHOICE, group="Generation"),
             *common_fields(max_threads=1),
             ConfigField("num_steps", "Sampling Steps", ConfigFieldType.INT,
                         default=4, min=1, max=32, step=1, group="Model"),

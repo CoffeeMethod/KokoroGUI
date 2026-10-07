@@ -518,7 +518,7 @@ class Audio8BackendAdapter(BackendHooksMixin):
         return [
             ConfigField("lang_code", "Language", ConfigFieldType.CHOICE,
                         default="English", choices=list(AUDIO8_LANGUAGE_CHOICES), group="Generation"),
-            ConfigField("voice", "Voice Reference", ConfigFieldType.CHOICE,
+            ConfigField("voice", "Reference", ConfigFieldType.CHOICE,
                         default=None, group="Generation"),
             # Parallelism is capped low: every segment serializes through
             # the shared model lock (see the module docstring).

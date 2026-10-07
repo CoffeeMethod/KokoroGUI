@@ -235,7 +235,7 @@ def test_a_missing_wav_is_refused(qt_app, monkeypatch, tmp_path):
     dock, transcribe, save = _guarded_dock(qt_app, monkeypatch)
     warning = _warnings(monkeypatch)
     dock.wav_path_edit.setText(str(tmp_path / "nope.wav"))
-    _assert_refused(dock, transcribe, save, warning, "Select a reference audio file")
+    _assert_refused(dock, transcribe, save, warning, "Select a WAV file")
 
 
 def test_a_directory_is_refused(qt_app, monkeypatch, tmp_path):
@@ -244,7 +244,7 @@ def test_a_directory_is_refused(qt_app, monkeypatch, tmp_path):
     folder = tmp_path / "folder.wav"
     folder.mkdir()
     dock.wav_path_edit.setText(str(folder))
-    _assert_refused(dock, transcribe, save, warning, "Select a reference audio file")
+    _assert_refused(dock, transcribe, save, warning, "Select a WAV file")
 
 
 def test_an_oversized_wav_is_refused(qt_app, monkeypatch, tmp_path):

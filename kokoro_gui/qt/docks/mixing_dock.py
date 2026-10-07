@@ -29,7 +29,7 @@ class MixingDock(QDockWidget):
     mixFinished = Signal(bool, str)
 
     def __init__(self, app, parent=None):
-        super().__init__("Custom Voice", parent)
+        super().__init__("Voices", parent)
         self.setObjectName("dock_mixing")
         self.app = app
         # The engine this editor was built for; app.py rebuilds the dock when
@@ -102,7 +102,7 @@ class MixingDock(QDockWidget):
         layout.addLayout(prev_row)
 
         save_row = QHBoxLayout()
-        save_row.addWidget(QLabel("New Voice Name:"))
+        save_row.addWidget(QLabel("Mix name:"))
         self.mix_name_edit = QLineEdit()
         save_row.addWidget(self.mix_name_edit, 1)
         save_btn = QPushButton("Create && Save")
@@ -113,7 +113,7 @@ class MixingDock(QDockWidget):
         self.mix_status_label = QLabel("")
         layout.addWidget(self.mix_status_label)
 
-        layout.addWidget(QLabel("<b>Custom Voices:</b>"))
+        layout.addWidget(QLabel("<b>Mixes:</b>"))
         self.list_scroll = QScrollArea()
         self.list_scroll.setWidgetResizable(True)
         self.list_scroll.setMinimumHeight(120)
@@ -169,7 +169,7 @@ class MixingDock(QDockWidget):
 
         custom = sorted(self.backend.voice_store.list_voices())
         if not custom:
-            self._list_layout.addWidget(QLabel("No custom voices found."))
+            self._list_layout.addWidget(QLabel("No Mixes yet."))
         else:
             for cv in custom:
                 row = QFrame()
@@ -182,7 +182,7 @@ class MixingDock(QDockWidget):
                 self._list_layout.addWidget(row)
 
     def delete_custom_voice(self, name: str) -> None:
-        if QMessageBox.question(self, "Confirm", f"Delete voice '{name}'?") != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, "Confirm", f"Delete Mix '{name}'?") != QMessageBox.StandardButton.Yes:
             return
         try:
             self.backend.voice_store.delete(name)
@@ -259,13 +259,13 @@ class MixingDock(QDockWidget):
         name = self.mix_name_edit.text().strip()
 
         if not name:
-            QMessageBox.warning(self, "Error", "Please enter a name for the new voice.")
+            QMessageBox.warning(self, "Error", "Please enter a name for the new Mix.")
             return
         if not re.match(r"^[a-zA-Z0-9_-]+$", name):
             QMessageBox.warning(self, "Error", "Invalid name. Use alphanumeric, _, - only.")
             return
         if name in self.app.get_all_voices(backend=self.backend):
-            if QMessageBox.question(self, "Overwrite", f"Voice '{name}' exists. Overwrite?") != QMessageBox.StandardButton.Yes:
+            if QMessageBox.question(self, "Overwrite", f"Mix '{name}' exists. Overwrite?") != QMessageBox.StandardButton.Yes:
                 return
 
         self.mix_status_label.setText("Mixing...")

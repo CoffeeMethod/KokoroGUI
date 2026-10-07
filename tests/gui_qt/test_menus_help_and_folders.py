@@ -144,7 +144,7 @@ def test_about_lists_versions_engines_paths_and_whisper(qt_app, monkeypatch):
     assert "PySide6" in text and "torch" in text
     assert "Device: CPU" in text
     assert "kokoro" in text.lower()
-    assert "Cache folder:" in text and "Custom voices folder:" in text
+    assert "Cache folder:" in text and "Mixes folder:" in text
     assert "config_qt.json" in text
     assert "Log file:" in text and "kokorogui.log" in text
     assert f"Whisper model: {asr.get_whisper_model_name()} (cached)" in text
