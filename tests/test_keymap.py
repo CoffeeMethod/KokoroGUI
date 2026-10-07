@@ -3,7 +3,8 @@ import pytest
 
 from kokoro_gui.qt import keymap
 
-PLAIN_KEYS = {"Left", "Right", "Home", "End", "Delete", "J", "K", "L", "S", "F", "G", "Shift+Left", "Shift+Right"}
+PLAIN_KEYS = {"Left", "Right", "Home", "End", "Delete", "J", "K", "L", "S", "F", "G", "Shift+Left", "Shift+Right",
+              "M", "N", "Shift+N", "[", "]"}
 
 
 def test_no_two_bindings_share_a_sequence():
