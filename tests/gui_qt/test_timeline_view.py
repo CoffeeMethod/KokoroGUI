@@ -55,7 +55,7 @@ def _tagged_doc(text, tagged=(), **kwargs):
     if clips is None:
         clips = [clip for _start, _end, clip in tagged]
     # Placement tests here predate gaps; test_arrangement.py covers those.
-    kwargs.setdefault("settings", {"gap_s": 0.0, "paragraph_gap_s": 0.0})
+    kwargs.setdefault("settings", {"gap_s": 0.0, "paragraph_gap_s": 0.0, "heading_gap_after_s": 0.0})
     return Document(runs=runs, clips=clips, **kwargs)
 
 

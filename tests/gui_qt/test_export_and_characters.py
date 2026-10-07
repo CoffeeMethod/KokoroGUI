@@ -95,6 +95,7 @@ def test_run_export_with_dirty_clips_offers_generate_first(qt_app, monkeypatch):
 
 def test_run_export_schedules_mixdown_on_the_worker_and_writes_the_file(qt_app, tmp_path):
     qt_app.document.settings["gap_s"] = 0.0  # about the export path, not gaps
+    qt_app.document.settings["heading_gap_after_s"] = 0.0  # "hello" reads as a heading
     _type(qt_app.editor, "hello world")
     _generated_clip(qt_app, tmp_path, 0, 5, seconds=1.0, name="a")
     _generated_clip(qt_app, tmp_path, 6, 11, seconds=0.5, name="b")
@@ -183,6 +184,7 @@ def test_characters_dialog_refuses_to_remove_a_character_in_use(qt_app, monkeypa
 
 def test_transport_position_drives_playhead_readout_and_playing_clip(qt_app, tmp_path):
     qt_app.document.settings["gap_s"] = 0.0  # about the readout, not gaps
+    qt_app.document.settings["heading_gap_after_s"] = 0.0  # "hello" reads as a heading
     _type(qt_app.editor, "hello world")
     first = _generated_clip(qt_app, tmp_path, 0, 5, seconds=1.0, name="a")
     second = _generated_clip(qt_app, tmp_path, 6, 11, seconds=1.0, name="b")
@@ -516,6 +518,7 @@ def test_measure_loudness_refuses_without_clips(qt_app, monkeypatch):
 def test_measure_loudness_shows_numbers_for_two_clips_and_writes_no_file(qt_app, tmp_path):
     pytest.importorskip("pyloudnorm")
     qt_app.document.settings["gap_s"] = 0.0
+    qt_app.document.settings["heading_gap_after_s"] = 0.0
     _type(qt_app.editor, "hello world")
     _generated_clip(qt_app, tmp_path, 0, 5, seconds=1.0, name="a", tone_hz=440)
     _generated_clip(qt_app, tmp_path, 6, 11, seconds=1.0, name="b", tone_hz=440)
