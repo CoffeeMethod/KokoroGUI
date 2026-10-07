@@ -30,6 +30,9 @@ native text history is wiped (`native_history_cleared`, after the editor
 reloads its text), native entries go and a joined entry keeps only its
 custom half.
 
+`one_step` folds several joined entries into one, for an edit made as many
+separate text changes (`TranscriptEditor.delete_ranges`).
+
 While an undo or redo runs (`replaying`), the text changes it makes are
 replays, not edits: the editor applies them to the document and pushes
 nothing, so the stacks and the order log stay as they were.
