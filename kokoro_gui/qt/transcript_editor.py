@@ -1501,6 +1501,41 @@ class TranscriptEditor(QTextEdit):
         if pending_line is not None:
             self._try_recognize_shorthand_line(*pending_line)
 
+    def delete_ranges(self, ranges) -> int:
+        """Deletes every `(start, end)` of `ranges` as one edit and returns
+        how many it removed (the filler dialog's Remove). Each range goes
+        through `_on_contents_change` like a Delete keypress, so recording
+        text takes its words and audio with it; the ranges are removed from
+        the last to the first so no offset moves under the next. The first
+        removal is an edit block of its own and the rest join it
+        (`joinPreviousEditBlock`), so Qt keeps one native undo command, and
+        `UndoCoordinator.one_step` folds the per-range `TextEditCommand`s
+        into the one undo step. A range that touches a subproject's line or a bed's is
+        skipped, as typing there is."""
+        text_length = len(self.app.document.text)
+        spans: list = []
+        for start, end in sorted((max(0, int(s)), min(text_length, int(e))) for s, e in ranges):
+            if end <= start or self.edit_touches_placeholder(start, end):
+                continue
+            if spans and start <= spans[-1][1]:
+                spans[-1] = (spans[-1][0], max(spans[-1][1], end))
+            else:
+                spans.append((start, end))
+        cursor = QTextCursor(self.document())
+        with self.undo_coordinator.one_step():
+            for number, (start, end) in enumerate(reversed(spans)):
+                if number == 0:
+                    cursor.beginEditBlock()
+                else:
+                    cursor.joinPreviousEditBlock()
+                try:
+                    cursor.setPosition(start)
+                    cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+                    cursor.removeSelectedText()
+                finally:
+                    cursor.endEditBlock()
+        return len(spans)
+
     def _key_may_edit_imported(self, event, start: int, end: int, inserting: bool) -> bool:
         """True when the key's edit (`_key_edit_range`) may change imported
         recording text. A Backspace or Delete with no selection can take a

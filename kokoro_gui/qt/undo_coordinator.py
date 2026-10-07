@@ -36,6 +36,7 @@ nothing, so the stacks and the order log stay as they were.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Callable, Optional
 
 from PySide6.QtGui import QTextDocument
@@ -117,6 +118,23 @@ class UndoCoordinator:
             top.count += 1
         else:
             self._order.append(CUSTOM)
+
+    @contextmanager
+    def one_step(self):
+        """Edits made inside the `with` undo as one step. The caller makes
+        Qt keep them in one native command (the first in an edit block, the
+        rest with `joinPreviousEditBlock`, as `TranscriptEditor.delete_ranges`
+        does), but Qt still announces a command per edit, so the log gets
+        an entry per edit; this folds them into one entry that carries every
+        custom command they pushed."""
+        mark = len(self._order)
+        try:
+            yield
+        finally:
+            tail = self._order[mark:]
+            if len(tail) > 1:
+                joined = sum(entry.count for entry in tail if isinstance(entry, _Joined))
+                self._order[mark:] = [_Joined(joined) if joined else NATIVE]
 
     def native_history_cleared(self) -> None:
         """Qt's text undo history was wiped (the editor reloaded its text):
