@@ -1542,7 +1542,7 @@ class TranscriptEditor(QTextEdit):
             if fx_name in list_fx_preset_names(self.app.project_dir):
                 overrides = {"fx_preset": fx_name}
             else:
-                self.app.set_status(f"No FX preset named '{fx_name}': the clip uses its character's FX.",
+                self.app.set_status(f"No FX named '{fx_name}': the clip uses its character's FX.",
                                     "warning")
         self._push_assign_character(line_start, line_end, character.id, clip_overrides=overrides)
 

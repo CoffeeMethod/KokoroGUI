@@ -79,7 +79,7 @@ import kokoro_gui.qt.app as qt_app_module
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS
 from kokoro_gui.engines.base import SHARED_CONFIG_KEYS
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
-from kokoro_gui.qt import spec
+from kokoro_gui.qt import fx_resolve, spec
 from kokoro_gui.qt.docks.scope_fields import ScopeFields
 from kokoro_gui.qt.schema_form import SchemaFormWidget
 
@@ -172,7 +172,7 @@ class SettingsDock(QDockWidget):
         self.apply_fx_check = QCheckBox("Apply")
         fx_row_layout.addWidget(self.fx_preset_combo, 1)
         fx_row_layout.addWidget(self.apply_fx_check)
-        audio_form.addRow("FX Preset:", fx_row)
+        audio_form.addRow("FX:", fx_row)
 
         self.normalize_check = QCheckBox("Normalize")
         self.trim_check = QCheckBox("Trim Silence")
@@ -203,7 +203,7 @@ class SettingsDock(QDockWidget):
         self.normalize_check.toggled.connect(lambda v: self._on_hand_built_changed("normalize", v))
         self.trim_check.toggled.connect(lambda v: self._on_hand_built_changed("trim", v))
         self.apply_fx_check.toggled.connect(lambda v: self._on_hand_built_changed("apply_fx", v))
-        self.fx_preset_combo.currentTextChanged.connect(self._on_fx_preset_selected)
+        self.fx_preset_combo.currentIndexChanged.connect(self._on_fx_preset_index)
 
         self.refresh_fx_presets()
         self._build_for_selection()
@@ -338,7 +338,7 @@ class SettingsDock(QDockWidget):
             "normalize": self.app.settings.get("normalize", False),
             "trim_silence": self.app.settings.get("trim", False),
             "apply_fx": self.app.settings.get("apply_fx", True),
-            "fx_preset": self.app.settings.get("fx_preset", "Select FX Preset..."),
+            "fx_preset": self.app.settings.get("fx_preset", fx_resolve.PLACEHOLDER),
         })
         return values
 
@@ -479,7 +479,7 @@ class SettingsDock(QDockWidget):
             "normalize": self.app.settings.get("normalize", False),
             "trim": self.app.settings.get("trim", False),
             "apply_fx": self.app.settings.get("apply_fx", True),
-            "fx_preset": self.app.settings.get("fx_preset", "Select FX Preset..."),
+            "fx_preset": self.app.settings.get("fx_preset", fx_resolve.PLACEHOLDER),
         }
         base.update(cfg)
 
@@ -493,8 +493,8 @@ class SettingsDock(QDockWidget):
             self.normalize_check.setChecked(bool(base["normalize"]))
             self.trim_check.setChecked(bool(base["trim"]))
             self.apply_fx_check.setChecked(bool(base["apply_fx"]))
-            fx_name = base["fx_preset"] or "Select FX Preset..."
-            idx = self.fx_preset_combo.findText(fx_name)
+            fx_name = base["fx_preset"] or fx_resolve.PLACEHOLDER
+            idx = self.fx_preset_combo.findData(fx_name)
             self.fx_preset_combo.setCurrentIndex(idx if idx >= 0 else 0)
         finally:
             for w in widgets:
@@ -511,8 +511,11 @@ class SettingsDock(QDockWidget):
             return  # defense in depth - every hand-built field is in ALLOWED_PRESET_KEYS today
         self._write_scoped(key, value)
 
+    def _on_fx_preset_index(self, index: int) -> None:
+        self._on_fx_preset_selected(self.fx_preset_combo.itemData(index))
+
     def _on_fx_preset_selected(self, name: str) -> None:
-        if not name or name == "Select FX Preset...":
+        if not name or name == fx_resolve.PLACEHOLDER:
             return
         if self._mode == "none":
             # "none" mode's FX preset combo actually *loads* the preset's
@@ -538,7 +541,7 @@ class SettingsDock(QDockWidget):
             "normalize": self.normalize_check.isChecked(),
             "trim_silence": self.trim_check.isChecked(),
             "apply_fx": self.apply_fx_check.isChecked(),
-            "fx_preset": self.fx_preset_combo.currentText(),
+            "fx_preset": self.fx_preset_combo.currentData() or "",
         })
         return state
 
@@ -566,7 +569,9 @@ class SettingsDock(QDockWidget):
         re-triggering `_on_fx_preset_selected`."""
         if self._mode == "none":
             self.fx_preset_combo.blockSignals(True)
-            self.fx_preset_combo.setCurrentText(name)
+            index = self.fx_preset_combo.findData(name)
+            if index >= 0:
+                self.fx_preset_combo.setCurrentIndex(index)
             self.fx_preset_combo.blockSignals(False)
         else:
             self._none_values["fx_preset"] = name
@@ -574,12 +579,14 @@ class SettingsDock(QDockWidget):
     # --- FX preset combo mirror (kept in sync with the FX dock's own combo) --
 
     def refresh_fx_presets(self) -> None:
-        presets = ["Select FX Preset..."]
+        presets = [fx_resolve.PLACEHOLDER]
         if os.path.exists(qt_app_module.FX_PRESETS_DIR):
             files = [f for f in os.listdir(qt_app_module.FX_PRESETS_DIR) if f.endswith(".json")]
             presets.extend(f[:-5] for f in files)
         self.fx_preset_combo.blockSignals(True)
         self.fx_preset_combo.clear()
-        self.fx_preset_combo.addItems(presets)
-        self.fx_preset_combo.setCurrentText("Select FX Preset...")
+        for name in presets:
+            # The placeholder shows as "No FX" but stays the stored value.
+            self.fx_preset_combo.addItem(fx_resolve.PLACEHOLDER_LABEL if name == fx_resolve.PLACEHOLDER else name, name)
+        self.fx_preset_combo.setCurrentIndex(0)
         self.fx_preset_combo.blockSignals(False)

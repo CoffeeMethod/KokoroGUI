@@ -1,5 +1,5 @@
 """Edit > Characters... - the project's characters and their link to the
-global character library (UI13: name, color, voice, FX preset; phase 3:
+global character library (UI13: name, color, voice, FX; phase 3:
 the library, grill WF4-WF7 and WF12).
 
 Each row carries a scope badge: "Library" for a character linked to a
@@ -169,7 +169,7 @@ class CharactersDialog(QDialog):
         for name in list_fx_preset_names(self.app.project_dir):
             self.fx_combo.addItem(name)
         self.fx_combo.currentTextChanged.connect(self._on_fx_changed)
-        form.addRow("FX preset:", self.fx_combo)
+        form.addRow("FX:", self.fx_combo)
 
         self.variants_label = QLabel("Variants:")
         variants_box = QWidget()

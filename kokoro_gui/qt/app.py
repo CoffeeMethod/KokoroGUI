@@ -3827,8 +3827,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         missing_fx = sorted({name for name in tag_fx.values() if name not in known_fx})
         if missing_fx:
             QMessageBox.warning(
-                self, "Unknown FX presets",
-                f"No FX preset found for: {', '.join(missing_fx)}. Those clips use their character's FX.",
+                self, "Unknown FX",
+                f"No FX found for: {', '.join(missing_fx)}. Those clips use their character's FX.",
             )
         for start, end, character_id in triples:
             fields = {"gap_before_s": gaps[start]} if start in gaps else None

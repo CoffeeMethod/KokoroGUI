@@ -63,3 +63,48 @@ def test_the_fx_dock_survives_a_non_object_preset_file(qt_app):
     with open(os.path.join(qt_app_module.FX_PRESETS_DIR, "List.json"), "w", encoding="utf-8") as f:
         f.write("[1, 2, 3]")
     qt_app.fx_dock.load_preset("List")
+
+
+OLD_SENTINEL = "Select FX Preset..."  # what config_qt.json and old projects store
+
+
+def test_the_no_fx_item_shows_no_fx_and_stores_the_old_sentinel(qt_app):
+    for combo in (qt_app.settings_dock.fx_preset_combo, qt_app.fx_dock.preset_combo):
+        assert combo.itemText(0) == "No FX"
+        assert combo.itemData(0) == OLD_SENTINEL
+        assert combo.findText(OLD_SENTINEL) < 0
+    assert qt_app.settings_dock._snapshot_none_values()["fx_preset"] == OLD_SENTINEL
+
+
+def test_a_character_holding_the_old_sentinel_shows_no_fx_and_resolves_to_no_fx(qt_app):
+    from kokoro_gui.qt import fx_resolve
+
+    character = qt_app.document.characters[0]
+    character.preset_data["fx_preset"] = OLD_SENTINEL
+
+    qt_app.selection.select_character(character.id)
+
+    for combo in (qt_app.settings_dock.fx_preset_combo, qt_app.fx_dock.preset_combo):
+        assert combo.currentText() == "No FX"
+        assert combo.currentData() == OLD_SENTINEL
+    resolution = fx_resolve.resolve_fx(qt_app, character=character)
+    assert resolution.preset_name is None
+    assert character.preset_data["fx_preset"] == OLD_SENTINEL  # showing it doesn't rewrite it
+
+
+def test_choosing_a_named_fx_in_the_settings_combo_stores_its_name(qt_app):
+    from kokoro_gui.qt import fx_resolve
+
+    import kokoro_gui.qt.app as qt_app_module
+    os.makedirs(qt_app_module.FX_PRESETS_DIR, exist_ok=True)
+    with open(os.path.join(qt_app_module.FX_PRESETS_DIR, "Radio.json"), "w", encoding="utf-8") as f:
+        json.dump({"gain_db": 1.0}, f)
+    qt_app.fx_dock.refresh_presets()
+    character = qt_app.document.characters[0]
+    qt_app.selection.select_character(character.id)
+    combo = qt_app.settings_dock.fx_preset_combo
+
+    combo.setCurrentIndex(combo.findData("Radio"))
+
+    assert character.preset_data["fx_preset"] == "Radio"
+    assert fx_resolve.real_preset_name(character.preset_data["fx_preset"]) == "Radio"

@@ -337,7 +337,7 @@ class ConversionMixin:
                         # Resolve voice path for the new voice
                         seg_config['voice'] = self.resolve_voice_path(seg_config['voice'], config.get("project_dir"))
                     else:
-                        if self.on_status: self.on_status(f"Warning: Preset '{speaker_name}' not found.", False)
+                        if self.on_status: self.on_status(f"Warning: Character '{speaker_name}' not found.", False)
 
                 if fx_name:
                     fx_preset = self.load_fx_preset(fx_name, config.get("project_dir"))
@@ -346,7 +346,7 @@ class ConversionMixin:
                         seg_config['apply_fx'] = True
                         seg_config['fx_preset'] = fx_name
                     else:
-                        if self.on_status: self.on_status(f"Warning: FX Preset '{fx_name}' not found.", False)
+                        if self.on_status: self.on_status(f"Warning: FX '{fx_name}' not found.", False)
 
                 # Split this segment into sub-chunks for parallel processing
                 # Use same character limit as original

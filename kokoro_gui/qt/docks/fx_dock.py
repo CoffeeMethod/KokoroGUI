@@ -13,7 +13,7 @@ selection the way the Settings tab does, with the same three modes:
   and pushed as one `SetClipFxCommand` per 300ms of quiet, so a slider drag
   is one undo step and the override is a full resolved-values dict.
 - "character": the character's attached FX preset file. The first edit per
-  session asks "This changes the preset for every clip using X. Continue?";
+  session asks "This changes the FX for every clip using X. Continue?";
   a character with no preset yet gets one named after it.
 
 `project_fx_state()` always returns the "none" values regardless of what's
@@ -50,6 +50,7 @@ from kokoro_gui.engine.presets import filter_fx_preset_values
 from kokoro_gui.qt import fx_resolve, spec
 from kokoro_gui.qt.fx_presets import import_ir_file, list_fx_preset_names, list_ir_names
 from kokoro_gui.qt.fx_resolve import PLACEHOLDER as _PLACEHOLDER
+from kokoro_gui.qt.fx_resolve import PLACEHOLDER_LABEL as _PLACEHOLDER_LABEL
 
 CLIP_EDIT_DEBOUNCE_MS = 300
 PROJECT_EDIT_DEBOUNCE_MS = 300
@@ -92,11 +93,11 @@ class FXDock(QDockWidget):
         preset_row = QHBoxLayout()
         self.preset_combo = QComboBox()
         self.preset_combo.activated.connect(self._on_preset_activated)
-        save_btn = QPushButton("Save FX Preset...")
+        save_btn = QPushButton("Save FX...")
         save_btn.clicked.connect(self._save_preset_dialog)
         refresh_btn = QPushButton("Refresh")
         refresh_btn.clicked.connect(self.refresh_presets)
-        preset_row.addWidget(QLabel("FX Preset:"))
+        preset_row.addWidget(QLabel("FX:"))
         preset_row.addWidget(self.preset_combo, 1)
         preset_row.addWidget(save_btn)
         preset_row.addWidget(refresh_btn)
@@ -288,14 +289,14 @@ class FXDock(QDockWidget):
     def _set_combo_text(self, name) -> None:
         self.preset_combo.blockSignals(True)
         try:
-            if name and self.preset_combo.findText(name) < 0 and name != "custom":
-                self.preset_combo.addItem(name)
+            if name and self.preset_combo.findData(name) < 0 and name != "custom":
+                self.preset_combo.addItem(name, name)
             if name == "custom":
-                if self.preset_combo.findText("(custom)") < 0:
-                    self.preset_combo.addItem("(custom)")
-                self.preset_combo.setCurrentText("(custom)")
+                if self.preset_combo.findData("(custom)") < 0:
+                    self.preset_combo.addItem("(custom)", "(custom)")
+                self.preset_combo.setCurrentIndex(self.preset_combo.findData("(custom)"))
             else:
-                self.preset_combo.setCurrentText(name or _PLACEHOLDER)
+                self.preset_combo.setCurrentIndex(max(0, self.preset_combo.findData(name or _PLACEHOLDER)))
         finally:
             self.preset_combo.blockSignals(False)
 
@@ -329,7 +330,7 @@ class FXDock(QDockWidget):
             return True
         answer = QMessageBox.question(
             self, "Edit character FX",
-            f"This changes the preset for every clip using {character.name}. Continue?",
+            f"This changes the FX for every clip using {character.name}. Continue?",
         )
         if answer != QMessageBox.StandardButton.Yes:
             return False
@@ -395,12 +396,14 @@ class FXDock(QDockWidget):
 
     def refresh_presets(self) -> None:
         self.refresh_ir_choices()
-        current = self.preset_combo.currentText()
+        current = self.preset_combo.currentData()
         presets = [_PLACEHOLDER] + list_fx_preset_names(self.app.project_dir)
         self.preset_combo.blockSignals(True)
         self.preset_combo.clear()
-        self.preset_combo.addItems(presets)
-        self.preset_combo.setCurrentText(current if current in presets else _PLACEHOLDER)
+        for name in presets:
+            # The placeholder shows as "No FX" but stays the stored value.
+            self.preset_combo.addItem(_PLACEHOLDER_LABEL if name == _PLACEHOLDER else name, name)
+        self.preset_combo.setCurrentIndex(max(0, self.preset_combo.findData(current if current in presets else _PLACEHOLDER)))
         self.preset_combo.blockSignals(False)
         if getattr(self.app, "settings_dock", None) is not None:
             self.app.settings_dock.refresh_fx_presets()
@@ -414,7 +417,7 @@ class FXDock(QDockWidget):
             with open(fpath, "w", encoding="utf-8") as fh:
                 json.dump(data, fh, indent=4)
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save FX preset: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to save FX: {e}")
             return False
         # A clip whose character uses this preset post-processes differently
         # now; the post config memo keys on `revision.FILES`.
@@ -422,7 +425,7 @@ class FXDock(QDockWidget):
         return True
 
     def _save_preset_dialog(self) -> None:
-        name, ok = QInputDialog.getText(self, "Save FX Preset", "Enter FX preset name:")
+        name, ok = QInputDialog.getText(self, "Save FX", "Name for this FX:")
         if not ok or not name:
             return
         name = re.sub(r'[<>:"/\\|?*]', "", name).strip()
@@ -430,7 +433,7 @@ class FXDock(QDockWidget):
             return
         data = {k: self.get_state()[k] for k in spec.FX_PRESET_KEYS}
         if self._write_preset_file(name, data):
-            QMessageBox.information(self, "Saved", f"FX Preset '{name}' saved.")
+            QMessageBox.information(self, "Saved", f"FX '{name}' saved.")
             self.refresh_presets()
             self._set_combo_text(name)
 
@@ -449,7 +452,7 @@ class FXDock(QDockWidget):
             with open(fpath, "r", encoding="utf-8") as fh:
                 data = filter_fx_preset_values(json.load(fh))
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load FX preset: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to load FX: {e}")
             return
         self.app.settings["fx_preset"] = safe_name
         if self._mode == "none":
@@ -463,7 +466,7 @@ class FXDock(QDockWidget):
         self.app.refresh_timeline()
 
     def _on_preset_activated(self, index: int) -> None:
-        name = self.preset_combo.itemText(index)
+        name = self.preset_combo.itemData(index)
         if not name or name == _PLACEHOLDER or name == "(custom)":
             return
         if self._mode == "clip" and self._target is not None:

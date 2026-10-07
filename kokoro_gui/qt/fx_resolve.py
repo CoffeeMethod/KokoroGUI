@@ -25,7 +25,11 @@ from typing import Optional
 from kokoro_gui.engine import presets
 from kokoro_gui.engine.presets import filter_fx_preset_values
 
+# The stored "no FX chosen" value. `config_qt.json` and older projects carry it
+# in `fx_preset`, so the string never changes; combos show PLACEHOLDER_LABEL
+# and keep this as the item's data.
 PLACEHOLDER = "Select FX Preset..."
+PLACEHOLDER_LABEL = "No FX"
 
 
 @dataclass
