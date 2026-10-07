@@ -328,3 +328,58 @@ def test_lexicon_spoken_chains_markup_and_lexicon_spans():
     assert text[slice(*original_span(spans, win, win + 3))] == "Nguyen"
     arrived = out.index("arrived")
     assert text[slice(*original_span(spans, arrived, arrived + 7))] == "arrived"
+
+
+# --- tag options: `[Name, overlap:0.3]:` ---
+
+def test_find_character_fx_spans_reads_tag_options():
+    span = find_character_fx_spans("[Sam, overlap:0.3]: right, exactly")[0]
+    assert (span.speaker_name, span.fx_name, span.options) == ("Sam", None, {"overlap": "0.3"})
+    span = find_character_fx_spans("[Sam:Radio, overlap:0.3]: right")[0]
+    assert (span.speaker_name, span.fx_name, span.options) == ("Sam", "Radio", {"overlap": "0.3"})
+
+
+def test_a_tag_without_options_has_an_empty_options_dict():
+    assert find_character_fx_spans("[Sam]: hi")[0].options == {}
+    assert find_character_fx_spans("[Sam:Radio]: hi")[0].options == {}
+
+
+def test_tag_options_accept_spacing_case_and_several_keys():
+    span = find_character_fx_spans("[Sam ,Overlap : 0.5 , mood:calm]: hi")[0]
+    assert span.speaker_name == "Sam"
+    assert span.options == {"overlap": "0.5", "mood": "calm"}
+
+
+def test_a_comma_in_a_name_or_fx_is_not_an_option():
+    span = find_character_fx_spans("[Smith, John]: hi")[0]
+    assert (span.speaker_name, span.fx_name, span.options) == ("Smith, John", None, {})
+    span = find_character_fx_spans("[Smith, John:Radio]: hi")[0]
+    assert (span.speaker_name, span.fx_name, span.options) == ("Smith, John", "Radio", {})
+    span = find_character_fx_spans("[Sam:Old, tinny]: hi")[0]
+    assert (span.speaker_name, span.fx_name, span.options) == ("Sam", "Old, tinny", {})
+
+
+def test_parse_multispeaker_text_strips_tag_options_from_the_speaker(engine):
+    result = engine.parse_multispeaker_text("[Sam, overlap:0.3]: right, exactly")
+    assert result == [("Sam", None, "right, exactly")]
+    result = engine.parse_multispeaker_text("[Sam:Radio, overlap:0.3]: right")
+    assert result == [("Sam", "Radio", "right")]
+
+
+def test_strip_markup_removes_a_tag_with_options():
+    from kokoro_gui.engine.text_extraction import strip_markup
+
+    assert strip_markup("[Sam, overlap:0.3]: right, exactly") == "right, exactly"
+
+
+def test_tag_overrides_turns_overlap_into_the_clip_override_and_warns_about_the_rest():
+    from kokoro_gui.engine.text_extraction import tag_overrides
+
+    assert tag_overrides({"overlap": "0.3"}) == ({"overlap_s": 0.3}, [])
+    assert tag_overrides({"overlap": "9"}) == ({"overlap_s": 5.0}, [])
+    assert tag_overrides({"overlap": "-2"}) == ({"overlap_s": 0.0}, [])
+    overrides, problems = tag_overrides({"overlap": "soon", "mood": "calm"})
+    assert overrides == {}
+    assert len(problems) == 2 and "overlap" in problems[0] and "mood" in problems[1]
+    assert tag_overrides({"overlap": "nan"})[0] == {}
+    assert tag_overrides({}) == ({}, [])

@@ -55,7 +55,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from kokoro_gui.engine.text_extraction import strip_markup
+from kokoro_gui.engine.text_extraction import OVERLAP_MAX_S, OVERLAP_OVERRIDE_KEY, strip_markup
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
 
 FALLBACK_CHARS_PER_SECOND = 15.0
@@ -68,9 +68,8 @@ DEFAULT_HEADING_GAP_S = 1.2
 # A heading is one line of at most this many words that doesn't end like a sentence.
 HEADING_MAX_WORDS = 12
 _HEADING_ENDINGS = (".", "!", "?", ",", ";")
-# `Clip.overrides` key for the overlap, in seconds, and its upper limit.
-OVERLAP_KEY = "overlap_s"
-OVERLAP_MAX_S = 5.0
+# `Clip.overrides["overlap_s"]` is the overlap in seconds, at most `OVERLAP_MAX_S`.
+OVERLAP_KEY = OVERLAP_OVERRIDE_KEY
 # A blank line, whitespace-only lines included.
 _PARAGRAPH_BREAK = re.compile(r"\n[ \t\r\f\v]*\n")
 

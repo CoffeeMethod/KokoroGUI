@@ -280,3 +280,43 @@ def test_assign_character_command_sets_and_undoes_clip_overrides():
     assert doc.clips == []
     doc.undo_stack.redo()
     assert doc.clips[0].overrides == {"fx_preset": "Radio"}
+
+
+# ---------------------------------------------------------------------------
+# tag options (plan 24): `[Name, overlap:0.3]:`
+# ---------------------------------------------------------------------------
+
+
+def test_a_tag_with_options_still_matches_its_character():
+    sam = Character.from_preset_dict("Sam", {})
+    doc = Document.from_plain_text("[Sam, overlap:0.3]: right, exactly.", characters=[sam])
+    triples, unmatched = plan_auto_split_clips(doc, split_by_paragraph=False)
+    assert unmatched == []
+    assert [t[2] for t in triples] == [sam.id]
+
+
+def test_plan_tag_overrides_gives_the_overlap_to_the_first_range_of_a_span():
+    from kokoro_gui.daw.auto_split import plan_tag_overrides
+
+    alice = Character.from_preset_dict("Alice", {})
+    sam = Character.from_preset_dict("Sam", {})
+    text = "[Alice]: A long line.\n\n[Sam:Radio, overlap:0.3]: One.\n\nTwo."
+    doc = Document.from_plain_text(text, characters=[alice, sam])
+
+    triples, _unmatched = plan_auto_split_clips(doc, split_by_paragraph=True)
+    overrides = plan_tag_overrides(doc, triples)
+
+    starts = [t[0] for t in triples]
+    assert len(triples) == 3
+    assert overrides == {starts[1]: {"overlap_s": 0.3}}
+
+
+def test_plan_tag_option_warnings_name_each_problem_once():
+    from kokoro_gui.daw.auto_split import plan_tag_option_warnings
+
+    sam = Character.from_preset_dict("Sam", {})
+    doc = Document.from_plain_text("[Sam, mood:calm]: One.\n\n[Sam, mood:calm, overlap:x]: Two.", characters=[sam])
+    problems = plan_tag_option_warnings(doc)
+    assert len(problems) == 2
+    assert "mood" in problems[0] and "overlap" in problems[1]
+    assert plan_tag_option_warnings(Document.from_plain_text("[Sam]: One.", characters=[sam])) == []
