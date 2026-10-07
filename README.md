@@ -51,6 +51,7 @@ Unreleased:
 -   Generate stale clips in the selection only, a taskbar alert when a long job finishes, and a
     prompt before closing mid-generate
 -   Split a clip in two at the playhead and join two clips back, from Edit, the block menu or `S`
+-   Edit > Remove Filler Words finds um, uh and the like in a recording, lets you check each one and play it, and cuts them in one undo step
 -   Export can normalize to a LUFS target, File > Measure Loudness reports a mix, and the transport has a level meter
 -   The Export dialog has tabs, an MP3 bitrate, a sample rate and a filename template, and asks before it overwrites a file
 -   Export presets for ACX, Apple Podcasts, Spotify and YouTube that check each file, an RMS mode with a peak limiter,
