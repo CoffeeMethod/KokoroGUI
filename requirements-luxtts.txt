@@ -1,0 +1,7 @@
+# Optional: install after requirements.txt, using the same Python environment.
+# Pin the LuxTTS fork of Zipvoice and its matching custom vocoder, not PyPI Zipvoice.
+--find-links https://k2-fsa.github.io/icefall/piper_phonemize.html
+zipvoice @ git+https://github.com/ysharma3501/LuxTTS.git@28ae6a61151684fffc9d1a7aa15eafa02286fe0b
+linacodec @ git+https://github.com/ysharma3501/LinaCodec.git@c0ae7c7285e121475c27592cfbb600624b714290
+# Retain the app's transformers API compatibility.
+transformers==4.57.6

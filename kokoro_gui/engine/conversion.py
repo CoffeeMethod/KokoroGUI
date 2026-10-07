@@ -88,7 +88,7 @@ class ConversionMixin:
                         actual_voice = "_preview_temp"
                         extra_params["voice_tensor"] = voice_tensor
                     else:
-                        actual_voice = self.resolve_voice_path(target_voice)
+                        actual_voice = self.resolve_voice_path(target_voice, target_extra.get("project_dir"))
 
                     # Pitch Compensation
                     eff_speed = target_speed
@@ -100,7 +100,7 @@ class ConversionMixin:
                     # Generate, a line at a time
                     lines = [line for line in re.split(r"\n+", segment_text) if line.strip()] or [segment_text]
                     for line in lines:
-                        synthesis = self._synthesize(line, {"voice": actual_voice, "speed": eff_speed,
+                        synthesis = self._synthesize(line, {**target_extra, "voice": actual_voice, "speed": eff_speed,
                                                             "lang_code": lang_code, **extra_params},
                                                      cancellable=False)
                         audio = to_numpy(synthesis.audio)
@@ -166,7 +166,7 @@ class ConversionMixin:
         index, text, config = chunk_data
         config = dict(config)
         text = self.apply_lexicon(strip_markup(text), config.get("lexicon") or {})
-        config["voice"] = self.resolve_voice_path(config["voice"])
+        config["voice"] = self.resolve_voice_path(config["voice"], config.get("project_dir"))
         config["raw_output"] = True
         os.makedirs(config["out_dir"], exist_ok=True)
         self.cancel_event.clear()
@@ -295,7 +295,7 @@ class ConversionMixin:
 
     def start_conversion(self, text, config):
         # Resolve voice path once before distribution
-        config['voice'] = self.resolve_voice_path(config['voice'])
+        config['voice'] = self.resolve_voice_path(config['voice'], config.get("project_dir"))
 
         self.cancel_event.clear()
         self.worker.run_coro(self._process_text_async(text, config))
@@ -335,7 +335,7 @@ class ConversionMixin:
                         if 'trim' in preset:
                             seg_config['trim_silence'] = preset['trim']
                         # Resolve voice path for the new voice
-                        seg_config['voice'] = self.resolve_voice_path(seg_config['voice'])
+                        seg_config['voice'] = self.resolve_voice_path(seg_config['voice'], config.get("project_dir"))
                     else:
                         if self.on_status: self.on_status(f"Warning: Preset '{speaker_name}' not found.", False)
 

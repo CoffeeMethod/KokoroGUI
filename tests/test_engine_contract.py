@@ -13,7 +13,7 @@ import pytest
 from kokoro_gui.engine.caching import segment_key
 from kokoro_gui.engines import registry
 
-ENGINES = ["audio8", "dummy", "kokoro", "toneclone"]
+ENGINES = ["audio8", "dummy", "kokoro", "luxtts", "toneclone"]
 
 
 def _tone(n=2205):
@@ -39,6 +39,14 @@ def contract_backend(request, isolated_dirs, fake_pipeline, toneclone_plugin, mo
         from kokoro_gui.engines.dummy import DummyEngine
 
         engine = DummyEngine()
+    elif engine_id == "luxtts":
+        from types import SimpleNamespace
+        from kokoro_gui.engine.runner import EngineRunner
+        from kokoro_gui.engines.luxtts import LuxTTSModel
+
+        fake = SimpleNamespace(encode_prompt=lambda *a, **k: {},
+                               generate_speech=lambda *a, **k: _tone())
+        engine = EngineRunner(LuxTTSModel(loader=lambda device: fake))
     else:
         engine = registry.get_factory(engine_id).make_contract_engine()
     backend = registry.get_engine(engine_id, engine=engine)
@@ -53,7 +61,7 @@ def contract_backend(request, isolated_dirs, fake_pipeline, toneclone_plugin, mo
 
         voice = "contract_ref"
         wav = tmp_path / "ref.wav"
-        sf.write(str(wav), _tone(), 44100)
+        sf.write(str(wav), _tone(3 * 44100) if engine_id == "luxtts" else _tone(), 44100)
         backend.voice_store.save_reference(voice, str(wav), "What the reference says.")
     else:
         voice = backend.get_voices(None)[0].id

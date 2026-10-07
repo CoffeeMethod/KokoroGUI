@@ -178,7 +178,7 @@ def test_the_other_engines_load_without_the_kokoro_package():
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                             cwd=str(Path(__file__).resolve().parent.parent))
     assert result.returncode == 0, result.stderr
-    assert strip_ansi(result.stdout).strip() == "['audio8', 'dummy'] ['audio8', 'dummy', 'kokoro'] True"
+    assert strip_ansi(result.stdout).strip() == "['audio8', 'dummy', 'luxtts'] ['audio8', 'dummy', 'kokoro', 'luxtts'] True"
 
 
 def test_the_engine_package_imports_without_kokoro():

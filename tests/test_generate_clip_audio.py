@@ -19,9 +19,9 @@ def test_generate_clip_audio_resolves_voice_path(engine, fake_pipeline, make_con
     calls = []
     original_resolve = engine.resolve_voice_path
 
-    def spy(voice):
+    def spy(voice, project_dir=None):
         calls.append(voice)
-        return original_resolve(voice)
+        return original_resolve(voice, project_dir)
 
     monkeypatch.setattr(engine, "resolve_voice_path", spy)
 

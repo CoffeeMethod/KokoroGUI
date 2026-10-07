@@ -550,7 +550,7 @@ def test_the_next_selection_puts_the_voices_tab_back_on_the_active_engine(qt_app
 
 def test_picking_in_the_voices_engine_combo_is_deferred(qt_app, qtbot):
     combo = qt_app.mixing_dock.engine_combo
-    assert [combo.itemData(i) for i in range(combo.count())] == qt_app.voice_editor_engines() == ["audio8", "kokoro"]
+    assert [combo.itemData(i) for i in range(combo.count())] == qt_app.voice_editor_engines() == ["audio8", "kokoro", "luxtts"]
 
     combo.setCurrentIndex(combo.findData("audio8"))
     combo.activated.emit(combo.currentIndex())

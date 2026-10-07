@@ -89,14 +89,18 @@ class EmbeddingStore:
 
 
 class ReferenceStore:
-    """A wav + transcript pair per voice. `global_dir` is a zero-argument
+    """A wav with a transcript sidecar per voice. Engines that transcribe
+    internally set `requires_transcript=False` and can list wav-only voices.
+    `global_dir` is a zero-argument
     callable read at call time (Audio8 passes its module's `AUDIO8_REFS_DIR`,
     which its tests patch); by default `custom_voices/<id>_refs/`.
     Transcripts are cached by `(path, mtime, size)`, so the dirty check,
     which reads them through `cache_key_extra`, costs a stat per clip."""
 
-    def __init__(self, engine_id: str, global_dir: Optional[Callable[[], str]] = None):
+    def __init__(self, engine_id: str, global_dir: Optional[Callable[[], str]] = None,
+                 requires_transcript: bool = True):
         self.engine_id = engine_id
+        self.requires_transcript = requires_transcript
         self._global_dir = global_dir or (lambda: os.path.join(runtime.CUSTOM_VOICES_DIR, f"{engine_id}_refs"))
         self._transcript_cache: dict = {}
 
@@ -161,15 +165,15 @@ class ReferenceStore:
         ensure_private_dir(directory, fallback=False)
         out_wav = os.path.join(directory, f"{safe_name}.wav")
         out_txt = os.path.join(directory, f"{safe_name}.txt")
-        shutil.copyfile(wav_path, out_wav)
+        if os.path.realpath(wav_path) != os.path.realpath(out_wav):
+            shutil.copyfile(wav_path, out_wav)
         with open(out_txt, "w", encoding="utf-8") as f:
             f.write(transcript.strip())
         return os.path.abspath(out_wav)
 
     def list_references(self, project_dir: Optional[str] = None) -> list:
-        """Sorted names of every wav+txt pair in the project dir or the
-        global store (a lone `.wav` or `.txt` is an interrupted save, not a
-        usable reference)."""
+        """Sorted reference names in the project dir or global store.
+        A sidecar is required unless the engine transcribes internally."""
         names = set()
         for directory in self.search_dirs(project_dir):
             if not os.path.isdir(directory):
@@ -177,8 +181,10 @@ class ReferenceStore:
             for f in os.listdir(directory):
                 if not f.endswith(".wav"):
                     continue
+                if not os.path.isfile(os.path.join(directory, f)):
+                    continue
                 name = f[:-4]
-                if os.path.isfile(os.path.join(directory, f"{name}.txt")):
+                if not self.requires_transcript or os.path.isfile(os.path.join(directory, f"{name}.txt")):
                     names.add(name)
         return sorted(names)
 

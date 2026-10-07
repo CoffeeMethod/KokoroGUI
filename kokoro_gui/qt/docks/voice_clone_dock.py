@@ -100,7 +100,9 @@ class VoiceCloneDock(QDockWidget):
         wav_row.addWidget(browse_btn)
         layout.addLayout(wav_row)
 
-        layout.addWidget(QLabel("<b>Transcript</b> (what's said in the audio)"))
+        needs_transcript = getattr(self.store, "requires_transcript", True)
+        transcript_label = QLabel("<b>Transcript</b> (what's said in the audio)")
+        layout.addWidget(transcript_label)
         self.transcript_edit = QPlainTextEdit()
         self.transcript_edit.setFixedHeight(100)
         layout.addWidget(self.transcript_edit)
@@ -146,6 +148,19 @@ class VoiceCloneDock(QDockWidget):
         self.transcribe_btn = QPushButton("\U0001F3A4 Auto-Transcribe")
         self.transcribe_btn.clicked.connect(self._on_transcribe_clicked)
         layout.addWidget(self.transcribe_btn)
+
+        if not needs_transcript:
+            transcript_label.hide()
+            self.transcript_edit.hide()
+            self.asr_engine_combo.hide()
+            for index in range(engine_row.count()):
+                widget = engine_row.itemAt(index).widget()
+                if widget is not None:
+                    widget.hide()
+            self.vosk_row.hide()
+            self.transcribe_btn.hide()
+            layout.addWidget(QLabel("Use at least 3 seconds of clear speech.\n"
+                                   "This engine transcribes the reference automatically during generation."))
 
         self.status_label = QLabel("")
         layout.addWidget(self.status_label)
@@ -318,7 +333,7 @@ class VoiceCloneDock(QDockWidget):
         wav_path = self._checked_wav_path(self.wav_path_edit.text())
         if wav_path is None:
             return
-        if not transcript:
+        if not transcript and getattr(self.store, "requires_transcript", True):
             QMessageBox.warning(self, "Error", "Enter or auto-transcribe a transcript first.")
             return
         if name in self.store.list_references():

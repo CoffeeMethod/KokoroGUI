@@ -130,7 +130,10 @@
   <span class="f">&lt;mix name&gt;.pt</span>
 <span class="d">engines/audio8/refs/</span>
   <span class="f">&lt;reference name&gt;.wav</span>
-  <span class="f">&lt;reference name&gt;.txt</span></pre>
+  <span class="f">&lt;reference name&gt;.txt</span>
+<span class="d">engines/luxtts/refs/</span>
+  <span class="f">&lt;reference name&gt;.wav</span>
+  <span class="f">&lt;reference name&gt;.txt</span> <span class="c">optional sidecar; may be empty</span></pre>
         </div>
       </div>
     </div>
@@ -154,7 +157,7 @@
             <tr><td>includes</td><td><code>{"generated_audio": bool, "imported_audio": bool, "projects": [id, ...], "video": bool}</code>. Whether generated audio was bundled; whether the bundle carries at least one file under <code>audio/imported/</code>; the ids of the embedded subprojects under <code>projects/</code>; and whether it carries the reference video under <code>video/</code>. A bundle saved without generated audio regenerates its clips on open.</td></tr>
             <tr><td>audio.format</td><td><code>"wav"</code> or <code>"flac"</code>: the format new segments are written in.</td></tr>
             <tr><td>stats</td><td><code>{"clips", "characters", "duration_s"}</code>, plus <code>"subprojects"</code> when there are any. Counts and the sum of segment durations. Cosmetic; nothing reads audio to compute it.</td></tr>
-            <tr><td>engines</td><td><code>{"&lt;engine id&gt;": {"version": str, "meta": {}}}</code> for each engine the project's characters use. <code>version</code> is what the engine reported (Kokoro: the package version; Audio8: its model id). <code>meta</code> is per engine and empty for both shipped engines.</td></tr>
+            <tr><td>engines</td><td><code>{"&lt;engine id&gt;": {"version": str, "meta": {}}}</code> for each engine the project's characters use. <code>version</code> is what the engine reported (Kokoro: the package version; Audio8: its model id; LuxTTS: its model id, upstream revision and adapter/package version). <code>meta</code> is per engine and empty for the shipped engines.</td></tr>
             <tr><td>assets</td><td>Bundle path to SHA-256, for every entry under <code>fx/</code> (impulse responses included) and <code>engines/</code>, and for the reference video under <code>video/</code>. Save skips re-hashing an asset whose file hasn't changed size or mtime since the working copy's index recorded it.</td></tr>
           </tbody>
         </table>
@@ -238,7 +241,7 @@
           <h2><span class="idx">07 · Segment keys</span>The one hash</h2>
           <p>A segment key is a SHA-256 over a pipe-joined <code>k=v</code> list. The same function names the file, stamps <code>Segment.cache_key</code>, and drives the stale check in the transcript gutter, so the three can't disagree.</p>
           <p>The voice enters as a name plus a content fingerprint, never a path, which is why a key is the same on every machine. Nothing after generation is in it: split pattern, FX, output format, normalize and trim all apply to the same raw segment, so they don't change the key and don't make a clip stale.</p>
-          <p>Kokoro adds nothing to <code>extra</code>. Audio8 adds its reference transcript and sampling settings, since two clones of the same WAV with different transcripts are different voices.</p>
+          <p>Kokoro adds nothing to <code>extra</code>. Audio8 adds its reference transcript and sampling settings, since two clones of the same WAV with different transcripts are different voices. LuxTTS adds its six Model settings; its internally generated transcript and encoded Reference are derived data and are not saved in the key or bundle.</p>
         </div>
         <div class="code-block reveal">
           <div class="head">segment key inputs · schema 3</div>
@@ -272,6 +275,7 @@
             <tr><td>fx/ir/&lt;name&gt;.wav</td><td>An impulse response the convolution reverb's <code>convolution_ir</code> names in the project's FX, in a saved FX a character or clip names, or in a clip's FX override. On open it takes priority over the library's file of the same name (<code>presets/fx/ir/</code>).</td></tr>
             <tr><td>engines/kokoro/voices/&lt;name&gt;.pt</td><td>A Mix made in the Voices tab: a saved voice tensor. Loaded with <code>torch.load(weights_only=True)</code>, see <a href="#safety" class="link">safety</a>.</td></tr>
             <tr><td>engines/audio8/refs/&lt;name&gt;.wav + .txt</td><td>A Reference and its word-for-word transcript. The encoded reference codes are derived data and stay in the machine's own cache; the app warms them on the first generate after open.</td></tr>
+            <tr><td>engines/luxtts/refs/&lt;name&gt;.wav (+ optional .txt)</td><td>A LuxTTS Reference WAV. Saving through Voices also writes an empty transcript sidecar; LuxTTS does not require or use it. Encoded References are kept in memory and recreated on this machine when needed.</td></tr>
             <tr><td>projects/&lt;id&gt;.tbaw</td><td>An embedded subproject: a complete bundle of its own, stored uncompressed, extracted with the audio. Opening the parent doesn't open it; selecting its block does. Its exported mix lives only in its working copy and is never bundled.</td></tr>
           </tbody>
         </table>

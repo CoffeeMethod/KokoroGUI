@@ -39,7 +39,7 @@
       "@id": "https://coffeemethod.github.io/KokoroGUI/#app",
       "name": "KokoroGUI",
       "alternateName": ["Kokoro GUI", "Kokoro TTS GUI", "KokoroGUI text-based audio editor"],
-      "description": "A free, open-source text-based audio editor for text to speech. The script is the project: each line has a character and a voice, a multitrack timeline is built from the text, and editing a word regenerates only that line. Runs Kokoro TTS and Audio8 voice cloning locally.",
+      "description": "A free, open-source text-based audio editor for text to speech. The script is the project: each line has a character and a voice, a multitrack timeline is built from the text, and editing a word regenerates only that line. Runs Kokoro TTS, Audio8 and optional LuxTTS locally.",
       "applicationCategory": "MultimediaApplication",
       "applicationSubCategory": "Text to speech editor",
       "operatingSystem": "Windows, macOS, Linux",
@@ -55,7 +55,7 @@
       "featureList": [
         "Text-based audio editing: the transcript is the project and the timeline is built from it",
         "Only lines whose text, voice, speed, language or engine changed regenerate",
-        "Per-character voices and engines in one script (Kokoro TTS and Audio8 voice cloning)",
+        "Per-character voices and engines in one script (Kokoro TTS, Audio8 and LuxTTS)",
         "Multitrack timeline with mute, solo, faders, pan, automation, fades and ducking",
         "Non-destructive FX: seventeen Pedalboard effects applied at playback",
         "Subtitle import and fit-to-slot for dubbing, with reference video",
@@ -74,7 +74,7 @@
           "name": "What is KokoroGUI?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "A free, open-source desktop app for text to speech that works as a text-based audio editor. You write or import a script, assign each line to a character, and KokoroGUI generates the audio onto a multitrack timeline you can mix and export. It started as a GUI for the Kokoro TTS model and now runs Audio8 voice cloning beside it."
+            "text": "A free, open-source desktop app for text to speech that works as a text-based audio editor. You write or import a script, assign each line to a character, and KokoroGUI generates the audio onto a multitrack timeline you can mix and export. It started as a GUI for the Kokoro TTS model and now runs Audio8 and optional LuxTTS beside it."
           }
         },
         {
@@ -106,7 +106,7 @@
           "name": "Can it clone a voice?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Yes. The Audio8 engine clones a voice from a short WAV and its transcript, and KokoroGUI can transcribe the WAV for you. A Kokoro character and an Audio8 character can speak in the same scene."
+            "text": "Yes. The Audio8 engine clones a voice from a short WAV and its transcript, and KokoroGUI can transcribe the WAV for you. LuxTTS needs only the WAV, with at least three seconds of clear speech. Characters using any of these engines can speak in the same scene."
           }
         },
         {
@@ -438,7 +438,7 @@
           </div>
           <ul class="wf-list">
             <li><b>Subtitles in, clips out</b><a href="settings.html#generation">Import Subtitles</a><span>SRT, WebVTT and ASS/SSA. Each cue becomes a clip locked to its time, and named speakers map to characters in one dialog.</span></li>
-            <li><b>Fit to slot</b><a href="settings.html#timeline">Timeline</a><span>Each clip shows how full its slot is. Kokoro regenerates at a new speed until it fits within 3%; Audio8 time-stretches on playback.</span></li>
+            <li><b>Fit to slot</b><a href="settings.html#timeline">Timeline</a><span>Each clip shows how full its slot is. Kokoro and LuxTTS regenerate at a new speed until it fits within 3%; Audio8 time-stretches on playback.</span></li>
             <li><b>Hear the original</b><a href="settings.html#transport">Transport</a><span>Import the source track and switch between Dub, Original and Both mid-play. The original under each clip is its cue's slice.</span></li>
             <li><b>Picture to dub against</b><a href="settings.html#video">Video</a><span>Load an MP4, MOV, MKV or WebM; it plays muted and follows the transport, with an offset for leaders.</span></li>
             <li><b>Stems for the mix</b><a href="settings.html#processing">Export</a><span>One file per track or per character, plus a dialogue stem without the music, all the length of the mix so they line up at 0. The start timecode goes in the file name.</span></li>
@@ -504,7 +504,7 @@
           <ul class="wf-list">
             <li><b>Takes</b><a href="settings.html#timeline">Clip menu</a><span>Regenerating keeps the old version. Switch back from the clip's menu; a take from text you've since changed says "old text".</span></li>
             <li><b>Review status and notes</b><a href="settings.html#project-clip">Clip fields</a><span>To do, generated, approved or needs rewrite, with a note. The timeline's Show filter dims everything else.</span></li>
-            <li><b>Voice variants</b><a href="settings.html#characters">Characters</a><span>An Audio8 character can carry "angry" and "whisper" References; the transcript's Variant box picks one per line.</span></li>
+            <li><b>Voice variants</b><a href="settings.html#characters">Characters</a><span>An Audio8 or LuxTTS character can carry "angry" and "whisper" References; the transcript's Variant box picks one per line.</span></li>
             <li><b>Files for the engine</b><a href="settings.html#processing">Export</a><span>Per-clip files named <code>&lt;base&gt;_001_Guard.wav</code>, a cue sheet CSV, and subtitles with one cue per word if you want lip-sync data.</span></li>
             <li><b>Frame-accurate times</b><a href="settings.html#settings-window">Timecode</a><span>The ruler and clock show <code>HH:MM:SS:FF</code> at your frame rate, from any start time.</span></li>
           </ul>
@@ -539,7 +539,7 @@
         </div>
         <div class="track c4">
           <div class="track-head"><h3>Characters</h3><div class="msad"><span>M</span><span>S</span><span>A</span><span>D</span></div></div>
-          <div class="track-body"><p>A character is a name, a color, a voice, an engine and an FX. Keep them in a library every project shares, or local to one file. Kokoro and Audio8 characters can talk to each other in the same scene.</p><a class="more" href="settings.html#characters">Characters reference →</a></div>
+          <div class="track-body"><p>A character is a name, a color, a voice, an engine and an FX. Keep them in a library every project shares, or local to one file. Kokoro, Audio8 and LuxTTS characters can talk to each other in the same scene.</p><a class="more" href="settings.html#characters">Characters reference →</a></div>
         </div>
         <div class="track c5">
           <div class="track-head"><h3>Tags</h3><div class="msad"><span>M</span><span>S</span><span>A</span><span>D</span></div></div>
@@ -553,8 +553,8 @@
     <div class="wrap">
       <div class="sec-head reveal">
         <span class="eyebrow c2">Engines</span>
-        <h2>Two local engines, picked per character</h2>
-        <p>Each character chooses its engine in Edit &gt; Characters, so a Kokoro narrator can introduce an Audio8 clone. The Settings and Voices tabs follow whichever character's clip you've selected.</p>
+        <h2>Three local engines, picked per character</h2>
+        <p>Each character chooses its engine in Edit &gt; Characters, so a Kokoro narrator can introduce an Audio8 or LuxTTS character. The Settings and Voices tabs follow whichever character's clip you've selected.</p>
       </div>
       <div class="compare reveal">
         <table class="cmp">
@@ -563,19 +563,21 @@
               <th></th>
               <th>Kokoro <span class="sub">hexgrad/kokoro · default</span></th>
               <th>Audio8 <span class="sub">Audio8-TTS-Preview-0.6b</span></th>
+              <th>LuxTTS <span class="sub">YatharthS/LuxTTS &middot; optional</span></th>
             </tr>
           </thead>
           <tbody>
-            <tr><td>Voices</td><td>Built-in voices, plus your own Mixes from the Voices tab</td><td>Cloned from a Reference: a short WAV and its transcript</td></tr>
-            <tr><td>Languages</td><td>American and British English, Spanish, French, Italian, Portuguese, Japanese, Chinese</td><td>Whatever the reference speaks</td></tr>
-            <tr><td>Speed</td><td>0.5x to 2x, and Fit to slot regenerates at a new speed</td><td>Its own pace; Fit to slot time-stretches instead</td></tr>
-            <tr><td>Word timing</td><td>Reported by the engine in English</td><td>From a Whisper pass after generating</td></tr>
-            <tr><td>Sample rate</td><td class="mono">24,000 Hz</td><td class="mono">44,100 Hz</td></tr>
-            <tr><td>Parallel generation</td><td>One pipeline per thread</td><td>One shared model, one segment at a time</td></tr>
-            <tr><td>Licensing</td><td>Apache-2.0</td><td>Check the model card. Transcribing a reference uses Whisper (MIT) by default; Vosk is the offline Apache-2.0 option</td></tr>
+            <tr><td>Voices</td><td>Built-in voices, plus your own Mixes from the Voices tab</td><td>Cloned from a Reference: a short WAV and its transcript</td><td>Cloned from a Reference WAV; at least three seconds, no transcript needed</td></tr>
+            <tr><td>Languages</td><td>American and British English, Spanish, French, Italian, Portuguese, Japanese, Chinese</td><td>Whatever the reference speaks</td><td>English</td></tr>
+            <tr><td>Speed</td><td>0.5x to 2x, and Fit to slot regenerates at a new speed</td><td>Its own pace; Fit to slot time-stretches instead</td><td>0.5x to 2x, and Fit to slot regenerates at a new speed</td></tr>
+            <tr><td>Word timing</td><td>Reported by the engine in English</td><td>From a Whisper pass after generating</td><td>From a Whisper pass after generating</td></tr>
+            <tr><td>Sample rate</td><td class="mono">24,000 Hz</td><td class="mono">44,100 Hz</td><td class="mono">48,000 Hz</td></tr>
+            <tr><td>Parallel generation</td><td>One pipeline per thread</td><td>One shared model, one segment at a time</td><td>One shared model, one segment at a time</td></tr>
+            <tr><td>Licensing</td><td>Apache-2.0</td><td>Check the model card. Transcribing a reference uses Whisper (MIT) by default; Vosk is the offline Apache-2.0 option</td><td>Apache-2.0 code and speech model; see upstream for dependencies</td></tr>
           </tbody>
         </table>
       </div>
+      <p class="dek" style="margin-top:1rem;"><a class="link" href="settings.html#luxtts">LuxTTS installation, References and settings &rarr;</a></p>
     </div>
   </section>
 
@@ -675,7 +677,7 @@
       <div class="faq reveal">
         <details open>
           <summary>What is KokoroGUI?</summary>
-          <p>A free, open-source desktop app for text to speech that works as a text-based audio editor. You write or import a script, assign each line to a character, and KokoroGUI generates the audio onto a multitrack timeline you can mix and export. It started as a GUI for the Kokoro TTS model and now runs Audio8 voice cloning beside it.</p>
+          <p>A free, open-source desktop app for text to speech that works as a text-based audio editor. You write or import a script, assign each line to a character, and KokoroGUI generates the audio onto a multitrack timeline you can mix and export. It started as a GUI for the Kokoro TTS model and now runs Audio8 and optional LuxTTS beside it.</p>
         </details>
         <details>
           <summary>Is there a GUI for Kokoro TTS?</summary>
@@ -691,7 +693,7 @@
         </details>
         <details>
           <summary>Can it clone a voice?</summary>
-          <p>Yes. The Audio8 engine clones a voice from a short WAV and its transcript, and KokoroGUI can transcribe the WAV for you. A Kokoro character and an Audio8 character can speak in the same scene.</p>
+          <p>Yes. The Audio8 engine clones a voice from a short WAV and its transcript, and KokoroGUI can transcribe the WAV for you. LuxTTS needs only the WAV, with at least three seconds of clear speech. Characters using any of these engines can speak in the same scene.</p>
         </details>
         <details>
           <summary>What can I make with it?</summary>
@@ -755,7 +757,7 @@ sudo dnf install espeak-ng</pre>
           <div><h4>Python 3.11+</h4><p>The only hard version requirement.</p></div>
           <div><h4>eSpeak NG</h4><p>Kokoro needs it to turn text into phonemes. Install it before the first run.</p></div>
           <div><h4>A GPU is optional</h4><p>Everything runs on the CPU. Options &gt; Device picks CUDA when PyTorch finds one.</p></div>
-          <div><h4>First use downloads models</h4><p>Kokoro and Audio8 come from Hugging Face; Audio8 loads with <code>trust_remote_code=True</code>. Whisper is about 1.6 GB and asks before it downloads.</p></div>
+          <div><h4>First use downloads models</h4><p>Kokoro, Audio8 and LuxTTS come from Hugging Face; Audio8 loads with <code>trust_remote_code=True</code>. The app's Whisper is about 1.6 GB and asks before it downloads. LuxTTS downloads its own smaller Reference transcriber; see <a class="link" href="settings.html#luxtts">optional installation and setup</a>.</p></div>
           <div><h4>Smaller or offline transcription</h4><p>Copy <code>.env.example</code> to <code>.env</code>. Set <code>WHISPER_MODEL</code> to <code>small</code>, <code>base</code> or <code>tiny</code>, or <code>VOSK_MODEL_PATH</code> to use Vosk.</p></div>
           <div><h4>Trouble with torch?</h4><p>Follow <a class="link" href="https://pytorch.org/get-started/locally/" target="_blank" rel="noopener">pytorch.org</a> for your OS and GPU before <code>pip install -r requirements.txt</code>.</p></div>
         </div>

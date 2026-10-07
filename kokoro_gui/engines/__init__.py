@@ -1,7 +1,7 @@
 """Engine backend abstraction (PLAN_qt_and_engine_abstraction.md workstream 1).
 
 Importing this package loads no backend. The registry calls `load_engines`
-on its first query: it imports the built-in "audio8", "dummy" and "kokoro"
+on its first query: it imports the built-in "audio8", "dummy", "kokoro" and "luxtts"
 backends, then every `kokorogui.engines` entry point (a plugin engine),
 each on its own, so one that fails (the `kokoro` package isn't installed, a
 broken plugin) is marked unavailable instead of taking the others down, and
@@ -23,6 +23,7 @@ BUILTIN_ENGINES = (
     ("audio8", "Audio8 TTS (voice cloning)", "kokoro_gui.engines.audio8_tts"),
     ("dummy", "Dummy (offline test tone)", "kokoro_gui.engines.dummy"),
     ("kokoro", "Kokoro (local)", "kokoro_gui.engines.kokoro"),
+    ("luxtts", "LuxTTS (voice cloning)", "kokoro_gui.engines.luxtts"),
 )
 
 ENTRY_POINT_GROUP = "kokorogui.engines"

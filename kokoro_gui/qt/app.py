@@ -3633,6 +3633,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             "trim_silence": state["trim_silence"],
             "lexicon": self.settings.get("lexicon", {}),
         }
+        # Preview uses the same model settings and bundled reference as clips.
+        for key, default in self._model_fields(self.backend):
+            extra_config[key] = engine.get(key, default)
+        extra_config["project_dir"] = self.project_dir
         if self.settings_dock.apply_fx_enabled():
             extra_config.update(self.fx_dock.project_fx_state())
 

@@ -7,7 +7,7 @@
 A text-based audio workflow. Edit the words and the audio follows: write or import a transcript,
 give each line a character, and the clips land on a timeline you can mix and export. Change a word
 and only that clip generates again. It runs locally on [Kokoro](https://github.com/hexgrad/kokoro),
-with Audio8 voice cloning built in as a second engine.
+with Audio8 voice cloning and optional LuxTTS support.
 
 <img width="1600" height="1000" alt="KokoroGUI 4.0: transcript and settings tabs over a seconds-axis timeline and transport, dark theme" src="docs/assets/shell_dark.png" />
 
@@ -22,8 +22,8 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
     again.
 -   **Timeline and mixer.** One track per character, with mute, solo, fader, pan, automation,
     fades, markers, loops and timecode.
--   **Two engines.** Kokoro's named and mixable voices in 8 languages, and Audio8, which clones a
-    voice from a short recording. Each character picks its own.
+-   **Multiple engines.** Kokoro's named and mixable voices in 8 languages, Audio8 voice cloning,
+    and optional LuxTTS. Each character picks its own.
 -   **Non-destructive FX.** A Pedalboard chain (compressor, EQ, reverb, convolution reverb, delay
     and more) applied on playback and export, per project, character or clip.
 -   **Dubbing.** Subtitle import, fit-to-slot timing, the original dialogue and a reference video
@@ -44,6 +44,7 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 Unreleased:
 
+-   Added the optional [LuxTTS engine](docs/settings.html#luxtts).
 -   A Help menu with Documentation, Keyboard Shortcuts and About, and File > Show in Folder
 -   A log file, and a dialog with the traceback when something crashes
 -   Importing a big book no longer freezes the window, and an oversized or malformed one is refused with the reason

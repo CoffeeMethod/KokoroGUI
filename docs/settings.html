@@ -99,7 +99,8 @@
         <a href="#fx">Audio FX</a>
         <a href="#lexicon">Lexicon</a>
         <a href="#mixing">Mixing</a>
-        <a href="#voice-reference">References</a>
+        <a href="#voice-reference">Audio8 References</a>
+        <a href="#luxtts">LuxTTS</a>
         <a href="#presets">Preset files</a>
         <a href="#jit">JIT streaming</a>
         <a href="#force-refresh">Force refresh</a>
@@ -112,9 +113,9 @@
       <div class="prose reveal">
         <h2><span class="idx">Options menu</span>Engines, device, theme</h2>
         <p><strong>Options &gt; Settings&hellip;</strong> (Ctrl+,) opens the <a class="link" href="#settings-window">Settings window</a>: everything about the program and the project, as opposed to a voice. The Settings tab keeps only what a voice sounds like.</p>
-        <p><strong>Each character picks its engine</strong>, in the Settings tab's Engine row or in Edit &gt; Characters, so one project can mix Kokoro and Audio8 voices; every engine a character uses stays loaded. The selected clip's character (or the first character, with nothing selected) decides what the Settings tab's fields look like and which editor the Voices tab opens on (Mixing for Kokoro, References for Audio8); the Voices tab's own Engine box opens another engine's editor without changing a character. Everything below is written per-engine where the two differ.</p>
-        <p>Language, the default voice, an engine's own Model fields and its Parallel threads are kept per engine, so a Kokoro and an Audio8 character each generate with their own. An engine this install doesn't have shows as "(not installed)": its characters keep it, their clips play and don't generate. Without the <code>kokoro</code> package the app runs Audio8 and Dummy.</p>
-        <p><strong>Options &gt; Device</strong> picks CPU / CUDA / Auto for the Kokoro pipeline (the first line, &ldquo;Detected&rdquo;, names what torch found: a CUDA card, an Apple GPU or the CPU. The engines use CUDA or the CPU only, so an Apple GPU is listed but not used. The CUDA entry is greyed out when torch reports no device) and re-initializes the engine. <strong>Options &gt; Theme</strong> switches between the dark (default) and light palettes. The checkable entries under them are whether copying text carries its character and FX along, whether a paste splits off its own run, the <a class="link" href="#transcript">Transcript details</a> submenu, and <a class="link" href="#jit">JIT streaming</a> for projects with no clips. The welcome dialog's "Show at startup" box is the one launch setting that isn't here; it lives on the dialog itself (File &gt; Welcome…).</p>
+        <p><strong>Each character picks its engine</strong>, in the Settings tab's Engine row or in Edit &gt; Characters, so one project can mix Kokoro, Audio8 and LuxTTS voices; every engine a character uses stays loaded. The selected clip's character (or the first character, with nothing selected) decides what the Settings tab's fields look like and which editor the Voices tab opens on (Mixing for Kokoro, References for Audio8 and LuxTTS); the Voices tab's own Engine box opens another engine's editor without changing a character. Everything below is written per-engine where they differ.</p>
+        <p>Language, the default voice, an engine's own Model fields and its Parallel threads are kept per engine, so characters using different engines each generate with their own. An engine this install doesn't have shows as "(not installed)": its characters keep it, their clips play and don't generate. Without the <code>kokoro</code> package the app runs Audio8, LuxTTS (with its optional dependencies) and Dummy.</p>
+        <p><strong>Options &gt; Device</strong> picks CPU / CUDA / Auto for Kokoro and LuxTTS (the first line, &ldquo;Detected&rdquo;, names what torch found: a CUDA card, an Apple GPU or the CPU. The engines use CUDA or the CPU only, so an Apple GPU is listed but not used. The CUDA entry is greyed out when torch reports no device) and re-initializes the engine. <strong>Options &gt; Theme</strong> switches between the dark (default) and light palettes. The checkable entries under them are whether copying text carries its character and FX along, whether a paste splits off its own run, the <a class="link" href="#transcript">Transcript details</a> submenu, and <a class="link" href="#jit">JIT streaming</a> for projects with no clips. The welcome dialog's "Show at startup" box is the one launch setting that isn't here; it lives on the dialog itself (File &gt; Welcome…).</p>
       </div>
     </div>
   </section>
@@ -147,17 +148,17 @@
           </tbody>
         </table>
       </div>
-      <p class="dek" style="margin-top:1rem;">Voice, Speed and the Audio control fields can vary per clip or character. Language and an engine's Model fields (Audio8's sampling knobs) are shown disabled, not hidden, while a clip or character is selected, since they only apply to the whole document. Segmentation, output format, threads and the caches aren't here at all: they're program settings, in the <a class="link" href="#settings-window">Settings window</a>.</p>
+      <p class="dek" style="margin-top:1rem;">Voice, Speed and the Audio control fields can vary per clip or character. Language and an engine's Model fields (Audio8's and LuxTTS's sampling knobs) are shown disabled, not hidden, while a clip or character is selected, since they only apply to the whole document. Segmentation, output format, threads and the caches aren't here at all: they're program settings, in the <a class="link" href="#settings-window">Settings window</a>.</p>
       <p class="dek" style="margin-top:1rem;">Above the fields, the <strong>Engine</strong> row: with a character selected it sets that character's engine (refused while a job runs; the voice stays if the new engine has one by that name, else it becomes the new engine's default); with a clip selected it does the same for the clip's character, so every clip of that character follows; with nothing selected it is "Engine for new characters", the engine Add in Edit &gt; Characters and subtitle import give a new character, and the Language and Voice under it switch to that engine's defaults, the voice a new character starts with. Picking an engine and then a voice is one stop.</p>
-      <p class="dek" style="margin-top:1rem;">The fields below are what the two engines declare. Rows marked Audio8 only don't appear for a Kokoro character at all. Language, Voice (with nothing selected) and the Audio8-only rows are remembered per engine.</p>
+      <p class="dek" style="margin-top:1rem;">The fields below depend on the selected engine; its Model fields appear only for that engine. Language, Voice (with nothing selected) and Model fields are remembered per engine. <a class="link" href="#luxtts">LuxTTS settings</a> are listed below.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Voice fields</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Language</td><td>For Kokoro, picks which phonemization pipeline runs; each language uses its own <code>KPipeline</code> and voice list. For Audio8 it's one of eleven labels from the model card. See the callout below: it currently isn't sent to the model at all.</td></tr>
-            <tr><td>Voice</td><td>Kokoro: a named base voice (<code>af_heart</code>, <code>bm_daniel</code>, ...) or a saved Mix from the Voices tab. Audio8: a saved Reference (a WAV and its transcript) from the Voices tab.</td></tr>
-            <tr><td>Speed</td><td>Kokoro: 0.5x-2.0x, passed straight to the pipeline as a native generation parameter. Audio8: shown in the same range, but see the callout below, it's currently not forwarded to the model either.</td></tr>
+            <tr><td>Language</td><td>For Kokoro, picks which phonemization pipeline runs; each language uses its own <code>KPipeline</code> and voice list. For Audio8 it's one of eleven labels from the model card. See the callout below: it currently isn't sent to the model at all. LuxTTS supports English.</td></tr>
+            <tr><td>Voice</td><td>Kokoro: a named base voice (<code>af_heart</code>, <code>bm_daniel</code>, ...) or a saved Mix from the Voices tab. Audio8: a saved Reference (a WAV and its transcript) from the Voices tab. LuxTTS: a saved Reference WAV, with no transcript required.</td></tr>
+            <tr><td>Speed</td><td>Kokoro and LuxTTS: 0.5x-2.0x, passed to the model as a native generation parameter. Audio8: shown in the same range, but see the callout below, it's currently not forwarded to the model either.</td></tr>
             <tr><td>Max new tokens <span class="engine-note">Audio8 only</span></td><td>Caps how many tokens the model can generate per segment. Default 1024, hard-capped at 2048 to match the model's real <code>max_seq_len</code>; anything higher gets silently clamped by the model anyway.</td></tr>
             <tr><td>Temperature <span class="engine-note">Audio8 only</span></td><td>Sampling temperature, default 0.8. Higher values add more variation between takes of the same text.</td></tr>
             <tr><td>Top P / Top K <span class="engine-note">Audio8 only</span></td><td>Nucleus and top-k sampling cutoffs, default 0.95 and 50. Standard token-sampling controls for the model's decoder.</td></tr>
@@ -223,7 +224,7 @@
           <caption>Performance</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>Parallel threads <span class="engine-note">per engine</span></td><td>Kokoro: 1-32. Each thread runs its own pipeline, so more threads generate more pieces at once. Audio8: 1-4, but one shared model generates one piece at a time, so more threads don't speed up the model itself.</td></tr>
+            <tr><td>Parallel threads <span class="engine-note">per engine</span></td><td>Kokoro: 1-32. Each thread runs its own pipeline, so more threads generate more pieces at once. Audio8: 1-4, but one shared model generates one piece at a time, so more threads don't speed up the model itself. LuxTTS: one shared model and one segment at a time.</td></tr>
             <tr><td>Enable segment cache</td><td>For whole-document and JIT generation: keeps each generated piece under <code>cache/</code>, keyed by a hash of what produced it, so a re-run with the same text and settings skips it. Clips don't need it: each clip's audio is written once into the project, under a name made from the same hash.</td></tr>
             <tr><td>Cache reference encoding <span class="engine-note">Audio8 only</span></td><td>A second, separate cache that stores the model's encoded reference audio, keyed by the reference file's contents. Repeated segments against the same Reference skip re-running the audio encoder, independent of the segment cache above.</td></tr>
           </tbody>
@@ -306,13 +307,13 @@
             <tr><td>Drag a clip's top corner</td><td>The small squares on a generated clip's top-left and top-right corners set its fade-in and fade-out. Settings with nothing selected &gt; Auto-crossfade adds a 10 ms fade wherever clips overlap.</td></tr>
             <tr><td>Overlap warning</td><td>Two clips that overlap on the same track get a red border.</td></tr>
             <tr><td>A clip with a target</td><td>Its slot (Target (s) in the Settings tab) is drawn as a bracket from the clip's start, which may reach past the block, and its label gives the clip's length as a percentage of the target. Over 103% the clip is tinted amber, over 115% red.</td></tr>
-            <tr><td>Right-click a clip &gt; Fit to slot</td><td>Shown for a clip with a target. Changes the clip until it's within 3% of the target, as one undo step. Kokoro regenerates it at a new speed, from 0.7x to 1.6x, up to three times. Audio8 has no speed control, so its playback is time-stretched instead, between 0.87x and 1.15x, without changing the pitch. A line still too long at 1.6x or 1.15x is set to Needs rewrite. Clips placed after it ripple as they do after a regenerate.</td></tr>
+            <tr><td>Right-click a clip &gt; Fit to slot</td><td>Shown for a clip with a target. Changes the clip until it's within 3% of the target, as one undo step. Kokoro and LuxTTS regenerate it at a new speed, from 0.7x to 1.6x, up to three times. Audio8 has no speed control, so its playback is time-stretched instead, between 0.87x and 1.15x, without changing the pitch. A line still too long at 1.6x or 1.15x is set to Needs rewrite. Clips placed after it ripple as they do after a regenerate.</td></tr>
             <tr><td>Fit all over slot</td><td>The button above the timeline, shown once any clip has a target. Fits every clip that runs more than 3% past its target.</td></tr>
             <tr><td>A music bed's block</td><td>A file added with File &gt; Import Audio&hellip;, on the Music track. Drag its left or right edge to trim the file; the audio stays where it was on the timeline. Right-click: Play, Loop (repeat the trimmed part; the right edge then sets how long it runs), Reset trim, Unpin from timeline, Lock in time, Remove. A bed has no Generate, Take or Align words.</td></tr>
             <tr><td>A subproject's block</td><td>A folder glyph and its title. It plays the subproject's exported mix, hatched while that's stale and crossed out when the subproject can't be opened. Click it: the transcript, Settings and Audio FX tabs show the subproject ("Subproject: …" at the top, Back returns). Double-click it (or its line in the transcript) to enter it: the timeline shows it and a breadcrumb above goes back up. Right-click: Enter, Generate and render, Detach to file… / Embed, Relink…, Remove.</td></tr>
             <tr><td>Right-click a clip &gt; Take</td><td>Every take the clip has, the active one ticked, with its length. Regenerating keeps the old take. A take made from text you've since changed says "old text"; picking it marks the clip stale. Delete take drops one.</td></tr>
             <tr><td>Right-click a clip &gt; Status</td><td>To do, Generated, Approved or Needs rewrite. Generating sets Generated. The Show box above the timeline dims clips that don't match (All, Not approved, Needs rewrite).</td></tr>
-            <tr><td>Right-click a clip &gt; Align words</td><td>Runs Whisper over the clip's audio to work out when each word is spoken. This runs by itself after generating with Audio8, or with Kokoro outside English.</td></tr>
+            <tr><td>Right-click a clip &gt; Align words</td><td>Runs Whisper over the clip's audio to work out when each word is spoken. This runs by itself after generating with Audio8 or LuxTTS, or with Kokoro outside English.</td></tr>
             <tr><td>Track header: M, S, A, D, fader, pan</td><td>Mute, solo (any soloed track silences the others), show the volume automation lane, and duck; below them a fader (0-200%) and pan (snaps to centre). In the automation lane, double-click adds a point, drag moves it, right-click deletes it and Alt+drag moves a segment. <code>D</code> turns the track down while clips on tracks without it play, by Options &gt; Settings&hellip; &gt; Timeline &gt; Ducking; it starts off, the Music track's included. Music beds never duck other tracks, and the source track neither ducks nor is ducked. Playback and export both follow these.</td></tr>
             <tr><td>Generate (transport)</td><td>Once the project has clips, this generates every stale clip in one pass instead of the whole transcript, with bounded concurrency and cancel-safe queuing; each clip goes to its character's engine. Then every stale subproject is generated and its mix exported into the project, one at a time. A project with no clips yet still falls back to the original whole-document pipeline. Its menu holds Generate stale clips in selection (only the clips your selected transcript text overlaps, or the selected clip), Auto-split then generate and the Split by paragraph toggle.</td></tr>
           </tbody>
@@ -371,9 +372,9 @@
           <thead><tr><th>Field or button</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td>Name / Color</td><td>The name <code>[Name]:</code> tags match, and the tint its text and clips get. The color picker's presets are the eight default character colors.</td></tr>
-            <tr><td>Engine</td><td>Kokoro or Audio8 (and any plugin engine). One project can mix both. The Settings and Voices tabs follow the selected clip's character. A new character gets the Settings tab's "Engine for new characters" (its Engine row with nothing selected). An engine that isn't installed shows as "(not installed)".</td></tr>
-            <tr><td>Voice / FX</td><td>A Kokoro voice or Mix, or an Audio8 Reference; and the FX every clip of this character plays through unless it has its own.</td></tr>
-            <tr><td>Variants <span class="engine-note">Audio8</span></td><td>Named alternative References, such as "angry" or "whisper". The transcript's Variant box picks one per clip.</td></tr>
+            <tr><td>Engine</td><td>Kokoro, Audio8 or LuxTTS (and any plugin engine). One project can mix them. The Settings and Voices tabs follow the selected clip's character. A new character gets the Settings tab's "Engine for new characters" (its Engine row with nothing selected). An engine that isn't installed shows as "(not installed)".</td></tr>
+            <tr><td>Voice / FX</td><td>A Kokoro voice or Mix, or an Audio8 or LuxTTS Reference; and the FX every clip of this character plays through unless it has its own.</td></tr>
+            <tr><td>Variants <span class="engine-note">Audio8 and LuxTTS</span></td><td>Named alternative References, such as "angry" or "whisper". The transcript's Variant box picks one per clip.</td></tr>
             <tr><td>Scope</td><td>Global lives in the character library (<code>characters/</code>), and every project that links it follows its voice, FX, color, engine and variants. Project belongs to the top-level project and is shared by its subprojects. Local belongs to this file only. A project always keeps its own copy, so it opens on a machine whose library lacks the character; the dialog then says "Library (not found here)".</td></tr>
             <tr><td>Promote to Library / Promote to Project</td><td>Turns a local character into a library entry, or, inside a subproject, shares it with the whole project.</td></tr>
             <tr><td>Rename in library</td><td>Each project keeps its own name for a library character. This copies this project's name to the library entry.</td></tr>
@@ -588,6 +589,46 @@
     </div>
   </section>
 
+  <section class="doc-section" id="luxtts" data-clip="LuxTTS" data-cc="c2">
+    <div class="wrap">
+      <h2><span class="idx">Optional engine</span>LuxTTS</h2>
+      <div class="prose reveal">
+        <p><a class="link" href="https://github.com/ysharma3501/LuxTTS" target="_blank" rel="noopener">LuxTTS</a> generates English speech locally at 48 kHz from a Reference WAV. Each character can use it alongside Kokoro and Audio8 characters.</p>
+        <h3>Install and choose a Reference</h3>
+        <p>In the app's Python environment, run this command from the repository folder. It installs the pinned LuxTTS fork and its LinaCodec vocoder:</p>
+        <pre><code>python -m pip install -r requirements-luxtts.txt</code></pre>
+        <p>Git must be on PATH. The optional requirements include a phonemizer wheel source; wheel availability depends on Python and platform. Keep torch and torchaudio on matching versions for your device. The requirements pin <code>transformers==4.57.6</code> for compatibility. If dependencies are missing, loading LuxTTS reports the install command.</p>
+        <p>Choose <strong>LuxTTS (voice cloning)</strong> in the character's Engine row. In <strong>Voices</strong>, browse to a WAV containing at least three seconds of clear speech, enter a name in <strong>Save as</strong>, and save it. Select that Reference in the character's Voice field. Files over 200 MB are refused. The transcript and Auto-transcribe controls are hidden because LuxTTS transcribes the Reference internally.</p>
+        <p>First use downloads <code>YatharthS/LuxTTS</code> and the engine's Whisper transcriber (tiny on CPU, base on CUDA). This transcriber is separate from the app's Whisper used for recordings and word alignment. <strong>Options &gt; Device</strong> selects CPU, CUDA or Auto; Auto uses CUDA when available, otherwise CPU.</p>
+        <h3>Settings</h3>
+        <p>These Model fields live in the Settings tab and are kept per engine. Select project scope to edit them. Speed can vary per character or clip: the 0.5x-2x control is passed to LuxTTS directly, and Fit to slot can regenerate at a different speed.</p>
+      </div>
+      <div class="table-wrap reveal">
+        <table class="ref">
+          <caption>LuxTTS Model fields</caption>
+          <thead><tr><th>Setting</th><th>Default and range</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Sampling Steps</td><td>4; 1-32</td><td>Number of sampling steps used to generate speech. More steps take more time.</td></tr>
+            <tr><td>Guidance Scale</td><td>3; 0-10</td><td>Strength of the model's guidance during sampling.</td></tr>
+            <tr><td>Time Shift</td><td>0.9; 0.1-1</td><td>Adjusts the sampling time schedule.</td></tr>
+            <tr><td>Reference Duration (seconds)</td><td>5; 3-1000</td><td>Maximum duration of Reference audio used to encode the voice.</td></tr>
+            <tr><td>Reference RMS</td><td>0.01; 0.001-0.1</td><td>Target RMS level when preparing the Reference.</td></tr>
+            <tr><td>Smooth Audio</td><td>Off</td><td>Uses the vocoder's smooth output mode. Both modes return 48 kHz audio.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose reveal" style="margin-top:1.4rem;">
+        <p>Generation uses one shared model, one segment at a time. Cancel takes effect between model calls, including after Reference encoding; it cannot interrupt a model call already running. LuxTTS has no JIT streaming or native word timings. The app can align words with its separate Whisper pass after generation.</p>
+        <p>Encoded References are reused in memory, with up to eight kept at once. Changing a WAV, Reference Duration or Reference RMS encodes it again; changing device clears the stored encodings. A project bundles the source Reference files, so it can generate on another machine with LuxTTS installed. Derived encodings stay out of the bundle. Changing a Model field makes affected clips stale.</p>
+        <h3>Troubleshooting and a real generation check</h3>
+        <p>If librosa aborts with an LLVM error mentioning <code>__svml</code>, set <code>NUMBA_DISABLE_INTEL_SVML=1</code> before starting Python and point <code>NUMBA_CACHE_DIR</code> to a fresh folder. This disables Numba's optional Intel vector math acceleration.</p>
+        <p>For the optional real CPU integration check, set <code>LUXTTS_REFERENCE_WAV</code> to a speech WAV of at least three seconds, then run:</p>
+        <pre><code>python -m pytest -m integration tests/integration/test_real_luxtts.py -s</code></pre>
+        <p>The check generates both audio modes under <code>tests/output/</code> for listening. The LuxTTS code and speech model use Apache-2.0; see the upstream repository for its dependencies.</p>
+      </div>
+    </div>
+  </section>
+
   <section class="doc-section" id="presets">
     <div class="wrap">
       <h2><span class="idx">Files on disk</span>Preset files</h2>
@@ -603,7 +644,7 @@
       <h2><span class="idx">Options menu</span>JIT streaming</h2>
       <div class="prose reveal">
         <p>"JIT streaming (no-clips fallback only)" plays a project that has no clips yet while it's still generating: one thread fills a queue, another plays from it. That only works when the engine makes audio faster than it plays, with enough margin that playback never catches up.</p>
-        <p>Kokoro can. Audio8, one large model generating one piece at a time, can't, so with an Audio8 character selected the entry is greyed out and generation runs normally. Once a project has clips, Generate works clip by clip and the transport plays them, and this setting doesn't apply.</p>
+        <p>Kokoro can. Audio8 and LuxTTS generate one piece at a time and have no JIT streaming support, so with a character using either engine selected the entry is greyed out and generation runs normally. Once a project has clips, Generate works clip by clip and the transport plays them, and this setting doesn't apply.</p>
       </div>
     </div>
   </section>
