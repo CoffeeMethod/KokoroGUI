@@ -1447,3 +1447,112 @@ def test_zoom_to_fit_clamps_and_guards_an_empty_arrangement(qtbot):
     view.render_document(doc, compute_arrangement(doc, chars_per_second=1e9))
     view.zoom_to_fit()  # a near-zero length: clamps to the top of the range
     assert view.zoom == MAX_PIXELS_PER_SECOND
+
+
+# --- snapping: markers, the grid ---------------------------------------------
+
+def _snap_view(qtbot, grid=False, markers_at=()):
+    from kokoro_gui.daw import markers
+
+    view = TimelineView()
+    qtbot.addWidget(view)
+    view.resize(800, 300)
+    doc, clip, _track = _build_doc_with_one_clip()
+    for seconds in markers_at:
+        doc.settings["markers"], _m = markers.add_marker(doc.settings, seconds)
+    _render(view, doc)
+    view.set_snap_to_grid(grid)
+    return view, doc, clip
+
+
+def test_the_grid_lines_are_choose_tick_step_apart_at_the_default_zoom():
+    assert choose_tick_step(DEFAULT_PIXELS_PER_SECOND) == 2.0
+
+
+def test_a_point_nothing_catches_stays_put_with_snap_to_grid_off(qtbot):
+    view, _doc, _clip = _snap_view(qtbot)
+    assert view.snap_to_grid is False
+    assert view._snap_seconds(3.3, "someone-else") == 3.3
+
+
+def test_snap_to_grid_rounds_to_the_nearest_grid_line(qtbot):
+    view, _doc, _clip = _snap_view(qtbot, grid=True)
+    assert view._snap_seconds(3.3, "someone-else") == 4.0
+    assert view._snap_seconds(2.9, "someone-else") == 2.0
+    assert view._snap_seconds(7.2, "someone-else") == 8.0
+
+
+def test_the_grid_follows_the_zoom(qtbot):
+    view, _doc, _clip = _snap_view(qtbot, grid=True)
+    view.set_zoom(400.0)
+    step = choose_tick_step(400.0)
+    assert step < 2.0
+    assert view._snap_seconds(3.3, "someone-else") == pytest.approx(round(3.3 / step) * step)
+
+
+def test_a_clip_edge_beats_the_grid(qtbot):
+    view, _doc, clip = _snap_view(qtbot, grid=True)
+    placed = view._arrangement.by_clip_id()[clip.id]
+    near_end = placed.end_s + 0.05
+    assert view._snap_seconds(near_end, "someone-else") == placed.end_s
+
+
+def test_the_playhead_beats_the_grid(qtbot):
+    view, _doc, _clip = _snap_view(qtbot, grid=True)
+    view.set_playhead(5.1)
+    assert view._snap_seconds(5.15, "someone-else") == 5.1
+
+
+def test_a_marker_catches_a_drag_with_the_grid_off(qtbot):
+    view, _doc, _clip = _snap_view(qtbot, markers_at=[3.1])
+    assert view._snap_seconds(3.15, "someone-else") == 3.1
+    assert view._snap_seconds(3.5, "someone-else") == 3.5  # too far to catch
+
+
+def test_a_marker_beats_the_grid(qtbot):
+    view, _doc, _clip = _snap_view(qtbot, grid=True, markers_at=[3.1])
+    assert view._snap_seconds(3.15, "someone-else") == 3.1
+
+
+def test_the_grid_never_snaps_before_zero(qtbot):
+    view, _doc, _clip = _snap_view(qtbot, grid=True)
+    assert view._snap_seconds(-0.4, "someone-else") == 0.0
+
+
+def test_dragging_a_clip_with_snap_to_grid_on_drops_it_on_a_grid_line(qtbot):
+    view, _doc, clip = _snap_view(qtbot, grid=True)
+    moved = []
+    view.clipMoved.connect(lambda cid, s: moved.append((cid, s)))
+    block = next(b for b in _clip_block_items(view) if b.clip_id == clip.id)
+    press = view.mapFromScene(block.mapToScene(2, 2))
+    release = press + QPointF(seconds_to_x(3.3, DEFAULT_PIXELS_PER_SECOND), 0).toPoint()
+
+    _press_release(view, qtbot, press, release)
+
+    assert moved == [(clip.id, 4.0)]
+
+
+def test_dragging_a_marker_with_snap_to_grid_on_drops_it_on_a_grid_line(qtbot):
+    view, _doc, _clip = _snap_view(qtbot, grid=True, markers_at=[1.0])
+    moved = []
+    view.markerMoved.connect(lambda mid, s: moved.append(s))
+    y = RULER_HEIGHT_PX / 2
+    press = view.mapFromScene(QPointF(seconds_to_x(1.0, DEFAULT_PIXELS_PER_SECOND), y))
+    release = view.mapFromScene(QPointF(seconds_to_x(3.3, DEFAULT_PIXELS_PER_SECOND), y))
+
+    _press_release(view, qtbot, press, release)
+
+    assert moved == [4.0]
+
+
+def test_a_marker_drag_with_snap_to_grid_off_keeps_the_dropped_time(qtbot):
+    view, _doc, _clip = _snap_view(qtbot, markers_at=[1.0])
+    moved = []
+    view.markerMoved.connect(lambda mid, s: moved.append(s))
+    y = RULER_HEIGHT_PX / 2
+    press = view.mapFromScene(QPointF(seconds_to_x(1.0, DEFAULT_PIXELS_PER_SECOND), y))
+    release = view.mapFromScene(QPointF(seconds_to_x(3.3, DEFAULT_PIXELS_PER_SECOND), y))
+
+    _press_release(view, qtbot, press, release)
+
+    assert moved == [3.3]

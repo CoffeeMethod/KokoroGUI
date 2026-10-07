@@ -186,6 +186,7 @@ SETTINGS_DEFAULTS = {
     "character_fx_paste_splits": True,
     "character_fx_copy": True,
     "notify_sound": True,       # Options > Sound when a long job finishes
+    "snap_to_grid": False,      # the Timeline dock's Snap to grid button and the G key
     # Options > Transcript details: the master switch, then one toggle per
     # overlay (each counts only while the master is on).
     "transcript_details": False,

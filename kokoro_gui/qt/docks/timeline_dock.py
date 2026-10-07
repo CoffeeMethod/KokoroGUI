@@ -153,6 +153,16 @@ class TimelineDock(QDockWidget):
                                         "the start.")
         self.zoom_fit_button.clicked.connect(lambda _checked=False: self.timeline_view.zoom_to_fit())
         filter_row.addWidget(self.zoom_fit_button)
+        # Snap to grid is a view setting, kept in config_qt.json and never in
+        # the project. The G key (timeline focused) flips it.
+        self.snap_button = QPushButton("Snap to grid")
+        self.snap_button.setCheckable(True)
+        self.snap_button.setToolTip("Dragged clips and markers land on the nearest grid line (G with the timeline "
+                                    "focused). Clip edges, markers and the playhead still catch within a few pixels.")
+        self.snap_button.setChecked(bool(self.app.settings.get("snap_to_grid", False)))
+        self.timeline_view.set_snap_to_grid(self.snap_button.isChecked())
+        self.snap_button.toggled.connect(self._on_snap_toggled)
+        filter_row.addWidget(self.snap_button)
         self.fit_all_button = QPushButton("Fit all over slot")
         self.fit_all_button.setToolTip("Fit every clip that runs past its target duration: regenerate "
                                        "faster, or time-stretch on an engine without a speed control.")
@@ -193,6 +203,10 @@ class TimelineDock(QDockWidget):
         self._fit_batch: list = []
 
         self.refresh()
+
+    def _on_snap_toggled(self, on: bool) -> None:
+        self.timeline_view.set_snap_to_grid(on)
+        self.app._set_setting("snap_to_grid", bool(on))
 
     def refresh_breadcrumb(self) -> None:
         """`Book › Chapter 12`: a button per project from the root to the

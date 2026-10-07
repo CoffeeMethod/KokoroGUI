@@ -956,6 +956,7 @@ class TimelineView(QGraphicsView):
         self._scene_span = (0.0, 0.0)
         self._status_filter = "all"
         self._loop_s: Optional[tuple] = None
+        self._snap_to_grid = False
 
         self.header: Optional[TrackHeaderView] = None
         self.horizontalScrollBar().valueChanged.connect(self._on_hscroll)
@@ -1359,7 +1360,9 @@ class TimelineView(QGraphicsView):
         return None
 
     def _snap_seconds(self, seconds: float, moving_clip_id: str) -> float:
-        """Snap to other clips' edges and the playhead within SNAP_PX."""
+        """Snap to other clips' edges, markers, the playhead and 0 within
+        SNAP_PX. A point none of those catches goes to the nearest grid line
+        when Snap to grid is on."""
         candidates = []
         if self._arrangement is not None:
             for placed in self._arrangement.placed:
@@ -1368,14 +1371,40 @@ class TimelineView(QGraphicsView):
                 candidates.extend((placed.start_s, placed.end_s))
         if self._playhead_s is not None:
             candidates.append(self._playhead_s)
+        candidates.extend(m["seconds"] for m in self._markers())
         candidates.append(0.0)
         best = seconds
         best_dist = SNAP_PX / self._zoom
+        caught = False
         for c in candidates:
             d = abs(c - seconds)
             if d <= best_dist:
-                best, best_dist = c, d
+                best, best_dist, caught = c, d, True
+        if not caught:
+            best = self.grid_snap(seconds)
         return max(0.0, best)
+
+    @property
+    def snap_to_grid(self) -> bool:
+        return self._snap_to_grid
+
+    def set_snap_to_grid(self, on: bool) -> None:
+        """Snap to grid: a dragged clip or marker lands on the nearest grid
+        line (`choose_tick_step` apart, the dotted lines) unless an edge, the
+        playhead or a marker is closer than SNAP_PX. The lines draw darker
+        while it is on."""
+        on = bool(on)
+        if on != self._snap_to_grid:
+            self._snap_to_grid = on
+            self.viewport().update()
+
+    def grid_snap(self, seconds: float) -> float:
+        """`seconds` rounded to the nearest grid line when Snap to grid is
+        on, else unchanged."""
+        if not self._snap_to_grid or self._zoom <= 0:
+            return seconds
+        step = choose_tick_step(self._zoom)
+        return round(seconds / step) * step
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().mouseReleaseEvent(event)
@@ -1474,7 +1503,7 @@ class TimelineView(QGraphicsView):
         seconds = x_to_seconds(scene_pos.x(), self._zoom)
         if mode == "marker":
             if moved:
-                self.markerMoved.emit(payload, round(seconds, 3))
+                self.markerMoved.emit(payload, round(max(0.0, self.grid_snap(seconds)), 3))
             else:
                 self.seekRequested.emit(x_to_seconds(press_scene.x(), self._zoom))
         elif mode == "loop":
@@ -1866,7 +1895,7 @@ class TimelineView(QGraphicsView):
             return
         step = choose_tick_step(self._zoom)
         grid_color = QColor(pal.lane_border)
-        grid_color.setAlpha(120)
+        grid_color.setAlpha(220 if self._snap_to_grid else 120)
         painter.setPen(QPen(grid_color, 1, Qt.PenStyle.DotLine))
         k = max(1, int((left / self._zoom) // step))
         while True:
