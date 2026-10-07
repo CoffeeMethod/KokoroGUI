@@ -11,7 +11,7 @@ moved into a dock and reshaped into three rows:
    transport plays when the project has a source track. Without one the
    toggle is disabled on Dub.
 2. Preview, Generate (the row's one `primary` button: a `QToolButton`
-   whose menu holds "Generate dirty clips", "Generate stale clips in
+   whose menu holds "Generate stale clips", "Generate stale clips in
    selection", "Auto-split then generate" and
    the checkable "Split by paragraph"), Cancel (flat).
 3. One progress bar carrying the status/detail text via `setFormat`, in
@@ -221,7 +221,7 @@ class TransportDock(QDockWidget):
         self.generate_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.generate_btn.clicked.connect(self.app.on_generate_clicked)
         self.generate_menu = QMenu(self.generate_btn)
-        self.generate_dirty_action = QAction("Generate dirty clips", self)
+        self.generate_dirty_action = QAction("Generate stale clips", self)
         self.generate_dirty_action.triggered.connect(self.app.on_generate_clicked)
         self.generate_selection_action = QAction("Generate stale clips in selection", self)
         self.generate_selection_action.triggered.connect(self.app.generate_selection)

@@ -847,8 +847,8 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
     dirty = document.dirty_clips()
     if dirty:
         box = QMessageBox(parent)
-        box.setWindowTitle("Clips out of date")
-        box.setText(f"{len(dirty)} clip(s) are out of date and will be silent in the export.")
+        box.setWindowTitle("Stale clips")
+        box.setText(f"{len(dirty)} clip(s) are stale and will be silent in the export.")
         generate_btn = box.addButton("Generate first", QMessageBox.ButtonRole.AcceptRole)
         box.addButton("Export anyway", QMessageBox.ButtonRole.ActionRole)
         box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
@@ -1109,7 +1109,7 @@ def run_measure_loudness(app, parent=None) -> bool:
 
     note = "Measured as " + ("mono." if channels == 1 else "stereo, the export's default.")
     if stale:
-        note += f" {stale} clip(s) are out of date and count as silence."
+        note += f" {stale} clip(s) are stale and count as silence."
 
     def _done(future):
         try:
