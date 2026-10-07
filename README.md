@@ -51,6 +51,8 @@ Unreleased:
 -   Generate stale clips in the selection only, a taskbar alert when a long job finishes, and a
     prompt before closing mid-generate
 -   Split a clip in two at the playhead and join two clips back, from Edit, the block menu or `S`
+-   Keys for the transport and timeline (arrows, Home, End, J/K/L, Delete, Ctrl+G, Esc) that work only with the timeline
+    focused, with Ctrl+Alt versions for any panel, and a Snap to grid button that also snaps to markers
 -   Export can normalize to a LUFS target, File > Measure Loudness reports a mix, and the transport has a level meter
 -   The Export dialog has tabs, an MP3 bitrate, a sample rate and a filename template, and asks before it overwrites a file
 -   Export presets for ACX, Apple Podcasts, Spotify and YouTube that check each file, an RMS mode with a peak limiter,

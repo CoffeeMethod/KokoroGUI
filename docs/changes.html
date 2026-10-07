@@ -312,6 +312,35 @@
         <h3>Timeline and view</h3>
         <ul class="change-list">
           <li>
+            <h4>A keyboard map for the transport and the timeline</h4>
+            <p>The arrow keys, Home, End and the letters would all type or move the caret in the transcript, so a plain key only works while the timeline has the focus (click it first). Each has a Ctrl+Alt version that works in any panel, including the transcript. Space and Ctrl+Space still play and pause, and the Help &gt; Keyboard Shortcuts sheet lists every row under Transport, Timeline and Generate.</p>
+            <div class="table-wrap">
+              <table class="ref">
+                <thead><tr><th>Action</th><th>Timeline focused</th><th>Any panel</th></tr></thead>
+                <tbody>
+                  <tr><td>Play / pause</td><td>Space</td><td>Ctrl+Space</td></tr>
+                  <tr><td>Play, pause, jump back 5 s</td><td>L, K, J</td><td>none</td></tr>
+                  <tr><td>Stop and return to start</td><td>Home</td><td>Ctrl+Alt+Home</td></tr>
+                  <tr><td>Go to end</td><td>End</td><td>Ctrl+Alt+End</td></tr>
+                  <tr><td>Previous / next clip start</td><td>Left / Right</td><td>Ctrl+Alt+Left / Right</td></tr>
+                  <tr><td>Previous / next marker</td><td>Shift+Left / Right</td><td>Ctrl+Alt+Shift+Left / Right</td></tr>
+                  <tr><td>Split clip at playhead</td><td>S</td><td>none</td></tr>
+                  <tr><td>Zoom to fit</td><td>F</td><td>none</td></tr>
+                  <tr><td>Snap to grid on or off</td><td>G</td><td>none</td></tr>
+                  <tr><td>Delete the selected music bed</td><td>Delete</td><td>none</td></tr>
+                  <tr><td>Generate stale clips</td><td>Ctrl+G</td><td>Ctrl+G</td></tr>
+                  <tr><td>Cancel the running generate</td><td>Esc</td><td>Esc</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>The transport can't play backwards or faster yet, so J jumps back 5 seconds and L only plays. A jump to the previous clip from the first clip goes to 0, and a jump to a marker that isn't there says so in the status line. Delete only removes a music bed (its transcript line goes with it, one undo step); on a speech clip it does nothing, because removing the clip would remove its text. Ctrl+G does nothing while a job runs, and Esc is armed only while a generate runs, so it reaches the transcript and dialogs the rest of the time.</p>
+          </li>
+          <li>
+            <h4>Snap to grid, and snapping to markers</h4>
+            <p>A dragged clip already caught on other clips' edges, the playhead and 0 within 8 pixels. Markers now catch too. A new Snap to grid button in the Timeline header (also <code>G</code> with the timeline focused) goes further: a clip or marker you drop where nothing catches lands on the nearest grid line, the dotted lines that sit at the ruler's labelled ticks. The lines draw darker while it is on. Zooming in moves the lines closer together, so the snap gets finer with it. A marker drag uses the grid only.</p>
+            <p>The button is a view setting. It is off by default, it is kept with your other settings and it is never written into the project file.</p>
+          </li>
+          <li>
             <h4>Zoom to fit, and a timeline that zooms out to ten hours</h4>
             <p>The Zoom to fit button in the timeline header sets the zoom so the whole arrangement fills the window, and scrolls to the start. The zoom floor is now 0.05 pixels per second instead of 20, so ten hours fit in 1,800 px. The ruler's tick steps reach two hours and its labels read <code>h:mm:ss</code> past an hour.</p>
             <p>Zoomed out, a block narrower than 24 px shows no label, and one narrower than 4 px draws no waveform and never decodes its audio. The 20 px minimum block width shrinks with the zoom below 20 pixels per second, down to 1 px at the floor, so a book's blocks don't pile on top of each other. A block under 20 px wide has no fade handles or FX chip. From 20 pixels per second up nothing changes.</p>
@@ -384,7 +413,7 @@
         <ul class="change-list">
           <li>
             <h4>A Help menu with Documentation, Keyboard Shortcuts and About</h4>
-            <p>Documentation opens the docs site. Keyboard Shortcuts lists every menu-bar shortcut plus the keys the window handles itself (Space and Ctrl+Space), read from the live objects, so a new shortcut shows up without anyone editing a list. About shows the app, Python, PySide6 and torch versions, the device, each engine's version or the reason it didn't load, the cache, custom voices and settings paths, and the Whisper model with whether it's downloaded. Copy puts that text on the clipboard. It makes no network call.</p>
+            <p>Documentation opens the docs site. Keyboard Shortcuts lists every menu-bar shortcut plus the keys the window handles itself (Space, Ctrl+Space and the timeline keys), read from the live objects, so a new shortcut shows up without anyone editing a list. About shows the app, Python, PySide6 and torch versions, the device, each engine's version or the reason it didn't load, the cache, custom voices and settings paths, and the Whisper model with whether it's downloaded. Copy puts that text on the clipboard. It makes no network call.</p>
           </li>
           <li>
             <h4>File &gt; Show in Folder</h4>
