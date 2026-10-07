@@ -253,7 +253,8 @@ class TimelineDock(QDockWidget):
                                                clip_samples_async=lambda clip, on_ready:
                                                self.app.rendered_clip_samples_async(clip, level, on_ready),
                                                nested_state=lambda clip: self.app.nested_state(clip, level),
-                                               clip_render_key=lambda clip: self.app.clip_render_key(clip, level))
+                                               clip_render_key=lambda clip: self.app.clip_render_key(clip, level),
+                                               flagged=self.app.is_clip_flagged)
 
     # -- seconds-axis drags (UI9) ------------------------------------------------
 

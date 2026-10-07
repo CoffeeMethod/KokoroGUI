@@ -375,6 +375,19 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Proofing</h3>
+        <ul class="change-list">
+          <li>
+            <h4>A Proof tab that checks the audio against the text</h4>
+            <p>The Proof tab sits after Outline in the top-right group. "Run proof on" takes All generated (every generated clip on the timeline), Selection (the selected clips) or This subproject (the clips of the selected subproject block, or of the subproject you are in). Whisper transcribes each segment on a background thread, with progress on the transport bar and the same download prompt as Align words. The Run proof button becomes Cancel while it runs. A cancel takes effect after the segment in progress, and the clips already scored keep their results. A file that can't be transcribed skips its clip and the status line says so.</p>
+            <p>A clip is scored against the text the engine spoke, that is its segments' stored text, so a lexicon rewrite or a removed <code>[Name:FX]:</code> tag is not a mismatch. Case, punctuation and hyphens are ignored, and numbers are spelled from one table on both sides: 0 to 100 as numbers ("21" is "twenty one") and 1000 to 2099 as years ("1999" is "nineteen ninety nine", "2007" is "two thousand seven"). Any other number, such as 345 or 12000, stays as digits, so a speaker reading "1999" as "one thousand nine hundred ninety nine" shows as a mismatch. The score is the share of words that line up (difflib's ratio over the two word lists, 100% for word for word). The tab lists the clips below "Flag below", default 0.92, worst first, with the clip's character and first words, the score, and the first difference: <code>dropped: 'the old mill'</code> for words in the text that weren't heard, <code>added: 'to'</code> for a repeat or a word Whisper made up, <code>changed: 'mill' heard as 'meal'</code>. The threshold is a program setting and applies at once to results already in.</p>
+            <p>Clicking a row selects the clip, puts the transcript caret on its first line and moves the playhead to its start. Regenerate makes a new take. Mark OK takes the clip off the list until it is regenerated and proofed again, and is not undoable because it isn't project data. Needs rewrite sets the clip's status to Needs rewrite, which also takes it off the list, and is one undo step. A flagged block on the timeline has a small purple triangle in its bottom-left corner.</p>
+            <p>Results are kept per clip with the segment keys they were scored on, so a regenerate or an edit that changes a segment makes the result disappear by itself. They live in <code>session.json</code> in the project's working folder, are never written into the <code>.tbaw</code>, and come back when you reopen the same file on the same machine. Opening the file elsewhere starts with none. Whisper's heard words are also kept per file for the session, so Align words and a second proof of the same clip don't transcribe it twice. Proofing needs no generation queue, but Whisper on a whole book takes a while, so proof a chapter at a time.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Importing books</h3>
         <ul class="change-list">
           <li>

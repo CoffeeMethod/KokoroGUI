@@ -112,6 +112,8 @@ def test_all_panels_are_docks_in_the_grid(qt_app):
     tabbed = qt_app.tabifiedDockWidgets(qt_app.settings_dock)
     assert qt_app.fx_dock in tabbed and qt_app.lexicon_dock in tabbed
     assert qt_app.outline_dock in tabbed and qt_app.outline_dock.windowTitle() == "Outline"
+    assert qt_app.proof_dock in tabbed and qt_app.proof_dock.windowTitle() == "Proof"
+    assert qt_app.proof_dock.objectName() == "dock_proof"
     assert qt_app.mixing_dock in tabbed  # Kokoro -> Mixing behind the "Voices" tab
     assert qt_app.mixing_dock.windowTitle() == "Voices"
     assert qt_app.mixing_dock.objectName() == "dock_voices"
