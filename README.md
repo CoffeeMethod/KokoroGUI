@@ -54,7 +54,7 @@ Unreleased:
     prompt before closing mid-generate
 -   Split a clip in two at the playhead and join two clips back, from Edit, the block menu or `S`
 -   Keys for the transport and timeline (arrows, Home, End, J/K/L, Delete, Ctrl+G, Esc) that work only with the timeline
-    focused, with Ctrl+Alt versions for any panel, and a Snap to grid button that also snaps to markers
+    focused, with Ctrl+Alt versions of the arrows, Home and End for any panel, and a Snap to grid button that also snaps to markers
 -   Edit > Remove Filler Words finds um, uh and the like in a recording, lets you check each one and play it, and cuts them in one undo step
 -   Export can normalize to a LUFS target, File > Measure Loudness reports a mix, and the transport has a level meter
 -   The Export dialog has tabs, an MP3 bitrate, a sample rate and a filename template, and asks before it overwrites a file
@@ -77,6 +77,8 @@ Unreleased:
     a whole-word rule for every answer you type
 -   Options > Spellcheck underlines words the dictionary doesn't know, in the language of each clip's character
 -   The window says FX, Character, Reference, Mix and stale where it said FX Preset, Preset, voice reference, custom voice and dirty
+-   Playback runs at 0.5x to 2x with the voices keeping their pitch (a speed box in the transport, `[` and `]`, and `L`
+    steps 1x, 1.5x, 2x), `M` drops a flag at the playhead with an optional note, and `N` jumps to the next flag
 
 In 4.0.0-beta.2:
 

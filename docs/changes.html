@@ -319,13 +319,16 @@
         <ul class="change-list">
           <li>
             <h4>A keyboard map for the transport and the timeline</h4>
-            <p>The arrow keys, Home, End and the letters would all type or move the caret in the transcript, so a plain key only works while the timeline has the focus (click it first). Each has a Ctrl+Alt version that works in any panel, including the transcript. Space and Ctrl+Space still play and pause, and the Help &gt; Keyboard Shortcuts sheet lists every row under Transport, Timeline and Generate.</p>
+            <p>The arrow keys, Home, End and the letters would all type or move the caret in the transcript, so a plain key only works while the timeline has the focus (click it first). The arrows, Home and End have a Ctrl+Alt version that works in any panel, including the transcript. The letters and brackets don't, because on a layout where AltGr counts as Ctrl+Alt the twin would swallow a typed character. Space and Ctrl+Space still play and pause, and the Help &gt; Keyboard Shortcuts sheet lists every row under Transport, Timeline and Generate.</p>
             <div class="table-wrap">
               <table class="ref">
                 <thead><tr><th>Action</th><th>Timeline focused</th><th>Any panel</th></tr></thead>
                 <tbody>
                   <tr><td>Play / pause</td><td>Space</td><td>Ctrl+Space</td></tr>
                   <tr><td>Play, pause, jump back 5 s</td><td>L, K, J</td><td>none</td></tr>
+                  <tr><td>Playback speed up / down a step</td><td>] / [</td><td>none</td></tr>
+                  <tr><td>Drop a flag at the playhead</td><td>M</td><td>none</td></tr>
+                  <tr><td>Previous / next flag</td><td>Shift+N / N</td><td>none</td></tr>
                   <tr><td>Stop and return to start</td><td>Home</td><td>Ctrl+Alt+Home</td></tr>
                   <tr><td>Go to end</td><td>End</td><td>Ctrl+Alt+End</td></tr>
                   <tr><td>Previous / next clip start</td><td>Left / Right</td><td>Ctrl+Alt+Left / Right</td></tr>
@@ -339,7 +342,7 @@
                 </tbody>
               </table>
             </div>
-            <p>The transport can't play backwards or faster yet, so J jumps back 5 seconds and L only plays. A jump to the previous clip from the first clip goes to 0, and a jump to a marker that isn't there says so in the status line. Delete only removes a music bed (its transcript line goes with it, one undo step); on a speech clip it does nothing, because removing the clip would remove its text. Ctrl+G does nothing while a job runs, and Esc is armed only while a generate runs, so it reaches the transcript and dialogs the rest of the time.</p>
+            <p>The transport can't play backwards, so J jumps back 5 seconds. A jump to the previous clip from the first clip goes to 0, and a jump to a marker that isn't there says so in the status line. Delete only removes a music bed (its transcript line goes with it, one undo step); on a speech clip it does nothing, because removing the clip would remove its text. Ctrl+G does nothing while a job runs, and Esc is armed only while a generate runs, so it reaches the transcript and dialogs the rest of the time.</p>
           </li>
           <li>
             <h4>Snap to grid, and snapping to markers</h4>
@@ -355,6 +358,21 @@
             <h4>Reopening a project returns you to where you left off</h4>
             <p>The playhead, the timeline zoom and scroll, the transcript scroll and the selected clip are written to the project's <code>session.json</code>, which is never part of the <code>.tbaw</code>. They are saved two seconds after a zoom or selection change, when you close the project, and when you close the window. Open restores them. A value that is missing or damaged is skipped, and a selected clip that no longer exists is ignored.</p>
             <p>The saved view comes back while the project's working folder under <code>cache/projects/</code> still exists, which is when you relaunch on the last project. Opening or creating a different project deletes the folders of the other closed projects, and their saved view goes with them. Only the root project is remembered; nothing is written while a subproject is open on the timeline.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Listen-through</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Playback at 0.5x to 2x, with the pitch unchanged</h4>
+            <p>A speed box after the Loop button sets the playback speed to 0.5x, 0.75x, 1x, 1.25x, 1.5x, 1.75x or 2x. With the timeline focused, <code>]</code> and <code>[</code> step it up and down, and <code>L</code> plays and then, while playing, steps through 1x, 1.5x and 2x. A voice keeps its pitch at every speed. The playhead, the timeline and the highlighted word still follow the audio, and the transcript scrolls to the clip being read.</p>
+            <p>The stretch is a streaming WSOLA in numpy (<code>kokoro_gui/audio/stretch.py</code>), so it adds no dependency. It cuts 30 ms grains out of the mix and lines each one up with the one before, within 10 ms, by cross-correlation. A 1024-frame block at 2x takes about 0.15 ms where it was measured, against 6 ms for <code>pedalboard.time_stretch</code> on the same block, which also leaves a seam at every block edge. At 1x the output is sample for sample what it was before. Speed is playback only: Export, Measure Loudness and stems never see it. It is kept with your settings as <code>playback_rate</code>, not in the project, and a damaged value falls back to 1x. A loop region and Loop wrap the same way at any speed. A seek, a speed change or a pause restarts the stretch at the playhead, and a clip that finishes generating mid-play becomes audible within about a tenth of a second.</p>
+          </li>
+          <li>
+            <h4>Flags: <code>M</code> to drop one, <code>N</code> to find the next</h4>
+            <p>With the timeline focused, <code>M</code> drops a marker named "Flag 1", "Flag 2" and so on at the playhead, as one undo step, and opens a small note field. Playback keeps running. Enter stores the note (a second undo step), Esc keeps the flag without one, and a click elsewhere keeps what you typed. <code>N</code> and <code>Shift+N</code> seek to the next and previous flag, which is a marker with a note or one whose name starts with "Flag". Shift+Left and Shift+Right still visit every marker. A flag is an ordinary marker, so it shows on the ruler, can be renamed and moved there, and is saved with the project as before. Nothing new is written to the <code>.tbaw</code>.</p>
           </li>
         </ul>
       </div>
