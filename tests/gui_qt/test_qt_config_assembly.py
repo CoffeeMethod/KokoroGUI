@@ -328,3 +328,80 @@ def test_migrating_an_old_dict_lexicon_stales_no_clip(qt_app, tmp_path):
     qt_app.settings["lexicon"] = migrated
 
     assert qt_app.document.dirty_clips() == []
+
+
+def _title_and_body(qt_app):
+    text = "Chapter One\n\nIt began here."
+    qt_app.document.text = text
+    character = qt_app.document.characters[0]
+    title = qt_app.document.assign_character_to_range(0, 11, character.id)
+    body = qt_app.document.assign_character_to_range(13, len(text), character.id)
+    return title, body
+
+
+def test_heading_speed_multiplies_the_heading_clips_speed_only(qt_app):
+    title, body = _title_and_body(qt_app)
+    base = qt_app._assemble_generation_config(title)["speed"]
+    assert qt_app._assemble_generation_config(body)["speed"] == base
+    qt_app.document.settings["heading_speed"] = 0.8
+    assert qt_app._assemble_generation_config(title)["speed"] == round(base * 0.8, 4)
+    assert qt_app._assemble_generation_config(body)["speed"] == base
+    # The clip-level config the generate path builds carries the same speed.
+    assert qt_app._assemble_clip_config(title)["speed"] == round(base * 0.8, 4)
+    # 1.0 means off.
+    qt_app.document.settings["heading_speed"] = 1.0
+    assert qt_app._assemble_generation_config(title)["speed"] == base
+
+
+def test_heading_speed_applies_on_top_of_the_clips_own_speed(qt_app):
+    title, _body = _title_and_body(qt_app)
+    title.overrides["speed"] = 1.5
+    qt_app.document.settings["heading_speed"] = 0.5
+    assert qt_app._assemble_generation_config(title)["speed"] == 0.75
+
+
+def test_changing_heading_speed_restales_the_heading_once(qt_app, tmp_path):
+    from kokoro_gui.daw.dirty import build_segments_from_results, compute_expected_cache_hash
+
+    title, body = _title_and_body(qt_app)
+    for i, clip in enumerate((title, body)):
+        path = tmp_path / f"seg{i}.wav"
+        path.write_bytes(b"RIFF")
+        clip_text = qt_app.document.clip_text(clip)
+        key = compute_expected_cache_hash(clip_text, qt_app._assemble_generation_config(clip),
+                                          key_fn=qt_app.document.segment_key_fn, clip=clip)
+        clip.segments = build_segments_from_results(key, [{
+            "text": clip_text, "path": str(path), "duration": 1.0, "cache_key": key,
+        }])
+    assert qt_app.document.dirty_clips() == []
+
+    qt_app.document.settings["heading_speed"] = 0.9
+    assert qt_app.document.dirty_clips() == [title]
+    qt_app.document.settings["heading_speed"] = 1.0
+    assert qt_app.document.dirty_clips() == []
+
+
+def test_a_clip_that_becomes_the_first_one_picks_up_the_heading_speed(qt_app, tmp_path):
+    from kokoro_gui.daw.dirty import build_segments_from_results, compute_expected_cache_hash
+
+    text = "It began here.\n\nChapter Two"
+    qt_app.document.text = text
+    character = qt_app.document.characters[0]
+    first = qt_app.document.assign_character_to_range(0, 14, character.id)
+    second = qt_app.document.assign_character_to_range(16, len(text), character.id)
+    qt_app.document.settings["heading_speed"] = 0.9
+    for i, clip in enumerate((first, second)):
+        path = tmp_path / f"seg{i}.wav"
+        path.write_bytes(b"RIFF")
+        clip_text = qt_app.document.clip_text(clip)
+        key = compute_expected_cache_hash(clip_text, qt_app._assemble_generation_config(clip),
+                                          key_fn=qt_app.document.segment_key_fn, clip=clip)
+        clip.segments = build_segments_from_results(key, [{
+            "text": clip_text, "path": str(path), "duration": 1.0, "cache_key": key,
+        }])
+    assert qt_app.document.dirty_clips() == []
+
+    # Deleting the first paragraph makes "Chapter Two" the first clip, so it
+    # now reads as the heading: its text didn't change, its key does.
+    qt_app.document.replace_text(0, 16, 0, "Chapter Two")
+    assert qt_app.document.dirty_clips() == [second]

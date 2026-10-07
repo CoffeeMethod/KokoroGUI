@@ -47,7 +47,7 @@ from kokoro_gui.daw.migration import import_presets_to_library, link_exact_match
 from kokoro_gui.daw import fit as fit_ops, markers as marker_ops, segment_view, subtitles
 from kokoro_gui.daw.derived import StaleCacheError
 from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character, Document
-from kokoro_gui.daw.arrangement import compute_arrangement, segment_timeline
+from kokoro_gui.daw.arrangement import compute_arrangement, heading_clip_id, heading_speed, segment_timeline
 from kokoro_gui.daw.mixplan import clip_mixes
 from kokoro_gui.daw.imported import segment_plays
 from kokoro_gui.daw.auto_split import plan_auto_split_clips, plan_pause_gaps, plan_tag_fx
@@ -1641,6 +1641,10 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, QMainWindow):
         variant_voice = self._variant_voice(clip, project)
         if variant_voice:
             config["voice"] = variant_voice
+        factor = heading_speed(project.document)
+        if factor != 1.0 and heading_clip_id(project.document) == clip.id:
+            # A chapter title reads at its own pace (the project's `heading_speed`).
+            config["speed"] = round(float(config.get("speed", 1.0) or 1.0) * factor, 4)
         config["project_dir"] = project.project_dir
         config["take"] = int(clip.overrides.get("take", 0) or 0)
         return config
@@ -1771,9 +1775,12 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, QMainWindow):
         About 15 us, so the tracker asks on every read."""
         if self.settings_dock is None:
             return None
+        document = project.document
+        heading = heading_clip_id(document) if heading_speed(document) != 1.0 else None
         return json.dumps([self.settings_dock.get_state(), self.settings.get("lexicon"),
                            self.settings.get("engines"), self.settings.get("default_engine"),
-                           project.project_dir, sorted(self._backends)],
+                           project.project_dir, sorted(self._backends),
+                           heading_speed(document), heading],
                           sort_keys=True, default=str)
 
     def _dirty_check_config(self, clip, project=None) -> dict:
