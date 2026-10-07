@@ -115,6 +115,19 @@ def test_gap_before_names_where_the_silence_comes_from():
     assert segment_view.gap_before(doc, fourth) == ("time", 62.3)
 
 
+def test_gap_before_names_the_pacing_rules_and_overlap():
+    doc, alice = _doc("Chapter One\n\nOne. Two. Three.")
+    title = doc.assign_character_to_range(0, 11, alice.id)
+    body = doc.assign_character_to_range(13, 18, alice.id)
+    after = doc.assign_character_to_range(19, 29, alice.id)
+    doc.settings.update({"gap_s": 0.35, "paragraph_gap_s": 0.9, "heading_gap_after_s": 1.2})
+    assert segment_view.gap_before(doc, title) == ("first", 0.0)
+    assert segment_view.gap_before(doc, body) == ("heading", 1.2)
+    assert segment_view.gap_before(doc, after) == ("clip", 0.35)
+    after.overrides["overlap_s"] = 0.3
+    assert segment_view.gap_before(doc, after) == ("overlap", 0.3)
+
+
 def test_estimated_length_uses_the_learned_rate():
     doc, alice = _doc("x" * 30)
     clip = doc.assign_character_to_range(0, 30, alice.id)

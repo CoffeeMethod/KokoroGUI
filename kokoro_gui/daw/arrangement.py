@@ -18,9 +18,19 @@ previous clip in text order ended - across every track, so the default is
 one continuous read-through no matter how many lanes there are.
 
 The gap is the clip's own `gap_before_s` when set (a `[pause:x]` marker
-sets it), else `document.settings["paragraph_gap_s"]` when the text between
-the two clips holds a blank line, else `document.settings["gap_s"]`. The
-first clip gets only its own override. A pinned clip ignores gaps.
+sets it), else `chapter_gap_s` when the clip is a subproject (default: the
+paragraph gap), else `heading_gap_after_s` when the clip before it is the
+document's heading (default 1.2 s), else `paragraph_gap_s` when the text
+between the two clips holds a blank line, else `gap_s`. With `gap_jitter_s`
+set, a speaker change draws its `gap_s` from that range instead
+(`gap_jitter_range`). The first clip gets only its own override. A pinned
+clip ignores gaps.
+
+A clip with `overrides["overlap_s"]` (`[Sam, overlap:0.3]:`) instead starts
+that many seconds before the clip before it ends, so a backchannel lands
+over the end of the line it answers. The read-through cursor stays at the
+later of the two ends, so the line after a short backchannel doesn't move
+back in time.
 A music bed placed by timestamp (`Clip.is_bed`, phase 5 P2) doesn't move
 the read-through: the clip after it in text order follows the clip before
 it, so a bed under the whole episode doesn't push new lines to its end. A
@@ -39,6 +49,8 @@ timestamp after its old end moves by the difference, except a clip with
 """
 from __future__ import annotations
 
+import hashlib
+import random
 import re
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -52,6 +64,13 @@ FALLBACK_CHARS_PER_SECOND = 15.0
 OVERLAP_EPSILON_S = 1e-3
 DEFAULT_GAP_S = 0.35
 DEFAULT_PARAGRAPH_GAP_S = 0.9
+DEFAULT_HEADING_GAP_S = 1.2
+# A heading is one line of at most this many words that doesn't end like a sentence.
+HEADING_MAX_WORDS = 12
+_HEADING_ENDINGS = (".", "!", "?", ",", ";")
+# `Clip.overrides` key for the overlap, in seconds, and its upper limit.
+OVERLAP_KEY = "overlap_s"
+OVERLAP_MAX_S = 5.0
 # A blank line, whitespace-only lines included.
 _PARAGRAPH_BREAK = re.compile(r"\n[ \t\r\f\v]*\n")
 
@@ -147,21 +166,114 @@ def is_paragraph_break(between: str) -> bool:
     return bool(_PARAGRAPH_BREAK.search(between))
 
 
-def boundary_gap_s(document, text: str, previous_end: Optional[int], clip, extent_start: int) -> float:
-    """The silence placed before `clip`: its `gap_before_s` override, else
-    the paragraph or clip gap depending on the text between the previous
-    clip's extent end and this one's start. `previous_end=None` means this
-    is the first clip, which has no default gap."""
+def is_heading_text(text: str) -> bool:
+    """Whether `text` reads as a chapter title: one line of at most
+    `HEADING_MAX_WORDS` words, tags and markers aside, that doesn't end in
+    `.`, `!`, `?`, `,` or `;`."""
+    line = strip_markup(text or "").strip()
+    if not line or "\n" in line or len(line.split()) > HEADING_MAX_WORDS:
+        return False
+    return not line.endswith(_HEADING_ENDINGS)
+
+
+def heading_clip_id(document) -> Optional[str]:
+    """The id of the document's heading clip, or None: its first clip in
+    the text, when that is a generated clip whose text `is_heading_text`
+    (a chapter title as the import wizard or New from eBook leaves it)."""
+    index = document.index()
+    first_id = next(iter(index.extents), None)
+    clip = index.clips.get(first_id) if first_id is not None else None
+    if clip is None or clip.source != "generated":
+        return None
+    return clip.id if is_heading_text(document.clip_text(clip)) else None
+
+
+def is_heading(document, clip) -> bool:
+    """Whether `clip` is the document's heading (`heading_clip_id`)."""
+    return heading_clip_id(document) == clip.id
+
+
+def heading_speed(document) -> float:
+    """`document.settings["heading_speed"]`, the factor a heading clip's
+    speed is multiplied by; 1.0 (off) when unset or not a positive number."""
+    try:
+        value = float((document.settings or {}).get("heading_speed", 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+    return value if value > 0 else 1.0
+
+
+def gap_jitter_range(document) -> Optional[tuple]:
+    """`(min, max)` seconds from `document.settings["gap_jitter_s"]`, or
+    None (off) when it is unset or not two non-negative numbers. A reversed
+    pair is put in order."""
+    value = (document.settings or {}).get("gap_jitter_s")
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    try:
+        low, high = float(value[0]), float(value[1])
+    except (TypeError, ValueError):
+        return None
+    if low < 0 or high < 0:
+        return None
+    return (min(low, high), max(low, high))
+
+
+def jitter_gap_s(clip_id: str, low: float, high: float) -> float:
+    """A gap in `[low, high]` drawn from a generator seeded by the clip id.
+    `hashlib`, not `hash()`, which is salted per process: the same clip gets
+    the same gap on every run and every machine."""
+    seed = int.from_bytes(hashlib.sha256(str(clip_id).encode("utf-8")).digest()[:8], "big")
+    return random.Random(seed).uniform(low, high)
+
+
+def overlap_s(clip) -> Optional[float]:
+    """`clip.overrides["overlap_s"]` clamped to `0..OVERLAP_MAX_S`, or None
+    when the clip has none or it isn't a number."""
+    value = (getattr(clip, "overrides", None) or {}).get(OVERLAP_KEY)
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return min(OVERLAP_MAX_S, max(0.0, float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def boundary_gap(document, text: str, previous_end: Optional[int], clip, extent_start: int,
+                 previous=None, heading_id: Optional[str] = None) -> tuple:
+    """`(kind, seconds)` for the silence placed before `clip`. In order: its
+    `gap_before_s` ("override"); nothing for the first clip ("first", when
+    `previous_end` is None); `chapter_gap_s` for a subproject ("chapter");
+    `heading_gap_after_s` when `previous` is the heading, `heading_id`
+    (`heading_clip_id`) ("heading"); the paragraph gap across a blank line
+    ("paragraph"); a draw from `gap_jitter_s` when the speaker changes from
+    `previous` ("jitter"); else `gap_s` ("clip"). Without `previous` the
+    heading and jitter rules are skipped."""
     if clip.gap_before_s is not None:
         try:
-            return max(0.0, float(clip.gap_before_s))
+            return "override", max(0.0, float(clip.gap_before_s))
         except (TypeError, ValueError):
             pass
     if previous_end is None:
-        return 0.0
+        return "first", 0.0
+    paragraph = _setting_s(document, "paragraph_gap_s", DEFAULT_PARAGRAPH_GAP_S)
+    if clip.is_nested:
+        return "chapter", _setting_s(document, "chapter_gap_s", paragraph)
+    if previous is not None and heading_id is not None and previous.id == heading_id:
+        return "heading", _setting_s(document, "heading_gap_after_s", DEFAULT_HEADING_GAP_S)
     if is_paragraph_break(text[previous_end:extent_start]):
-        return _setting_s(document, "paragraph_gap_s", DEFAULT_PARAGRAPH_GAP_S)
-    return _setting_s(document, "gap_s", DEFAULT_GAP_S)
+        return "paragraph", paragraph
+    if previous is not None and previous.character_id != clip.character_id:
+        jitter = gap_jitter_range(document)
+        if jitter is not None:
+            return "jitter", jitter_gap_s(clip.id, *jitter)
+    return "clip", _setting_s(document, "gap_s", DEFAULT_GAP_S)
+
+
+def boundary_gap_s(document, text: str, previous_end: Optional[int], clip, extent_start: int,
+                   previous=None, heading_id: Optional[str] = None) -> float:
+    """The seconds of `boundary_gap`."""
+    return boundary_gap(document, text, previous_end, clip, extent_start, previous, heading_id)[1]
 
 
 def align_onset_enabled(document) -> bool:
@@ -259,9 +371,13 @@ def compute_arrangement(document, engine_id: Optional[str] = None,
     with_extent.sort(key=lambda item: item[0])
 
     text = document.text
+    heading_id = heading_clip_id(document)
+    heading_factor = heading_speed(document)
     placed = []
     cursor = 0.0
     previous_end = None
+    previous = None
+    previous_placed = None
     for extent_start, extent_end, clip in with_extent:
         audio_duration = clip_duration(clip)
         if audio_duration is not None:
@@ -273,25 +389,42 @@ def compute_arrangement(document, engine_id: Optional[str] = None,
                 duration = float(better)
             else:
                 config = document.effective_config_for_clip(clip)
-                duration = estimate_duration_s(document.clip_text(clip), config.get("speed", 1.0), chars_per_second)
+                speed = config.get("speed", 1.0)
+                if clip.id == heading_id and heading_factor != 1.0:
+                    try:
+                        speed = float(speed) * heading_factor
+                    except (TypeError, ValueError):
+                        speed = heading_factor
+                duration = estimate_duration_s(document.clip_text(clip), speed, chars_per_second)
             estimated = True
         aligned = 0.0
+        overlap = None
         if clip.timeline_timestamp is not None:
             start = clip.timeline_timestamp
             if align and not estimated and getattr(clip, "pinned", False):
                 aligned = _aligned_onset_s(document, clip, duration, clip_post_config)
                 start = float(start) - aligned
         else:
-            start = cursor + boundary_gap_s(document, text, previous_end, clip, extent_start)
+            if previous_placed is not None:
+                overlap = overlap_s(clip)
+            if overlap is not None:
+                start = previous_placed.start_s + max(0.0, previous_placed.duration_s - overlap)
+            else:
+                start = cursor + boundary_gap_s(document, text, previous_end, clip, extent_start,
+                                                previous, heading_id)
         start = max(0.0, float(start))
-        placed.append(PlacedClip(clip=clip, start_s=start, duration_s=duration, estimated=estimated,
-                                 aligned_onset_s=aligned))
+        item = PlacedClip(clip=clip, start_s=start, duration_s=duration, estimated=estimated,
+                          aligned_onset_s=aligned)
+        placed.append(item)
         if getattr(clip, "is_bed", False) and clip.timeline_timestamp is not None:
             # A bed placed in time runs under the read-through; the next
             # clip follows the one before the bed.
             continue
-        cursor = start + duration
+        # A clip laid over the one before it never pulls the cursor back.
+        cursor = start + duration if overlap is None else max(cursor, start + duration)
         previous_end = extent_end
+        previous = clip
+        previous_placed = item
 
     total = max((p.end_s for p in placed), default=0.0)
     return Arrangement(placed=placed, total_duration_s=total)

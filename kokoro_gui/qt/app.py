@@ -2142,11 +2142,15 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, QMainWindow):
         kind, seconds = gap
         if kind == "time":
             return f"at {segment_view.format_length(seconds)}"
+        if kind == "overlap":
+            return f"overlap {seconds:.2f} s"
         text = f"gap {seconds:.2f} s"
         if kind == "paragraph":
             text += " ¶"
         elif kind == "override":
             text += " (set)"
+        elif kind in ("chapter", "heading"):
+            text += f" ({kind})"
         return text
 
     def _voice_label(self, clip) -> str:

@@ -16,7 +16,7 @@ def _doc(text, tagged, **kwargs):
     if cursor < len(text):
         runs.append(Run(text=text[cursor:]))
     # These tests are about order and length; gaps have their own tests.
-    kwargs.setdefault("settings", {"gap_s": 0.0, "paragraph_gap_s": 0.0})
+    kwargs.setdefault("settings", {"gap_s": 0.0, "paragraph_gap_s": 0.0, "heading_gap_after_s": 0.0})
     return Document(runs=runs, clips=[c for _s, _e, c in tagged], **kwargs)
 
 
@@ -151,14 +151,15 @@ def _two_clips(text, split, **settings):
 def test_default_gap_between_clips():
     from kokoro_gui.daw.arrangement import DEFAULT_GAP_S
 
-    doc, first, second = _two_clips("x" * 10 + " " + "y" * 10, (10, 11))
+    # The first line ends in a full stop, so it isn't a heading.
+    doc, first, second = _two_clips("x" * 9 + ". " + "y" * 10, (10, 11))
     arr = compute_arrangement(doc, chars_per_second=10.0)
     assert arr.placed[0].start_s == 0.0
     assert arr.placed[1].start_s == 1.0 + DEFAULT_GAP_S
 
 
 def test_paragraph_gap_across_a_blank_line():
-    doc, _first, _second = _two_clips("x" * 10 + "\n  \n" + "y" * 10, (10, 14), gap_s=0.1, paragraph_gap_s=2.0)
+    doc, _first, _second = _two_clips("x" * 9 + ".\n  \n" + "y" * 10, (10, 14), gap_s=0.1, paragraph_gap_s=2.0)
     arr = compute_arrangement(doc, chars_per_second=10.0)
     assert arr.placed[1].start_s == 3.0
 
