@@ -44,7 +44,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMainWindow, Q
 
 from kokoro_gui.daw import library as character_library, revision, wordalign
 from kokoro_gui.daw.migration import import_presets_to_library, link_exact_matches
-from kokoro_gui.daw import fit as fit_ops, segment_view, subtitles
+from kokoro_gui.daw import fit as fit_ops, markers as marker_ops, segment_view, subtitles
 from kokoro_gui.daw.derived import StaleCacheError
 from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character, Document
 from kokoro_gui.daw.arrangement import compute_arrangement, segment_timeline
@@ -70,8 +70,9 @@ from kokoro_gui.qt import settings as qt_settings
 from kokoro_gui.qt.open_projects import OpenProject
 from kokoro_gui.qt.reveal import reveal
 from kokoro_gui.qt.about_dialog import (
-    SHORTCUT_DESCRIPTION_PROPERTY, AboutDialog, ShortcutsDialog, device_summary,
+    SHORTCUT_DESCRIPTION_PROPERTY, SHORTCUT_GROUP_PROPERTY, AboutDialog, ShortcutsDialog, device_summary,
 )
+from kokoro_gui.qt import keymap
 from kokoro_gui.qt import recording_import, resume_view
 from kokoro_gui.qt.subprojects import ParentStore, SubprojectsMixin
 from kokoro_gui.qt.selection import SelectionModel
@@ -1287,23 +1288,33 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         return [d for d in docks if d is not None]
 
     def _build_shortcuts(self) -> None:
-        # UI12: plain Space toggles playback anywhere the focus widget
-        # doesn't claim it (the editor and line edits accept it as text via
-        # ShortcutOverride); Ctrl+Space always toggles.
-        self.space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
-        self.space_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
-        self.space_shortcut.activated.connect(self.transport.toggle)
-        self.space_shortcut.setProperty(SHORTCUT_DESCRIPTION_PROPERTY, "Play / pause")
-        self.ctrl_space_shortcut = QShortcut(QKeySequence("Ctrl+Space"), self)
-        self.ctrl_space_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        self.ctrl_space_shortcut.activated.connect(self.transport.toggle)
-        self.ctrl_space_shortcut.setProperty(SHORTCUT_DESCRIPTION_PROPERTY, "Play / pause (works in any panel)")
-        # A plain letter, so only while the timeline has the focus: typing an
-        # "s" in the transcript or a field never reaches it.
-        self.split_shortcut = QShortcut(QKeySequence("S"), self.timeline_dock.timeline_widget)
-        self.split_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.split_shortcut.activated.connect(self.split_clip_at_playhead)
-        self.split_shortcut.setProperty(SHORTCUT_DESCRIPTION_PROPERTY, "Split clip at playhead (timeline focused)")
+        """One `QShortcut` per row of `keymap.KEYS`, kept as
+        `self.<id>_shortcut` so the Keyboard Shortcuts sheet lists it. A
+        plain key is on the timeline view, so it never fires (or types)
+        while the focus is in the transcript or a field; a Ctrl key is
+        application-wide; Space is window-wide and the editor claims it as
+        text first (UI12); Esc stays off until a generate runs."""
+        contexts = {
+            keymap.WINDOW: (self, Qt.ShortcutContext.WindowShortcut),
+            keymap.APP: (self, Qt.ShortcutContext.ApplicationShortcut),
+            keymap.TIMELINE: (self.timeline_dock.timeline_view, Qt.ShortcutContext.WidgetWithChildrenShortcut),
+        }
+        self._key_shortcuts = []
+        for binding in keymap.KEYS:
+            parent, context = contexts[binding.scope]
+            shortcut = QShortcut(QKeySequence(binding.sequence), parent)
+            shortcut.setContext(context)
+            shortcut.activated.connect(getattr(self, binding.slot_name))
+            shortcut.setProperty(SHORTCUT_DESCRIPTION_PROPERTY, binding.label)
+            shortcut.setProperty(SHORTCUT_GROUP_PROPERTY, binding.group)
+            shortcut.setEnabled(not binding.while_generating)
+            setattr(self, f"{binding.id}_shortcut", shortcut)
+            self._key_shortcuts.append((binding, shortcut))
+
+    def _arm_generate_keys(self, generating: bool) -> None:
+        for binding, shortcut in getattr(self, "_key_shortcuts", ()):
+            if binding.while_generating:
+                shortcut.setEnabled(generating)
 
     # --- status helpers ---------------------------------------------------
 
@@ -3583,6 +3594,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def set_ui_state(self, is_running: bool) -> None:
         self._generating = is_running
+        self._arm_generate_keys(is_running)
         if not is_running and self._close_after_cancel:
             # The cancelled generate is done: finish closing once its
             # handler has applied the clips that did finish.
@@ -3867,6 +3879,95 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         for backend in self._backends.values():
             backend.cancel()
         self.set_status("Cancelling... waiting for workers...", "warning")
+
+    # --- keyboard map slots (keymap.KEYS) ---------------------------------
+
+    def toggle_playback(self) -> None:
+        self.transport.toggle()
+
+    def play_key(self) -> None:
+        if not self.transport.is_playing:
+            self.transport.play()
+
+    def pause_key(self) -> None:
+        self.transport.pause()
+
+    def jump_back_key(self) -> None:
+        """J: the transport can't play backwards, so it jumps back
+        `keymap.JUMP_BACK_S` and keeps its state."""
+        self.transport.seek(max(0.0, self.transport.position() - keymap.JUMP_BACK_S))
+
+    def go_to_start(self) -> None:
+        self.transport.stop()
+
+    def go_to_end(self) -> None:
+        self.transport.seek(self.transport.duration())
+
+    def _clip_start_times(self) -> list:
+        return sorted({placed.start_s for placed in self.current_arrangement().placed})
+
+    def _marker_times(self) -> list:
+        return [marker["seconds"] for marker in marker_ops.list_markers(self.level.document.settings)]
+
+    def go_to_previous_clip(self) -> None:
+        """Seeks to the start of the clip before the playhead; from the first
+        clip it goes to 0."""
+        now = self.transport.position()
+        target = keymap.previous_time(self._clip_start_times(), now)
+        if target is None and now > keymap.JUMP_EPSILON_S:
+            target = 0.0
+        if target is not None:
+            self.transport.seek(target)
+
+    def go_to_next_clip(self) -> None:
+        target = keymap.next_time(self._clip_start_times(), self.transport.position())
+        if target is not None:
+            self.transport.seek(target)
+
+    def go_to_previous_marker(self) -> None:
+        target = keymap.previous_time(self._marker_times(), self.transport.position())
+        if target is None:
+            self.set_status("No marker before the playhead.", "warning")
+        else:
+            self.transport.seek(target)
+
+    def go_to_next_marker(self) -> None:
+        target = keymap.next_time(self._marker_times(), self.transport.position())
+        if target is None:
+            self.set_status("No marker after the playhead.", "warning")
+        else:
+            self.transport.seek(target)
+
+    def zoom_timeline_to_fit(self) -> None:
+        self.timeline_dock.timeline_view.zoom_to_fit()
+
+    def toggle_snap_to_grid(self) -> None:
+        button = self.timeline_dock.snap_button
+        button.toggle()
+        self.set_status("Snap to grid on." if button.isChecked() else "Snap to grid off.")
+
+    def delete_selected_bed(self) -> bool:
+        """Delete on the timeline: removes the selected music bed (its
+        transcript line goes with it, one undo step). Any other clip stays,
+        since deleting it would delete its text."""
+        selected = self.selection.selected_clip_id
+        clip = self.level.document.get_clip(selected) if selected else None
+        if clip is None or not clip.is_bed:
+            self.set_status("Select a music bed to delete it.", "warning")
+            return False
+        self.timeline_dock.on_bed_action_requested(clip.id, "remove")
+        return True
+
+    def generate_stale_key(self) -> None:
+        """Ctrl+G: the Generate button's action, unless a job is running."""
+        if self.is_busy():
+            return
+        self.on_generate_clicked()
+
+    def cancel_generate_key(self) -> None:
+        """Esc: only armed while a generate runs (`_arm_generate_keys`)."""
+        if self._generating:
+            self.cancel_conversion()
 
     # --- transport / playhead (section 5) ----------------------------------
 

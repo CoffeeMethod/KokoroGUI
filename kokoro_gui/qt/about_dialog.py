@@ -16,6 +16,7 @@ from kokoro_gui.engine import asr, runtime
 from kokoro_gui.engines import registry
 
 SHORTCUT_DESCRIPTION_PROPERTY = "description"  # set on a QShortcut to label its row in the sheet
+SHORTCUT_GROUP_PROPERTY = "group"  # set on a QShortcut to file its row under a heading other than "Other"
 
 
 def device_summary() -> str:
@@ -118,7 +119,7 @@ def _humanize(attribute: str) -> str:
 def collect_shortcuts(app) -> list[tuple[str, str, str]]:
     """(group, label, keys) for every menu-bar action with a shortcut, then
     every `QShortcut` kept as an attribute of `app`. Menus come in menu-bar
-    order; the loose shortcuts are grouped under "Other"."""
+    order; the loose shortcuts follow, under their group property or "Other"."""
     rows: list[tuple[str, str, str]] = []
     for top in app.menuBar().actions():
         menu = top.menu()
@@ -127,7 +128,8 @@ def collect_shortcuts(app) -> list[tuple[str, str, str]]:
     for attribute, value in vars(app).items():
         if isinstance(value, QShortcut) and not value.key().isEmpty():
             label = value.property(SHORTCUT_DESCRIPTION_PROPERTY) or _humanize(attribute)
-            rows.append(("Other", str(label), value.key().toString(QKeySequence.SequenceFormat.PortableText)))
+            group = value.property(SHORTCUT_GROUP_PROPERTY) or "Other"
+            rows.append((str(group), str(label), value.key().toString(QKeySequence.SequenceFormat.PortableText)))
     return rows
 
 
