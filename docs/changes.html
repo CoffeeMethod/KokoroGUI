@@ -445,6 +445,22 @@
             <p>Type a sentence under the table. "After your rules" shows it once the lexicon has run, with tags and <code>[pause:x]</code> markers removed as generation does. For Kokoro, "Kokoro reads" adds each word with the phonemes the model's pronunciation step gives it, so you can see how <code>1999</code>, <code>Dr.</code> or <code>$4.50</code> will be said before you generate. It asks a moment after you stop typing, on the engine's worker thread, and loads the pronunciation step only, never the voice model. Other engines show the first line only.</p>
             <p>Select text in the transcript and choose "How will this be read?" from the right-click menu to put it in the Test field.</p>
           </li>
+          <li>
+            <h4>Find words to check</h4>
+            <p>The Lexicon tab has a "Find words to check..." button. It reads the transcript of every open project and lists the words an engine is likely to say wrong, most frequent first: <strong>names</strong> (a capitalised word that isn't the first word of a sentence, so "Marcus" counts and the "The" that opens a line doesn't), <strong>acronyms</strong> (two or more capitals, except in a heading set all in capitals), <strong>numbers</strong> (anything with a digit, such as <code>1999</code>, <code>3rd</code>, <code>$4.50</code> or <code>B-52</code>) and, when Spellcheck has a dictionary for the language, <strong>unknown words</strong>. The checkboxes above the table filter by kind, and the table shows the 500 most frequent. Tags and <code>[pause:x]</code> markers are not read. A word the Lexicon already rewrites, and a character's name, are left out.</p>
+            <p>Type how a word should be said in its Say it as cell. <strong>Hear</strong> speaks the word's sentence with your answer applied, on the active character's voice and engine, after the rules already in the Lexicon and without saving anything. <strong>Add</strong> writes a Whole word rule, and <strong>Add all filled</strong> writes one for every row with an answer, as a single Lexicon change that marks only the clips whose text it rewrites as stale. A rule for a name or an acronym matches case, so a rule for "Will" leaves "will" alone.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Spellcheck</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Options &gt; Spellcheck underlines unknown words</h4>
+            <p>A wavy underline marks each word in the transcript that the dictionary doesn't know. It's off by default. Each clip is checked in its character's language: English (American and British share one list, so "colour" is underlined), Spanish, French, Italian and Portuguese. A language with no word list, such as Japanese or Chinese, isn't checked. Tags, pause markers, words in capitals, single letters and words stuck to a digit are skipped. The names of the project's characters and the plain words in your Lexicon rules count as known.</p>
+            <p>It uses <code>pyspellchecker</code>, a pure Python package with about 7 MB of word lists, now in <code>requirements.txt</code>. Without it the menu entry is greyed out and Find words to check leaves out unknown words. Run <code>pip install -r requirements.txt</code> after updating.</p>
+          </li>
         </ul>
       </div>
 

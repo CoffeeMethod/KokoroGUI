@@ -50,6 +50,7 @@ from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character, Document
 from kokoro_gui.daw.arrangement import compute_arrangement, heading_clip_id, heading_speed, segment_timeline
 from kokoro_gui.daw.mixplan import clip_mixes
 from kokoro_gui.daw.imported import segment_plays
+from kokoro_gui.daw import spell
 from kokoro_gui.daw.auto_split import (
     plan_auto_split_clips, plan_pause_gaps, plan_tag_fx, plan_tag_option_warnings, plan_tag_overrides,
 )
@@ -315,6 +316,7 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, QMainWindow):
         self.proof_dock: ProofDock | None = None
         self.mixing_dock: MixingDock | None = None
         self._preview_path: str | None = None
+        self._spell_cache: dict = {}  # (language, extra words) -> daw.spell.Dictionary or None
         self.voice_clone_dock: VoiceCloneDock | None = None
         self.timeline_dock: TimelineDock | None = None
         self.transport_dock: TransportDock | None = None
@@ -1094,7 +1096,18 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, QMainWindow):
             self.details_layer_actions[key] = action
         self._sync_details_actions()
 
-        self.jit_action = QAction("JIT streaming (no-clips fallback only)", self)
+        self.spellcheck_action = QAction("Spellcheck", self)
+        self.spellcheck_action.setCheckable(True)
+        self.spellcheck_action.setChecked(bool(self.settings.get("spellcheck", False)))
+        self.spellcheck_action.setToolTip("Underline words in the transcript that the dictionary doesn't know. "
+                                          "English, Spanish, French, Italian and Portuguese, by the character's language.")
+        if not spell.available():
+            self.spellcheck_action.setEnabled(False)
+            self.spellcheck_action.setToolTip("Needs the pyspellchecker package: pip install pyspellchecker")
+        self.spellcheck_action.toggled.connect(self.set_spellcheck)
+        self.options_menu.addAction(self.spellcheck_action)
+
+        self.jit_action =QAction("JIT streaming (no-clips fallback only)", self)
         self.jit_action.setCheckable(True)
         self.jit_action.setChecked(bool(self.jit_enabled))
         self.jit_action.toggled.connect(self._on_jit_toggled)
@@ -3645,27 +3658,37 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, QMainWindow):
     # --- preview -----------------------------------
 
     def preview_conversion(self) -> None:
-        if isinstance(self.backend, MissingBackend):
-            self.set_status(f"{self.backend.message}: nothing to preview with.", "warning")
-            return
-        if not self.backend.is_ready():
-            QMessageBox.information(self, "Wait", "Engine is initializing... please wait 2 seconds and try again.")
-            return
-
+        """Speaks the editor's selection (else the whole transcript, else a
+        sample line) with the active character."""
         editor = self.editor
         cursor = editor.textCursor()
         text_data = cursor.selectedText().replace(" ", "\n") if cursor.hasSelection() else editor.toPlainText().strip()
         if not text_data:
             text_data = ("This is a sample audio preview using the Koh-koh-ro Tea-Tea-S engine. "
                          "It demonstrates the voice quality and speed settings.")
-        preview_text = text_data[:1000]
+        self.preview_text(text_data[:1000])
 
-        # The active character's voice on its own engine (the selected
-        # clip's character, else the first), over the project defaults.
+    def preview_text(self, text: str, character=None, lexicon=None) -> None:
+        """Speaks `text` (up to two segments) as `character` on its own
+        engine, the active character when None, with the project's model
+        settings and FX. `lexicon` replaces the saved rules for this one
+        preview (the Find Words to Check dialog tries a rule before it is
+        added); None uses `settings["lexicon"]`. Plays when it finishes."""
+        if character is None:
+            character = self.active_character()
+        backend = self.backend_for_character(character)
+        if isinstance(backend, MissingBackend):
+            self.set_status(f"{backend.message}: nothing to preview with.", "warning")
+            return
+        if not backend.is_ready():
+            QMessageBox.information(self, "Wait", "Engine is initializing... please wait 2 seconds and try again.")
+            return
+
+        # The character's voice on its own engine (the selected clip's
+        # character, else the first), over the project defaults.
         state = dict(self.settings_dock.get_state())
-        engine = self.engine_settings(self.backend.id)
+        engine = self.engine_settings(backend.id)
         state["lang_code"], state["voice"] = engine.get("lang_code"), engine.get("voice")
-        character = self.active_character()
         if character is not None:
             for key in ("voice", "speed", "lang_code"):
                 if character.preset_data.get(key) not in (None, ""):
@@ -3675,10 +3698,10 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, QMainWindow):
             "pitch": state["pitch"],
             "normalize": state["normalize"],
             "trim_silence": state["trim_silence"],
-            "lexicon": self.settings.get("lexicon", {}),
+            "lexicon": self.settings.get("lexicon", []) if lexicon is None else lexicon,
         }
         # Preview uses the same model settings and bundled reference as clips.
-        for key, default in self._model_fields(self.backend):
+        for key, default in self._model_fields(backend):
             extra_config[key] = engine.get(key, default)
         extra_config["project_dir"] = self.project_dir
         if self.settings_dock.apply_fx_enabled():
@@ -3699,9 +3722,60 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, QMainWindow):
                 payload = f"Preview error: {e}"
             self.previewFinished.emit(success, payload)
 
-        future = self.backend.preview(preview_text, state["voice"], state["speed"], tmp_path,
-                                      extra_config, lang_code=state["lang_code"])
+        future = backend.preview(text, state["voice"], state["speed"], tmp_path,
+                                 extra_config, lang_code=state["lang_code"])
         future.add_done_callback(_done)
+
+    # --- spelling ----------------------------------------------------------
+
+    def character_lang_code(self, character) -> str | None:
+        """The language `character` speaks: its own `lang_code`, else its
+        engine's language setting."""
+        code = (character.preset_data or {}).get("lang_code") if character is not None else None
+        if code:
+            return code
+        return self.engine_settings(self.backend_for_character(character).id).get("lang_code")
+
+    def spell_dictionary_for(self, character=None):
+        """The spelling dictionary for the language `character` speaks (the
+        active character when None), with every open project's character
+        names and the lexicon's plain finds counted as known words. None
+        when `pyspellchecker` is missing or the language has no word list.
+        One dictionary is kept per language and extra-word set."""
+        if character is None:
+            character = self.active_character()
+        language = spell.language_for(self.character_lang_code(character))
+        if language is None:
+            return None
+        extra = set()
+        for project in self.open_projects():
+            extra.update(c.name for c in project.document.characters)
+        extra.update(rule["find"] for rule in normalize_rules(self.settings.get("lexicon")) if rule["mode"] != "regex")
+        key = (language, frozenset(extra))
+        cache = self._spell_cache
+        if key not in cache:
+            if len(cache) >= 6:
+                cache.clear()
+            cache[key] = spell.dictionary_for(language, extra)
+        return cache[key]
+
+    def spellcheck_dictionary(self, character=None):
+        """What the transcript underlines `character`'s words with: its
+        dictionary while Options > Spellcheck is on, else None."""
+        if not self.settings.get("spellcheck", False):
+            return None
+        return self.spell_dictionary_for(character)
+
+    def set_spellcheck(self, on: bool) -> None:
+        """Options > Spellcheck."""
+        self.settings["spellcheck"] = bool(on)
+        if self.spellcheck_action.isChecked() != bool(on):
+            self.spellcheck_action.blockSignals(True)
+            self.spellcheck_action.setChecked(bool(on))
+            self.spellcheck_action.blockSignals(False)
+        if self.editor is not None:
+            self.editor.rehighlight()
+        self.schedule_save()
 
     def _remove_preview_file(self) -> None:
         """Deletes the last preview's temp file. The next preview and

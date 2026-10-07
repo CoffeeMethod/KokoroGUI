@@ -23,4 +23,7 @@ librosa==0.11.0
 vosk
 # Whisper ASR (kokoro_gui/engine/asr.py); weights download on first use.
 faster-whisper==1.2.1
+# Spellcheck underline and the unknown-word kind in Find Words to Check; pure Python,
+# about 7 MB of word lists. Imported lazily (kokoro_gui/daw/spell.py).
+pyspellchecker==0.9.0
 python-dotenv
