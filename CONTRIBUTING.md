@@ -88,6 +88,11 @@ changes. `tests/plugins/toneclone.py` is a complete small example.
    `"embedding"` (a `.ext` file per voice, `voice_store = EmbeddingStore(id, ext)`) or
    `"reference"` (a wav and transcript per voice, `voice_store = ReferenceStore(id)`, which also
    gets you the Voice Reference editor). The store gives you voice listing and bundling.
+   Reference engines assign saved voices through Voices (Save or Use); Settings shows the
+   assignment read-only. Use `ReferenceStore(id, requires_transcript=False)` when text is
+   optional, and consume reviewed text when supplied. Override
+   `reference_transcription_duration(config)` if the model uses only an excerpt: the default
+   is `None` for the full WAV, and the editor transcribes the reported duration on its worker.
 3. Register it. In this repo, add a line to `BUILTIN_ENGINES` in `kokoro_gui/engines/__init__.py`
    and call `register_engine(...)` at the bottom of the module. As a separate package, declare an
    entry point in the `kokorogui.engines` group naming the module or the adapter class. An engine
@@ -100,8 +105,8 @@ changes. `tests/plugins/toneclone.py` is a complete small example.
 
 - `kokoro_engine.py` is Kokoro's model and engine; `kokoro_gui/engine/` is the shared synthesis
   core: the `EngineRunner`, mixins per feature area, and `runtime.py`.
-- `kokoro_gui/engines/` is the backend interface, the registry, the voice stores and the three
-  built-in backends (Kokoro, Audio8, Dummy). Nothing there imports the document model.
+- `kokoro_gui/engines/` is the backend interface, the registry, the voice stores and the built-in
+  backends (Kokoro, Audio8, LuxTTS, Dummy). Nothing there imports the document model.
 - `kokoro_gui/daw/` is the document model: text, clips, tracks, characters, arrangement, dirty
   tracking, undo.
 - `kokoro_gui/audio/` is the transport, mixer and read-time FX stage.

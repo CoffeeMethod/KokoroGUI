@@ -141,6 +141,11 @@ class SettingsDock(QDockWidget):
         engine_form.addRow(self.engine_label, self.engine_combo)
         layout.addWidget(engine_row)
 
+        self.reference_voice_label = QLabel()
+        self.reference_voice_label.setWordWrap(True)
+        self.reference_voice_label.hide()
+        layout.addWidget(self.reference_voice_label)
+
         # --- Schema-driven config (moved from GenerationDock) ---
         self.schema_group = QGroupBox("Configuration")
         self.schema_layout = QVBoxLayout(self.schema_group)
@@ -372,6 +377,11 @@ class SettingsDock(QDockWidget):
         lang_code = self.app.engine_settings(backend.id).get("lang_code")
         voice_choices = [(v, v) for v in self.app.get_all_voices(lang_code, backend=backend)]
         values = self._current_schema_values()
+        is_reference = getattr(backend, "voice_kind", None) == "reference"
+        self.reference_voice_label.setVisible(is_reference)
+        if is_reference:
+            self.reference_voice_label.setText(
+                f"Voice: {values.get('voice') or 'None selected'} (choose in Voices)")
         # "voice" is resolved here: its options depend on the language and
         # the files on disk. Every other choice list is the schema's own.
         overrides = {"voice": voice_choices}
@@ -389,7 +399,8 @@ class SettingsDock(QDockWidget):
                 # pitch control that fights the hand-built one for the same
                 # ALLOWED_PRESET_KEYS override slot in clip/character mode.
                 # Program fields are in Options > Settings....
-                skip_keys={"lexicon", "pitch", *(f.key for f in schema if spec.is_program_field(f))},
+                skip_keys={"lexicon", "pitch", *(('voice',) if is_reference else ()),
+                           *(f.key for f in schema if spec.is_program_field(f))},
                 on_change=self._on_schema_field_changed,
             )
         finally:
@@ -413,6 +424,10 @@ class SettingsDock(QDockWidget):
         self.refresh_engine_row()
 
     def refresh_voice_choices(self) -> None:
+        if getattr(self.shown_backend(), "voice_kind", None) == "reference":
+            self.reference_voice_label.setText(
+                f"Voice: {self._current_schema_values().get('voice') or 'None selected'} (choose in Voices)")
+            return
         lang_code = self.schema_form.values().get("lang_code")
         voices = self.app.get_all_voices(lang_code, backend=self.shown_backend())
         current = self.schema_form.values().get("voice")

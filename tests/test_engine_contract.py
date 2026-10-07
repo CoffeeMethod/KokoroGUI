@@ -43,9 +43,13 @@ def contract_backend(request, isolated_dirs, fake_pipeline, toneclone_plugin, mo
         from types import SimpleNamespace
         from kokoro_gui.engine.runner import EngineRunner
         from kokoro_gui.engines.luxtts import LuxTTSModel
+        from kokoro_gui.engines import luxtts
 
         fake = SimpleNamespace(encode_prompt=lambda *a, **k: {},
                                generate_speech=lambda *a, **k: _tone())
+        # Prompt conditioning is a model boundary too; the contract stays
+        # weight-free for both automatic and reviewed transcripts.
+        monkeypatch.setattr(luxtts, "_encode_prompt", lambda *a, **k: {})
         engine = EngineRunner(LuxTTSModel(loader=lambda device: fake))
     else:
         engine = registry.get_factory(engine_id).make_contract_engine()

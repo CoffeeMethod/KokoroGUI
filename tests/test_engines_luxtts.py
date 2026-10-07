@@ -177,3 +177,46 @@ def test_preview_and_clip_use_project_reference_and_model_settings(lux, tmp_path
 def test_relative_paths_do_not_escape_voice_store(lux):
     model, _, _, _ = lux
     assert model.resolve_voice_path("../outside.wav") == "outside.wav"
+
+
+def test_edited_transcript_reencodes_prompt_and_changes_segment_key(lux, monkeypatch):
+    from pathlib import Path
+
+    model, fake, _, wav = lux
+    encoder = MagicMock(return_value={"edited": True})
+    monkeypatch.setattr(luxtts, "_encode_prompt", encoder)
+    config = {"voice": wav, "lang_code": "en"}
+    backend = SimpleNamespace(id="luxtts", resolve_voice_file=model.resolve_voice_path,
+                              cache_key_extra=model.cache_key_extra, engine_version=lambda: "test")
+    first = segment_key("Hello.", config, backend)
+    model.synthesize("Hello.", wav, 1, "en", {})
+    Path(wav).with_suffix(".txt").write_text("Reviewed reference words.", encoding="utf-8")
+    assert segment_key("Hello.", config, backend) != first
+    model.synthesize("Hello.", wav, 1, "en", {})
+    assert encoder.call_count == 2
+    assert encoder.call_args.args[-1] == "Reviewed reference words."
+
+
+def test_reviewed_text_uses_upstream_audio_processing_without_asr(monkeypatch):
+    import sys
+
+    process = MagicMock(side_effect=lambda path, transcriber, *args, **kwargs:
+                        (transcriber(None)["text"], 1, 2, 3))
+    monkeypatch.setitem(sys.modules, "zipvoice.modeling_utils", SimpleNamespace(process_audio=process))
+    lux = SimpleNamespace(tokenizer=object(), feature_extractor=object(), device="cpu")
+    result = luxtts._encode_prompt(lux, "ref.wav", luxtts.DEFAULTS, "Corrected words.")
+    assert result == {"prompt_tokens": "Corrected words.", "prompt_features_lens": 1,
+                      "prompt_features": 2, "prompt_rms": 3}
+    assert process.call_args.kwargs == {"target_rms": 0.01, "duration": 5.0}
+
+
+def test_project_transcript_wins_over_global(lux, tmp_path):
+    model, _, _, wav = lux
+    store = luxtts.LuxTTSReferenceStore
+    store.save_reference("Voice", wav, "Global words.")
+    refs = tmp_path / "project" / "engines" / "luxtts" / "refs"
+    refs.mkdir(parents=True)
+    sf.write(str(refs / "Voice.wav"), np.zeros(48000), 16000)
+    (refs / "Voice.txt").write_text("Project words.", encoding="utf-8")
+    assert model.cache_key_extra({"voice": "Voice", "project_dir": str(tmp_path / "project")})[
+        "ref_transcript"] == "Project words."

@@ -73,7 +73,7 @@ def test_jit_streaming_disabled_falls_back_to_standard_start(qt_app, monkeypatch
 
 # --- save / delete reference -------------------------------------------------
 
-def test_save_reference_appears_in_generation_voice_dropdown(qt_app, monkeypatch, tmp_path):
+def test_save_reference_assigns_character_and_settings_displays_voice(qt_app, monkeypatch, tmp_path):
     _switch_to_audio8(qt_app, monkeypatch)
     wav_path = _write_wav(tmp_path / "ref.wav")
 
@@ -87,8 +87,9 @@ def test_save_reference_appears_in_generation_voice_dropdown(qt_app, monkeypatch
 
     qt_app.selection.select_character(qt_app.document.characters[0].id)
     combo = qt_app.settings_dock.schema_form.widget_for("voice")
-    items = [combo.itemData(i) for i in range(combo.count())]
-    assert "Fred" in items
+    assert combo is None
+    assert qt_app.document.characters[0].preset_data["voice"] == "Fred"
+    assert "Fred" in qt_app.settings_dock.reference_voice_label.text()
 
 
 def test_save_reference_rejects_missing_name(qt_app, monkeypatch, tmp_path):
@@ -103,7 +104,7 @@ def test_save_reference_rejects_missing_name(qt_app, monkeypatch, tmp_path):
     assert Audio8ReferenceStore.list_references() == []
 
 
-def test_delete_reference_removes_it_and_dropdown_entry(qt_app, monkeypatch, tmp_path):
+def test_delete_reference_removes_it_from_store(qt_app, monkeypatch, tmp_path):
     _switch_to_audio8(qt_app, monkeypatch)
     dock = qt_app.voice_clone_dock
     dock.wav_path_edit.setText(_write_wav(tmp_path / "ref.wav"))
@@ -116,9 +117,10 @@ def test_delete_reference_removes_it_and_dropdown_entry(qt_app, monkeypatch, tmp
     dock.delete_reference("Ghost")
 
     assert Audio8ReferenceStore.list_references() == []
+    qt_app.selection.select_character(qt_app.document.characters[0].id)
     combo = qt_app.settings_dock.schema_form.widget_for("voice")
-    items = [combo.itemData(i) for i in range(combo.count())]
-    assert "Ghost" not in items
+    assert combo is None
+    assert "Ghost" not in Audio8ReferenceStore.list_references()
 
 
 def test_load_reference_populates_editable_fields(qt_app, monkeypatch, tmp_path):
@@ -534,7 +536,8 @@ def test_the_audio8_editor_opens_with_only_kokoro_characters(qt_app, monkeypatch
     assert character.preset_data["voice"] == "Fred"  # the one reference it lists
     qt_app.selection.select_character(character.id)
     combo = qt_app.settings_dock.schema_form.widget_for("voice")
-    assert "Fred" in [combo.itemData(i) for i in range(combo.count())]
+    assert combo is None
+    assert "Fred" in qt_app.settings_dock.reference_voice_label.text()
 
 
 def test_the_next_selection_puts_the_voices_tab_back_on_the_active_engine(qt_app):

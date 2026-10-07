@@ -51,6 +51,24 @@ def _device(device):
     return device
 
 
+def _encode_prompt(lux, path, settings, transcript):
+    """Keep LuxTTS's audio preprocessing, supplying reviewed text when saved.
+
+    Upstream encode_prompt always runs ASR. Its process_audio helper accepts
+    a transcriber callback, so supplying text needs no mutable model patch.
+    """
+    if not transcript:
+        return lux.encode_prompt(path, duration=settings["ref_duration"], rms=settings["ref_rms"])
+    from zipvoice.modeling_utils import process_audio
+
+    values = process_audio(
+        path, lambda audio: {"text": transcript}, lux.tokenizer,
+        lux.feature_extractor, lux.device, target_rms=settings["ref_rms"],
+        duration=settings["ref_duration"],
+    )
+    return dict(zip(("prompt_tokens", "prompt_features_lens", "prompt_features", "prompt_rms"), values))
+
+
 class LuxTTSModel(ModelBase):
     engine_id = "luxtts"
     display_name = "LuxTTS"
@@ -83,10 +101,19 @@ class LuxTTSModel(ModelBase):
         return f"LuxTTS ready ({device}, 48 kHz)."
 
     def engine_version(self):
-        return f"{MODEL_ID}:{UPSTREAM_REVISION}:adapter-1:{LuxTTSBackendAdapter.package_version()}"
+        return f"{MODEL_ID}:{UPSTREAM_REVISION}:adapter-2:{LuxTTSBackendAdapter.package_version()}"
 
     def cache_key_extra(self, config):
-        return {key: config.get(key, default) for key, default in DEFAULTS.items()}
+        settings = {key: config.get(key, default) for key, default in DEFAULTS.items()}
+        path = self.resolve_voice_path(config.get("voice"), config.get("project_dir"))
+        settings["ref_transcript"] = self._transcript(path)
+        return settings
+
+    @staticmethod
+    def _transcript(path):
+        if path and os.path.isfile(path):
+            return LuxTTSReferenceStore.read_transcript_file(os.path.splitext(path)[0] + ".txt")
+        return ""
 
     def resolve_voice_path(self, name, project_dir=None):
         if name and os.path.isabs(name) and os.path.isfile(name):
@@ -127,9 +154,11 @@ class LuxTTSModel(ModelBase):
         with self._lock:
             if self._lux is None:
                 self.load(lang_code)
-            key = (voice_fingerprint(os.path.abspath(path)), settings["ref_duration"], settings["ref_rms"])
+            transcript = self._transcript(path)
+            key = (voice_fingerprint(os.path.abspath(path)), transcript,
+                   settings["ref_duration"], settings["ref_rms"])
             if key not in self._prompts:
-                prompt = self._lux.encode_prompt(path, duration=settings["ref_duration"], rms=settings["ref_rms"])
+                prompt = _encode_prompt(self._lux, path, settings, transcript)
                 self._prompts[key] = prompt
                 if len(self._prompts) > 8:
                     self._prompts.popitem(last=False)
@@ -198,6 +227,9 @@ class LuxTTSBackendAdapter(BackendHooksMixin):
 
     def cancel(self):
         self._engine.cancel()
+
+    def reference_transcription_duration(self, config):
+        return config.get("ref_duration", DEFAULTS["ref_duration"])
 
 
 register_engine("luxtts", LuxTTSBackendAdapter, display_name=LuxTTSBackendAdapter.display_name)

@@ -39,6 +39,13 @@ def test_a_plugin_engine_works_end_to_end(qt_app, qtbot, toneclone_plugin, tmp_p
     character = qt_app.document.characters[0]
     assert qt_app.set_character_engine(character, "toneclone")
     assert character.preset_data["voice"] == "Echo"
+    qt_app.selection.select_character(character.id)
+    assert qt_app.settings_dock.schema_form.widget_for("voice") is None
+    assert not dock.transcript_edit.isHidden()
+    qt_app.voices_backend().voice_store.save_reference("Second", _ref_wav(tmp_path), "Other words.")
+    dock._use_reference("Second")
+    assert character.preset_data["voice"] == "Second"
+    dock._use_reference("Echo")
     qt_app.document.text = "one two three"
     clip = qt_app.document.assign_character_to_range(0, len(qt_app.document.text), character.id)
     assert clip in qt_app.document.dirty_clips()

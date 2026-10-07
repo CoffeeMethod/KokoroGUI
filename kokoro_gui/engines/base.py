@@ -231,6 +231,14 @@ class BackendHooksMixin:
     voice_kind = "named"
     voice_store = None
 
+    def reference_transcription_duration(self, config: dict) -> Optional[float]:
+        """Seconds of Reference audio used by the model; None means all.
+
+        Voice editors can transcribe the same excerpt without knowing an
+        engine's settings or importing its model implementation.
+        """
+        return None
+
     def builtin_voices(self, lang_code: Optional[str] = None) -> list:
         """The `VoiceInfo`s built into the model for `lang_code` (every
         language's when None). None by default."""

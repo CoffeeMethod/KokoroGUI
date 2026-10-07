@@ -1,8 +1,7 @@
 """Voice Reference dock: browse a reference WAV, get (and edit) an
 auto-transcript of it via kokoro_gui/engine/asr.py, and save it under a name
 so it shows up as a selectable "voice" for any backend whose
-`capabilities.supports_voice_cloning` is true (today: Audio8BackendAdapter -
-kokoro_gui/engines/audio8_tts.py). Shown only for such a backend - see
+`capabilities.supports_voice_cloning` is true. Shown only for such a backend - see
 app.py's `_sync_voice_clone_dock`, the same show/hide-on-engine-switch
 pattern `_sync_mixing_dock` uses for the Mixing dock. It edits the Voices
 tab's engine (`app.voices_backend()`), which an Engine row on top can move
@@ -25,19 +24,18 @@ or Reload to discard an unsaved edit and re-read whatever's actually in
 `.env` right now (picks up a change made by hand while the app was already
 running).
 
-Saving is required before a reference can be used for generation - there is
-no "generate with an unsaved wav" path, deliberately: the Settings tab's
-Voice dropdown is the single source of truth for which reference gets used
-(the engine's `ReferenceStore` via `backend.get_voices()`), so there is never
-a question of whether a freshly-browsed-but-unsaved wav or the dropdown's
-selection "wins". The store is the Voices tab's engine's
-(`voices_backend().voice_store`), so any engine whose `voice_kind` is
-"reference" gets this editor.
+Saving is required before a Reference can be used for generation. Save applies
+it to the active character when the editor and character use the same engine;
+Use explicitly assigns an existing Reference. Settings shows the assignment
+without a second picker. Editors and assignments use backend voice kinds and
+hooks, never engine IDs. Engines that use only an excerpt report its duration,
+so Auto-Transcribe covers the same audio that generation uses.
 """
 from __future__ import annotations
 
 import asyncio
 import os
+import tempfile
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -65,6 +63,21 @@ def _is_network_path(path: str) -> bool:
     if path[:2] not in ("\\\\", "//"):
         return False
     return path[2:4] not in ("?\\", "?/") or path[5:6] != ":"
+
+
+def _transcribe_reference(wav_path, duration, engine, model_path):
+    """Transcribe the model's excerpt off the GUI thread; clean up the copy."""
+    if duration is None:
+        return transcribe_wav(wav_path, engine=engine, model_path=model_path)
+    import soundfile as sf
+
+    with sf.SoundFile(wav_path) as source:
+        audio = source.read(frames=int(float(duration) * source.samplerate), dtype="float32")
+        sample_rate = source.samplerate
+    with tempfile.TemporaryDirectory(prefix="kokorogui-reference-") as directory:
+        excerpt = os.path.join(directory, "reference.wav")
+        sf.write(excerpt, audio, sample_rate)
+        return transcribe_wav(excerpt, engine=engine, model_path=model_path)
 
 
 class VoiceCloneDock(QDockWidget):
@@ -100,11 +113,11 @@ class VoiceCloneDock(QDockWidget):
         wav_row.addWidget(browse_btn)
         layout.addLayout(wav_row)
 
-        needs_transcript = getattr(self.store, "requires_transcript", True)
-        transcript_label = QLabel("<b>Transcript</b> (what's said in the audio)")
+        transcript_label = QLabel("<b>Transcript</b> (review/edit before saving)")
         layout.addWidget(transcript_label)
         self.transcript_edit = QPlainTextEdit()
         self.transcript_edit.setFixedHeight(100)
+        self.transcript_edit.setPlaceholderText("Type the Reference transcript or click Auto-Transcribe.")
         layout.addWidget(self.transcript_edit)
 
         engine_row = QHBoxLayout()
@@ -148,19 +161,6 @@ class VoiceCloneDock(QDockWidget):
         self.transcribe_btn = QPushButton("\U0001F3A4 Auto-Transcribe")
         self.transcribe_btn.clicked.connect(self._on_transcribe_clicked)
         layout.addWidget(self.transcribe_btn)
-
-        if not needs_transcript:
-            transcript_label.hide()
-            self.transcript_edit.hide()
-            self.asr_engine_combo.hide()
-            for index in range(engine_row.count()):
-                widget = engine_row.itemAt(index).widget()
-                if widget is not None:
-                    widget.hide()
-            self.vosk_row.hide()
-            self.transcribe_btn.hide()
-            layout.addWidget(QLabel("Use at least 3 seconds of clear speech.\n"
-                                   "This engine transcribes the reference automatically during generation."))
 
         self.status_label = QLabel("")
         layout.addWidget(self.status_label)
@@ -299,9 +299,15 @@ class VoiceCloneDock(QDockWidget):
         # not it's been Saved yet - transcribing shouldn't require a save
         # first, only persisting the path for next run/the standalone CLI does.
         future = self.app.voices_backend().run(
-            asyncio.to_thread(transcribe_wav, wav_path, engine=engine, model_path=vosk_model_path or None)
+            asyncio.to_thread(_transcribe_reference, wav_path,
+                              self._transcription_duration(), engine, vosk_model_path or None)
         )
         future.add_done_callback(_done)
+
+    def _transcription_duration(self):
+        backend = self.app.voices_backend()
+        hook = getattr(backend, "reference_transcription_duration", None)
+        return hook(self.app.engine_settings(backend.id)) if hook is not None else None
 
     def retire(self) -> None:
         """Called by `QtTTSApp._drop_voices_dock` when the Voices tab moves
@@ -350,8 +356,28 @@ class VoiceCloneDock(QDockWidget):
         if success:
             self.status_label.setText(f"Saved: {payload}")
             self.refresh_list()
+            character = self.app.active_character()
+            if character is not None and character.backend_id == self.backend_id:
+                self._use_reference(payload)
         else:
             self.status_label.setText(f"Save failed: {payload}")
+
+    def _use_reference(self, name: str) -> None:
+        """Explicitly assign a saved Reference to the active character."""
+        if self.app.is_busy():
+            QMessageBox.warning(self, "Busy", "Cancel the current job before changing a voice.")
+            return
+        character = self.app.active_character()
+        if character is None:
+            QMessageBox.warning(self, "No character", "Add a character in Edit > Characters first.")
+            return
+        if character.backend_id != self.backend_id:
+            if not self.app.set_character_engine(character, self.backend_id):
+                return
+        character.preset_data["voice"] = name
+        self.app.set_engine_setting(self.backend_id, "voice", name)
+        self.app.commit_character_edit(character)
+        self.status_label.setText(f"Using {name} for {character.name}.")
 
     def _load_reference(self, name: str) -> None:
         """Loads a saved reference back into the editable fields above, for
@@ -385,6 +411,10 @@ class VoiceCloneDock(QDockWidget):
             load_btn.setFlat(True)
             load_btn.clicked.connect(lambda _c=False, n=name: self._load_reference(n))
             row_layout.addWidget(load_btn, 1)
+            use_btn = QPushButton("Use")
+            use_btn.setToolTip("Assign this saved Reference to the active character.")
+            use_btn.clicked.connect(lambda _c=False, n=name: self._use_reference(n))
+            row_layout.addWidget(use_btn)
             del_btn = QPushButton("✕")
             del_btn.clicked.connect(lambda _c=False, n=name: self.delete_reference(n))
             row_layout.addWidget(del_btn)

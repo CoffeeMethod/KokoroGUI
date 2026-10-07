@@ -34,7 +34,7 @@ def test_save_without_transcript_and_select_for_character(lux_app, tmp_path):
     app = lux_app
     _save(app, tmp_path)
     dock = app.voice_clone_dock
-    assert dock.transcript_edit.isHidden() and dock.transcribe_btn.isHidden()
+    assert not dock.transcript_edit.isHidden() and not dock.transcribe_btn.isHidden()
     assert luxtts.LuxTTSReferenceStore.list_references() == ["Lux Voice"]
     character = app.document.characters[0]
     assert app.set_character_engine(character, "luxtts")
@@ -95,6 +95,24 @@ def test_project_round_trip_preserves_audio_only_voice(lux_app, tmp_path):
     assert luxtts.LuxTTSReferenceStore.find_wav("Lux Voice", directory)
 
 
+def test_project_bundles_and_reopens_reviewed_transcript(lux_app, tmp_path):
+    app = lux_app
+    _save(app, tmp_path)
+    luxtts.LuxTTSReferenceStore.save_reference("Reviewed", str(tmp_path / "reference.wav"), "Reviewed words.")
+    app.voice_clone_dock._use_reference("Reviewed")
+    path = str(tmp_path / "reviewed.tbaw")
+    app.save_project_as(path)
+    app.wait_for_project_io()
+    with zipfile.ZipFile(path) as bundle:
+        assert bundle.read("engines/luxtts/refs/Reviewed.txt").decode() == "Reviewed words."
+    luxtts.LuxTTSReferenceStore.delete_reference("Reviewed")
+    from kokoro_gui.qt import project as project_io
+    info = project_io.inspect_bundle(path)
+    directory = str(tmp_path / "fresh-reviewed")
+    project_io.extract_small(info, directory)
+    assert luxtts.LuxTTSReferenceStore.get_transcript("Reviewed", directory) == "Reviewed words."
+
+
 def test_engine_settings_persist_in_app_config(lux_app, tmp_path):
     import json
 
@@ -105,3 +123,47 @@ def test_engine_settings_persist_in_app_config(lux_app, tmp_path):
     saved = json.loads((tmp_path / "config_qt.json").read_text(encoding="utf-8"))
     assert saved["engines"]["luxtts"]["num_steps"] == 8
     assert saved["engines"]["luxtts"]["return_smooth"] is True
+
+
+def test_save_and_use_reference_assigns_character_without_settings_picker(lux_app, tmp_path):
+    app = lux_app
+    character = app.document.characters[0]
+    app.set_character_engine(character, "luxtts")
+    _save(app, tmp_path)
+    dock = app.voice_clone_dock
+    app.selection.select_character(character.id)
+    assert character.preset_data["voice"] == "Lux Voice"
+    assert app.settings_dock.schema_form.widget_for("voice") is None
+    assert "Lux Voice" in app.settings_dock.reference_voice_label.text()
+    luxtts.LuxTTSReferenceStore.save_reference("Other", str(tmp_path / "reference.wav"), "Edited words.")
+    dock._use_reference("Other")
+    assert character.preset_data["voice"] == "Other"
+    assert app.engine_settings("luxtts")["voice"] == "Other"
+    dock._load_reference("Other")
+    assert dock.transcript_edit.toPlainText() == "Edited words."
+
+
+def test_auto_transcribe_uses_model_excerpt_and_allows_edits(lux_app, tmp_path, monkeypatch, qtbot):
+    from kokoro_gui.qt.docks import voice_clone_dock
+
+    app = lux_app
+    wav = tmp_path / "long.wav"
+    sf.write(str(wav), np.ones(10 * 16000) * 0.1, 16000)
+    seen = []
+
+    def transcribe(path, **kwargs):
+        seen.append((path, sf.info(path).duration))
+        return "Heard words."
+
+    monkeypatch.setattr(voice_clone_dock, "transcribe_wav", transcribe)
+    dock = app.voice_clone_dock
+    dock.wav_path_edit.setText(str(wav))
+    dock._on_transcribe_clicked()
+    qtbot.waitUntil(lambda: dock.transcript_edit.toPlainText() == "Heard words.", timeout=5000)
+    assert seen[0][1] == 5.0
+    from pathlib import Path
+    assert not Path(seen[0][0]).exists()
+    dock.transcript_edit.setPlainText("Corrected words.")
+    dock.name_edit.setText("Reviewed")
+    dock._on_save_clicked()
+    assert luxtts.LuxTTSReferenceStore.get_transcript("Reviewed") == "Corrected words."
