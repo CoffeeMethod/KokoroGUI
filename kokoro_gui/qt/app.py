@@ -997,6 +997,11 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.edit_menu.addAction(self.join_clip_action)
         self.edit_menu.aboutToShow.connect(self._sync_split_join_actions)
         self.edit_menu.addSeparator()
+        self.remove_fillers_action = self._action("Remove &Filler Words...", self.remove_filler_words)
+        self.remove_fillers_action.setToolTip("Find um, uh and the like in the imported recordings, pick the ones "
+                                              "to cut, and remove them with their audio in one undo step.")
+        self.edit_menu.addAction(self.remove_fillers_action)
+        self.edit_menu.addSeparator()
         self.characters_action = self._action("&Characters...", self.open_characters_dialog)
         self.edit_menu.addAction(self.characters_action)
 
@@ -4292,6 +4297,33 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.split_clip_action.setEnabled(offset is not None and document.split_problem(clip, offset) is None)
         pair = self._join_pair()
         self.join_clip_action.setEnabled(pair is not None and document.join_problem(*pair) is None)
+
+    # --- filler words (plan 32) ------------------------------------------
+
+    def remove_filler_words(self) -> int:
+        """Edit > Remove Filler Words: lists the fillers in the recordings of
+        the transcript on screen, asks which to cut (`FillerDialog`), and
+        removes the checked ones as one undo step. Returns how many it cut."""
+        from kokoro_gui.daw import fillers
+        from kokoro_gui.qt.filler_dialog import FillerDialog
+
+        editor = self.editor
+        hits = fillers.find_fillers(self.document) if editor is not None else []
+        if not hits:
+            self.set_status("No filler words found in the recordings.", "info")
+            return 0
+        dialog = FillerDialog(self.document, hits, self)
+        if not self._ask_fillers(dialog):
+            return 0
+        removed = editor.delete_ranges([(hit.start, hit.end) for hit in dialog.checked_fillers()])
+        if removed:
+            self.set_status(f"Removed {removed} filler {'word' if removed == 1 else 'words'}.", "success")
+        return removed
+
+    def _ask_fillers(self, dialog) -> bool:
+        """Runs the filler dialog; True on Remove. Its own method so tests
+        answer it without a modal."""
+        return dialog.exec() == dialog.DialogCode.Accepted
 
     def play_clip(self, clip_id: str) -> bool:
         """The gutter's play button on an imported recording clip (phase 5

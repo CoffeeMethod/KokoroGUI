@@ -31,7 +31,7 @@ def test_file_menu_actions(qt_app):
 
 def test_edit_menu_actions(qt_app):
     assert _action_texts(qt_app.edit_menu) == ["Undo", "Redo", "Cut", "Copy", "Paste", "Split Clip at Playhead",
-                                                  "Join with Next Clip", "Characters..."]
+                                                  "Join with Next Clip", "Remove Filler Words...", "Characters..."]
 
 
 def test_options_menu_holds_settings_device_theme_and_toggles(qt_app):
