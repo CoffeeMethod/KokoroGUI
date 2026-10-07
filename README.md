@@ -74,6 +74,7 @@ Unreleased:
 -   Lexicon rules can match a whole word or a regex pattern and run in an order you set, and a Test field shows a
     sentence after the rules and how Kokoro will read it
 -   The window says FX, Character, Reference, Mix and stale where it said FX Preset, Preset, voice reference, custom voice and dirty
+-   Chapter and heading gaps, heading speed, a varied gap between speakers, and `[Sam, overlap:0.3]:` to start a line over the one before it
 
 In 4.0.0-beta.2:
 

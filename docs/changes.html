@@ -360,6 +360,27 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Pacing and overlap</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Gaps for chapters and headings</h4>
+            <p>Options &gt; Settings&hellip; &gt; Project has two new gaps. Chapter gap is the silence before a subproject, and follows the paragraph gap until you set it. Gap after a heading (1.2 s by default) is the silence after the document's first clip when it is a heading: one line of at most 12 words that doesn't end in a full stop, <code>!</code>, <code>?</code>, <code>,</code> or <code>;</code>. A clip's own Gap before still wins, then the chapter gap, the heading gap, the paragraph gap and the plain gap, in that order. The transcript's gap labels say "chapter" or "heading" where one applies.</p>
+            <p>Heading speed multiplies the heading clip's speed, so 0.90 reads a chapter title a little slower. It is 1.00, which is off, until you change it. The speed is part of the clip's key, so changing it makes the heading stale once and regenerates only that clip. A clip that becomes the first clip of the document, because you deleted what came before, picks up the heading speed the same way.</p>
+            <p><strong>Before you open an existing project.</strong> A project whose first clip is a short line with no closing punctuation now has 1.2 s after it instead of the plain gap, so the rest of a non-hand-timed project starts about 0.85 s later. Set Gap after a heading to the Gap value in Settings &gt; Project for the old placement.</p>
+          </li>
+          <li>
+            <h4>A varied gap when the speaker changes</h4>
+            <p>"Vary the gap when the speaker changes" in Settings &gt; Project takes two values. Each clip whose character differs from the clip before it then draws its gap between them instead of using Gap. The draw comes from the clip's id, so a project places its clips the same way on every open, export and machine. A line by the same speaker, a blank-line gap, a heading gap and a clip's own Gap before keep their values. It is off by default.</p>
+          </li>
+          <li>
+            <h4>Overlap: <code>[Sam, overlap:0.3]:</code></h4>
+            <p>A line can start before the line above it ends. Write the overlap in seconds, 0 to 5, after a comma in the tag: <code>[Sam, overlap:0.3]: right, exactly</code>, or <code>[Sam:Radio, overlap:0.3]:</code> with an FX. Typing the line and pressing Enter, and Auto-split, both put it on the clip, in the same undo step. The Settings tab has an Overlap field for a selected clip, where blank clears it. The clip starts at the end of the clip before it minus the overlap, and the clip after it starts when the longer of the two ends. Overlap 0 starts it with no gap.</p>
+            <p>Two characters on different tracks overlap without the red overlap border. On one track the border shows and Auto-crossfade applies. A clip you've dragged to a time ignores the overlap, and the second half of a split clip doesn't inherit it. The tag's other half changed too: a bracket is read as <code>name[:FX]</code> followed by <code>, key:value</code> options. A key other than <code>overlap</code>, or an overlap that isn't a number, is ignored with a warning in the status line. A name with a comma in it, such as <code>[Smith, John]:</code>, is still a name. Projects with no clips read the name and drop the overlap, since that path has no timeline. The overlap is stored in the clip's overrides, so a project saved with it opens in an older version with the clips placed one after another.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Chapters</h3>
         <ul class="change-list">
           <li>
