@@ -119,10 +119,10 @@ class KokoroModel(ModelBase):
         return pipeline
 
     def ready_message(self, lang_code):
-        return f"Pipeline Initialized ({self.loaded_lang or lang_code})."
+        return f"Kokoro ready ({self.loaded_lang or lang_code})."
 
     def load_error(self, error, lang_code):
-        msg = f"Pipeline Init Failed: {error}"
+        msg = f"Kokoro failed to load: {error}"
         err_str = str(error).lower()
         if lang_code == "j" and ("fugashi" in err_str or "unidic" in err_str):
             msg += "\n(Try: pip install fugashi unidic-lite)"

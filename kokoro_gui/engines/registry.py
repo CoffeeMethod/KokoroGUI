@@ -77,7 +77,7 @@ def get_engine(engine_id: str, *args, **kwargs):
     _ensure_loaded()
     if engine_id not in _registry:
         raise KeyError(
-            f"No engine backend registered under {engine_id!r}. "
+            f"No engine registered under {engine_id!r}. "
             f"Known engines: {sorted(_registry)}"
         )
     return _registry[engine_id](*args, **kwargs)

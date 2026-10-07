@@ -414,7 +414,7 @@ class SubprojectsMixin:
         target = project_io.mixdown_file(child.project_dir, fmt)
         tmp = os.path.join(child.project_dir, f"{project_io.MIXDOWN}.tmp.{fmt}")
         document = child.document
-        self._begin_project_io(f"Rendering {child.title()}...", read_only=False)
+        self._begin_project_io(f"Exporting {child.title()}...", read_only=False)
 
         def _work():
             result = mixdown(document, tmp, fmt, rate, arrangement=arrangement,
@@ -426,14 +426,14 @@ class SubprojectsMixin:
         def _done(result, error):
             self._end_project_io(read_only=False)
             if error is not None:
-                self.set_status(f"Rendering {child.title()} failed: {error}", "error")
+                self.set_status(f"Exporting {child.title()} failed: {error}", "error")
                 if then is not None:
                     then(False)
                 return
             project_io.write_mixdown_info(child.project_dir, target, digest, result.duration_s, rate)
             child.mixdown_path, child.mixdown_digest = target, digest
             child.state_cache = None
-            self.set_status(f"Rendered {child.title()}.", "success")
+            self.set_status(f"Exported {child.title()}.", "success")
             parent = self.parent_of(child)
             if parent is not None and parent.parent_id is not None:
                 parent.state_cache = None

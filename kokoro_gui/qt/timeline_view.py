@@ -1087,10 +1087,10 @@ class TimelineView(QGraphicsView):
         menu.addSeparator()
 
     def _build_subproject_menu(self, menu: QMenu, clip) -> QMenu:
-        """A nested block: Enter, Generate and render, Detach to file... or
+        """A nested block: Enter, Generate, Detach to file... or
         Embed, Relink..., Remove."""
         kind = (clip.child or {}).get("kind", "embedded")
-        items = [("Enter", "enter"), ("Generate and render", "render")]
+        items = [("Enter", "enter"), ("Generate", "render")]
         items.append(("Detach to file...", "detach") if kind == "embedded" else ("Embed", "embed"))
         items.append(("Relink...", "relink"))
         items.append(("Remove", "remove"))

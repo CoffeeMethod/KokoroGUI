@@ -88,7 +88,7 @@ class JITMixin:
                         if self.cancel_event.is_set(): break
 
                         if self.on_status:
-                            self.on_status(f"JIT: Generating chunk {i+1}/{total_segments}...", False)
+                            self.on_status(f"JIT: Generating segment {i+1}/{total_segments}...", False)
 
                         chunk_files = await asyncio.to_thread(self.process_chunk_task, (i, seg_text, seg_config), None)
 
@@ -118,7 +118,7 @@ class JITMixin:
 
                         idx += 1
                         if self.on_status:
-                            self.on_status(f"JIT: Playing chunk {idx}...", False)
+                            self.on_status(f"JIT: Playing segment {idx}...", False)
 
                         clean_snip = item['text'].replace("\n", " ").strip()
                         if len(clean_snip) > 40: clean_snip = clean_snip[:37] + "..."

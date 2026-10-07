@@ -60,7 +60,7 @@ class DummyModel(ModelBase):
     engine_id = "dummy"
     sample_rate = SAMPLE_RATE
     concurrency = "per_thread"
-    display_name = "Dummy pipeline"
+    display_name = "Dummy"
 
     def synthesize(self, text, voice, speed, lang_code, params):
         text = (text or "").strip()
