@@ -49,7 +49,7 @@ CONTEXT_CHARS = 60
 # conversion paths read.
 _TAG = r"\[[^\]\n]{1,100}\]:\s*"
 _MARKUP = re.compile(f"{_TAG}|{PAUSE_MARKER_PATTERN}")
-_WORD = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*")
+WORD = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*")
 _CHUNK = re.compile(r"[^\s—–]*\d[^\s—–]*")
 _APOSTROPHES = re.compile(r"['’]")
 _LEAD = "(\"'“‘[{"
@@ -92,6 +92,12 @@ def _blank(match: re.Match, boundary: bool) -> str:
     tag starts a sentence."""
     body = "".join("\n" if c == "\n" else " " for c in match.group(0))
     return "." + body[1:] if boundary else body
+
+
+def blank_markup(text: str) -> str:
+    """`text` with every tag and pause marker replaced by spaces (newlines
+    kept), so no offset moves and nothing in a tag is read as a word."""
+    return _MARKUP.sub(lambda m: _blank(m, False), text)
 
 
 def _covered(word: str, rules: list) -> bool:
@@ -157,7 +163,7 @@ def candidates(text: str, known: Optional[Container[str]] = None, lexicon=None,
     "unknown" kind. `lexicon` is the rule list (or the old dict) whose words are
     left out, `ignore` more words to leave out (case-insensitive)."""
     scan = _MARKUP.sub(lambda m: _blank(m, True), text)
-    plain = _MARKUP.sub(lambda m: _blank(m, False), text)
+    plain = blank_markup(text)
     rules = normalize_rules(lexicon)
     skip = {name.casefold() for name in ignore if isinstance(name, str)}
 
@@ -168,7 +174,7 @@ def candidates(text: str, known: Optional[Container[str]] = None, lexicon=None,
     first_any: dict = {}
     qualified: dict = {}  # spelling -> (kind, offset of the first qualifying occurrence)
     span_index = 0
-    for match in _WORD.finditer(scan):
+    for match in WORD.finditer(scan):
         start, end = match.span()
         # A word glued to a digit chunk ("3rd", "B-52") belongs to the token.
         while span_index < len(digit_spans) and digit_spans[span_index][1] <= start:
