@@ -88,7 +88,7 @@ from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QMenu, QTextEdit, QToolTip, QWidget
 
 from kokoro_gui.daw import fit as fit_ops
-from kokoro_gui.daw import derived, imported, segment_view
+from kokoro_gui.daw import derived, imported, segment_view, spell
 from kokoro_gui.daw.auto_split import plan_auto_split_clips
 from kokoro_gui.daw.undo import ApplyWordsCommand, AssignCharacterCommand, TextEditCommand
 from kokoro_gui.engine.segmenting import PAUSE, WORD
@@ -175,10 +175,16 @@ class ClipHighlighter(QSyntaxHighlighter):
     """
 
     def __init__(self, qt_text_document, daw_document_provider: Callable[[], object],
-                 details_provider: Optional[Callable[[], dict]] = None):
+                 details_provider: Optional[Callable[[], dict]] = None,
+                 spell_provider: Optional[Callable[[object], object]] = None):
         super().__init__(qt_text_document)
         self._daw_document_provider = daw_document_provider
         self._details_provider = details_provider or (lambda: {})
+        # `spell_provider(character)` is the `daw.spell.Dictionary` for the
+        # words of that character's clips (None for text outside any
+        # clip), or None when spellcheck is off or the language has none.
+        self._spell_provider = spell_provider
+        self._spell: dict = {}
         self._dirty_ids: Optional[set] = None
         self._rate_levels: Optional[dict] = None
         self._word_spans: Optional[list] = None
@@ -195,6 +201,43 @@ class ClipHighlighter(QSyntaxHighlighter):
         self._details = None
         self._pieces = {}
         self._rewrites = {}
+        self._spell = {}
+
+    def spell_dictionary(self, character):
+        """`spell_provider(character)`, once per cycle and character."""
+        if self._spell_provider is None:
+            return None
+        key = character.id if character is not None else None
+        if key not in self._spell:
+            try:
+                self._spell[key] = self._spell_provider(character)
+            except Exception:
+                self._spell[key] = None
+        return self._spell[key]
+
+    def spell_spans(self, daw_doc, block_start: int, block_end: int) -> tuple:
+        """`(lo, hi)` offsets in the block of each word the dictionary of
+        its clip's character doesn't know. Tags are not read, and neither
+        is a subproject's or a music bed's line."""
+        if self._spell_provider is None:
+            return ()
+        text = None
+        spans = []
+        for run, run_start, run_end in daw_doc.index().runs_in(block_start, block_end):
+            if run.kind == "placeholder":
+                continue
+            clip = daw_doc.get_clip(run.clip_id) if run.clip_id is not None else None
+            dictionary = self.spell_dictionary(daw_doc.get_character(clip.character_id) if clip is not None else None)
+            if dictionary is None:
+                continue
+            lo = max(run_start, block_start) - block_start
+            hi = min(run_end, block_end) - block_start
+            if hi <= lo:
+                continue
+            if text is None:
+                text = self.document().findBlock(block_start).text()
+            spans.extend((lo + a, lo + b) for a, b in spell.unknown_spans(text[lo:hi], dictionary))
+        return tuple(spans)
 
     def details(self) -> dict:
         """The app's `details_flags()`, once per cycle."""
@@ -311,8 +354,9 @@ class ClipHighlighter(QSyntaxHighlighter):
             runs.append((lo, hi, placeholder, color, underline, shades))
         words = tuple(self._spans_in(self.word_spans(), block_start, block_end))
         gaps = tuple(self._spans_in(self.untimed_gaps(), block_start, block_end))
-        palette = (pal.dirty_underline, pal.fit_far_over, pal.fit_over, pal.panel_alt, pal.text_muted)
-        return (tuple(runs), words, gaps, palette)
+        palette = (pal.dirty_underline, pal.fit_far_over, pal.fit_over, pal.panel_alt, pal.text_muted,
+                   pal.spell_underline)
+        return (tuple(runs), words, gaps, palette, self.spell_spans(daw_doc, block_start, block_end))
 
     @staticmethod
     def spec_state(spec) -> int:
@@ -325,8 +369,8 @@ class ClipHighlighter(QSyntaxHighlighter):
         spec = self.block_spec(block_start, block_start + len(block_text))
         if spec is None:
             return
-        runs, words, gaps, palette = spec
-        dirty_underline, fit_far_over, fit_over, panel_alt, text_muted = palette
+        runs, words, gaps, palette, misspelled = spec
+        dirty_underline, fit_far_over, fit_over, panel_alt, text_muted, spell_underline = palette
         for lo, hi, placeholder, color, underline, shades in runs:
             fmt = QTextCharFormat()
             if placeholder:
@@ -369,6 +413,12 @@ class ClipHighlighter(QSyntaxHighlighter):
         for lo, hi in gaps:
             fmt = QTextCharFormat(self.format(lo))
             fmt.setForeground(QColor(text_muted))
+            self.setFormat(lo, hi - lo, fmt)
+        # Options > Spellcheck: a wave under each word the dictionary lacks.
+        for lo, hi in misspelled:
+            fmt = QTextCharFormat(self.format(lo))
+            fmt.setUnderlineStyle(QTextCharFormat.UnderlineStyle.SpellCheckUnderline)
+            fmt.setUnderlineColor(QColor(spell_underline))
             self.setFormat(lo, hi - lo, fmt)
         self.setCurrentBlockState(self.spec_state(spec))
 
@@ -834,7 +884,8 @@ class TranscriptEditor(QTextEdit):
         # call bouncing straight back into _on_cursor_position_changed.
         self._updating_from_model = False
 
-        self._highlighter = ClipHighlighter(self.document(), lambda: self.app.document, self._details_flags)
+        self._highlighter = ClipHighlighter(self.document(), lambda: self.app.document, self._details_flags,
+                                            self._spell_dictionary)
         self.undo_coordinator = UndoCoordinator(
             self.document(), self.app.document.undo_stack, self._on_custom_stack_changed, self._run_joined
         )
@@ -1077,6 +1128,12 @@ class TranscriptEditor(QTextEdit):
     def _details_flags(self) -> dict:
         flags = getattr(self.app, "details_flags", None)
         return flags() if flags is not None else {}
+
+    def _spell_dictionary(self, character):
+        """The dictionary Options > Spellcheck underlines `character`'s
+        words with, None while the option is off."""
+        provider = getattr(self.app, "spellcheck_dictionary", None)
+        return provider(character) if provider is not None else None
 
     def _refresh_details_marks(self) -> None:
         """The segment bars and gap labels `paintEvent` draws, from the

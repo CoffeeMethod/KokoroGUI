@@ -77,6 +77,8 @@ class Palette:
     # approved clip in the gutter.
     segment_mark: str
     status_approved: str
+    # Options > Spellcheck: the wave under a word the dictionary doesn't know.
+    spell_underline: str
     # Transport level meter: the bar's zones (below -6 dBFS, up to -1, over).
     meter_ok: str
     meter_warn: str
@@ -118,6 +120,7 @@ LIGHT = Palette(
     fit_far_over="#dc2626",
     segment_mark="#8b8f96",
     status_approved="#16a34a",
+    spell_underline="#7c3aed",
     meter_ok="#16a34a",
     meter_warn="#f59e0b",
     meter_clip="#dc2626",
@@ -154,6 +157,7 @@ DARK = Palette(
     fit_far_over="#ef4444",
     segment_mark="#6e737b",
     status_approved="#4ade80",
+    spell_underline="#a78bfa",
     meter_ok="#4ade80",
     meter_warn="#fbbf24",
     meter_clip="#ef4444",

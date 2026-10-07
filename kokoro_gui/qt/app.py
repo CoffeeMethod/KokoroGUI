@@ -50,6 +50,7 @@ from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character, Document
 from kokoro_gui.daw.arrangement import compute_arrangement, segment_timeline
 from kokoro_gui.daw.mixplan import clip_mixes
 from kokoro_gui.daw.imported import segment_plays
+from kokoro_gui.daw import spell
 from kokoro_gui.daw.auto_split import plan_auto_split_clips, plan_pause_gaps, plan_tag_fx
 from kokoro_gui.daw.beds import playable_segments
 from kokoro_gui.daw.mixdown import duck_db_setting
@@ -1084,7 +1085,18 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             self.details_layer_actions[key] = action
         self._sync_details_actions()
 
-        self.jit_action = QAction("JIT streaming (no-clips fallback only)", self)
+        self.spellcheck_action = QAction("Spellcheck", self)
+        self.spellcheck_action.setCheckable(True)
+        self.spellcheck_action.setChecked(bool(self.settings.get("spellcheck", False)))
+        self.spellcheck_action.setToolTip("Underline words in the transcript that the dictionary doesn't know. "
+                                          "English, Spanish, French, Italian and Portuguese, by the character's language.")
+        if not spell.available():
+            self.spellcheck_action.setEnabled(False)
+            self.spellcheck_action.setToolTip("Needs the pyspellchecker package: pip install pyspellchecker")
+        self.spellcheck_action.toggled.connect(self.set_spellcheck)
+        self.options_menu.addAction(self.spellcheck_action)
+
+        self.jit_action =QAction("JIT streaming (no-clips fallback only)", self)
         self.jit_action.setCheckable(True)
         self.jit_action.setChecked(bool(self.jit_enabled))
         self.jit_action.toggled.connect(self._on_jit_toggled)
@@ -3703,8 +3715,6 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         names and the lexicon's plain finds counted as known words. None
         when `pyspellchecker` is missing or the language has no word list.
         One dictionary is kept per language and extra-word set."""
-        from kokoro_gui.daw import spell
-
         if character is None:
             character = self.active_character()
         language = spell.language_for(self.character_lang_code(character))
@@ -3721,6 +3731,24 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                 cache.clear()
             cache[key] = spell.dictionary_for(language, extra)
         return cache[key]
+
+    def spellcheck_dictionary(self, character=None):
+        """What the transcript underlines `character`'s words with: its
+        dictionary while Options > Spellcheck is on, else None."""
+        if not self.settings.get("spellcheck", False):
+            return None
+        return self.spell_dictionary_for(character)
+
+    def set_spellcheck(self, on: bool) -> None:
+        """Options > Spellcheck."""
+        self.settings["spellcheck"] = bool(on)
+        if self.spellcheck_action.isChecked() != bool(on):
+            self.spellcheck_action.blockSignals(True)
+            self.spellcheck_action.setChecked(bool(on))
+            self.spellcheck_action.blockSignals(False)
+        if self.editor is not None:
+            self.editor.rehighlight()
+        self.schedule_save()
 
     def _remove_preview_file(self) -> None:
         """Deletes the last preview's temp file. The next preview and
