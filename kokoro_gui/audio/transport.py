@@ -28,6 +28,18 @@ The original dialogue neither ducks nor is ducked: its clips load with
 `duck` and `sidechain` off, so "both" ducks the dub's beds under the dub's
 speech only.
 
+`rate` (`set_rate`, 0.5 to 2.0, runtime only, playback only: export and the
+mixdown never see it) plays faster or slower with the pitch unchanged. At
+1.0 the callback is the plain path below, sample for sample what it was
+before. Anywhere else it mixes source frames in order through a streaming
+`stretch.Stretcher` (WSOLA, grill PG7) that pulls them with `_pull_source`,
+which wraps at a loop region's end or the arrangement's end the way the
+plain path does. `_frame` still holds the source frame the output has
+reached (`base + stretcher.played * rate`, wrapped), so the timeline, the
+playhead readout and the transcript highlight need no change. A seek, a
+rate change, `play()`, a loop change or a new sample rate makes the
+callback restart the stretcher at `_frame`.
+
 Position is the callback's frame counter, sample accurate, published to
 the GUI thread by a 30Hz `QTimer` as `positionChanged(float)`. The same
 tick publishes `levelsChanged(peak_l, peak_r, rms_l, rms_r)`, linear: the
@@ -52,7 +64,7 @@ import numpy as np
 from PySide6.QtCore import QObject, QTimer, Signal
 
 import playback
-from kokoro_gui.audio import mixer
+from kokoro_gui.audio import mixer, stretch
 
 POSITION_TIMER_MS = 33
 DEFAULT_SAMPLE_RATE = 24000
@@ -60,6 +72,21 @@ MONITOR_MODES = ("dub", "original", "both")
 # Each side's gain in the "both" monitor mode: -6 dB.
 BOTH_GAIN = 0.5012
 _SILENT_LEVELS = (0.0, 0.0, 0.0, 0.0)
+RATE_MIN = stretch.RATE_MIN
+RATE_MAX = stretch.RATE_MAX
+# What `[` and `]` step through, and what the Transport dock's combo lists.
+RATE_STEPS = (0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0)
+
+
+def clamp_rate(rate) -> float:
+    """`rate` kept to `RATE_MIN`..`RATE_MAX`; anything that isn't a number is 1.0."""
+    try:
+        value = float(rate)
+    except (TypeError, ValueError):
+        return 1.0
+    if value != value:
+        return 1.0
+    return min(RATE_MAX, max(RATE_MIN, round(value, 3)))
 
 
 @dataclass(frozen=True)
@@ -134,6 +161,7 @@ class Transport(QObject):
     finished = Signal()
     loaded = Signal()
     levelsChanged = Signal(float, float, float, float)  # peak L/R, RMS L/R, linear
+    rateChanged = Signal(float)
 
     def __init__(self, parent=None, stream_factory: Optional[Callable] = None):
         super().__init__(parent)
@@ -153,6 +181,14 @@ class Transport(QObject):
         self.loop = False
         # `(start_frame, end_frame)` or None; see the module docstring.
         self.loop_range: Optional[tuple] = None
+        # Playback rate (see the module docstring) and the stretcher state
+        # the callback keeps while it is not 1.0.
+        self._rate = 1.0
+        self._stretcher: Optional[stretch.Stretcher] = None
+        self._stretch_epoch = 0
+        self._stretch_key = None
+        self._stretch_base = 0
+        self._stretch_source = 0
         # The sidechain's state while any loaded clip ducks, else None.
         self._duck: Optional[mixer.DuckState] = None
         # (peak_l, peak_r, rms_l, rms_r), written by the callback and read
@@ -191,6 +227,26 @@ class Transport(QObject):
     def loaded_alt_clips(self) -> list:
         with self._lock:
             return list(self._alt_clips)
+
+    @property
+    def rate(self) -> float:
+        return self._rate
+
+    def set_rate(self, rate) -> float:
+        """Plays at `rate` times normal speed, pitch unchanged. Clamped to
+        0.5..2.0; takes effect on the next block and keeps the position.
+        Returns the rate set."""
+        rate = clamp_rate(rate)
+        with self._lock:
+            changed = rate != self._rate
+            self._rate = rate
+            self._stretch_epoch += 1
+        if rate != 1.0 and (self._stretcher is None or self._stretcher.sample_rate != self._sample_rate):
+            # Built here, on the GUI thread, so the callback doesn't.
+            self._stretcher = stretch.Stretcher(self._sample_rate, mixer.CHANNELS)
+        if changed:
+            self.rateChanged.emit(rate)
+        return rate
 
     @property
     def monitor(self) -> str:
@@ -287,6 +343,7 @@ class Transport(QObject):
             if self._frame >= self._total_frames:
                 self._frame = 0
             self._ended = False
+            self._stretch_epoch += 1
         self._open_stream()
         self._set_state("playing")
         self._timer.start()
@@ -307,6 +364,7 @@ class Transport(QObject):
         with self._lock:
             self._frame = 0
             self._ended = False
+            self._stretch_epoch += 1
             if self._duck is not None:
                 self._duck.reset()
         self._clear_levels()
@@ -333,6 +391,7 @@ class Transport(QObject):
         with self._lock:
             self._frame = min(frame, self._total_frames)
             self._ended = False
+            self._stretch_epoch += 1
             if self._duck is not None:
                 self._duck.reset()
         self.positionChanged.emit(self.position())
@@ -379,8 +438,12 @@ class Transport(QObject):
             loop = self.loop
             loop_range = self.loop_range
             duck = self._duck
+            rate = self._rate
+            epoch = self._stretch_epoch
         new_frame = frame + frames
-        if loop_range is not None and frame < loop_range[1] <= new_frame:
+        if rate != 1.0:
+            block, new_frame = self._stretched_block(frames, frame, clips, total, loop, loop_range, duck, rate, epoch)
+        elif loop_range is not None and frame < loop_range[1] <= new_frame:
             # The block crosses the region's end: play up to it, then carry
             # on from the region's start.
             start, end = loop_range
@@ -417,6 +480,67 @@ class Transport(QObject):
                 self._levels = (max(held_l, float(top[0]), -float(bottom[0])),
                                 max(held_r, float(top[1]), -float(bottom[1])),
                                 float(np.sqrt(energy[0])), float(np.sqrt(energy[1])))
+
+    def _stretched_block(self, frames: int, frame: int, clips: list, total: int, loop: bool,
+                         loop_range: Optional[tuple], duck, rate: float, epoch: int) -> tuple:
+        """`(block, new_frame)` for a callback at a rate other than 1.0."""
+        key = (epoch, rate, loop, loop_range, self._sample_rate)
+        stretcher = self._stretcher
+        if stretcher is None or stretcher.sample_rate != self._sample_rate:
+            stretcher = self._stretcher = stretch.Stretcher(self._sample_rate, mixer.CHANNELS)
+            self._stretch_key = None
+        if self._stretch_key != key:
+            stretcher.reset(rate)
+            self._stretch_base = self._stretch_source = frame
+            self._stretch_key = key
+
+        def pull(count: int) -> np.ndarray:
+            chunk, self._stretch_source = self._pull_source(clips, self._stretch_source, count, total, loop,
+                                                            loop_range, duck)
+            return chunk
+
+        block = stretcher.process(frames, pull)
+        position = self._stretch_base + int(round(stretcher.source_frames))
+        return block, self._wrap_frame(position, self._stretch_base, total, loop, loop_range)
+
+    @staticmethod
+    def _pull_source(clips: list, position: int, count: int, total: int, loop: bool,
+                     loop_range: Optional[tuple], duck) -> tuple:
+        """`(block, position)`: the next `count` source frames from
+        `position`, wrapping where the plain path wraps (a loop region's end
+        while the position is before it, else the arrangement's end when
+        `loop` is set), and the position after them."""
+        block = np.zeros((count, mixer.CHANNELS), dtype=np.float32)
+        done = 0
+        region = loop_range is not None and loop_range[1] > loop_range[0]
+        while done < count:
+            if region and position < loop_range[1]:
+                bound, back = loop_range[1], loop_range[0]
+            elif loop and total > 0:
+                position %= total
+                bound, back = total, 0
+            else:
+                bound, back = None, 0
+            take = count - done if bound is None else min(count - done, bound - position)
+            block[done:done + take] = mixer.mix_block(clips, position, take, duck=duck)
+            done += take
+            position += take
+            if bound is not None and position >= bound:
+                position = back
+        return block, position
+
+    @staticmethod
+    def _wrap_frame(position: int, base: int, total: int, loop: bool, loop_range: Optional[tuple]) -> int:
+        """A source frame counted straight on from `base`, wrapped the way
+        the plain path wraps it."""
+        if loop_range is not None and loop_range[1] > loop_range[0] and base < loop_range[1]:
+            start, end = loop_range
+            if position >= end:
+                return start + (position - start) % (end - start)
+            return position
+        if loop and total > 0:
+            return position % total
+        return position
 
     @staticmethod
     def _write_block(outdata, block: np.ndarray) -> None:
