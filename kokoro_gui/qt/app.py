@@ -3618,27 +3618,37 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     # --- preview -----------------------------------
 
     def preview_conversion(self) -> None:
-        if isinstance(self.backend, MissingBackend):
-            self.set_status(f"{self.backend.message}: nothing to preview with.", "warning")
-            return
-        if not self.backend.is_ready():
-            QMessageBox.information(self, "Wait", "Engine is initializing... please wait 2 seconds and try again.")
-            return
-
+        """Speaks the editor's selection (else the whole transcript, else a
+        sample line) with the active character."""
         editor = self.editor
         cursor = editor.textCursor()
         text_data = cursor.selectedText().replace(" ", "\n") if cursor.hasSelection() else editor.toPlainText().strip()
         if not text_data:
             text_data = ("This is a sample audio preview using the Koh-koh-ro Tea-Tea-S engine. "
                          "It demonstrates the voice quality and speed settings.")
-        preview_text = text_data[:1000]
+        self.preview_text(text_data[:1000])
 
-        # The active character's voice on its own engine (the selected
-        # clip's character, else the first), over the project defaults.
+    def preview_text(self, text: str, character=None, lexicon=None) -> None:
+        """Speaks `text` (up to two segments) as `character` on its own
+        engine, the active character when None, with the project's model
+        settings and FX. `lexicon` replaces the saved rules for this one
+        preview (the Find Words to Check dialog tries a rule before it is
+        added); None uses `settings["lexicon"]`. Plays when it finishes."""
+        if character is None:
+            character = self.active_character()
+        backend = self.backend_for_character(character)
+        if isinstance(backend, MissingBackend):
+            self.set_status(f"{backend.message}: nothing to preview with.", "warning")
+            return
+        if not backend.is_ready():
+            QMessageBox.information(self, "Wait", "Engine is initializing... please wait 2 seconds and try again.")
+            return
+
+        # The character's voice on its own engine (the selected clip's
+        # character, else the first), over the project defaults.
         state = dict(self.settings_dock.get_state())
-        engine = self.engine_settings(self.backend.id)
+        engine = self.engine_settings(backend.id)
         state["lang_code"], state["voice"] = engine.get("lang_code"), engine.get("voice")
-        character = self.active_character()
         if character is not None:
             for key in ("voice", "speed", "lang_code"):
                 if character.preset_data.get(key) not in (None, ""):
@@ -3648,10 +3658,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             "pitch": state["pitch"],
             "normalize": state["normalize"],
             "trim_silence": state["trim_silence"],
-            "lexicon": self.settings.get("lexicon", {}),
+            "lexicon": self.settings.get("lexicon", []) if lexicon is None else lexicon,
         }
         # Preview uses the same model settings and bundled reference as clips.
-        for key, default in self._model_fields(self.backend):
+        for key, default in self._model_fields(backend):
             extra_config[key] = engine.get(key, default)
         extra_config["project_dir"] = self.project_dir
         if self.settings_dock.apply_fx_enabled():
@@ -3672,8 +3682,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                 payload = f"Preview error: {e}"
             self.previewFinished.emit(success, payload)
 
-        future = self.backend.preview(preview_text, state["voice"], state["speed"], tmp_path,
-                                      extra_config, lang_code=state["lang_code"])
+        future = backend.preview(text, state["voice"], state["speed"], tmp_path,
+                                 extra_config, lang_code=state["lang_code"])
         future.add_done_callback(_done)
 
     def _remove_preview_file(self) -> None:

@@ -182,6 +182,27 @@ def test_preview_uses_the_active_characters_engine_and_voice(qt_app):
     assert voice == "bf_emma"
 
 
+def test_preview_text_speaks_the_given_text_as_the_given_character(qt_app):
+    first = qt_app.document.characters[0]
+    second = Character(name="Other", preset_data={"voice": "bf_emma"})
+    qt_app.document.characters.append(second)
+    first.preset_data["voice"] = "af_heart"
+    qt_app.preview_text("Hello there", character=second)
+    (text, voice, _speed, _path, _extra), _kwargs = qt_app.engine.generate_preview.call_args
+    assert (text, voice) == ("Hello there", "bf_emma")
+    qt_app.preview_text("Again")
+    (text, voice, *_rest), _kwargs = qt_app.engine.generate_preview.call_args
+    assert (text, voice) == ("Again", "af_heart")
+
+
+def test_preview_text_uses_the_saved_lexicon_unless_given_one(qt_app):
+    qt_app.settings["lexicon"] = [{"find": "a", "replace": "b", "mode": "word", "case": False}]
+    qt_app.preview_text("x")
+    assert qt_app.engine.generate_preview.call_args[0][4]["lexicon"] == qt_app.settings["lexicon"]
+    qt_app.preview_text("x", lexicon=[])
+    assert qt_app.engine.generate_preview.call_args[0][4]["lexicon"] == []
+
+
 def test_preview_writes_to_a_private_temp_file_and_the_next_one_removes_it(qt_app):
     import os
 
