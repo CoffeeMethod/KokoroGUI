@@ -127,13 +127,14 @@ def _is_blank(text: str, index: int) -> bool:
 
 
 def timed_span(document, filler: Filler) -> Optional[tuple]:
-    """`(start_s, end_s)` in the recording file of the words under the filler's
-    word, or None when none is timed. What the dialog's Play button plays."""
+    """`(source, start_s, end_s)` of the words under the filler's word: the
+    recording (a key of `Document.sources`) and where the word sits in it, or
+    None when none is timed. What the dialog's Play button plays."""
     clip = document.get_clip(filler.clip_id)
     if clip is None:
         return None
-    times = [(start_s, end_s) for w_start, w_end, _source, start_s, end_s in imported.clip_words(document, clip)
-             if w_end > filler.word_start and w_start < filler.word_end]
-    if not times:
+    rows = [(source, start_s, end_s) for w_start, w_end, source, start_s, end_s in imported.clip_words(document, clip)
+            if w_end > filler.word_start and w_start < filler.word_end]
+    if not rows:
         return None
-    return min(t[0] for t in times), max(t[1] for t in times)
+    return rows[0][0], min(row[1] for row in rows), max(row[2] for row in rows)

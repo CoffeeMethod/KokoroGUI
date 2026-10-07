@@ -150,5 +150,5 @@ def test_hits_come_back_in_text_order():
 def test_timed_span_is_the_word_in_the_recording_file():
     doc = _doc("Well um we went")
     hit, = find_fillers(doc)
-    start_s, end_s = timed_span(doc, hit)
-    assert (round(start_s, 2), round(end_s, 2)) == (0.3, 0.6)
+    source, start_s, end_s = timed_span(doc, hit)
+    assert (source, round(start_s, 2), round(end_s, 2)) == (A, 0.3, 0.6)

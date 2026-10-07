@@ -123,3 +123,111 @@ def test_delete_ranges_merges_overlaps_and_ignores_empty_ones(qt_app, tmp_path):
     assert document.text == text[:start] + text[start + 5:]
     qt_app.undo()
     assert document.text == text
+
+
+# -- the dialog and the Edit menu entry ----------------------------------------
+
+
+def _answer(qt_app, monkeypatch, edit=None, accept=True):
+    """Patches the dialog's modal: `edit(dialog)` runs first (tick boxes),
+    then the dialog is accepted or cancelled. Returns the dialogs shown."""
+    shown = []
+
+    def _ask(dialog):
+        shown.append(dialog)
+        if edit is not None:
+            edit(dialog)
+        return accept
+
+    monkeypatch.setattr(qt_app, "_ask_fillers", _ask)
+    return shown
+
+
+def test_the_edit_menu_has_the_entry(qt_app):
+    labels = [a.text() for a in qt_app.edit_menu.actions()]
+    assert "Remove &Filler Words..." in labels
+
+
+def test_the_dialog_lists_every_hit_with_the_safe_ones_checked(qt_app, tmp_path, monkeypatch):
+    _recording(qt_app, tmp_path, [[("So,", 0.0, 0.4), ("like,", 0.5, 0.9), ("um", 1.0, 1.4), ("we", 1.5, 1.9),
+                                   ("left", 2.0, 2.4)]])
+    shown = _answer(qt_app, monkeypatch, accept=False)
+
+    assert qt_app.remove_filler_words() == 0
+
+    dialog, = shown
+    assert [h.text for h in dialog.hits()] == ["like", "um"]
+    assert [dialog.is_checked(i) for i in range(dialog.row_count())] == [False, True]
+    assert dialog.remove_button.text() == "Remove 1"
+    assert qt_app.document.text == "So, like, um we left"
+
+
+def test_unchecked_rows_stay_and_checked_rows_go(qt_app, tmp_path, monkeypatch):
+    _recording(qt_app, tmp_path, [[("So,", 0.0, 0.4), ("like,", 0.5, 0.9), ("um", 1.0, 1.4), ("we", 1.5, 1.9),
+                                   ("left", 2.0, 2.4)]])
+    document = qt_app.document
+    before = copy.deepcopy(document.runs)
+    _answer(qt_app, monkeypatch)
+
+    assert qt_app.remove_filler_words() == 1
+    assert document.text == "So, like, we left"
+    assert "um" not in qt_app.editor.toPlainText().split()
+
+    qt_app.undo()
+    assert document.runs == before and qt_app.editor.toPlainText() == "So, like, um we left"
+
+
+def test_checking_a_context_row_removes_it_too(qt_app, tmp_path, monkeypatch):
+    _recording(qt_app, tmp_path, [[("So,", 0.0, 0.4), ("like,", 0.5, 0.9), ("we", 1.0, 1.4), ("left", 1.5, 1.9)]])
+    _answer(qt_app, monkeypatch, edit=lambda dialog: dialog.set_checked(0, True))
+
+    assert qt_app.remove_filler_words() == 1
+    assert qt_app.document.text == "So, we left"
+
+
+def test_cancel_and_an_empty_selection_change_nothing(qt_app, tmp_path, monkeypatch):
+    _recording(qt_app, tmp_path, [SAYING])
+    text = qt_app.document.text
+    _answer(qt_app, monkeypatch, accept=False)
+    assert qt_app.remove_filler_words() == 0 and qt_app.document.text == text
+
+    _answer(qt_app, monkeypatch, edit=lambda dialog: dialog.set_all(False))
+    assert qt_app.remove_filler_words() == 0 and qt_app.document.text == text
+    assert qt_app.editor.toPlainText() == text
+
+
+def test_with_no_fillers_it_says_so_and_shows_no_dialog(qt_app, tmp_path, monkeypatch):
+    _recording(qt_app, tmp_path, [LATER])
+    shown = _answer(qt_app, monkeypatch)
+
+    assert qt_app.remove_filler_words() == 0
+
+    assert shown == []
+
+
+def test_generated_text_is_never_offered(qt_app, monkeypatch):
+    from PySide6.QtGui import QTextCursor
+
+    cursor = QTextCursor(qt_app.editor.document())
+    cursor.insertText("Well um we went")
+    qt_app.document.assign_character_to_range(0, len(qt_app.document.text), qt_app.document.characters[0].id)
+    shown = _answer(qt_app, monkeypatch)
+
+    assert qt_app.remove_filler_words() == 0 and shown == []
+
+
+def test_play_reads_the_fillers_slice_of_the_recording_with_a_margin(qt_app, tmp_path, monkeypatch):
+    from kokoro_gui.qt import filler_dialog
+
+    _source, _ids = _recording(qt_app, tmp_path, [SAYING])
+    played = []
+    monkeypatch.setattr(filler_dialog.playback, "play_range", lambda path, a, b: played.append((path, a, b)))
+    hits = fillers.find_fillers(qt_app.document)
+    dialog = filler_dialog.FillerDialog(qt_app.document, hits)
+
+    assert dialog.play(0) is True
+
+    (path, start_s, end_s), = played
+    assert path.endswith(".wav") and "imported" in path
+    assert start_s == 0.45 - filler_dialog.PLAY_MARGIN_S
+    assert end_s == 0.95 + filler_dialog.PLAY_MARGIN_S
