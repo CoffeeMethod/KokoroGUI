@@ -102,6 +102,8 @@ STATUS_FILTERS = {
     "needs_rewrite": {"needs_rewrite"},
 }
 FILTERED_OUT_OPACITY = 0.3
+# Side of the corner mark on a clip whose audio didn't match its text.
+FLAG_MARK_PX = 12.0
 LANE_HEIGHT_PX = 80.0
 LANE_MARGIN_PX = 8.0
 MIN_CLIP_WIDTH_PX = 20.0
@@ -217,6 +219,7 @@ class ClipBlockItem(QGraphicsItem):
         self._fx_active = False
         self._estimated = False
         self._overlap = False
+        self._flagged = False
         # A subproject's block (phase 4): None for an ordinary clip, else
         # "ok", "stale" or "missing".
         self._nested_state = None
@@ -308,6 +311,17 @@ class ClipBlockItem(QGraphicsItem):
     @property
     def overlap(self) -> bool:
         return self._overlap
+
+    def set_flagged(self, flagged: bool) -> None:
+        """Proof by ASR: the clip's audio didn't match its text. Paints a
+        corner mark in the theme's `proof_flag` color."""
+        if flagged != self._flagged:
+            self._flagged = flagged
+            self.update()
+
+    @property
+    def flagged(self) -> bool:
+        return self._flagged
 
     def set_fit(self, slot_start_px: Optional[float], slot_width_px: Optional[float],
                 ratio: Optional[float]) -> None:
@@ -466,6 +480,21 @@ class ClipBlockItem(QGraphicsItem):
         if self._label and self._width >= LABEL_MIN_WIDTH_PX:
             painter.setPen(label_color_for(base) if not self._estimated else QColor(pal.text))
             painter.drawText(rect.adjusted(label_left, 3, -4, -2), 0, self._label)
+
+        if self._flagged:
+            # A triangle in the bottom-left corner: the top corners hold the
+            # fade handles and the bottom right the FX chip.
+            size = min(FLAG_MARK_PX, self._width / 2.0, self._height / 2.0)
+            mark = QPainterPath()
+            mark.moveTo(1.0, self._height - 1.0)
+            mark.lineTo(1.0 + size, self._height - 1.0)
+            mark.lineTo(1.0, self._height - 1.0 - size)
+            mark.closeSubpath()
+            painter.save()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(pal.proof_flag))
+            painter.drawPath(mark)
+            painter.restore()
 
         if self.is_compact:
             # Zoomed far out: the fade handles and the FX chip are fixed-size
@@ -945,6 +974,7 @@ class TimelineView(QGraphicsView):
 
         self._automation_shown: set = set()
         self._nested_state_fn = None
+        self._flagged_fn = None
         self._automation_items: dict = {}
         # Reconciled rendering (`render_document`): per clip id, what its
         # block shows and what its waveform was drawn from; peaks by render
@@ -1690,8 +1720,10 @@ class TimelineView(QGraphicsView):
 
     def render_document(self, document, arrangement: Optional[Arrangement] = None,
                         clip_samples=None, nested_state=None, clip_render_key=None,
-                        clip_samples_async=None) -> None:
-        """`clip_samples_async(clip, on_ready)` is `clip_samples` that may
+                        clip_samples_async=None, flagged=None) -> None:
+        """`flagged(clip)` says whether a block gets the proof mark (Proof by
+        ASR); unset keeps the last one given.
+        `clip_samples_async(clip, on_ready)` is `clip_samples` that may
         answer later; when given, a block's waveform is drawn once it does
         and nothing is rendered on this thread.
         `nested_state(clip)` gives a subproject block's state ("ok",
@@ -1709,6 +1741,8 @@ class TimelineView(QGraphicsView):
         pal = theme.current()
         if nested_state is not None:
             self._nested_state_fn = nested_state
+        if flagged is not None:
+            self._flagged_fn = flagged
         if clip_render_key is not None:
             self._clip_render_key = clip_render_key
         if document is not self._rendered_document:
@@ -1785,9 +1819,11 @@ class TimelineView(QGraphicsView):
                 audio_segment = next((s for s in clip.segments if s.audio_path), None)
                 audio_path = audio_segment.audio_path if audio_segment is not None else None
 
+            flag_fn = self._flagged_fn
+            is_flagged = bool(flag_fn(clip)) if flag_fn is not None and not clip.has_placeholder else False
             state = (x, y, width, height, color, label, clip.id in overlapping, nested_value, clip.is_bed,
                      loop_marks, fit, placed.estimated, placed.start_s, placed.duration_s, fades, fx_active,
-                     audio_path)
+                     audio_path, is_flagged)
             block = self._blocks_by_clip_id.get(clip.id)
             if block is None:
                 block = ClipBlockItem()
@@ -1798,6 +1834,7 @@ class TimelineView(QGraphicsView):
             previous = self._block_states.get(clip.id)
             if previous is None or previous[0] != state:
                 block.set_overlap(clip.id in overlapping)
+                block.set_flagged(is_flagged)
                 block.set_color(color)
                 block.set_nested_state(nested_value)
                 block.set_bed(clip.is_bed, loop_marks)
@@ -1924,6 +1961,7 @@ class TimelineWidget(QWidget):
 
     def render_document(self, document, arrangement: Optional[Arrangement] = None,
                         clip_samples=None, nested_state=None, clip_render_key=None,
-                        clip_samples_async=None) -> None:
+                        clip_samples_async=None, flagged=None) -> None:
         self.view.render_document(document, arrangement, clip_samples=clip_samples, nested_state=nested_state,
-                                  clip_render_key=clip_render_key, clip_samples_async=clip_samples_async)
+                                  clip_render_key=clip_render_key, clip_samples_async=clip_samples_async,
+                                  flagged=flagged)

@@ -187,6 +187,7 @@ SETTINGS_DEFAULTS = {
     "character_fx_copy": True,
     "notify_sound": True,       # Options > Sound when a long job finishes
     "snap_to_grid": False,      # the Timeline dock's Snap to grid button and the G key
+    "proof_threshold": 0.92,    # Proof dock: a clip matching its text less closely than this is flagged
     # Options > Transcript details: the master switch, then one toggle per
     # overlay (each counts only while the master is on).
     "transcript_details": False,

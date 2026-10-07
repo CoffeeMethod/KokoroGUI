@@ -74,6 +74,7 @@ from kokoro_gui.qt.about_dialog import (
 )
 from kokoro_gui.qt import keymap
 from kokoro_gui.qt import recording_import, resume_view
+from kokoro_gui.qt.proofing import ProofMixin
 from kokoro_gui.qt.subprojects import ParentStore, SubprojectsMixin
 from kokoro_gui.qt.selection import SelectionModel
 from kokoro_gui.qt.speaker_mapping_dialog import (
@@ -95,8 +96,8 @@ from kokoro_gui.daw.arrangement import clip_audio_duration_s  # noqa: E402
 from kokoro_gui.qt.characters_dialog import CharactersDialog  # noqa: E402
 from kokoro_gui.qt.fx_presets import list_fx_preset_names  # noqa: E402
 from kokoro_gui.qt.docks import (  # noqa: E402
-    FXDock, LexiconDock, MixingDock, OutlineDock, SettingsDock, TimelineDock, TranscriptDock, TransportDock,
-    VideoDock, VoiceCloneDock,
+    FXDock, LexiconDock, MixingDock, OutlineDock, ProofDock, SettingsDock, TimelineDock, TranscriptDock,
+    TransportDock, VideoDock, VoiceCloneDock,
 )
 from kokoro_gui.qt.docks.export_dialog import (  # noqa: E402
     ExportDialog, ExportReportDialog, LoudnessDialog, run_export, run_measure_loudness,
@@ -121,7 +122,7 @@ TIMELINE_TYPING_DEBOUNCE_MS = 60
 LIBRARY_WATCH_DEBOUNCE_MS = 150
 
 
-class QtTTSApp(SubprojectsMixin, QMainWindow):
+class QtTTSApp(SubprojectsMixin, ProofMixin, QMainWindow):
     previewFinished = Signal(bool, str)
     themeChanged = Signal()
     exportProgress = Signal(float, str)
@@ -138,6 +139,10 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
     # (done, total), the result as [(clip_id, segment_id, words)].
     _wordAlignProgress = Signal(int, int)
     _wordsAligned = Signal(object)
+    # Proof by ASR (plan 21): progress as (done, total) segments, the
+    # result as (scored, skipped, cancelled), see proofing.py.
+    _proofProgress = Signal(int, int)
+    _proofFinished = Signal(object)
     # A render finished on the pool (`audio/post.py`): queued onto the GUI
     # thread, which stores it and calls the readers waiting on it.
     _rendersReady = Signal()
@@ -238,6 +243,9 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self._wordAlignProgress.connect(self._on_word_align_progress)
         self._wordsAligned.connect(self._on_words_aligned)
         self._word_align_thread: threading.Thread | None = None
+        self._proofProgress.connect(self._on_proof_progress)
+        self._proofFinished.connect(self._on_proof_finished)
+        self._init_proof()
         self._rendersReady.connect(self._on_renders_ready)
         post.set_notifier(self._rendersReady.emit)
         # `_post_inputs_fingerprint` at the last pre-warm; None until one is seen.
@@ -302,6 +310,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.fx_dock: FXDock | None = None
         self.lexicon_dock: LexiconDock | None = None
         self.outline_dock: OutlineDock | None = None
+        self.proof_dock: ProofDock | None = None
         self.mixing_dock: MixingDock | None = None
         self._preview_path: str | None = None
         self.voice_clone_dock: VoiceCloneDock | None = None
@@ -1190,6 +1199,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         self.fx_dock = FXDock(self)
         self.lexicon_dock = LexiconDock(self)
         self.outline_dock = OutlineDock(self)
+        self.proof_dock = ProofDock(self)
         self.timeline_dock = TimelineDock(self)
         self.transport_dock = TransportDock(self)
         self.video_dock = VideoDock(self)
@@ -1236,7 +1246,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         bottom = Qt.DockWidgetArea.LeftDockWidgetArea
         self.addDockWidget(top, self.transcript_dock)
         self.addDockWidget(top, self.settings_dock)
-        for dock in (self.fx_dock, self.lexicon_dock, self.outline_dock):
+        for dock in (self.fx_dock, self.lexicon_dock, self.outline_dock, self.proof_dock):
             self.addDockWidget(top, dock)
             self.tabifyDockWidget(self.settings_dock, dock)
         self._follow_active_for_voices()
@@ -1288,7 +1298,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def _all_docks(self) -> list:
         docks = [self.transcript_dock, self.settings_dock, self.fx_dock, self.lexicon_dock,
-                 self.outline_dock, self.mixing_dock, self.voice_clone_dock, self.timeline_dock, self.transport_dock,
+                 self.outline_dock, self.proof_dock, self.mixing_dock, self.voice_clone_dock, self.timeline_dock, self.transport_dock,
                  self.video_dock]
         return [d for d in docks if d is not None]
 
@@ -1456,6 +1466,8 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             self.transcript_dock.sync_header()
         if self.outline_dock is not None:
             self.outline_dock.refresh()
+        if self.proof_dock is not None:
+            self.proof_dock.refresh()
 
     def _prewarm_renders(self) -> None:
         """When the post inputs (Settings, project FX, the project) moved
@@ -2724,6 +2736,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
         """Steps 6 and 7: the document, the session record, the TB9 status
         line, and the backend's `on_project_opened`."""
         versions = self._engine_versions(info.manifest)
+        previous_session = project_io.read_session(project_dir)
         try:
             loaded = project_io.finish_open(info, project_dir, versions, recovered=recovered)
         except (OSError, ValueError, KeyError) as e:
@@ -2731,6 +2744,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
             QMessageBox.warning(self, "Open failed", f"Couldn't read the project: {e}")
             self._start_untitled_after_failed_open()
             return
+        self.carry_proof_over(previous_session, project_dir)
         root = self.root
         root.lock = lock
         root.project_dir = project_dir
@@ -3881,6 +3895,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
 
     def cancel_conversion(self) -> None:
         self._text_read_stop.set()
+        self._proof_cancel.set()
         for backend in self._backends.values():
             backend.cancel()
         self.set_status("Cancelling... waiting for workers...", "warning")
@@ -4391,6 +4406,7 @@ class QtTTSApp(SubprojectsMixin, QMainWindow):
                     heard = asr.transcribe_wav_words(path, "whisper")
                 except Exception:  # noqa: BLE001 - one bad file skips one segment
                     continue
+                self.remember_heard(path, heard)
                 out.append((clip_id, segment_id, wordalign.align(text, heard)))
             self._wordsAligned.emit(out)
 
