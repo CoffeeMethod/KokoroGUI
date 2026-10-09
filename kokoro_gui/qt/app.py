@@ -99,7 +99,7 @@ from kokoro_gui.daw.arrangement import clip_audio_duration_s  # noqa: E402
 from kokoro_gui.qt.characters_dialog import CharactersDialog  # noqa: E402
 from kokoro_gui.qt.fx_presets import list_fx_preset_names  # noqa: E402
 from kokoro_gui.qt.docks import (  # noqa: E402
-    FXDock, LexiconDock, MixingDock, OutlineDock, ProofDock, SettingsDock, TimelineDock, TranscriptDock,
+    FXDock, LexiconDock, MixingDock, OutlineDock, ProofDock, QueueDock, SettingsDock, TimelineDock, TranscriptDock,
     TransportDock, VideoDock, VoiceCloneDock,
 )
 from kokoro_gui.qt.docks.export_dialog import (  # noqa: E402
@@ -1213,10 +1213,12 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.lexicon_dock = LexiconDock(self)
         self.outline_dock = OutlineDock(self)
         self.proof_dock = ProofDock(self)
+        self.queue_dock = QueueDock(self)
         self.timeline_dock = TimelineDock(self)
         self.transport_dock = TransportDock(self)
         self.video_dock = VideoDock(self)
 
+        self.refresh_queue_ui()
         self.timeline_dock.batchGenerationProgress.connect(self.on_batch_generation_progress)
         self.timeline_dock.batchGenerationFinished.connect(self.on_batch_generation_finished)
         self.timeline_dock.timeline_view.seekRequested.connect(self.transport.seek)
@@ -1262,7 +1264,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         bottom = Qt.DockWidgetArea.LeftDockWidgetArea
         self.addDockWidget(top, self.transcript_dock)
         self.addDockWidget(top, self.settings_dock)
-        for dock in (self.fx_dock, self.lexicon_dock, self.outline_dock, self.proof_dock):
+        for dock in (self.fx_dock, self.lexicon_dock, self.outline_dock, self.proof_dock, self.queue_dock):
             self.addDockWidget(top, dock)
             self.tabifyDockWidget(self.settings_dock, dock)
         self._follow_active_for_voices()
@@ -1314,7 +1316,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
     def _all_docks(self) -> list:
         docks = [self.transcript_dock, self.settings_dock, self.fx_dock, self.lexicon_dock,
-                 self.outline_dock, self.proof_dock, self.mixing_dock, self.voice_clone_dock, self.timeline_dock, self.transport_dock,
+                 self.outline_dock, self.proof_dock, self.queue_dock, self.mixing_dock, self.voice_clone_dock, self.timeline_dock, self.transport_dock,
                  self.video_dock]
         return [d for d in docks if d is not None]
 

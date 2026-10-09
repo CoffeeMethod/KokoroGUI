@@ -388,6 +388,15 @@ class GenerationQueueMixin:
             # Between two items (a pump is pending): nothing left to wait for.
             self._queue_go_idle()
 
+    def cancel_queue_clicked(self) -> None:
+        """The Queue dock's Cancel all: stops a running generate the way the
+        Transport dock's Cancel does; with nothing running it clears the
+        queued items."""
+        if self.queue_active:
+            self.cancel_conversion()
+        else:
+            self.cancel_queue()
+
     def remove_queue_item(self, item: QueueItem) -> bool:
         if self.generation_queue.remove(item):
             self._queue_changed()
