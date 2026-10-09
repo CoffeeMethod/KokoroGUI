@@ -103,6 +103,7 @@
         <a href="#luxtts">LuxTTS</a>
         <a href="#presets">Preset files</a>
         <a href="#jit">JIT streaming</a>
+        <a href="#storage">Storage</a>
         <a href="#force-refresh">Force refresh</a>
       </div>
     </div>
@@ -654,6 +655,22 @@
       <div class="prose reveal">
         <p>"JIT streaming (no-clips fallback only)" plays a project that has no clips yet while it's still generating: one thread fills a queue, another plays from it. That only works when the engine makes audio faster than it plays, with enough margin that playback never catches up.</p>
         <p>Kokoro can. Audio8 and LuxTTS generate one piece at a time and have no JIT streaming support, so with a character using either engine selected the entry is greyed out and generation runs normally. Once a project has clips, Generate works clip by clip and the transport plays them, and this setting doesn't apply.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="storage">
+    <div class="wrap">
+      <h2><span class="idx">Options menu</span>Storage</h2>
+      <div class="prose reveal">
+        <p>Options &gt; Storage... shows what the program keeps in its cache folder and how big each part is.</p>
+        <ul>
+          <li><strong>Generated audio cache.</strong> Whole-document and JIT generation save each piece of audio here under a long key and reuse it when the same text, voice and settings come round again. Clips generated from the timeline don't use it; their audio lives in the project.</li>
+          <li><strong>Audio8 reference codes.</strong> One small file per reference WAV, so the reference is encoded once. Deleting them costs a re-encode.</li>
+          <li><strong>Project working copies.</strong> The folder every open and recent project is unpacked into, with unsaved work in it. It is listed for its size only. There is no Clear for it, and the app removes old copies by itself.</li>
+        </ul>
+        <p>Clear asks first and tells you the size. It is greyed out while a generate or export runs. "Keep the generated audio cache under" is a size limit in MB, 2048 by default, and 0 turns it off. Over the limit, the least recently used audio is deleted at launch and after a generate ends. The limit is a program setting, shared by every project.</p>
+        <p>Clear and the limit delete only files directly in the cache folder named like a cache entry. They never open <code>projects/</code> or <code>logs/</code>, and they skip symlinks.</p>
       </div>
     </div>
   </section>

@@ -131,6 +131,18 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Storage</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Options &gt; Storage</h4>
+            <p>The dialog lists three things in the cache folder with their size: the generated audio cache (what whole-document and JIT generation reuse), Audio8's reference codes, and the project working copies. Sizes are measured on a worker thread when the dialog opens. Clear sits beside the first two. It asks first, with the size in the question, and it is greyed out while a job runs. The working copies have no button, because the unsaved work of every open project lives in them and the app tidies the rest itself. Show cache folder opens the folder, and Help &gt; About shows the cache size.</p>
+            <p>"Keep the generated audio cache under" sets a limit in MB, 2048 by default and 0 for none. When the cache is over it, at launch and after a generate ends, the least recently used audio goes, all the files of one key together. A cache hit now sets the modified time of the files it reuses, so "used" means "modified". The limit is <code>segment_cache_max_mb</code> in <code>config_qt.json</code> and is never saved in a project. Clips generated one by one live in the project and are not in this cache.</p>
+            <p>Clear and the trim delete only files directly in the cache folder whose names look like a cache entry (a 64-character key, a number and an audio extension). They never enter <code>projects/</code> or <code>logs/</code>, never delete a folder, and skip symlinks. Nothing in the project file changes.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Export and loudness</h3>
         <ul class="change-list">
           <li>
