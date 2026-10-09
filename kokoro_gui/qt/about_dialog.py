@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QDialog, QDialogButtonBox, QPlainTextEdit, QPushBu
 
 import kokoro_gui
 from kokoro_gui import logging_setup
-from kokoro_gui.engine import asr, runtime
+from kokoro_gui.engine import asr, cache_admin, runtime
 from kokoro_gui.engines import registry
 
 SHORTCUT_DESCRIPTION_PROPERTY = "description"  # set on a QShortcut to label its row in the sheet
@@ -74,6 +74,13 @@ def _engine_lines() -> list[str]:
     return lines
 
 
+def _cache_size() -> str:
+    try:
+        return cache_admin.describe(cache_admin.segment_cache_usage())
+    except Exception:
+        return "size unknown"
+
+
 def about_text(config_file: str) -> str:
     """The About dialog's text. `config_file` is the program settings file
     the app reads (the app owns that path)."""
@@ -88,6 +95,7 @@ def about_text(config_file: str) -> str:
         *_engine_lines(),
         "",
         f"Cache folder: {os.path.abspath(runtime.CACHE_DIR)}",
+        f"Generated audio cache: {_cache_size()} (Options > Storage)",
         f"Mixes folder: {os.path.abspath(runtime.CUSTOM_VOICES_DIR)}",
         f"Settings file: {os.path.abspath(config_file)}",
         f"Log file: {logging_setup.resolve_log_path(runtime.CACHE_DIR)}",
