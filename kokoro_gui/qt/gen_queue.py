@@ -193,7 +193,8 @@ class GenerationQueueMixin:
                  and not self.cannot_generate(stale[clip_id], project)]
         if not clips:
             return False
-        entries = self._clip_entries(project, clips)
+        # The item keeps the order it was planned in (text order).
+        entries = [(clip.id, len(document.clip_text(clip)), self.backend_for(clip, project).id) for clip in clips]
         item.clip_ids = [clip_id for clip_id, _chars, _engine in entries]
         item.engine_chars = {}
         for _clip_id, chars, engine_id in entries:

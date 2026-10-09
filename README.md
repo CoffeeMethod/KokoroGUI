@@ -37,6 +37,8 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
     dubbing. Transcripts (WebVTT, SRT, Podcasting 2.0 JSON, plain text), a chapters file and show notes can ride along.
     mp3, flac and ogg files carry a title, artist, show, episode number and cover image, and an mp3 carries its chapters.
     An M4B audiobook has a chapter per subproject. File > Measure Loudness reports the numbers.
+-   **Generation queue.** Generate works through the stale clips eight at a time, so a book fills in as it goes. The
+    Queue tab lists the batches with the time left, and you can pause, reorder and resume them, even after a restart.
 -   **Proofing.** The Proof tab has Whisper listen to the generated clips, compares what it heard with each clip's
     text and lists the ones that don't match, worst first.
 -   **One-file projects.** A `.tbaw` holds the text, the audio and every voice it uses, so it opens
@@ -46,6 +48,8 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 Unreleased:
 
+-   Generate fills a book in as it goes: the stale clips run eight at a time, a Queue tab lists the batches with the time
+    left, and Pause, reorder and Resume work on them, even after a restart
 -   Added the optional [LuxTTS engine](docs/settings.html#luxtts).
 -   A Help menu with Documentation, Keyboard Shortcuts and About, and File > Show in Folder
 -   A log file, and a dialog with the traceback when something crashes
