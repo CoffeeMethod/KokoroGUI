@@ -113,8 +113,10 @@ def gaps_before(document) -> dict:
     """`{clip_id: (kind, seconds)}` for the silence `compute_arrangement`
     places before each clip in the text, in one pass in text order: kind
     "time" when the clip is placed by `timeline_timestamp` (seconds is the
-    timestamp), else "override" (its own `gap_before_s`), "paragraph" or
-    "clip" (the document's gaps), or "first" for the first clip. Like the
+    timestamp), "overlap" when it starts before the previous clip ends
+    (`overrides["overlap_s"]`, seconds is the overlap), else the kind
+    `arrangement.boundary_gap` names ("override", "chapter", "heading",
+    "paragraph", "jitter" or "clip") or "first" for the first clip. Like the
     arrangement, a bed placed in time doesn't count as the clip before the
     next one."""
     # Every clip's extent in one walk over the runs (`clip_extent` is a scan
@@ -128,22 +130,23 @@ def gaps_before(document) -> dict:
     extents = sorted(((spans[c.id][0], spans[c.id][1], c) for c in document.clips if c.id in spans),
                      key=lambda item: item[0])
     text = document.text
+    heading_id = arrangement.heading_clip_id(document)
     out = {}
     previous_end = None
+    previous = None
     for start, end, clip in extents:
         if clip.timeline_timestamp is not None:
             out[clip.id] = ("time", float(clip.timeline_timestamp))
         else:
-            seconds = arrangement.boundary_gap_s(document, text, previous_end, clip, start)
-            if clip.gap_before_s is not None:
-                kind = "override"
-            elif previous_end is None:
-                kind = "first"
+            overlap = arrangement.overlap_s(clip) if previous is not None else None
+            if overlap is not None:
+                out[clip.id] = ("overlap", overlap)
             else:
-                kind = "paragraph" if arrangement.is_paragraph_break(text[previous_end:start]) else "clip"
-            out[clip.id] = (kind, seconds)
+                out[clip.id] = arrangement.boundary_gap(document, text, previous_end, clip, start, previous,
+                                                        heading_id)
         if not (clip.is_bed and clip.timeline_timestamp is not None):
             previous_end = end
+            previous = clip
     return out
 
 

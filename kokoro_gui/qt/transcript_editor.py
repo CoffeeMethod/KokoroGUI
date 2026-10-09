@@ -92,6 +92,7 @@ from kokoro_gui.daw import derived, imported, segment_view, spell
 from kokoro_gui.daw.auto_split import plan_auto_split_clips
 from kokoro_gui.daw.undo import ApplyWordsCommand, AssignCharacterCommand, TextEditCommand
 from kokoro_gui.engine.segmenting import PAUSE, WORD
+from kokoro_gui.engine.text_extraction import parse_tag_content, tag_overrides
 from kokoro_gui.qt import project as project_io
 from kokoro_gui.qt import theme
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
@@ -1619,7 +1620,7 @@ class TranscriptEditor(QTextEdit):
         match = _SHORTHAND_LINE_PATTERN.match(line_text)
         if match is None:
             return
-        speaker_name, _colon, fx_name = (part.strip() for part in match.group(1).partition(":"))
+        speaker_name, fx_name, options = parse_tag_content(match.group(1))
         character = self.app.document.get_character_by_name(speaker_name)
         if character is None:
             return
@@ -1629,13 +1630,19 @@ class TranscriptEditor(QTextEdit):
         if self.app.document.clip_covering(line_start) is not None:
             return  # already tagged - don't reassign on every revisit
         # The tag's FX name becomes the clip's FX (grill TE12).
-        overrides = None
+        overrides = {}
         if fx_name:
             if fx_name in list_fx_preset_names(self.app.project_dir):
-                overrides = {"fx_preset": fx_name}
+                overrides["fx_preset"] = fx_name
             else:
                 self.app.set_status(f"No FX named '{fx_name}': the clip uses its character's FX.",
                                     "warning")
+        # `[Name, overlap:0.3]:` puts the clip over the end of the one before it.
+        option_overrides, problems = tag_overrides(options)
+        overrides.update(option_overrides)
+        if problems:
+            self.app.set_status(" ".join(problems), "warning")
+        overrides = overrides or None
         self._push_assign_character(line_start, line_end, character.id, clip_overrides=overrides)
 
     # -- Characters menu -----------------------------------------------------

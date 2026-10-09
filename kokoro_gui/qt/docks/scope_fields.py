@@ -4,7 +4,8 @@ project's fields (pacing, crossfade, ripple, onset alignment, ducking,
 track layout, timecode, source track) are in Options > Settings...
 (kokoro_gui/qt/settings_window.py).
 
-Clip: its gap override (blank inherits), take, review status, note,
+Clip: its gap override (blank inherits), its overlap with the clip before
+it (`overrides["overlap_s"]`, blank for none), take, review status, note,
 source text with a syllable comparison against the clip's text, and the
 reference range (`overrides["reference_range"]`, typed as "start - end" in
 seconds, blank for none), and the duration target fit to slot aims at
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.daw import fit as fit_ops
+from kokoro_gui.daw.arrangement import OVERLAP_KEY, OVERLAP_MAX_S, overlap_s
 from kokoro_gui.daw.models import CLIP_STATUSES
 from kokoro_gui.daw.reference import REFERENCE_RANGE_KEY, reference_range
 from kokoro_gui.daw.undo import SetActiveTakeCommand, SetFieldCommand
@@ -32,6 +34,8 @@ STATUS_LABELS = {"todo": "To do", "generated": "Generated", "approved": "Approve
                  "needs_rewrite": "Needs rewrite"}
 # The clip gap spin's minimum stands for "inherit" (shown as blank text).
 GAP_INHERIT = -0.05
+# The overlap spin's minimum stands for "no overlap" (blank), likewise.
+OVERLAP_NONE = -0.05
 # The target spin's minimum stands for "no target" (blank), likewise.
 TARGET_NONE = 0.0
 TARGET_MAX_S = 3600.0
@@ -102,6 +106,16 @@ class ScopeFields(QWidget):
                                                            None if gap.value() <= GAP_INHERIT else gap.value()))
         self.form.addRow("Gap before (s):", gap)
 
+        current_overlap = overlap_s(clip)
+        overlap = _spin(OVERLAP_NONE, OVERLAP_MAX_S, 0.05, OVERLAP_NONE if current_overlap is None else current_overlap)
+        overlap.setSpecialValueText(" ")
+        overlap.setToolTip("Start this many seconds before the clip before it ends, for a backchannel or an "
+                           "interruption. Blank places it after a gap, as usual. A clip placed by hand ignores it.")
+        overlap.editingFinished.connect(
+            lambda: self._set_override(OVERLAP_KEY, None if overlap.value() <= OVERLAP_NONE
+                                       else round(overlap.value(), 3)))
+        self.form.addRow("Overlap (s):", overlap)
+
         take = QComboBox()
         active = int(clip.overrides.get("take", 0) or 0)
         for index in sorted({active, *clip.takes}):
@@ -161,7 +175,7 @@ class ScopeFields(QWidget):
             lambda: self._set_override(fit_ops.TARGET_KEY,
                                        None if target.value() <= TARGET_NONE else round(target.value(), 3)))
         self.form.addRow("Target (s):", target)
-        self.widgets = {"gap_before_s": gap, "take": take, "status": status, "note": note,
+        self.widgets = {"gap_before_s": gap, "overlap_s": overlap, "take": take, "status": status, "note": note,
                         "source_text": source, "source_edit": edit, "syllables": syllables,
                         "reference_range": reference, "target_duration_s": target}
 

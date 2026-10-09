@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import re
 
-from kokoro_gui.engine.text_extraction import PAUSE_MARKER_PATTERN, find_character_fx_spans
+from kokoro_gui.engine.text_extraction import PAUSE_MARKER_PATTERN, find_character_fx_spans, tag_overrides
 
 _PAUSE_MARKER = re.compile(PAUSE_MARKER_PATTERN)
 
@@ -106,6 +106,35 @@ def plan_tag_fx(document, triples: list) -> dict:
                 fx[start] = span.fx_name
                 break
     return fx
+
+
+def plan_tag_overrides(document, triples: list) -> dict:
+    """`{start: overrides}` for the planned ranges a tag's options set, from
+    `plan_auto_split_clips`'s triples. `[Sam, overlap:0.3]:` gives the clip
+    `{"overlap_s": 0.3}`. A tag's options belong to the clip that starts its
+    line, so with "Split by paragraph" only the span's first range gets them
+    (the later paragraphs follow it in order). The caller merges each into
+    the new clip's overrides."""
+    out = {}
+    for span in find_character_fx_spans(document.text):
+        overrides, _problems = tag_overrides(span.options)
+        if not overrides:
+            continue
+        inside = [start for start, _end, _character_id in triples if span.start <= start < span.end]
+        if inside:
+            out[min(inside)] = overrides
+    return out
+
+
+def plan_tag_option_warnings(document) -> list:
+    """The problems `tag_overrides` finds in the document's tags (an unknown
+    key, a value that isn't a number), each once, in text order."""
+    seen = []
+    for span in find_character_fx_spans(document.text):
+        for problem in tag_overrides(span.options)[1]:
+            if problem not in seen:
+                seen.append(problem)
+    return seen
 
 
 def _paragraph_ranges(text: str, base_offset: int) -> list:

@@ -81,6 +81,7 @@ Unreleased:
     a whole-word rule for every answer you type
 -   Options > Spellcheck underlines words the dictionary doesn't know, in the language of each clip's character
 -   The window says FX, Character, Reference, Mix and stale where it said FX Preset, Preset, voice reference, custom voice and dirty
+-   Chapter and heading gaps, heading speed, a varied gap between speakers, and `[Sam, overlap:0.3]:` to start a line over the one before it
 -   Playback runs at 0.5x to 2x with the voices keeping their pitch (a speed box in the transport, `[` and `]`, and `L`
     steps 1x, 1.5x, 2x), `M` drops a flag at the playhead with an optional note, and `N` jumps to the next flag
 

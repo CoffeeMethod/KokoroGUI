@@ -157,7 +157,7 @@ def _generated():
                                    tracks=[Track(name="Alice", character_id=alice.id)])
     clip = doc.assign_character_to_range(0, len(LINE), alice.id)
     clip.overrides.update({"take": 2, "speed": 1.2, "target_duration_s": 3.0, "reference_range": [1.0, 2.0],
-                           "fx_preset": "Radio"})
+                           "fx_preset": "Radio", "overlap_s": 0.3})
     clip.fx_override = {"reverb": 0.3}
     clip.status, clip.note = "approved", "check the name"
     clip.fade_in_s, clip.fade_out_s = 0.1, 0.4
@@ -194,6 +194,8 @@ def test_split_copies_the_clips_fields_to_the_second_half():
     assert clip.gap_before_s == 0.7
     # The slot the first half was cut to stays with it.
     assert clip.overrides["target_duration_s"] == 3.0 and clip.overrides["take"] == 2
+    # So does the overlap with the clip before: the second half follows the first.
+    assert clip.overrides["overlap_s"] == 0.3
 
 
 def test_split_leaves_the_first_half_stale_and_the_second_new():

@@ -157,3 +157,38 @@ def test_auto_split_sets_a_tag_fx_as_the_clip_override(qt_app, monkeypatch):
     assert default_clip.overrides.get("fx_preset") == "Radio"
     assert "fx_preset" not in by_character[bob.id].overrides
     assert any("Nowhere" in str(a) for a in warnings)
+
+
+# -- tag options (plan 24) ---------------------------------------------------
+
+
+def test_auto_split_puts_a_tag_overlap_on_the_clip_and_warns_about_unknown_options(qt_app, monkeypatch):
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: warnings.append(a)))
+    statuses = []
+    qt_app.set_status = lambda message, kind="info": statuses.append((message, kind))
+    bob = _add_bob(qt_app)
+    qt_app.document.text = "[Default]: Hello there, long line.\n\n[Bob, overlap:0.3, mood:calm]: Right."
+
+    qt_app.auto_split_and_generate()
+
+    by_character = {c.character_id: c for c in qt_app.document.clips}
+    assert by_character[bob.id].overrides == {"overlap_s": 0.3}
+    assert by_character[qt_app.document.characters[0].id].overrides == {}
+    assert not warnings
+    assert any(kind == "warning" and "mood" in message for message, kind in statuses)
+    # One undo step per clip, as before.
+    qt_app.undo()
+    assert len(qt_app.document.clips) == 1
+
+
+def test_auto_split_overlap_moves_the_clip_on_the_timeline(qt_app, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: None))
+    bob = _add_bob(qt_app)
+    qt_app.document.text = "[Default]: Hello there, long line.\n\n[Bob, overlap:0.3]: Right."
+    qt_app.auto_split_and_generate()
+
+    placed = qt_app.build_arrangement().by_clip_id()
+    first, second = (placed[c.id] for c in qt_app.document.clips)
+    assert abs(second.start_s - (first.end_s - 0.3)) < 1e-6
+    assert bob.id in {c.character_id for c in qt_app.document.clips}

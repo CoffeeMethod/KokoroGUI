@@ -47,11 +47,13 @@ from kokoro_gui.daw.migration import import_presets_to_library, link_exact_match
 from kokoro_gui.daw import fit as fit_ops, markers as marker_ops, segment_view, subtitles
 from kokoro_gui.daw.derived import StaleCacheError
 from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character, Document
-from kokoro_gui.daw.arrangement import compute_arrangement, segment_timeline
+from kokoro_gui.daw.arrangement import compute_arrangement, heading_clip_id, heading_speed, segment_timeline
 from kokoro_gui.daw.mixplan import clip_mixes
 from kokoro_gui.daw.imported import segment_plays
 from kokoro_gui.daw import spell
-from kokoro_gui.daw.auto_split import plan_auto_split_clips, plan_pause_gaps, plan_tag_fx
+from kokoro_gui.daw.auto_split import (
+    plan_auto_split_clips, plan_pause_gaps, plan_tag_fx, plan_tag_option_warnings, plan_tag_overrides,
+)
 from kokoro_gui.daw.beds import playable_segments
 from kokoro_gui.daw.mixdown import duck_db_setting
 from kokoro_gui.daw.reference import SOURCE_TRACK_KEY, reference_slices, source_track_settings
@@ -1659,6 +1661,10 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         variant_voice = self._variant_voice(clip, project)
         if variant_voice:
             config["voice"] = variant_voice
+        factor = heading_speed(project.document)
+        if factor != 1.0 and heading_clip_id(project.document) == clip.id:
+            # A chapter title reads at its own pace (the project's `heading_speed`).
+            config["speed"] = round(float(config.get("speed", 1.0) or 1.0) * factor, 4)
         config["project_dir"] = project.project_dir
         config["take"] = int(clip.overrides.get("take", 0) or 0)
         return config
@@ -1789,9 +1795,12 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         About 15 us, so the tracker asks on every read."""
         if self.settings_dock is None:
             return None
+        document = project.document
+        heading = heading_clip_id(document) if heading_speed(document) != 1.0 else None
         return json.dumps([self.settings_dock.get_state(), self.settings.get("lexicon"),
                            self.settings.get("engines"), self.settings.get("default_engine"),
-                           project.project_dir, sorted(self._backends)],
+                           project.project_dir, sorted(self._backends),
+                           heading_speed(document), heading],
                           sort_keys=True, default=str)
 
     def _dirty_check_config(self, clip, project=None) -> dict:
@@ -2160,11 +2169,15 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         kind, seconds = gap
         if kind == "time":
             return f"at {segment_view.format_length(seconds)}"
+        if kind == "overlap":
+            return f"overlap {seconds:.2f} s"
         text = f"gap {seconds:.2f} s"
         if kind == "paragraph":
             text += " ¶"
         elif kind == "override":
             text += " (set)"
+        elif kind in ("chapter", "heading"):
+            text += f" ({kind})"
         return text
 
     def _voice_label(self, clip) -> str:
@@ -3931,6 +3944,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
         gaps = plan_pause_gaps(self.document, triples)
         tag_fx = plan_tag_fx(self.document, triples)
+        tag_options = plan_tag_overrides(self.document, triples)
+        option_warnings = plan_tag_option_warnings(self.document)
         known_fx = set(list_fx_preset_names(self.project_dir))
         missing_fx = sorted({name for name in tag_fx.values() if name not in known_fx})
         if missing_fx:
@@ -3940,13 +3955,17 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             )
         for start, end, character_id in triples:
             fields = {"gap_before_s": gaps[start]} if start in gaps else None
-            overrides = {"fx_preset": tag_fx[start]} if tag_fx.get(start) in known_fx else None
+            overrides = {"fx_preset": tag_fx[start]} if tag_fx.get(start) in known_fx else {}
+            overrides.update(tag_options.get(start, {}))
+            overrides = overrides or None
             self.document.undo_stack.push(AssignCharacterCommand(start, end, character_id, clip_fields=fields,
                                                                  clip_overrides=overrides))
 
         self.editor.rehighlight()
         self.schedule_save()
         self.refresh_timeline()
+        if option_warnings:
+            self.set_status(" ".join(option_warnings), "warning")
 
         self.timeline_dock.generate_dirty_clips_requested()
 

@@ -5,6 +5,7 @@ parsing, and long-text splitting into synthesis-sized chunks.
 at call time, so tests can monkeypatch them on those modules (e.g.
 `monkeypatch.setattr(text_extraction.pypdf, "PdfReader", FakeReader)`).
 """
+import math
 import os
 import re
 import zipfile
@@ -96,6 +97,65 @@ _SPEAKER_FX_TAG_PATTERN = r"\[([^\]\n]{1,100})\]:\s*"
 PAUSE_MARKER_PATTERN = r"\[pause:(\d+(?:\.\d+)?)\]"
 _MARKUP = re.compile(f"{_SPEAKER_FX_TAG_PATTERN}|{PAUSE_MARKER_PATTERN}")
 
+# A tag's bracket reads `name[:fx](, key:value)*`: `[Sam, overlap:0.3]:`,
+# `[Sam:Radio, overlap:0.3]:`. `TAG_OPTION_KEYS` are the keys that do
+# something; a lowercase key that isn't one is still an option (and gets a
+# warning), so a typo doesn't turn into part of the speaker's name.
+TAG_OPTION_KEYS = ("overlap",)
+# `Clip.overrides` key `overlap` becomes, and its upper limit in seconds.
+OVERLAP_OVERRIDE_KEY = "overlap_s"
+OVERLAP_MAX_S = 5.0
+_TAG_OPTION = re.compile(r"^\s*([A-Za-z][A-Za-z_]*)\s*:\s*(.*?)\s*$")
+
+
+def parse_tag_content(raw: str) -> tuple:
+    """`(speaker_name, fx_name, options)` from the text between a tag's
+    brackets. Split on `,` first: the first part is `name` or `name:FX` (on
+    its first `:`), each later part a `key:value` option. A name or FX with a
+    comma in it ("Smith, John") still parses as a name: the options count
+    only when every part after the first is a `key:value` whose key is a
+    known option or is all lowercase ("John:Radio" is not an option)."""
+    options: dict = {}
+    parts = raw.split(",")
+    if len(parts) > 1:
+        found = {}
+        for part in parts[1:]:
+            match = _TAG_OPTION.match(part)
+            key = match.group(1) if match else ""
+            if not match or not (key.lower() in TAG_OPTION_KEYS or key == key.lower()):
+                found = None
+                break
+            found[key.lower()] = match.group(2)
+        if found is not None:
+            options = found
+            raw = parts[0].strip()
+    speaker_name, fx_name = raw, None
+    if ":" in raw:
+        head, _colon, tail = raw.partition(":")
+        speaker_name, fx_name = head.strip(), tail.strip()
+    return speaker_name, fx_name, options
+
+
+def tag_overrides(options: dict) -> tuple:
+    """`(overrides, warnings)` for a tag's `options`: `overlap` becomes
+    `{"overlap_s": seconds}` clamped to `0..OVERLAP_MAX_S`; an unknown key
+    or a value that isn't a number is dropped with a warning line."""
+    overrides: dict = {}
+    problems: list = []
+    for key, value in (options or {}).items():
+        if key.lower() == "overlap":
+            try:
+                seconds = float(value)
+            except (TypeError, ValueError):
+                seconds = None
+            if seconds is None or not math.isfinite(seconds):
+                problems.append(f"Tag option overlap:{value} isn't a number of seconds, so it was ignored.")
+            else:
+                overrides[OVERLAP_OVERRIDE_KEY] = round(min(OVERLAP_MAX_S, max(0.0, seconds)), 3)
+        else:
+            problems.append(f"Unknown tag option '{key}', so it was ignored.")
+    return overrides, problems
+
 
 def strip_markup(text: str, with_origin: bool = False):
     """`text` without its `[Name]:`/`[Name:FX]:` tags and `[pause:x]`
@@ -143,6 +203,8 @@ class InlineTagSpan(NamedTuple):
     end: int
     speaker_name: str
     fx_name: Optional[str]
+    # `key:value` pairs after the name, as the typed strings (`{"overlap": "0.3"}`).
+    options: dict = {}
 
 
 def find_character_fx_spans(text: str) -> list:
@@ -160,15 +222,11 @@ def find_character_fx_spans(text: str) -> list:
     matches = list(re.finditer(_SPEAKER_FX_TAG_PATTERN, text))
     spans = []
     for i, match in enumerate(matches):
-        raw_name = match.group(1)
-        speaker_name, fx_name = raw_name, None
-        if ":" in raw_name:
-            parts = raw_name.split(":", 1)
-            speaker_name = parts[0].strip()
-            fx_name = parts[1].strip()
+        speaker_name, fx_name, options = parse_tag_content(match.group(1))
 
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        spans.append(InlineTagSpan(start=match.start(), end=end, speaker_name=speaker_name, fx_name=fx_name))
+        spans.append(InlineTagSpan(start=match.start(), end=end, speaker_name=speaker_name, fx_name=fx_name,
+                                   options=options))
     return spans
 
 
@@ -336,14 +394,9 @@ class TextExtractionMixin:
 
         segments = []
         for i in range(len(matches)):
-            raw_name = matches[i].group(1)
-            speaker_name = raw_name
-            fx_name = None
-
-            if ":" in raw_name:
-                parts = raw_name.split(":", 1)
-                speaker_name = parts[0].strip()
-                fx_name = parts[1].strip()
+            # `[Name, overlap:0.3]:` options mean nothing here: this path has
+            # no timeline. They are parsed only so the name is right.
+            speaker_name, fx_name, _options = parse_tag_content(matches[i].group(1))
 
             start = matches[i].end()
             end = matches[i+1].start() if i+1 < len(matches) else len(text)

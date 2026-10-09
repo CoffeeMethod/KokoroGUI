@@ -338,9 +338,10 @@ class Run(Tracked):
 
 # `Run.kind` (and `Clip.source`) of an imported recording's text.
 IMPORTED = "imported"
-# `Clip.overrides` keys that belong to one clip: its take, and the slot a
-# subtitle cue or a dub's reference line sets. A split's second half drops them.
-_SLOT_KEYS = frozenset({"take", "target_duration_s", "reference_range"})
+# `Clip.overrides` keys that belong to one clip: its take, the slot a
+# subtitle cue or a dub's reference line sets, and the overlap with the clip
+# before it. A split's second half drops them.
+_SLOT_KEYS = frozenset({"take", "target_duration_s", "reference_range", "overlap_s"})
 # The `Document.settings` key holding `Document.sources`.
 SOURCES_KEY = "sources"
 

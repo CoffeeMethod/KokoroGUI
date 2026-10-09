@@ -393,3 +393,34 @@ def test_an_engine_with_no_voices_leaves_the_character_without_one(qt_app, monke
 
     assert "voice" not in character.preset_data
     assert character.variants == {"angry": "angry_ref"}
+
+
+def test_clip_scope_overlap_field_sets_and_clears_the_override_undoably(qt_app):
+    import pytest
+
+    qt_app.document.text = "A long first line here. Right."
+    character = qt_app.document.characters[0]
+    first = qt_app.document.assign_character_to_range(0, 23, character.id)
+    second = qt_app.document.assign_character_to_range(24, 30, character.id)
+    qt_app.selection.select_clip(second.id)
+    fields = qt_app.settings_dock.scope_fields.widgets
+    assert fields["overlap_s"].value() == fields["overlap_s"].minimum()  # blank
+
+    before = qt_app.build_arrangement().by_clip_id()[second.id].start_s
+    fields["overlap_s"].setValue(0.3)
+    fields["overlap_s"].editingFinished.emit()
+
+    assert second.overrides["overlap_s"] == 0.3
+    placed = qt_app.build_arrangement().by_clip_id()
+    assert placed[second.id].start_s == pytest.approx(placed[first.id].end_s - 0.3)
+    assert placed[second.id].start_s < before
+    qt_app.undo()
+    assert "overlap_s" not in second.overrides
+
+    fields = qt_app.settings_dock.scope_fields.widgets
+    fields["overlap_s"].setValue(0.0)
+    fields["overlap_s"].editingFinished.emit()
+    assert second.overrides["overlap_s"] == 0.0  # zero is an overlap of nothing, no gap
+    fields["overlap_s"].setValue(fields["overlap_s"].minimum())
+    fields["overlap_s"].editingFinished.emit()
+    assert "overlap_s" not in second.overrides

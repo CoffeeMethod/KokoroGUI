@@ -184,6 +184,7 @@
           <thead><tr><th>Field</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td>Gap before</td><td>This clip's own gap, over the project's. Blank uses the project's. A <code>[pause:x]</code> marker sets it when Auto-split creates the clip.</td></tr>
+            <tr><td>Overlap</td><td>Starts this clip that many seconds before the clip before it ends (0 to 5), for a backchannel. Blank places it after a gap. <code>[Name, overlap:0.3]:</code> sets it. A clip placed by hand ignores it.</td></tr>
             <tr><td>Take</td><td>Switch between the clip's takes, like the timeline's Take menu.</td></tr>
             <tr><td>Status / Note</td><td>Review state and a note, for the timeline filter and the cue sheet.</td></tr>
             <tr><td>Source text</td><td>The original line a dub is written against. Press Edit to change it and Save to store it. It shows as the transcript gutter's tooltip, and a rough syllable count of both lines sits underneath (vowel groups per word: a length check, not a real syllable count).</td></tr>
@@ -237,6 +238,10 @@
           <tbody>
             <tr><td>Subproject title</td><td>Shown while a subproject is focused. Its name: its line in the parent, its block and the breadcrumb show it. Stored in its own <code>project.json</code>.</td></tr>
             <tr><td>Gap / Paragraph gap</td><td>Seconds of silence between clips placed one after another (default 0.35), and between clips with a blank line between them (default 0.9). 0 gives the old back-to-back placement. Clips you've dragged to a fixed time ignore both.</td></tr>
+            <tr><td>Chapter gap</td><td>Seconds of silence before a subproject. It follows the paragraph gap until you set it.</td></tr>
+            <tr><td>Gap after a heading</td><td>Seconds of silence after the document's first clip when it is a heading: one line of at most 12 words that doesn't end in a full stop, <code>!</code>, <code>?</code>, <code>,</code> or <code>;</code>. Default 1.2. Set it to the Gap to place the clip after a title like any other.</td></tr>
+            <tr><td>Heading speed</td><td>A multiple of the heading clip's speed. 1.00 is off. A change makes the heading stale once.</td></tr>
+            <tr><td>Vary the gap when the speaker changes</td><td>Off by default. On, a clip whose character differs from the one before draws its gap between the two values, the same draw on every run. A line by the same speaker and a blank-line gap keep their own.</td></tr>
             <tr><td>Auto-crossfade overlapping clips</td><td>Off by default. On, a clip that starts or ends inside another gets at least a 10 ms fade at that edge. The clip's own fades aren't changed.</td></tr>
             <tr><td>Ripple on regenerate</td><td>On by default. When a regenerated clip comes back longer or shorter, the clips you dragged to a fixed time after it move by the difference. A clip marked Lock in time (its right-click menu) stays put.</td></tr>
             <tr><td>Align locked clips to their first word</td><td>A clip locked in time and placed at a fixed time starts early by the silence before its first word, so the word, not the breath before it, lands on the clip's time (a subtitle cue's in-time). The first word comes from the clip's word timings, else from the measured leading silence. Skipped for a clip with Trim Silence on. Until you change it, it's on in a project with any locked clip and off otherwise.</td></tr>

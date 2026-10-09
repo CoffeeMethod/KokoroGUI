@@ -11,8 +11,10 @@ Pages:
 - Performance: the segment cache (shared), then each installed engine's
   "Advanced" schema fields (threads, Audio8's reference-encoding cache),
   stored in that engine's `settings["engines"][<id>]` bucket.
-- Project: the subproject's title (when one is focused), gaps,
-  auto-crossfade, ripple, onset alignment. `Document.settings`.
+- Project: the subproject's title (when one is focused), gaps (clip,
+  paragraph, chapter, after a heading, the speaker-change jitter), the
+  heading's speed, auto-crossfade, ripple, onset alignment.
+  `Document.settings`.
 - Timeline: track layout, ducking, timecode. `Document.settings`.
 - Source track: the imported original dialogue's offset, or its removal.
 
@@ -34,7 +36,9 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.audio.mixer import DEFAULT_DUCK_DB
-from kokoro_gui.daw.arrangement import DEFAULT_GAP_S, DEFAULT_PARAGRAPH_GAP_S, align_onset_enabled
+from kokoro_gui.daw.arrangement import (
+    DEFAULT_GAP_S, DEFAULT_HEADING_GAP_S, DEFAULT_PARAGRAPH_GAP_S, align_onset_enabled, gap_jitter_range,
+)
 from kokoro_gui.daw.reference import SOURCE_TRACK_KEY, source_track_settings
 from kokoro_gui.daw.timecode import FRAME_RATES, tc_to_frames, timecode_settings
 from kokoro_gui.daw.undo import SetFieldCommand
@@ -210,6 +214,32 @@ class SettingsWindow(QDialog):
         para.setToolTip("Silence between clips across a blank line.")
         form.addRow("Gap (s):", gap)
         form.addRow("Paragraph gap (s):", para)
+        chapter = _spin(0.0, 10.0, 0.05, self._setting_s("chapter_gap_s", float(para.value())))
+        chapter.setToolTip("Silence before a subproject, such as the next chapter. Follows the paragraph gap "
+                           "until you set it.")
+        heading_gap = _spin(0.0, 10.0, 0.05, self._setting_s("heading_gap_after_s", DEFAULT_HEADING_GAP_S))
+        heading_gap.setToolTip("Silence after the heading: the first clip, when it is one short line that "
+                               "doesn't end like a sentence.")
+        heading_speed = _spin(0.25, 2.0, 0.05, self._setting_s("heading_speed", 1.0))
+        heading_speed.setSuffix("x")
+        heading_speed.setToolTip("Reads the heading at this multiple of its speed. 1.00 leaves it as is. "
+                                 "Changing it makes the heading stale.")
+        form.addRow("Chapter gap (s):", chapter)
+        form.addRow("Gap after a heading (s):", heading_gap)
+        form.addRow("Heading speed:", heading_speed)
+        jitter_range = gap_jitter_range(self.app.document)
+        jitter = QCheckBox("Vary the gap when the speaker changes")
+        jitter.setChecked(jitter_range is not None)
+        jitter.setToolTip("Each speaker change draws its gap between these two values, the same draw every "
+                          "time, so the pacing sounds less mechanical. Same-speaker and paragraph gaps "
+                          "stay as set.")
+        jitter_min = _spin(0.0, 10.0, 0.05, jitter_range[0] if jitter_range else 0.2)
+        jitter_max = _spin(0.0, 10.0, 0.05, jitter_range[1] if jitter_range else 0.8)
+        for spin in (jitter_min, jitter_max):
+            spin.setEnabled(jitter_range is not None)
+            jitter.toggled.connect(spin.setEnabled)
+        form.addRow("", jitter)
+        form.addRow("Between (s):", _row(jitter_min, QLabel("and"), jitter_max))
 
         crossfade = QCheckBox("Auto-crossfade overlapping clips")
         crossfade.setChecked(bool(settings.get("auto_crossfade", False)))
@@ -225,8 +255,16 @@ class SettingsWindow(QDialog):
                          "word, so the word lands on the clip's time. Skipped for a clip with trim on. "
                          "On by default when the project has a locked clip.")
         form.addRow("", align)
-        self.widgets.update({"gap_s": gap, "paragraph_gap_s": para, "auto_crossfade": crossfade,
-                             "ripple": ripple, "align_onset": align})
+        self.widgets.update({"gap_s": gap, "paragraph_gap_s": para, "chapter_gap_s": chapter,
+                             "heading_gap_after_s": heading_gap, "heading_speed": heading_speed,
+                             "gap_jitter": jitter, "gap_jitter_min": jitter_min, "gap_jitter_max": jitter_max,
+                             "auto_crossfade": crossfade, "ripple": ripple, "align_onset": align})
+
+    def _setting_s(self, key: str, default: float) -> float:
+        try:
+            return float(self.app.document.settings.get(key, default))
+        except (TypeError, ValueError):
+            return default
 
     def _build_timeline(self, layout: QVBoxLayout) -> None:
         settings = self.app.document.settings
@@ -322,8 +360,10 @@ class SettingsWindow(QDialog):
                 values[(("engine", engine_id), key)] = value
         if "title" in w:
             values[("title", None)] = w["title"].text().strip()
-        for key in ("gap_s", "paragraph_gap_s"):
+        for key in ("gap_s", "paragraph_gap_s", "chapter_gap_s", "heading_gap_after_s", "heading_speed"):
             values[("doc", key)] = round(w[key].value(), 2)
+        values[("doc", "gap_jitter_s")] = ([round(w["gap_jitter_min"].value(), 2), round(w["gap_jitter_max"].value(), 2)]
+                                           if w["gap_jitter"].isChecked() else None)
         for key in ("auto_crossfade", "ripple", "align_onset"):
             values[("doc", key)] = w[key].isChecked()
         mode = w["track_layout"].currentData()

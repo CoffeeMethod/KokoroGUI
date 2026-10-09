@@ -224,3 +224,131 @@ def test_timecode_fields_store_one_dict(qt_app, window):
     window.widgets["tc_start"].setText("garbage")
     window.apply()
     assert qt_app.document.settings["timecode"]["start"] == "01:00:00;00"
+
+
+# -- Pacing (plan 24) -------------------------------------------------------------------
+
+def _title_body_chapter(qt_app):
+    """A title line, a body line and a subproject-looking third clip are
+    enough to see every gap rule move; the third is a plain clip here."""
+    text = "Chapter One\n\nIt began here.\n\nAnd went on."
+    qt_app.document.text = text
+    character = qt_app.document.characters[0]
+    title = qt_app.document.assign_character_to_range(0, 11, character.id)
+    body = qt_app.document.assign_character_to_range(13, 28, character.id)
+    last = qt_app.document.assign_character_to_range(30, len(text), character.id)
+    qt_app.document.settings.update({"gap_s": 0.35, "paragraph_gap_s": 0.9})
+    return title, body, last
+
+
+def _starts(qt_app, *clips):
+    placed = qt_app.build_arrangement().by_clip_id()
+    return [placed[c.id].start_s for c in clips]
+
+
+def test_pacing_fields_show_the_defaults_and_an_untouched_window_writes_nothing(qt_app, window):
+    widgets = window.widgets
+    assert widgets["chapter_gap_s"].value() == widgets["paragraph_gap_s"].value()
+    assert widgets["heading_gap_after_s"].value() == 1.2
+    assert widgets["heading_speed"].value() == 1.0
+    assert not widgets["gap_jitter"].isChecked()
+    assert not widgets["gap_jitter_min"].isEnabled()
+    assert not window.apply_button.isEnabled()
+    window.apply()
+    for key in ("chapter_gap_s", "heading_gap_after_s", "heading_speed", "gap_jitter_s"):
+        assert key not in qt_app.document.settings
+
+
+def test_heading_gap_edit_moves_the_clip_after_the_heading_in_one_undo_step(qt_app):
+    title, body, _last = _title_body_chapter(qt_app)
+    before = _starts(qt_app, body)[0]
+    window = qt_app.open_settings_window()
+    window.widgets["heading_gap_after_s"].setValue(3.0)
+    window.apply()
+    window.reject()
+
+    assert qt_app.document.settings["heading_gap_after_s"] == 3.0
+    after = _starts(qt_app, body)[0]
+    assert after - before == pytest.approx(3.0 - 1.2)
+    qt_app.document.undo_stack.undo()
+    assert "heading_gap_after_s" not in qt_app.document.settings
+    assert _starts(qt_app, body)[0] == pytest.approx(before)
+
+
+def test_jitter_fields_write_a_range_and_turning_it_off_clears_it(qt_app):
+    _title_body_chapter(qt_app)
+    window = qt_app.open_settings_window()
+    window.widgets["gap_jitter"].setChecked(True)
+    assert window.widgets["gap_jitter_min"].isEnabled()
+    window.widgets["gap_jitter_min"].setValue(0.1)
+    window.widgets["gap_jitter_max"].setValue(0.4)
+    window.apply()
+    assert qt_app.document.settings["gap_jitter_s"] == [0.1, 0.4]
+    assert window.widgets["gap_jitter"].isChecked()  # the page rebuilt from the new state
+
+    window.widgets["gap_jitter"].setChecked(False)
+    window.apply()
+    assert "gap_jitter_s" not in qt_app.document.settings
+    window.reject()
+    qt_app.document.undo_stack.undo()
+    assert qt_app.document.settings["gap_jitter_s"] == [0.1, 0.4]
+
+
+def test_jitter_moves_a_speaker_change_in_the_arrangement(qt_app):
+    from kokoro_gui.daw.models import Character
+
+    bob = Character.from_preset_dict("Bob", {})
+    qt_app.document.characters.append(bob)
+    qt_app.document.text = "Alice speaks first. Bob answers."
+    alice = qt_app.document.characters[0]
+    first = qt_app.document.assign_character_to_range(0, 19, alice.id)
+    second = qt_app.document.assign_character_to_range(20, 31, bob.id)
+    qt_app.document.settings["gap_s"] = 0.35
+    placed = qt_app.build_arrangement().by_clip_id()
+    plain = placed[second.id].start_s - placed[first.id].end_s
+    assert plain == pytest.approx(0.35)
+
+    window = qt_app.open_settings_window()
+    window.widgets["gap_jitter"].setChecked(True)
+    window.widgets["gap_jitter_min"].setValue(1.0)
+    window.widgets["gap_jitter_max"].setValue(1.0)
+    window.apply()
+    window.reject()
+    placed = qt_app.build_arrangement().by_clip_id()
+    assert placed[second.id].start_s - placed[first.id].end_s == pytest.approx(1.0)
+
+
+def test_heading_speed_edit_restales_the_heading_clip(qt_app, tmp_path):
+    from kokoro_gui.daw.dirty import build_segments_from_results, compute_expected_cache_hash
+
+    title, body, last = _title_body_chapter(qt_app)
+    for i, clip in enumerate((title, body, last)):
+        path = tmp_path / f"seg{i}.wav"
+        path.write_bytes(b"RIFF")
+        clip_text = qt_app.document.clip_text(clip)
+        key = compute_expected_cache_hash(clip_text, qt_app._assemble_generation_config(clip),
+                                          key_fn=qt_app.document.segment_key_fn, clip=clip)
+        clip.segments = build_segments_from_results(key, [{
+            "text": clip_text, "path": str(path), "duration": 1.0, "cache_key": key,
+        }])
+    assert qt_app.document.dirty_clips() == []
+
+    window = qt_app.open_settings_window()
+    window.widgets["heading_speed"].setValue(0.9)
+    window.apply()
+    window.reject()
+    assert qt_app.document.dirty_clips() == [title]
+    qt_app.document.undo_stack.undo()
+    assert qt_app.document.dirty_clips() == []
+
+
+def test_chapter_gap_follows_the_paragraph_gap_until_it_is_set(qt_app):
+    window = qt_app.open_settings_window()
+    window.widgets["paragraph_gap_s"].setValue(1.5)
+    window.apply()
+    assert window.widgets["chapter_gap_s"].value() == 1.5
+    assert "chapter_gap_s" not in qt_app.document.settings
+    window.widgets["chapter_gap_s"].setValue(2.5)
+    window.apply()
+    assert qt_app.document.settings["chapter_gap_s"] == 2.5
+    window.reject()

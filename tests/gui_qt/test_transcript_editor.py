@@ -792,3 +792,44 @@ def test_a_shorthand_clip_keeps_its_tag_but_never_speaks_it(qtbot, qt_app):
     clip = qt_app.document.clip_covering(10)
     assert qt_app.document.clip_text(clip).startswith("[Alice]: ")
     assert spoken_text(qt_app.document.clip_text(clip), {}).split() == ["hello", "there"]
+
+
+def test_shorthand_overlap_option_becomes_the_clip_override(qtbot, qt_app):
+    """`[Alice, overlap:0.3]:` finds Alice and puts the overlap on the clip."""
+    editor = _editor(qt_app)
+    alice = Character.from_preset_dict("Alice", {"voice": "af_bella"})
+    qt_app.document.characters.append(alice)
+
+    _type_line_and_press_enter(qtbot, editor, "[Alice, overlap:0.3]: right, exactly")
+
+    clip = qt_app.document.clip_covering(25)
+    assert clip is not None and clip.character_id == alice.id
+    assert clip.overrides == {"overlap_s": 0.3}
+
+
+def test_shorthand_overlap_and_fx_share_one_undo_step(qtbot, qt_app):
+    _write_fx_preset("Radio")
+    editor = _editor(qt_app)
+    alice = Character.from_preset_dict("Alice", {"voice": "af_bella"})
+    qt_app.document.characters.append(alice)
+
+    _type_line_and_press_enter(qtbot, editor, "[Alice:Radio, overlap:0.5]: hello there")
+
+    clip = qt_app.document.clip_covering(30)
+    assert clip.overrides == {"fx_preset": "Radio", "overlap_s": 0.5}
+    qt_app.undo()
+    assert qt_app.document.clip_covering(30) is None
+
+
+def test_shorthand_with_an_unknown_option_warns_and_still_makes_the_clip(qtbot, qt_app):
+    statuses = []
+    qt_app.set_status = lambda message, kind="info": statuses.append((message, kind))
+    editor = _editor(qt_app)
+    alice = Character.from_preset_dict("Alice", {"voice": "af_bella"})
+    qt_app.document.characters.append(alice)
+
+    _type_line_and_press_enter(qtbot, editor, "[Alice, mood:calm]: hello there")
+
+    clip = qt_app.document.clip_covering(25)
+    assert clip is not None and clip.overrides == {}
+    assert any(kind == "warning" and "mood" in message for message, kind in statuses)
