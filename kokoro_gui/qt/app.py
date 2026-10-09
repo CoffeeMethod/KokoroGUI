@@ -63,7 +63,7 @@ from kokoro_gui.daw.undo import (
     SetFieldCommand, SplitClipCommand,
 )
 from kokoro_gui import logging_setup
-from kokoro_gui.engine import caching, runtime, text_extraction
+from kokoro_gui.engine import cache_admin, caching, runtime, text_extraction
 from kokoro_gui.engine.lexicon import normalize_rules
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.engines.base import per_engine_fields
@@ -72,6 +72,7 @@ from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spe
 from kokoro_gui.qt import settings as qt_settings
 from kokoro_gui.qt.open_projects import OpenProject
 from kokoro_gui.qt.reveal import reveal
+from kokoro_gui.qt.storage_dialog import StorageDialog, trim_in_background
 from kokoro_gui.qt.about_dialog import (
     SHORTCUT_DESCRIPTION_PROPERTY, SHORTCUT_GROUP_PROPERTY, AboutDialog, ShortcutsDialog, device_summary,
 )
@@ -259,6 +260,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._textRead.connect(self._on_text_read)
         self._text_read_thread: threading.Thread | None = None
         self._text_read_stop = threading.Event()
+        self._cache_trim_thread: threading.Thread | None = None
         # Set when the user turns down the Whisper download for alignment,
         # so the next Generate doesn't ask again this session.
         self._word_align_declined = False
@@ -378,6 +380,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
         for backend in list(self._backends.values()):
             backend.on_project_opened(self.project_dir, {})
+        self.trim_segment_cache_async()
         if self._pending_open_path:
             path, self._pending_open_path = self._pending_open_path, None
             self.open_project(path)
@@ -1115,6 +1118,10 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._sync_jit_action_enabled()
 
         self.options_menu.addSeparator()
+        self.storage_action = self._action("Storage...", self.open_storage_dialog)
+        self.storage_action.setToolTip("Size of the generated audio cache and Audio8 reference codes, Clear, "
+                                       "and the size limit.")
+        self.options_menu.addAction(self.storage_action)
         self.force_refresh_action = QAction("Force refresh", self)
         self.force_refresh_action.setToolTip("Re-check every clip and file and redraw the transcript and timeline.")
         self.force_refresh_action.setStatusTip(self.force_refresh_action.toolTip())
@@ -2082,6 +2089,30 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self.settings_window.show_page(page)
         self.settings_window.open()
         return self.settings_window
+
+    # --- Options: storage ------------------------------------------------------
+
+    def open_storage_dialog(self) -> StorageDialog:
+        """Options > Storage...: cache sizes, Clear and the size limit
+        (kokoro_gui/qt/storage_dialog.py). Window-modal, opened with `open()`."""
+        dialog = StorageDialog(self)
+        dialog.open()
+        self._storage_dialog = dialog
+        return dialog
+
+    def trim_segment_cache_async(self) -> None:
+        """Keeps the generated audio cache under
+        `settings["segment_cache_max_mb"]` (0 = no limit) on a worker thread.
+        Runs at launch and when a generate ends. One trim at a time."""
+        if self._cache_trim_thread is not None and self._cache_trim_thread.is_alive():
+            return
+        self._cache_trim_thread = trim_in_background(
+            self.settings.get("segment_cache_max_mb", cache_admin.DEFAULT_MAX_MB), cache_admin.segment_cache_dir())
+
+    def wait_for_cache_trim(self, timeout_s: float = 30.0) -> None:
+        """Blocks until a running trim has finished. For tests and scripts."""
+        if self._cache_trim_thread is not None:
+            self._cache_trim_thread.join(timeout_s)
 
     # --- Options: transcript details ----------------------------------------
 
@@ -3642,6 +3673,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
     def on_engine_finish(self) -> None:
         self.set_ui_state(False)
+        self.trim_segment_cache_async()
         self._rebuild_transport_schedule()
         self._notify_if_long_job()
 

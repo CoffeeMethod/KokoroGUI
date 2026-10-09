@@ -75,6 +75,7 @@ Unreleased:
 -   Export writes tags and a cover image into mp3, flac and ogg files, and markers as chapters in an mp3
 -   A Proof tab that has Whisper listen to the generated clips and flags those that don't match their text
 -   Export can write an audiobook as one M4B with a chapter per subproject, the tags and the cover (needs ffmpeg on PATH)
+-   Options > Storage shows the size of the generated audio cache and Audio8's reference codes, clears either, and trims the audio cache to a size limit
 -   Lexicon rules can match a whole word or a regex pattern and run in an order you set, and a Test field shows a
     sentence after the rules and how Kokoro will read it
 -   Lexicon > Find words to check lists the names, acronyms and numbers in a book, plays each in its sentence, and adds

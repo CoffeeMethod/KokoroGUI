@@ -188,6 +188,7 @@ SETTINGS_DEFAULTS = {
     "notify_sound": True,       # Options > Sound when a long job finishes
     "snap_to_grid": False,      # the Timeline dock's Snap to grid button and the G key
     "playback_rate": 1.0,       # the Transport dock's speed combo and the [ ] keys, 0.5 to 2
+    "segment_cache_max_mb": 2048,  # Options > Storage: the generated audio cache is trimmed to this, 0 = no limit
     "spellcheck": False,        # Options > Spellcheck: underline words the dictionary lacks
     "proof_threshold": 0.92,    # Proof dock: a clip matching its text less closely than this is flagged
     # Options > Transcript details: the master switch, then one toggle per

@@ -62,6 +62,59 @@ def test_cache_hit_skips_pipeline_call(engine, isolated_dirs, make_config, monke
     assert os.path.exists(results[0]["path"])
 
 
+def test_cache_hit_touches_the_files_it_reuses(engine, isolated_dirs, make_config, monkeypatch):
+    # mtime is what cache_admin.trim_segment_cache reads as "last used".
+    config = make_config(caching=True)
+    text = "Hello world."
+    h = _hash(text, config)
+    audio = (0.1 * np.sin(2 * np.pi * 220 * np.arange(1200) / 24000)).astype(np.float32)
+    path = isolated_dirs.cache_dir / f"{h}_0.wav"
+    sf.write(str(path), audio, 24000)
+    os.utime(path, (1000, 1000))
+    monkeypatch.setattr(kokoro_engine, "get_thread_pipeline",
+                        lambda lang_code="a": (_ for _ in ()).throw(AssertionError("a hit must not synthesize")))
+
+    engine.process_chunk_task((0, text, config), None)
+
+    assert path.stat().st_mtime > 1_000_000
+
+
+def test_cache_hit_still_works_when_a_file_cannot_be_touched(engine, isolated_dirs, make_config, monkeypatch):
+    config = make_config(caching=True)
+    text = "Hello world."
+    h = _hash(text, config)
+    audio = (0.1 * np.sin(2 * np.pi * 220 * np.arange(1200) / 24000)).astype(np.float32)
+    sf.write(str(isolated_dirs.cache_dir / f"{h}_0.wav"), audio, 24000)
+    monkeypatch.setattr(kokoro_engine, "get_thread_pipeline",
+                        lambda lang_code="a": (_ for _ in ()).throw(AssertionError("a hit must not synthesize")))
+
+    def _read_only(path, *a, **k):
+        raise PermissionError("read-only volume")
+
+    monkeypatch.setattr("kokoro_gui.engine.caching.os.utime", _read_only)
+
+    results = engine.process_chunk_task((0, text, config), None)
+
+    assert len(results) == 1 and os.path.exists(results[0]["path"])
+
+
+def test_cache_miss_and_split_entries_leave_no_stale_mtime_behind(engine, fake_pipeline, isolated_dirs, make_config):
+    # A freshly written entry is newest by construction; the pre-beta.2 split
+    # entry is rewritten, so trim sees a current key, not the old one.
+    text = "Hello world."
+    config = make_config(caching=True)
+    h = _hash(text, config)
+    stale = (0.1 * np.sin(2 * np.pi * 220 * np.arange(3000) / 24000)).astype(np.float32)
+    for i in (0, 1):
+        path = isolated_dirs.cache_dir / f"{h}_{i}.wav"
+        sf.write(str(path), stale, 24000)
+        os.utime(path, (1000, 1000))
+
+    engine.process_chunk_task((0, text, config), None)
+
+    assert (isolated_dirs.cache_dir / f"{h}_0.wav").stat().st_mtime > 1_000_000
+
+
 def test_generate_clip_audio_cache_hits_like_batch_path(engine, isolated_dirs, make_config, monkeypatch):
     # kokoro_gui/engine/conversion.py's generate_clip_audio (the per-clip
     # Generate entry point - Claude/PLAN_daw_ui_ux_redesign.md) is a thin

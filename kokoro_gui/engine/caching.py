@@ -52,9 +52,8 @@ from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
 
 # Bump whenever compute_cache_key's composition or logic changes. Old cache
 # entries simply stop matching (new hash algorithm -> new filenames) and
-# become dead weight for whatever eventually implements cache eviction
-# (ROADMAP) - a bump means the first run after upgrading regenerates the
-# whole cache. 3: the voice enters as basename + content fingerprint instead
+# become dead weight until `cache_admin.trim_segment_cache` evicts them. A
+# bump means the first run after upgrading regenerates the whole cache. 3: the voice enters as basename + content fingerprint instead
 # of the resolved path, so a key is the same on every machine (the `.tbaw`
 # bundle names files by it). `.json` project migration rekeys with
 # `schema_version=2` to adopt segments stamped under the old key.
@@ -70,6 +69,18 @@ RESERVED_SUFFIX = ".reserved"
 _voice_fingerprint_cache = {}
 
 AUDIO_FORMATS = ("wav", "flac", "mp3", "ogg")
+
+
+def _touch_cache_files(cache_dir, cache_hash, count):
+    """Marks a legacy cache entry as just used: sets the mtime of its
+    `count` files to now. Access times are often switched off, so mtime is
+    what `cache_admin.trim_segment_cache` reads as "last used". A file that
+    can't be touched (read-only, gone) is skipped."""
+    for i in range(count):
+        try:
+            os.utime(os.path.join(cache_dir, f"{cache_hash}_{i}.wav"))
+        except OSError:
+            pass
 
 
 def get_engine_version(engine_id=DEFAULT_ENGINE_ID):
@@ -397,6 +408,7 @@ class CachingMixin:
                                 n += 1
                         else:
                             cached_segments = loaded
+                            _touch_cache_files(cache_dir, cache_hash, len(loaded))
             except Exception as e:
                 print(f"Cache check error: {e}")
                 cached_segments = []
