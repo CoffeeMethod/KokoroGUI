@@ -75,6 +75,7 @@ from kokoro_gui.qt.about_dialog import (
 )
 from kokoro_gui.qt import keymap
 from kokoro_gui.qt import recording_import, resume_view
+from kokoro_gui.qt.gen_queue import GenerationQueueMixin
 from kokoro_gui.qt.listen_through import ListenThroughMixin
 from kokoro_gui.qt.proofing import ProofMixin
 from kokoro_gui.qt.subprojects import ParentStore, SubprojectsMixin
@@ -124,7 +125,7 @@ TIMELINE_TYPING_DEBOUNCE_MS = 60
 LIBRARY_WATCH_DEBOUNCE_MS = 150
 
 
-class QtTTSApp(SubprojectsMixin, ProofMixin, ListenThroughMixin, QMainWindow):
+class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThroughMixin, QMainWindow):
     previewFinished = Signal(bool, str)
     themeChanged = Signal()
     exportProgress = Signal(float, str)
@@ -198,12 +199,10 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, ListenThroughMixin, QMainWindow):
         self._missing_children: set = set()
         # child id -> "ok"/"stale" for subprojects that aren't open.
         self._closed_child_states: dict = {}
-        # Stale subprojects waiting to be generated and rendered, one at a
-        # time behind is_busy: [(nested clip, then)], and the render step a
-        # child's batch generate hands back to.
-        self._subproject_queue: list = []
+        # The render step a child's batch generate hands back to, and the
+        # generation queue (`gen_queue.py`) that runs the batches.
         self._pending_render_after_generate: dict = {}
-        self._nested_after_batch = None
+        self._init_generation_queue()
         self._io_thread: threading.Thread | None = None
         self._pending_open_path: str | None = None
         self._closing_after_save = False
@@ -2416,6 +2415,7 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, ListenThroughMixin, QMainWindow):
         monitor = (session or {}).get("monitor")
         self.set_monitor_mode(monitor if monitor in MONITOR_MODES else "dub", remember=False)
         self._restore_view(session)
+        self.restore_queue(session)
         self._update_window_title()
         self.schedule_save()
 
@@ -2762,6 +2762,7 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, ListenThroughMixin, QMainWindow):
             self._start_untitled_after_failed_open()
             return
         self.carry_proof_over(previous_session, project_dir)
+        self.carry_queue_over(previous_session, project_dir)
         root = self.root
         root.lock = lock
         root.project_dir = project_dir
@@ -2774,6 +2775,7 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, ListenThroughMixin, QMainWindow):
             self.set_status(notice, "warning")
         if not loaded.notices:
             self.set_status(f"Opened {project_io.project_title(info.path)}.")
+        self.announce_restored_queue()
         if project_io.video_settings(self.root.project_settings) is not None and self.video_path() is None:
             self._offer_video_relink()
 
@@ -3629,16 +3631,20 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, ListenThroughMixin, QMainWindow):
         self._notify_if_long_job()
 
     def set_ui_state(self, is_running: bool) -> None:
+        if not is_running and self.queue_active:
+            # A step inside a queue run (a project IO, a batch) ended; the
+            # queue holds the busy state until it goes idle.
+            return
         self._generating = is_running
         self._arm_generate_keys(is_running)
         if not is_running and self._close_after_cancel:
             # The cancelled generate is done: finish closing once its
             # handler has applied the clips that did finish.
-            self._subproject_queue.clear()
             QTimer.singleShot(0, self.close)
-        elif not is_running and self._subproject_queue:
-            # The next stale subproject, once this job's handler is done.
-            QTimer.singleShot(0, self._advance_subproject_queue)
+        elif not is_running and not self.queue_paused and self.generation_queue.next_queued() is not None:
+            # Queued work waited for this job: the next item, once its
+            # handler is done.
+            QTimer.singleShot(0, self.pump_queue)
         self.transport_dock.set_busy(is_running)
         self.settings_dock.volume_spin.setEnabled(not is_running)
         self.settings_dock.pitch_spin.setEnabled(not is_running)
@@ -3803,15 +3809,13 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, ListenThroughMixin, QMainWindow):
             QMessageBox.information(self, "Up to date", "All clips are already generated.")
             return
 
-        # Once a document has any clips, Generate always runs the
-        # dirty-scoped batch path - even with JIT enabled (JIT has no
+        # Once a document has any clips, Generate always queues the
+        # dirty-scoped batches - even with JIT enabled (JIT has no
         # per-clip output shape; it stays reachable via the no-clips
-        # fallback above). Stale subprojects follow, one at a time (phase 4).
+        # fallback above). Stale subprojects queue behind them (phase 4).
         if any(not clip.is_nested for clip in dirty):
-            self._nested_after_batch = level if any(clip.is_nested for clip in dirty) else None
             self.timeline_dock.generate_dirty_clips_requested(level)
-        else:
-            self.generate_stale_subprojects(level)
+        self.generate_stale_subprojects(level)
 
     def selected_clip_ids(self, project=None) -> set:
         """The ids of the clips the user has selected in `project` (the
@@ -3846,7 +3850,6 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, ListenThroughMixin, QMainWindow):
         if not stale:
             self.set_status("Nothing stale in the selection", "warning")
             return
-        self._nested_after_batch = None
         self.timeline_dock.generate_dirty_clips_requested(project, clip_ids={clip.id for clip in stale})
 
     def generate_clip(self, clip_id: str) -> None:
@@ -3871,6 +3874,9 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, ListenThroughMixin, QMainWindow):
         self._after_project_generated(project)
 
     def on_batch_generation_progress(self, completed: int, total: int, current_clip_label: str) -> None:
+        if self.queue_active:
+            self.on_queue_batch_progress(completed, total)
+            return
         percent = int((completed / total) * 100) if total else 0
         if current_clip_label:
             detail = f"Generated {completed}/{total} clips"
@@ -3879,18 +3885,9 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, ListenThroughMixin, QMainWindow):
         self.transport_dock.set_progress(percent, detail)
 
     def on_batch_generation_finished(self, succeeded: int, failed: int, failed_clip_ids: list) -> None:
-        total = succeeded + failed
-        if failed == 0:
-            self.set_status(f"Generated {succeeded} clip(s).", "success")
-        elif succeeded == 0:
-            self.set_status(f"Batch generation failed for all {failed} clip(s).", "error")
-        else:
-            self.set_status(f"Generated {succeeded} of {total} clips ({failed} failed)", "warning")
+        """One queue item landed: the transport hears its clips now. The
+        status line is the queue's (`_queue_go_idle`)."""
         self._rebuild_transport_schedule()
-        self._notify_if_long_job()
-        project, self._nested_after_batch = self._nested_after_batch, None
-        if project is not None and not self._close_after_cancel:
-            self.generate_stale_subprojects(project)
 
     def _notify_if_long_job(self) -> None:
         """A job that ran longer than `NOTIFY_AFTER_S` flashes the taskbar
@@ -3976,6 +3973,7 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, ListenThroughMixin, QMainWindow):
         self._proof_cancel.set()
         for backend in self._backends.values():
             backend.cancel()
+        self.cancel_queue()
         self.set_status("Cancelling... waiting for workers...", "warning")
 
     # --- keyboard map slots (keymap.KEYS) ---------------------------------
@@ -4559,7 +4557,6 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, ListenThroughMixin, QMainWindow):
             if not self._close_after_cancel:
                 if self._ask_cancel_generate_to_quit():
                     self._close_after_cancel = True
-                    self._subproject_queue.clear()
                     self.cancel_conversion()
                 else:
                     self._view_saved_on_close = False

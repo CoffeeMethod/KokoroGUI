@@ -228,6 +228,10 @@ class GenerationQueue:
         return {c for i in self.items if i.state == QUEUED and (project_id is None or i.project_id == project_id)
                 for c in i.clip_ids}
 
+    def pending_clip_ids(self, project_id: Optional[str] = None) -> set:
+        """The clip ids in queued and running items (of `project_id`, when given)."""
+        return {c for i in self.pending() if project_id is None or i.project_id == project_id for c in i.clip_ids}
+
     def clip_total(self) -> int:
         return sum(i.clip_count for i in self.items if i.kind == CLIPS and i.state != CANCELLED)
 

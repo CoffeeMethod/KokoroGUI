@@ -157,6 +157,8 @@ def test_counts_and_queued_clip_ids():
     assert queue.remaining_chars() == 15
     assert queue.queued_clip_ids() == {"c", "n1"}
     assert queue.queued_clip_ids("p2") == {"c"}
+    assert queue.pending_clip_ids() == {"a", "b", "c", "n1"}
+    assert queue.pending_clip_ids("p2") == {"c"}
 
 
 # -- time left -------------------------------------------------------------------------

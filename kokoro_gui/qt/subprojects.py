@@ -447,53 +447,17 @@ class SubprojectsMixin:
         return True
 
     def generate_subproject(self, clip, then=None) -> None:
-        """A stale nested clip's play button: open the child, generate its
-        stale clips, then render its mixdown (NP2)."""
-        self._subproject_queue.append((clip, then))
-        if len(self._subproject_queue) == 1 and not self.is_busy():
-            self._advance_subproject_queue()
+        """A stale nested clip's play button: queues the child (open it,
+        generate its stale clips, then render its mixdown: NP2). `then(ok)`
+        runs on the GUI thread when that item ends."""
+        self.enqueue_subproject(clip, then=then)
 
     def generate_stale_subprojects(self, project) -> int:
         """Queues every stale nested clip of `project`'s document."""
         stale = [c for c in project.document.nested_clips() if self.nested_state(c, project) == "stale"]
         for clip in stale:
-            self._subproject_queue.append((clip, None))
-        if stale and not self.is_busy():
-            self._advance_subproject_queue()
+            self.enqueue_subproject(clip, project)
         return len(stale)
-
-    def _advance_subproject_queue(self) -> None:
-        if not self._subproject_queue or self.is_busy():
-            return
-        clip, then = self._subproject_queue[0]
-
-        def _finished(ok):
-            self._subproject_queue.pop(0)
-            if then is not None:
-                then(ok)
-            self._advance_subproject_queue()
-
-        def _opened(child):
-            if child is None:
-                _finished(False)
-                return
-            stale = [c for c in child.document.dirty_clips() if not c.is_nested]
-            if stale:
-                self._pending_render_after_generate[child.project_id] = _finished
-                self.timeline_dock.generate_dirty_clips_requested(child)
-                return
-            nested_stale = [c for c in child.document.nested_clips() if self.nested_state(c, child) == "stale"]
-            if nested_stale:
-                # Grandchildren first, then this child again.
-                self._subproject_queue[1:1] = [(c, None) for c in nested_stale]
-                self._subproject_queue.append((clip, then))
-                self._subproject_queue.pop(0)
-                self._advance_subproject_queue()
-                return
-            if not self.render_subproject(child, then=_finished):
-                _finished(False)
-
-        self.open_child(clip, then=_opened)
 
     def _after_project_generated(self, project) -> None:
         """A generate finished in `project`: a child with nothing stale left
