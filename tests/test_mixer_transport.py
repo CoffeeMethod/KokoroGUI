@@ -729,3 +729,158 @@ def test_a_sidechain_only_clip_is_never_in_the_output():
     assert np.allclose(out, 0.25)
     out = mixer.mix_block([_speech(np.ones(100), sidechain_only=True)], 0, 100, duck=mixer.DuckState(DUCK_RATE))
     assert np.allclose(out, 0.0)
+
+
+# -- plan 27: playback rate -------------------------------------------------------
+
+
+def _tone_clip(tmp_path, seconds=4.0, rate=8000, freq=440.0, amp=0.5):
+    t = np.arange(int(seconds * rate)) / rate
+    return _write(tmp_path / "tone.wav", amp * np.sin(2 * np.pi * freq * t), rate=rate)
+
+
+def _peak_hz(block, rate):
+    seg = block[rate // 10:-rate // 10, 0]
+    spectrum = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+    return float(np.argmax(spectrum)) * rate / len(seg)
+
+
+def test_rate_defaults_to_one_and_clamps(make_transport):
+    transport = make_transport()
+    seen = []
+    transport.rateChanged.connect(seen.append)
+
+    assert transport.rate == 1.0
+    assert transport.set_rate(9.0) == 2.0
+    assert transport.set_rate(0.1) == 0.5
+    assert transport.set_rate("fast") == 1.0
+    assert transport.set_rate(float("nan")) == 1.0
+    assert seen == [2.0, 0.5, 1.0]
+
+
+def test_a_block_at_rate_two_moves_the_position_two_frames_per_output_frame(tmp_path, make_transport):
+    transport = make_transport()
+    transport.load([ScheduledClip("c1", 0.0, _tone_clip(tmp_path))], sample_rate=8000)
+    transport.set_rate(2.0)
+
+    render_block_for_test(transport, 1000)
+
+    assert transport.position() == pytest.approx(2000 / 8000)
+    render_block_for_test(transport, 500)
+    assert transport.position() == pytest.approx(3000 / 8000)
+
+
+@pytest.mark.parametrize("rate", [0.5, 1.5, 2.0])
+def test_a_tone_keeps_its_pitch_at_any_rate(tmp_path, make_transport, rate):
+    transport = make_transport()
+    transport.load([ScheduledClip("c1", 0.0, _tone_clip(tmp_path))], sample_rate=8000)
+    transport.set_rate(rate)
+
+    block = render_block_for_test(transport, 8000)
+
+    assert abs(_peak_hz(block, 8000) - 440.0) < 4.0
+    assert np.allclose(block[:, 0], block[:, 1])
+
+
+def test_rate_one_is_the_plain_mix_and_returns_to_it_after_a_stretch(tmp_path, make_transport):
+    path = _tone_clip(tmp_path)
+    transport = make_transport()
+    transport.load([ScheduledClip("c1", 0.0, path)], sample_rate=8000)
+    expected = mixer.mix_block(transport.loaded_clips(), 0, 1000)
+
+    assert np.array_equal(render_block_for_test(transport, 1000), expected)
+
+    transport.set_rate(1.5)
+    render_block_for_test(transport, 1000)
+    transport.set_rate(1.0)
+    transport.seek(0.0)
+    assert np.array_equal(render_block_for_test(transport, 1000), expected)
+
+
+def test_a_rate_change_while_playing_continues_from_the_playhead(tmp_path, make_transport):
+    transport = make_transport()
+    transport.load([ScheduledClip("c1", 0.0, _tone_clip(tmp_path))], sample_rate=8000)
+    render_block_for_test(transport, 1000)
+    assert transport.position() == pytest.approx(0.125)
+
+    transport.set_rate(2.0)
+    render_block_for_test(transport, 1000)
+
+    assert transport.position() == pytest.approx(0.125 + 2000 / 8000)
+    transport.set_rate(1.0)
+    render_block_for_test(transport, 1000)
+    assert transport.position() == pytest.approx(0.125 + 3000 / 8000)
+
+
+def test_a_seek_restarts_the_stretch_at_the_new_place(tmp_path, make_transport):
+    samples = np.concatenate([np.full(8000, 0.25), np.full(8000, 0.75)])
+    transport = make_transport()
+    transport.load([ScheduledClip("c1", 0.0, _write(tmp_path / "a.wav", samples))], sample_rate=8000)
+    transport.set_rate(1.5)
+    render_block_for_test(transport, 500)
+
+    transport.seek(1.5)  # frame 12000, inside the 0.75 half
+    block = render_block_for_test(transport, 400)
+
+    assert np.allclose(block, 0.75, atol=1e-4)
+    assert transport.position() == pytest.approx((12000 + 600) / 8000)
+
+
+def test_the_loop_region_wraps_at_a_rate(tmp_path, make_transport):
+    samples = np.concatenate([np.full(8000, 0.25), np.full(8000, 0.75)])
+    transport = make_transport()
+    transport.load([ScheduledClip("c1", 0.0, _write(tmp_path / "a.wav", samples))], sample_rate=8000)
+    transport.set_loop_range_s(0.5, 1.0)  # frames 4000..8000
+    transport.seek(0.75)  # frame 6000
+    transport.set_rate(2.0)
+
+    blocks = []
+    for _ in range(12):
+        blocks.append(render_block_for_test(transport, 500))
+        assert 4000 <= transport.position() * 8000 < 8000
+
+    assert np.allclose(np.concatenate(blocks), 0.25, atol=1e-4)
+
+
+def test_the_whole_arrangement_loops_at_a_rate(tmp_path, make_transport):
+    transport = make_transport()
+    transport.load([ScheduledClip("c1", 0.0, _tone_clip(tmp_path, seconds=1.0))], sample_rate=8000)
+    transport.loop = True
+    transport.set_rate(2.0)
+
+    for _ in range(10):
+        render_block_for_test(transport, 500)
+        assert 0 <= transport.position() < 1.0
+
+    assert transport.position() == pytest.approx((10 * 1000 % 8000) / 8000)
+
+
+def test_playing_to_the_end_at_a_rate_stops_and_emits_finished(tmp_path, make_transport):
+    transport = make_transport()
+    transport.load([ScheduledClip("c1", 0.0, _tone_clip(tmp_path, seconds=0.5))], sample_rate=8000)
+    transport.set_rate(2.0)
+    finished = []
+    transport.finished.connect(lambda: finished.append(True))
+
+    transport.play()
+    stream = FakeStream.instances[-1]
+    for _ in range(4):
+        stream.pull(500)  # 2000 source frames: past the 4000-frame end by the fourth block
+    transport.process_pending()
+
+    assert finished == [True]
+    assert transport.state == "stopped"
+    assert transport.position() == pytest.approx(0.5)
+
+
+def test_a_clip_that_starts_later_is_heard_at_a_rate(tmp_path, make_transport):
+    path = _write(tmp_path / "a.wav", np.full(8000, 0.5))
+    transport = make_transport()
+    transport.load([ScheduledClip("c1", 1.0, path)], sample_rate=8000)
+    transport.set_rate(2.0)
+
+    first = render_block_for_test(transport, 2000)  # source frames 0..4000: before the clip
+    assert np.allclose(first, 0.0)
+    transport.seek(1.25)
+    inside = render_block_for_test(transport, 1000)
+    assert np.allclose(inside, 0.5, atol=1e-4)

@@ -77,6 +77,7 @@ from kokoro_gui.qt.about_dialog import (
 )
 from kokoro_gui.qt import keymap
 from kokoro_gui.qt import recording_import, resume_view
+from kokoro_gui.qt.listen_through import ListenThroughMixin
 from kokoro_gui.qt.proofing import ProofMixin
 from kokoro_gui.qt.subprojects import ParentStore, SubprojectsMixin
 from kokoro_gui.qt.selection import SelectionModel
@@ -125,7 +126,7 @@ TIMELINE_TYPING_DEBOUNCE_MS = 60
 LIBRARY_WATCH_DEBOUNCE_MS = 150
 
 
-class QtTTSApp(SubprojectsMixin, ProofMixin, QMainWindow):
+class QtTTSApp(SubprojectsMixin, ProofMixin, ListenThroughMixin, QMainWindow):
     previewFinished = Signal(bool, str)
     themeChanged = Signal()
     exportProgress = Signal(float, str)
@@ -1233,6 +1234,9 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, QMainWindow):
         self.transport.levelsChanged.connect(self.transport_dock.set_levels)
         self.transport_dock.loopToggled.connect(self._on_loop_toggled)
         self.transport_dock.monitorChanged.connect(self.set_monitor_mode)
+        self.transport_dock.rateRequested.connect(self.set_playback_rate)
+        self._init_listen_through()
+        self.apply_saved_playback_rate()
 
         # A QMainWindow needs a central widget; the docks fill everything.
         # Hidden with an Ignored size policy, NOT setFixedSize(0, 0): a fixed
@@ -3998,16 +4002,13 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, QMainWindow):
     def toggle_playback(self) -> None:
         self.transport.toggle()
 
-    def play_key(self) -> None:
-        if not self.transport.is_playing:
-            self.transport.play()
-
     def pause_key(self) -> None:
         self.transport.pause()
 
     def jump_back_key(self) -> None:
-        """J: the transport can't play backwards, so it jumps back
-        `keymap.JUMP_BACK_S` and keeps its state."""
+        """J: jumps back `keymap.JUMP_BACK_S` and keeps the transport's
+        state (it has no backward playback). L and the speed keys are
+        `ListenThroughMixin`'s."""
         self.transport.seek(max(0.0, self.transport.position() - keymap.JUMP_BACK_S))
 
     def go_to_start(self) -> None:

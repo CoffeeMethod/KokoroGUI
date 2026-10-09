@@ -7,12 +7,19 @@ Every function here returns a new list and leaves the document alone, so
 the caller applies it with one `SetFieldCommand("document", None,
 "settings", new_list, key="markers")` and the edit is undoable. A
 listen-through flag is a marker with a note.
+
+A flag is any marker with a note, or one whose name starts with "Flag", which
+is what the flag key names a new one (`next_flag_name`). The flag keys jump
+between flags only; Shift+Left and Shift+Right still visit every marker.
 """
 from __future__ import annotations
 
+import re
 import uuid
 
 MARKERS_KEY = "markers"
+FLAG_PREFIX = "Flag"
+_FLAG_NAME = re.compile(r"^Flag (\d+)$")
 
 
 def _clean(marker) -> dict | None:
@@ -35,6 +42,22 @@ def list_markers(settings: dict | None) -> list:
     raw = (settings or {}).get(MARKERS_KEY)
     cleaned = [m for m in (_clean(m) for m in (raw if isinstance(raw, list) else [])) if m is not None]
     return sorted(cleaned, key=lambda m: m["seconds"])
+
+
+def is_flag(marker: dict) -> bool:
+    """A listen-through flag: a marker with a note, or named "Flag ..."."""
+    return bool(marker.get("note")) or str(marker.get("name") or "").startswith(FLAG_PREFIX)
+
+
+def list_flags(settings: dict | None) -> list:
+    """The document's flags, sorted by time (copies)."""
+    return [m for m in list_markers(settings) if is_flag(m)]
+
+
+def next_flag_name(settings: dict | None) -> str:
+    """"Flag N", N one past the highest "Flag N" already there."""
+    numbers = [int(match.group(1)) for match in (_FLAG_NAME.match(m["name"]) for m in list_markers(settings)) if match]
+    return f"{FLAG_PREFIX} {max(numbers, default=0) + 1}"
 
 
 def get_marker(settings: dict | None, marker_id: str) -> dict | None:

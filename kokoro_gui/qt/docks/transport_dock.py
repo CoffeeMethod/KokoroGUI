@@ -10,6 +10,9 @@ moved into a dock and reshaped into three rows:
    the Dub / Original / Both monitor toggle (phase 5 D5): what the
    transport plays when the project has a source track. Without one the
    toggle is disabled on Dub.
+   After the loop button sits the playback speed combo (0.5x to 2x, pitch
+   unchanged, plan 27): it emits `rateRequested` and the app sets the
+   transport's rate; `set_rate_choice` shows a rate set from elsewhere.
 2. Preview, Generate (the row's one `primary` button: a `QToolButton`
    whose menu holds "Generate stale clips", "Generate stale clips in
    selection", "Auto-split then generate" and
@@ -34,10 +37,11 @@ import time
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QPainter
 from PySide6.QtWidgets import (
-    QButtonGroup, QDockWidget, QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QToolButton, QVBoxLayout,
+    QButtonGroup, QComboBox, QDockWidget, QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QToolButton, QVBoxLayout,
     QWidget,
 )
 
+from kokoro_gui.audio.transport import RATE_STEPS
 from kokoro_gui.daw.timecode import format_position
 from kokoro_gui.engine.time_utils import format_duration
 from kokoro_gui.qt import icons, theme
@@ -137,6 +141,7 @@ class TransportDock(QDockWidget):
     stopRequested = Signal()
     loopToggled = Signal(bool)
     monitorChanged = Signal(str)  # "dub" | "original" | "both"
+    rateRequested = Signal(float)  # the speed combo, playback only
 
     def __init__(self, app, parent=None):
         super().__init__("Transport", parent)
@@ -198,6 +203,15 @@ class TransportDock(QDockWidget):
         self.loop_btn = QPushButton("Loop")
         self.loop_btn.setCheckable(True)
         row1.addWidget(self.loop_btn)
+        self.rate_combo = QComboBox()
+        self.rate_combo.setObjectName("playback_rate")
+        for step in RATE_STEPS:
+            self.rate_combo.addItem(f"{step:g}x", step)
+        self.rate_combo.setCurrentIndex(RATE_STEPS.index(1.0))
+        self.rate_combo.setToolTip("Playback speed: voices keep their pitch. Playback only, never in an export. "
+                                   "[ and ] step it, L steps 1x, 1.5x, 2x.")
+        self.rate_combo.activated.connect(lambda _index: self.rateRequested.emit(self.rate_choice()))
+        row1.addWidget(self.rate_combo)
         layout.addLayout(row1)
 
         self.level_meter = LevelMeter()
@@ -344,6 +358,16 @@ class TransportDock(QDockWidget):
 
     def set_levels(self, peak_l: float, peak_r: float, rms_l: float, rms_r: float) -> None:
         self.level_meter.set_levels(peak_l, peak_r, rms_l, rms_r)
+
+    # -- playback speed ----------------------------------------------------
+
+    def rate_choice(self) -> float:
+        return float(self.rate_combo.currentData())
+
+    def set_rate_choice(self, rate: float) -> None:
+        """Shows the step nearest `rate` without emitting `rateRequested`."""
+        nearest = min(range(self.rate_combo.count()), key=lambda i: abs(self.rate_combo.itemData(i) - rate))
+        self.rate_combo.setCurrentIndex(nearest)
 
     # -- monitor toggle ----------------------------------------------------
 

@@ -2,10 +2,12 @@
 `QtTTSApp._build_shortcuts` turns into `QShortcut`s and the Keyboard
 Shortcuts sheet lists.
 
-Plain keys (a letter, the arrows, Home, End, Delete) only work while the
-timeline has the focus, so they never type or move the caret in the
-transcript (grill PG3). Each has a Ctrl-modified twin that works in any
-panel. Space and Esc are the two plain keys that work everywhere: Space
+Plain keys (a letter, a bracket, the arrows, Home, End, Delete) only work
+while the timeline has the focus, so they never type or move the caret in
+the transcript (grill PG3). The arrows, Home and End have a Ctrl+Alt twin
+that works in any panel. The letters and brackets don't: on a layout where
+AltGr is Ctrl+Alt, a twin would swallow a typed character (AltGr+N is a
+letter in Polish). Space and Esc are the two plain keys that work everywhere: Space
 because the editor and line edits claim it as text first, Esc because it is
 armed only while a generate runs.
 
@@ -33,8 +35,10 @@ GENERATE = "Generate"
 # How far a jump has to move the playhead, so a press at a clip's start goes
 # to the one before instead of staying put.
 JUMP_EPSILON_S = 0.001
-# What J does while the transport can't play backwards.
+# What J does: the transport has no backward playback.
 JUMP_BACK_S = 5.0
+# The speeds L steps through while it plays: 1x, 1.5x, 2x.
+LISTEN_RATES = (1.0, 1.5, 2.0)
 
 
 @dataclass(frozen=True)
@@ -56,9 +60,11 @@ class KeyBinding:
 KEYS: tuple = (
     KeyBinding("space", "Space", WINDOW, "Play / pause", "toggle_playback"),
     KeyBinding("ctrl_space", "Ctrl+Space", APP, "Play / pause (works in any panel)", "toggle_playback"),
-    KeyBinding("play", "L", TIMELINE, "Play (timeline focused)", "play_key"),
+    KeyBinding("play", "L", TIMELINE, "Play, then faster: 1.5x, 2x (timeline focused)", "play_key"),
     KeyBinding("pause", "K", TIMELINE, "Pause (timeline focused)", "pause_key"),
     KeyBinding("jump_back", "J", TIMELINE, "Jump back 5 s (timeline focused)", "jump_back_key"),
+    KeyBinding("rate_up", "]", TIMELINE, "Playback speed up a step (timeline focused)", "rate_up_key"),
+    KeyBinding("rate_down", "[", TIMELINE, "Playback speed down a step (timeline focused)", "rate_down_key"),
     KeyBinding("go_start", "Home", TIMELINE, "Stop and return to start (timeline focused)", "go_to_start"),
     KeyBinding("go_start_any", "Ctrl+Alt+Home", APP, "Stop and return to start (works in any panel)", "go_to_start"),
     KeyBinding("go_end", "End", TIMELINE, "Go to end (timeline focused)", "go_to_end"),
@@ -79,6 +85,12 @@ KEYS: tuple = (
                "go_to_next_marker", TIMELINE_GROUP),
     KeyBinding("marker_forward_any", "Ctrl+Alt+Shift+Right", APP, "Next marker (works in any panel)",
                "go_to_next_marker", TIMELINE_GROUP),
+    KeyBinding("flag", "M", TIMELINE, "Drop a flag at the playhead (timeline focused)",
+               "drop_flag", TIMELINE_GROUP),
+    KeyBinding("flag_back", "Shift+N", TIMELINE, "Previous flag (timeline focused)",
+               "go_to_previous_flag", TIMELINE_GROUP),
+    KeyBinding("flag_forward", "N", TIMELINE, "Next flag (timeline focused)",
+               "go_to_next_flag", TIMELINE_GROUP),
     KeyBinding("split", "S", TIMELINE, "Split clip at playhead (timeline focused)",
                "split_clip_at_playhead", TIMELINE_GROUP),
     KeyBinding("zoom_fit", "F", TIMELINE, "Zoom to fit (timeline focused)", "zoom_timeline_to_fit", TIMELINE_GROUP),
