@@ -760,6 +760,24 @@ class ReplaceWithNestedCommand(Command):
         document.tracks = copy.deepcopy(tracks)
 
 
+class InsertUntaggedCommand(Command):
+    """Adds `text` at `position` as untagged text (`Document.insert_untagged`),
+    leaving the clip to its left as it is. The runs are all that changes, so
+    undo puts the old list back."""
+
+    def __init__(self, position: int, text: str):
+        self.position = position
+        self.text = text
+        self._pre = None
+
+    def do(self, document) -> None:
+        self._pre = copy.deepcopy(document.runs)
+        document.insert_untagged(self.position, self.text)
+
+    def undo(self, document) -> None:
+        document.runs = copy.deepcopy(self._pre)
+
+
 class ImportCuesCommand(Command):
     """Subtitle import (phase 5 D2): each cue becomes a paragraph appended
     to the end of the text (a blank line before it) and a clip over it,

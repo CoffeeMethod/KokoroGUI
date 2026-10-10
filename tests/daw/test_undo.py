@@ -466,3 +466,36 @@ def test_set_active_take_swaps_segments_and_undoes():
     assert clip.takes == {}
     doc.undo_stack.undo()
     assert clip.takes == {0: first}
+
+
+# ---------------------------------------------------------------------------
+# InsertUntaggedCommand (plan 25: blank lines beside a subproject placeholder)
+# ---------------------------------------------------------------------------
+
+def test_insert_untagged_does_not_extend_the_clip_on_its_left():
+    from kokoro_gui.daw.undo import InsertUntaggedCommand
+
+    doc, alice, _ = _document_with_characters("Hello there.")
+    doc.undo_stack.push(AssignCharacterCommand(0, 12, alice.id))
+    clip = doc.clips[0]
+
+    doc.undo_stack.push(InsertUntaggedCommand(12, "\n\n"))
+    assert doc.text == "Hello there.\n\n"
+    assert doc.clip_text(clip) == "Hello there."
+    assert [r.clip_id for r in doc.runs] == [clip.id, None]
+
+    doc.undo_stack.undo()
+    assert doc.text == "Hello there." and doc.clip_text(clip) == "Hello there."
+    doc.undo_stack.redo()
+    assert doc.text == "Hello there.\n\n" and doc.clip_text(clip) == "Hello there."
+
+
+def test_insert_untagged_at_the_start_and_inside_text():
+    doc = Document.from_plain_text("abcd")
+    doc.insert_untagged(0, "\n")
+    doc.insert_untagged(3, "-")
+    assert doc.text == "\nab-cd"
+    doc.insert_untagged(99, "!")
+    assert doc.text == "\nab-cd!"
+    doc.insert_untagged(0, "")
+    assert doc.text == "\nab-cd!"
