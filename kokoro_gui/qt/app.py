@@ -3839,7 +3839,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if success:
             self.set_status("Playing preview...", "success")
             playback.play(payload)
-            QTimer.singleShot(3000, lambda: self.set_status("Ready"))
+            QTimer.singleShot(3000, self, lambda: self.set_status("Ready"))
         else:
             self.set_status(payload, "error")
 
