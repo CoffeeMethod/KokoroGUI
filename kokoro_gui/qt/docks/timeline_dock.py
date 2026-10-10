@@ -190,6 +190,8 @@ class TimelineDock(QDockWidget):
         # Outcome list for a batch whose future hasn't been picked up by
         # _on_batch_generation_raw yet - same reasoning as _pending_results.
         self._pending_batch: list | None = None
+        # `done` of the batch in flight (`start_batch`).
+        self._batch_done = None
         self._batch_progress_lock = threading.Lock()
         self._batch_completed = 0
 
@@ -921,23 +923,24 @@ class TimelineDock(QDockWidget):
 
     # -- batch dirty-scoped Generate (item 3) --------------------------------
 
-    def generate_dirty_clips_requested(self, project=None, clip_ids=None) -> None:
-        """Dispatches `KokoroEngine.generate_dirty_clips` for every clip
-        `Document.dirty_clips()` currently reports as stale. Guarded by the
-        same one-job-at-a-time check `on_generate_clip_requested` already
-        uses. Callers (`QtTTSApp.on_generate_clicked`) are expected to have
-        already checked `dirty_clips()` themselves for the "nothing to do"
-        message - this method silently no-ops on an empty dirty list so it
-        stays safe to call directly too. `clip_ids`, when given, keeps only
-        the stale clips whose id is in it (Generate > "Generate stale clips
-        in selection")."""
+    def generate_dirty_clips_requested(self, project=None, clip_ids=None) -> int:
+        """Queues every clip `Document.dirty_clips()` currently reports as
+        stale (`QtTTSApp.enqueue_clips` plans them into items of eight and
+        starts the queue; `start_batch` runs each). Guarded by the same
+        one-job-at-a-time check `on_generate_clip_requested` uses. Callers
+        (`QtTTSApp.on_generate_clicked`) are expected to have already
+        checked `dirty_clips()` themselves for the "nothing to do" message -
+        this method silently no-ops on an empty dirty list so it stays safe
+        to call directly too. `clip_ids`, when given, keeps only the stale
+        clips whose id is in it (Generate > "Generate stale clips in
+        selection"). Returns how many clips were queued."""
         if self.app.is_busy():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before generating.")
-            return
+            return 0
 
         project = project or self.app.level
         # Nested clips aren't TTS: a stale subproject generates through its
-        # own document (app.generate_subprojects).
+        # own document (app.generate_stale_subprojects).
         dirty = [clip for clip in project.document.dirty_clips() if not clip.is_nested]
         if clip_ids is not None:
             dirty = [clip for clip in dirty if clip.id in clip_ids]
@@ -953,21 +956,34 @@ class TimelineDock(QDockWidget):
             self.app.set_status("; ".join(f"{reason}: {n} clip(s) skipped" for reason, n in blocked.items()),
                                 "warning")
         if not dirty:
-            return
+            return 0
+        return self.app.enqueue_clips(project, dirty)
+
+    def start_batch(self, project, clip_ids, done=None) -> bool:
+        """Runs one queue item: dispatches the stale clips of `project` named
+        in `clip_ids`, each to its character's engine (the engines run side
+        by side on their own workers). When every engine has answered, the
+        results land in the document at once (`_on_batch_generation_raw`) and
+        `done(succeeded_ids, failed_ids)` runs. Returns whether it started;
+        the queue owns the busy state, so this does not touch it."""
+        wanted = set(clip_ids)
+        dirty = [clip for clip in project.document.dirty_clips() if clip.id in wanted and not clip.is_nested
+                 and not self.app.cannot_generate(clip, project)]
+        if not dirty:
+            return False
 
         # One batch per engine: each clip generates with its character's
         # backend, and the backends run side by side on their own workers.
         groups: dict = {}
-        clips_with_configs = []
         for clip in dirty:
             text = project.document.clip_text(clip)
             config = self.app._assemble_clip_config(clip, project)
-            clips_with_configs.append((clip.id, text, config))
             backend = self.app.backend_for(clip, project)
             groups.setdefault(backend.id, (backend, []))[1].append((clip.id, text, config))
 
-        total = len(clips_with_configs)
+        total = len(dirty)
         self._batch_completed = 0
+        self._batch_done = done
         self.app.set_ui_state(True)
         self.batchGenerationProgress.emit(0, total, "")
 
@@ -1007,12 +1023,12 @@ class TimelineDock(QDockWidget):
         for backend, group in groups.values():
             future = backend.generate_clips(group, progress=_on_clip_progress)
             future.add_done_callback(_done_for(group))
+        return True
 
     def _on_batch_generation_raw(self) -> None:
-        self.app.set_ui_state(False)
-
         pending = self._pending_batch
         self._pending_batch = None
+        done, self._batch_done = self._batch_done, None
         if pending is None:
             return
         project, pending = pending
@@ -1044,3 +1060,5 @@ class TimelineDock(QDockWidget):
             self.app.schedule_word_alignment(succeeded_ids)
 
         self.batchGenerationFinished.emit(len(succeeded_ids), len(failed_ids), failed_ids)
+        if done is not None:
+            done(succeeded_ids, failed_ids)

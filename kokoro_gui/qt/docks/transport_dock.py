@@ -16,7 +16,8 @@ moved into a dock and reshaped into three rows:
 2. Preview, Generate (the row's one `primary` button: a `QToolButton`
    whose menu holds "Generate stale clips", "Generate stale clips in
    selection", "Auto-split then generate" and
-   the checkable "Split by paragraph"), Cancel (flat).
+   the checkable "Split by paragraph"), Cancel (flat), and Pause (flat; the
+   generation queue's, Resume while paused).
 3. One progress bar carrying the status/detail text via `setFormat`, in
    place of the three separate labels the old central widget had.
 
@@ -259,6 +260,14 @@ class TransportDock(QDockWidget):
         self.cancel_btn.clicked.connect(self.app.cancel_conversion)
         self.cancel_btn.setEnabled(False)
         row2.addWidget(self.cancel_btn)
+        # Pause stops the generation queue after the running item; it turns
+        # into Resume while the queue is paused (`set_queue_state`).
+        self.queue_pause_btn = QPushButton("Pause")
+        self.queue_pause_btn.setFlat(True)
+        self.queue_pause_btn.setToolTip("Stop after the batch that is running. The rest stays queued.")
+        self.queue_pause_btn.clicked.connect(self.app.toggle_queue_pause)
+        self.queue_pause_btn.setEnabled(False)
+        row2.addWidget(self.queue_pause_btn)
         row2.addStretch(1)
         layout.addLayout(row2)
 
@@ -339,6 +348,14 @@ class TransportDock(QDockWidget):
 
     def is_busy(self) -> bool:
         return self._busy
+
+    def set_queue_state(self, pending: bool, paused: bool) -> None:
+        """The Pause button follows the generation queue: on while it has
+        work, and Resume while it is paused."""
+        self.queue_pause_btn.setEnabled(pending)
+        self.queue_pause_btn.setText("Resume" if paused else "Pause")
+        self.queue_pause_btn.setToolTip("Start the queued batches again." if paused else
+                                        "Stop after the batch that is running. The rest stays queued.")
 
     # -- transport readout -------------------------------------------------
 
