@@ -22,8 +22,10 @@ def test_menu_bar_has_the_five_menus(qt_app):
 
 def test_file_menu_actions(qt_app):
     texts = _action_texts(qt_app.file_menu)
-    assert texts == ["New", "New Subproject", "Add Subproject...", "Open...", "Recent", "Welcome...", "Save", "Save As...", "Show in Folder", "Import Text...",
-                     "Import Subtitles...", "Import Audio...", "Import Source Track...", "Load Video...", "Export...",
+    assert texts == ["New", "New Subproject", "Add Subproject...", "New from Template...", "Open...", "Recent", "Welcome...", "Save", "Save As...",
+                     "Save as Template...", "Show in Folder", "Import Text...",
+                     "Import Subtitles...", "Import Audio...", "Import Source Track...", "Load Video...", "Add Credits...",
+                     "Export...",
                      "Measure Loudness...", "Quit"]
     assert qt_app.import_audio_action.isEnabled() is True
     assert "music bed" in qt_app.import_audio_action.toolTip()

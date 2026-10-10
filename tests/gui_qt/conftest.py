@@ -61,6 +61,8 @@ def qt_app(tmp_path, monkeypatch, qtbot):
     monkeypatch.setattr(kokoro_engine, "KokoroEngine", StubEngine)
     from kokoro_gui.daw import library as library_module
     monkeypatch.setattr(library_module, "LIBRARY_DIR", str(tmp_path / "characters"))
+    from kokoro_gui.daw import templates as templates_module
+    monkeypatch.setattr(templates_module, "TEMPLATES_DIR", str(tmp_path / "templates"))
     (tmp_path / "custom_voices").mkdir(exist_ok=True)
 
     # Modal dialogs (QMessageBox.exec/QInputDialog.exec/...) block on the

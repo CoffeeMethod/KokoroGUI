@@ -945,6 +945,30 @@ class Document(Tracked):
         self._normalize_runs()
         return clip
 
+    def insert_untagged(self, position: int, text: str) -> None:
+        """Inserts `text` at `position` as a run of its own with no clip,
+        even where the run to its left is a clip's: `replace_text` would
+        extend that clip, this does not. Used for the blank lines around a
+        subproject placeholder, which must not make the neighbouring clip's
+        text, and so its key, change."""
+        if not text:
+            return
+        position = max(0, min(int(position), len(self.text)))
+        self._split_at(position)
+        new_runs = []
+        pos = 0
+        inserted = False
+        for existing in self.runs:
+            if not inserted and pos >= position:
+                new_runs.append(Run(text=text))
+                inserted = True
+            new_runs.append(existing)
+            pos += len(existing.text)
+        if not inserted:
+            new_runs.append(Run(text=text))
+        self.runs = new_runs
+        self._normalize_runs()
+
     def set_placeholder_text(self, clip_id: str, text: str) -> None:
         """Renames a nested clip's placeholder run (the subproject's title
         changed)."""

@@ -29,6 +29,7 @@ import os
 from PySide6.QtWidgets import QMessageBox
 
 from kokoro_gui.daw import library as character_library
+from kokoro_gui.daw import templates as template_store
 from kokoro_gui.engine.presets import filter_fx_preset_values
 from kokoro_gui.qt import project as project_io
 from kokoro_gui.qt.open_projects import OpenProject
@@ -1000,6 +1001,27 @@ class SubprojectsMixin:
             return self.new_subproject(cursor.selectionStart(), cursor.selectionEnd())
         return self.new_subproject(cursor.block().position() + cursor.block().length() - 1)
 
+    def _add_sections(self, sections) -> list:
+        """One subproject per `(title, text)` at the end of the root document,
+        a blank line between them. A section with no text stays empty; a
+        title left empty gets the next "Subproject N". Returns the children."""
+        made = []
+        document = self.root.document
+        for index, (title, text) in enumerate(sections):
+            if index:
+                document.replace_text(len(document.text), 0, 2, document.text + "\n\n")
+            child = self.new_subproject(len(document.text), title=title or None)
+            if child is None:
+                continue
+            if text:
+                child.document.set_plain_text(text)
+                self._autosave_one(child)
+            made.append(child)
+        if self.editor is not None:
+            self.editor.load_text(document.text)
+        self.refresh_timeline()
+        return made
+
     def new_from_sections(self, sections) -> list:
         """New from eBook, one subproject per chapter (NP8): a new project
         whose text is one placeholder line per `(title, text)` section, a
@@ -1009,22 +1031,200 @@ class SubprojectsMixin:
         made = []
 
         def _build():
-            document = self.root.document
-            for index, (title, text) in enumerate(sections):
-                if index:
-                    document.replace_text(len(document.text), 0, 2, document.text + "\n\n")
-                child = self.new_subproject(len(document.text), title=title)
-                if child is None:
-                    continue
-                child.document.set_plain_text(text)
-                self._autosave_one(child)
-                made.append(child)
-            if self.editor is not None:
-                self.editor.load_text(document.text)
-            self.refresh_timeline()
+            made.extend(self._add_sections(sections))
             self.set_status(f"New project with {len(made)} subproject(s). Save As to name it.")
 
         self.new_project(then=_build)
+        return made
+
+    # -- templates and credits (plan 25) -------------------------------------------
+
+    def subproject_text(self, parent, clip):
+        """The text of the subproject `clip` stands for in `parent`, read
+        without opening it when it is closed, or None when it can't be read
+        or holds subprojects of its own (a section keeps plain text only)."""
+        child = self.child_project(clip)
+        document = child.document if child is not None else None
+        if document is None:
+            project_dir = self._closed_child_dir(parent, clip)
+            try:
+                if project_dir:
+                    document = project_io.load_project_dir(project_dir, self.child_id_of(clip)).document
+                else:
+                    path = self.child_bundle_path(parent, clip)
+                    loaded = project_io.load_project(path) if path and os.path.isfile(path) else None
+                    document = loaded.document if loaded is not None else None
+            except (OSError, ValueError, KeyError, project_io.ProjectError):
+                document = None
+        if document is None or document.nested_clips():
+            return None
+        return document.text
+
+    def template_sections(self) -> list:
+        """`[(title, text_or_None)]` for the root project's subprojects, in
+        text order."""
+        parent = self.root
+        document = parent.document
+        extents = document.index().extents
+        clips = sorted(document.nested_clips(), key=lambda c: extents.get(c.id, (0, 0))[0])
+        return [(document.clip_text(clip), self.subproject_text(parent, clip)) for clip in clips]
+
+    def save_as_template_dialog(self):
+        """File > Save as Template...: asks for a name and which subprojects
+        keep their text, then writes the template. Returns the file stem or
+        None."""
+        from kokoro_gui.qt.template_dialogs import SaveTemplateDialog
+
+        if self.is_busy():
+            QMessageBox.warning(self, "Busy", "Finish or cancel the current job first.")
+            return None
+        title = self.root.title()
+        dialog = SaveTemplateDialog(self, "" if title == "Untitled" else title, self.template_sections())
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return None
+        name, rows = dialog.values()
+        return self.save_as_template(name, rows)
+
+    def save_as_template(self, name: str, rows) -> str | None:
+        """Writes the root project's settings, its library characters and
+        `rows` (`[(title, kept_text)]`) as template `name`. Asks before
+        replacing one."""
+        stem = template_store.safe_name(name)
+        if stem is None:
+            self.set_status("That name can't be used for a template.", "warning")
+            return None
+        if template_store.load_template(stem) is not None:
+            answer = QMessageBox.question(self, "Replace template", f"A template named \"{stem}\" exists. Replace it?")
+            if answer != QMessageBox.StandardButton.Yes:
+                return None
+        document = self.root.document
+        library_ids = [c.library_id for c in document.characters
+                       if c.library_id and not character_library.is_project_scope_id(c.library_id)]
+        try:
+            saved = template_store.save_template(name, document.settings, library_ids, rows)
+        except OSError as e:
+            self.set_status(f"Couldn't save the template: {e}", "error")
+            return None
+        self.set_status(f"Saved template {saved}.")
+        return saved
+
+    def new_from_template_dialog(self):
+        """File > New from Template... and the welcome dialog's button."""
+        from kokoro_gui.qt.template_dialogs import NewFromTemplateDialog
+
+        if self.is_busy():
+            QMessageBox.warning(self, "Busy", "Finish or cancel the current job first.")
+            return []
+        dialog = NewFromTemplateDialog(self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return []
+        template = dialog.selected()
+        return self.new_from_template(template) if template is not None else []
+
+    def new_from_template(self, template) -> list:
+        """A new project shaped by `template`: its settings on the root
+        document (before the subprojects exist, so they copy them), its
+        library characters linked, and one subproject per section with the
+        text the template kept. Returns the children, or [] when the close
+        prompt cancels."""
+        from kokoro_gui.daw.undo import SetFieldCommand
+
+        made = []
+
+        def _build():
+            document = self.root.document
+            for key, value in template.settings.items():
+                document.undo_stack.push(SetFieldCommand("document", None, "settings", value, key=key))
+            linked = {c.library_id for c in document.characters if c.library_id}
+            added = False
+            for library_id in template.characters:
+                entry = self.character_library.get(library_id) if library_id not in linked else None
+                if entry is not None:
+                    document.characters.append(character_library.linked_copy(entry))
+                    linked.add(library_id)
+                    added = True
+            if added:
+                self.on_characters_changed()
+            made.extend(self._add_sections([(s.title, s.text) for s in template.sections]))
+            self.set_status(f"New project from template {template.name} with {len(made)} subproject(s). "
+                            "Save As to name it.")
+
+        self.new_project(then=_build)
+        return made
+
+    def add_credits_dialog(self):
+        """File > Add Credits...: the form, filled from what the project
+        remembers (`project_settings["credits"]`), then `add_credits`."""
+        import datetime
+
+        from kokoro_gui.qt.template_dialogs import CreditsDialog
+
+        if self.is_busy():
+            QMessageBox.warning(self, "Busy", "Finish or cancel the current job first.")
+            return []
+        fields = template_store.clean_credit_fields(self.project_settings.get("credits"))
+        if not fields["year"]:
+            fields["year"] = str(datetime.date.today().year)
+        if not fields["title"]:
+            title = self.focus.title()
+            fields["title"] = "" if title in ("Untitled", "Subproject") else title
+        dialog = CreditsDialog(self, fields)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return []
+        return self.add_credits(dialog.values())
+
+    def add_credits(self, fields) -> list:
+        """Adds an "Opening Credits" subproject at the start and a "Closing
+        Credits" one at the end of the focus project, each holding the text
+        `credit_texts` makes. A subproject of that title that exists already
+        gets the new text instead of a twin. An opening with nothing to say
+        (no title, author or narrator) is skipped. Returns the children."""
+        from kokoro_gui.daw.undo import InsertUntaggedCommand, TextEditCommand
+
+        parent = self.focus
+        if parent is None or not parent.project_dir:
+            return []
+        fields = template_store.clean_credit_fields(fields)
+        self.project_settings["credits"] = fields
+        self.schedule_save()
+        opening, closing = template_store.credit_texts(fields)
+        document = parent.document
+        made = []
+
+        def _fill(child, text):
+            if child is None or child.document.text == text:
+                return
+            old = child.document.text
+            child.document.undo_stack.push(TextEditCommand(0, len(old), len(text), text))
+            self._autosave_one(child)
+            if child is self.focus and self.editor is not None:
+                self.editor.load_text(child.document.text)
+            made.append(child)
+
+        for title, text, at_start in ((template_store.OPENING_TITLE, opening, True),
+                                      (template_store.CLOSING_TITLE, closing, False)):
+            if not text:
+                continue
+            clip = next((c for c in document.nested_clips() if document.clip_text(c) == title), None)
+            if clip is not None:
+                self.open_child(clip, then=lambda child, text=text: _fill(child, text))
+                continue
+            body = document.text
+            if at_start:
+                pad = 2 - (len(body) - len(body.lstrip("\n"))) if body else 0
+                if pad > 0:
+                    document.undo_stack.push(InsertUntaggedCommand(0, "\n" * pad))
+                child = self.new_subproject(0, title=title)
+            else:
+                pad = 2 - (len(body) - len(body.rstrip("\n"))) if body else 0
+                if pad > 0:
+                    document.undo_stack.push(InsertUntaggedCommand(len(body), "\n" * pad))
+                child = self.new_subproject(len(document.text), title=title)
+            _fill(child, text)
+        if self.editor is not None and parent is self.focus:
+            self.editor.load_text(document.text)
+        self.refresh_timeline()
+        self.set_status("Credits added." if made else "Credits are up to date.")
         return made
 
     def new_from_ebook(self, path: str, per_chapter: bool = True) -> list:

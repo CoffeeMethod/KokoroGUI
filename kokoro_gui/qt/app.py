@@ -952,11 +952,15 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.file_menu.insertAction(self.recent_menu.menuAction(), self.new_subproject_action)
         self.add_subproject_action = self._action("Add Su&bproject...", self.add_subproject_dialog)
         self.file_menu.insertAction(self.recent_menu.menuAction(), self.add_subproject_action)
+        self.new_from_template_action = self._action("New from &Template...", self.new_from_template_dialog)
+        self.file_menu.insertAction(self.recent_menu.menuAction(), self.new_from_template_action)
         self.file_menu.insertAction(self.recent_menu.menuAction(), self.open_action)
         self.file_menu.addAction(self.welcome_action)
         self.file_menu.addSeparator()
         self.file_menu.addAction(self.save_action)
         self.file_menu.addAction(self.save_as_action)
+        self.save_as_template_action = self._action("Save as Temp&late...", self.save_as_template_dialog)
+        self.file_menu.addAction(self.save_as_template_action)
         self.show_in_folder_menu = self.file_menu.addMenu("Show in Fol&der")
         self.show_project_file_action = self._action(
             "&Project File", lambda: self._reveal_path(self.project_path))
@@ -981,6 +985,10 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.file_menu.addAction(self.import_source_track_action)
         self.load_video_action = self._action("Load &Video...", self.load_video_dialog)
         self.file_menu.addAction(self.load_video_action)
+        self.add_credits_action = self._action("Add &Credits...", self.add_credits_dialog)
+        self.add_credits_action.setToolTip("Add opening and closing credit subprojects from the book's title, author and narrator.")
+        self.file_menu.addAction(self.add_credits_action)
+        self.file_menu.aboutToShow.connect(self._sync_add_credits_action)
         self.export_action = self._action("&Export...", self.export_dialog, "Ctrl+E")
         self.file_menu.addAction(self.export_action)
         self.measure_loudness_action = self._action("&Measure Loudness...", self.measure_loudness)
@@ -2357,6 +2365,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             action.setChecked(name == self.workspaces.active)
 
     # --- File menu ----------------------------------------------------------
+
+    def _sync_add_credits_action(self) -> None:
+        """Add Credits needs something to put them around: text, or a subproject."""
+        document = self.focus.document
+        self.add_credits_action.setEnabled(bool(document.text.strip()) or bool(document.nested_clips()))
 
     def _rebuild_recent_menu(self) -> None:
         self.recent_menu.clear()

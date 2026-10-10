@@ -1,5 +1,5 @@
 """Welcome dialog (grill WF2, revised): recent projects, Resume, New, New
-from text, Open, shown over the main window on launch.
+from template, New from text, Open, shown over the main window on launch.
 
 The window has already loaded the last project by the time this opens, so
 the engine warms up underneath, Escape is a free Resume, and New starts
@@ -88,11 +88,14 @@ class WelcomeDialog(QDialog):
         self.open_btn.clicked.connect(self._open_selected)
         self.new_btn = QPushButton("New project")
         self.new_btn.clicked.connect(self.new_project)
+        self.new_from_template_btn = QPushButton("New from template...")
+        self.new_from_template_btn.clicked.connect(self.new_from_template)
         self.new_from_text_btn = QPushButton("New from text file...")
         self.new_from_text_btn.clicked.connect(self._new_from_text_dialog)
         self.open_other_btn = QPushButton("Open other...")
         self.open_other_btn.clicked.connect(self.open_other)
-        for widget in (self.open_btn, self.new_btn, self.new_from_text_btn, self.open_other_btn):
+        for widget in (self.open_btn, self.new_btn, self.new_from_template_btn, self.new_from_text_btn,
+                       self.open_other_btn):
             right.addWidget(widget)
         right.addStretch(1)
         body.addLayout(right, 2)
@@ -200,6 +203,10 @@ class WelcomeDialog(QDialog):
     def new_project(self) -> None:
         self.accept()
         self.app.new_project()
+
+    def new_from_template(self) -> None:
+        self.accept()
+        self.app.new_from_template_dialog()
 
     def _new_from_text_dialog(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "New project from text", filter=TEXT_FILTER)
