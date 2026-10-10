@@ -469,6 +469,22 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Templates and credits</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Save a project as a template, start the next one from it</h4>
+            <p>File &gt; Save as Template... writes the shape of the open project to <code>templates/&lt;name&gt;.json</code>, beside <code>characters/</code>. A template holds the project settings (gaps, ducking, track layout and the rest of Settings &gt; Project), the library characters the project links to, and one section per subproject with its title. Each section has a "Keep text of..." box. It starts ticked for a subproject under 2,000 characters, such as an intro or an ad read, and unticked for the rest, which come back empty. Markers, source tracks and anything that names a file are left out. File &gt; New from Template... and the Welcome dialog's "New from template..." list the saved templates (with a Delete button) and build a new project from the one you pick. The settings go in first, so each subproject starts with the same pacing, then the characters and the subprojects. A podcast can save episode 13 and start episode 14 from it.</p>
+            <p>A template is a plain JSON file and the app reads it as untrusted input, like <code>config_qt.json</code>: the file has a size cap, every field is type-checked, unknown keys are ignored, a template has at most 500 sections and 1,000,000 characters of kept text, and the name is cut to a bare file name. A project file does not change, and a template is not a <code>.tbaw</code>.</p>
+          </li>
+          <li>
+            <h4>File &gt; Add Credits...</h4>
+            <p>A form for the title, subtitle, author, narrator, publisher and year adds an "Opening Credits" subproject at the start and a "Closing Credits" subproject at the end of the project, each holding its text. The form shows both texts as you type. The opening reads "Title, Subtitle. Written by Author. Narrated by Narrator." The closing reads "You have been listening to Title. Written by Author. Narrated by Narrator. Copyright Year by Publisher. The end." A field left empty drops its sentence, and with no title, author or narrator there is no opening. Run it again after changing the form and the two subprojects get the new text; it adds no second pair. The form is remembered in the project's <code>project.json</code> under <code>credits</code>, a key older versions ignore, and <code>document.json</code> is untouched. The entry is greyed out for a project with no text and no subprojects.</p>
+            <p>The wording follows ACX's audio submission requirements as read on 2026-10-09. Opening credits state the title, author and narrator, closing credits indicate finality, suggested as "You have been listening to...", the same three facts and "The End." ACX also asks for the opening and closing credits as separate files, which is why they are subprojects (export a file per subproject). Every sentence ends in a full stop, so the first line of a credits subproject never reads as a chapter heading. The blank lines that set the credits apart from the book go in as text of their own, so the first and last clip of the book keep their text and stay generated.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Lexicon</h3>
         <ul class="change-list">
           <li>
