@@ -6,6 +6,14 @@ Engine row on top picks another engine's editor (grill EN3).
 
 The saved mixes are the engine's `voice_store` (an `EmbeddingStore`, global
 store only here: a project's own copies aren't deleted from this list).
+
+Preview blends the two voices in memory (`mix_tensor`) and speaks the
+tensor, so it writes no `.pt` into the voice store; only Create && Save does.
+With Live checked, letting go of the ratio slider, or changing a voice, a
+language or the operation (after `LIVE_DEBOUNCE_MS`), previews the first
+sentence of the stock text. Each request bumps `_preview_gen`: a result that
+isn't the latest is dropped, its temp file deleted, and the playback of the
+one before it is stopped.
 """
 from __future__ import annotations
 
@@ -14,9 +22,9 @@ import re
 import tempfile
 
 import playback
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QDockWidget, QFrame, QGridLayout, QHBoxLayout,
+    QCheckBox, QComboBox, QDockWidget, QFrame, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSlider,
     QVBoxLayout, QWidget,
 )
@@ -24,8 +32,22 @@ from PySide6.QtWidgets import (
 from kokoro_gui.qt.docks.scrolling import scrollable
 from kokoro_gui.qt.docks.voice_header import engine_header
 
+# How long a keyboard or wheel change to the slider (or a combo) waits for
+# the next one before a live preview starts.
+LIVE_DEBOUNCE_MS = 400
+_SENTENCE_END = re.compile(r"(?<=[.!?。！？])\s*")
+
+
+def first_sentence(text: str) -> str:
+    """`text` up to its first sentence end (the whole text when it has none)."""
+    text = (text or "").strip()
+    head = _SENTENCE_END.split(text, maxsplit=1)[0] if text else ""
+    return head or text
+
+
 class MixingDock(QDockWidget):
-    previewFinished = Signal(bool, str)
+    # (request number, success, error, the request's temp file)
+    previewFinished = Signal(int, bool, str, str)
     mixFinished = Signal(bool, str)
 
     def __init__(self, app, parent=None):
@@ -36,6 +58,12 @@ class MixingDock(QDockWidget):
         # the Voices tab moves to another mixing engine.
         self.backend_id = app.voices_backend().id
         self._preview_path: str | None = None
+        self._preview_gen = 0
+        self._live_key: tuple | None = None
+        self._live_timer = QTimer(self)
+        self._live_timer.setSingleShot(True)
+        self._live_timer.setInterval(LIVE_DEBOUNCE_MS)
+        self._live_timer.timeout.connect(self._run_live)
         self.previewFinished.connect(self._on_preview_finished)
         self.mixFinished.connect(self._on_mix_finished)
 
@@ -53,6 +81,8 @@ class MixingDock(QDockWidget):
         for label, code in lang_items:
             self.lang_a_combo.addItem(label, code)
         self.lang_a_combo.currentIndexChanged.connect(lambda _i: self._refresh_voice_list(self.lang_a_combo, self.voice_a_combo))
+        self.lang_a_combo.currentIndexChanged.connect(self._queue_live)
+        self.voice_a_combo.currentTextChanged.connect(self._queue_live)
         sel_grid.addWidget(self.lang_a_combo, 0, 1)
         sel_grid.addWidget(self.voice_a_combo, 0, 2)
 
@@ -63,6 +93,8 @@ class MixingDock(QDockWidget):
             self.lang_b_combo.addItem(label, code)
         self.lang_b_combo.setCurrentIndex(0)
         self.lang_b_combo.currentIndexChanged.connect(lambda _i: self._refresh_voice_list(self.lang_b_combo, self.voice_b_combo))
+        self.lang_b_combo.currentIndexChanged.connect(self._queue_live)
+        self.voice_b_combo.currentTextChanged.connect(self._queue_live)
         sel_grid.addWidget(self.lang_b_combo, 1, 1)
         sel_grid.addWidget(self.voice_b_combo, 1, 2)
         layout.addLayout(sel_grid)
@@ -76,6 +108,7 @@ class MixingDock(QDockWidget):
         self.op_combo = QComboBox()
         self.op_combo.addItems(["mix", "add", "subtract", "multiply", "divide"])
         self.op_combo.currentTextChanged.connect(self._update_ratio_label)
+        self.op_combo.currentTextChanged.connect(self._queue_live)
         op_row.addWidget(self.op_combo)
         op_row.addStretch(1)
         layout.addLayout(op_row)
@@ -86,6 +119,8 @@ class MixingDock(QDockWidget):
         self.ratio_slider.setRange(0, 100)
         self.ratio_slider.setValue(50)
         self.ratio_slider.valueChanged.connect(self._update_ratio_label)
+        self.ratio_slider.valueChanged.connect(self._on_ratio_changed)
+        self.ratio_slider.sliderReleased.connect(self._run_live)
         layout.addWidget(self.ratio_slider)
         self._update_ratio_label()
 
@@ -94,10 +129,16 @@ class MixingDock(QDockWidget):
         self.preview_lang_combo = QComboBox()
         for label, code in lang_items:
             self.preview_lang_combo.addItem(label, code)
+        self.preview_lang_combo.currentIndexChanged.connect(self._queue_live)
         prev_row.addWidget(self.preview_lang_combo)
         preview_btn = QPushButton("\U0001F50A Preview")
         preview_btn.clicked.connect(self.preview_mix)
         prev_row.addWidget(preview_btn)
+        self.live_check = QCheckBox("Live")
+        self.live_check.setToolTip("Preview again when you let go of the slider or change a voice, "
+                                   "a language or the operation.")
+        self.live_check.toggled.connect(self._on_live_toggled)
+        prev_row.addWidget(self.live_check)
         prev_row.addStretch(1)
         layout.addLayout(prev_row)
 
@@ -190,14 +231,58 @@ class MixingDock(QDockWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to delete: {e}")
 
-    def preview_mix(self) -> None:
+    # -- preview --------------------------------------------------------------
+
+    def _live_on(self) -> bool:
+        live = getattr(self, "live_check", None)  # absent while the dock is built
+        return live is not None and live.isChecked()
+
+    def _live_signature(self) -> tuple:
+        return (self.voice_a_combo.currentText(), self.voice_b_combo.currentText(), self._ratio_value(),
+                self.op_combo.currentText(), self.preview_lang_combo.currentData())
+
+    def _on_live_toggled(self, on: bool) -> None:
+        self._live_timer.stop()
+        if on:
+            self._live_key = None  # turning it on speaks the Mix as it is
+            self._run_live()
+
+    def _on_ratio_changed(self, _value: int) -> None:
+        # A drag previews on release (`sliderReleased`); a key, the wheel or
+        # a click in the groove has no release, so it waits for the next change.
+        if not self.ratio_slider.isSliderDown():
+            self._queue_live()
+
+    def _queue_live(self, *_args) -> None:
+        if self._live_on():
+            self._live_timer.start()
+
+    def _run_live(self) -> None:
+        """A live preview of the dock as it is now, unless the last one
+        already was (a release that follows a debounced change, say)."""
+        self._live_timer.stop()
+        if not self._live_on() or self._live_signature() == self._live_key:
+            return
+        self.preview_mix(live=True)
+
+    def preview_mix(self, live: bool = False) -> None:
+        """Speaks the blend of Voice A and B. `live` previews just the first
+        sentence and stops the sound of the one before. Any request makes the
+        ones still running stale: only the latest result plays."""
         v1 = self.voice_a_combo.currentText()
         v2 = self.voice_b_combo.currentText()
         ratio = self._ratio_value()
         op = self.op_combo.currentText()
         preview_lang = self.preview_lang_combo.currentData()
+        backend = self.backend
 
-        preview_text = self.backend.preview_text(preview_lang)
+        text = backend.preview_text(preview_lang)
+        if live:
+            text = first_sentence(text)
+            playback.stop()
+        self._live_key = self._live_signature()
+        self._preview_gen += 1
+        gen = self._preview_gen
         tmp_voice_name = "_tmp_mix_preview"
         self.remove_preview_file()
         fd, tmp_audio_path = tempfile.mkstemp(suffix=".wav", prefix="kokorogui-mixpreview-")
@@ -205,33 +290,29 @@ class MixingDock(QDockWidget):
         self._preview_path = tmp_audio_path
 
         self.mix_status_label.setText("Generating preview...")
-        backend = self.backend
 
         async def _run_preview():
-            success, msg, tensor = await backend.mix_voices(v1, v2, ratio, tmp_voice_name, op=op)
+            # In memory: nothing lands in the voice store.
+            success, msg, tensor = await backend.mix_tensor(v1, v2, ratio, op=op)
             if not success:
                 return False, msg
-            success = await backend.preview_mix(tensor, tmp_voice_name, preview_text, tmp_audio_path, preview_lang)
-            try:
-                backend.voice_store.delete(tmp_voice_name)
-            except Exception:
-                pass
-            return success, ""
+            success = await backend.preview_mix(tensor, tmp_voice_name, text, tmp_audio_path, preview_lang)
+            return success, "" if success else "The engine made no audio."
 
         def _done(future):
             try:
                 success, err = future.result()
             except Exception as e:
                 success, err = False, str(e)
-            self.previewFinished.emit(success, err)
-            if success:
-                playback.play(tmp_audio_path)
+            self.previewFinished.emit(gen, bool(success), err, tmp_audio_path)
 
         future = backend.run(_run_preview())
         future.add_done_callback(_done)
 
     def retire(self) -> None:
         """Called by `QtTTSApp._drop_voices_dock` when this editor is replaced."""
+        self._live_timer.stop()
+        self._preview_gen += 1  # a preview still running is stale
         self.remove_preview_file()
 
     def remove_preview_file(self) -> None:
@@ -239,15 +320,26 @@ class MixingDock(QDockWidget):
         rebuild and the app's `closeEvent` call it; `playback.play` returns
         before the sound ends, so nothing deletes the file right after."""
         path, self._preview_path = self._preview_path, None
+        self._remove_file(path)
+
+    @staticmethod
+    def _remove_file(path) -> None:
         if path:
             try:
                 os.remove(path)
             except OSError:
                 pass
 
-    def _on_preview_finished(self, success: bool, err: str) -> None:
+    def _on_preview_finished(self, gen: int, success: bool, err: str, path: str) -> None:
+        if gen != self._preview_gen:
+            # Superseded while it ran: it doesn't play and leaves no file.
+            if path != self._preview_path:
+                self._remove_file(path)
+            return
         if success:
             self.mix_status_label.setText("Playing preview...")
+            playback.stop()
+            playback.play(path)
         else:
             self.mix_status_label.setText(f"Preview failed: {err}")
 

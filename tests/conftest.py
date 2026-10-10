@@ -250,6 +250,7 @@ class StubEngine:
         self.generate_clip_audio = MagicMock()
         self.generate_dirty_clips = MagicMock()
         self.mix_voices = MagicMock()
+        self.mix_tensor = MagicMock()
         self.extract_text_from_file = MagicMock(return_value="")
         self.load_fx_preset = MagicMock(return_value=None)
         self.cancel = MagicMock()

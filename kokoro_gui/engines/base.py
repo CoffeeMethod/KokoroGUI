@@ -468,5 +468,10 @@ class SupportsVoiceMixing(Protocol):
                           new_name: str, op: str = "mix"):
         ...
 
+    async def mix_tensor(self, v1_name: str, v2_name: str, ratio: float, op: str = "mix"):
+        """`(ok, message, tensor)` for the blend, written nowhere: what a
+        live preview uses, so it never touches the voice store."""
+        ...
+
     async def preview_mix(self, tensor, voice_name: str, text: str, output_path: str, lang_code: str):
         ...

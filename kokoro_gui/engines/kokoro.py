@@ -148,6 +148,11 @@ class KokoroBackendAdapter(BackendHooksMixin):
         stays exactly where it is per the plan."""
         return await self._engine.mix_voices(v1_name, v2_name, ratio, new_name, op)
 
+    async def mix_tensor(self, v1_name: str, v2_name: str, ratio: float, op: str = "mix"):
+        """`(ok, message, tensor)` for the blend of two voices, written
+        nowhere (the Mixing dock's previews)."""
+        return await self._engine.mix_tensor(v1_name, v2_name, ratio, op)
+
     async def preview_mix(self, tensor, voice_name: str, text: str, output_path: str, lang_code: str):
         """Speaks `text` with an unsaved mix `tensor`, registered as
         `voice_name`, into `output_path` (the Mixing dock's Preview)."""
