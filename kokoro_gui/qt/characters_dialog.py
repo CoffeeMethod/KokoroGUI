@@ -18,6 +18,13 @@ A character on a cloning backend (Audio8) also gets a variants table:
 variant name -> reference (`Character.variants`), which a clip picks with
 the transcript's Variant combo.
 
+The Preview button next to the Voice combo speaks a sample as the character
+as it is in the dialog right now (the dialog edits the document's character
+in place, so an unsaved voice or engine change counts), through
+`app.preview_text`: the character's last clip in the open project (200
+characters, cut at a sentence end), else the engine's stock sentence. A
+character with variants gets a combo to hear one of them.
+
 Edits `app.document.characters` directly. Adding a character makes no
 `Track`; `Document.assign_character_to_range` makes one on first use
 (grill PR4). Removing one is refused while any clip still uses it; the
@@ -41,6 +48,7 @@ from PySide6.QtWidgets import (
 
 from kokoro_gui.daw import library as library_ops
 from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character
+from kokoro_gui.engines.missing import MissingBackend
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
 from kokoro_gui.qt import theme
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
@@ -59,6 +67,42 @@ _ID_ROLE = 0x0100
 _SCOPE_ROLE = 0x0101
 
 _FX_NONE = "(none)"
+_VARIANT_DEFAULT = "(default)"
+
+# Preview speaks at most this many characters of a clip's text.
+PREVIEW_CHARS = 200
+_SENTENCE_ENDS = ".!?。！？"
+
+
+def cut_sample(text: str, limit: int = PREVIEW_CHARS) -> str:
+    """`text` up to `limit` characters, cut after the last sentence end that
+    fits, else at the last space, else hard. Text that fits is returned whole
+    (whitespace collapsed)."""
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    end = max(head.rfind(mark) for mark in _SENTENCE_ENDS)
+    if end > 0:
+        return head[:end + 1]
+    space = head.rfind(" ")
+    return head[:space] if space > 0 else head
+
+
+def last_clip_text(document, character) -> str:
+    """The text of `character`'s last clip in text order, "" when it has no
+    clip with text in `document`."""
+    best, best_start = "", -1
+    for clip in document.clips:
+        if clip.character_id != character.id:
+            continue
+        extent = document.clip_extent(clip.id)
+        if extent is None or extent[0] <= best_start:
+            continue
+        text = document.clip_text(clip).strip()
+        if text:
+            best, best_start = text, extent[0]
+    return best
 
 
 class _ScopeBadgeDelegate(QStyledItemDelegate):
@@ -84,6 +128,7 @@ class CharactersDialog(QDialog):
         self.resize(560, 360)
         self._current: Character | None = None
         self._loading = False
+        self._previewing = False
 
         root = QHBoxLayout(self)
 
@@ -162,7 +207,21 @@ class CharactersDialog(QDialog):
         self.voice_combo = QComboBox()
         self.voice_combo.setEditable(True)
         self.voice_combo.currentTextChanged.connect(self._on_voice_changed)
-        form.addRow("Voice:", self.voice_combo)
+        voice_row = QHBoxLayout()
+        voice_row.addWidget(self.voice_combo, 1)
+        # A cloning character's variants: hear one instead of its voice.
+        self.preview_variant_combo = QComboBox()
+        self.preview_variant_combo.setToolTip("Hear this variant's reference instead of the character's voice.")
+        voice_row.addWidget(self.preview_variant_combo)
+        self.preview_btn = QPushButton("Preview")
+        self.preview_btn.setToolTip("Hear the character as it is now: a line from its last clip, else a sample sentence.")
+        self.preview_btn.clicked.connect(self.preview_character)
+        voice_row.addWidget(self.preview_btn)
+        form.addRow("Voice:", voice_row)
+        self.preview_status_label = QLabel("")
+        self.preview_status_label.setWordWrap(True)
+        form.addRow("", self.preview_status_label)
+        self.app.previewFinished.connect(self._on_preview_finished)
 
         self.fx_combo = QComboBox()
         self.fx_combo.addItem(_FX_NONE)
@@ -261,11 +320,13 @@ class CharactersDialog(QDialog):
             for w in (self.name_edit, self.color_btn, self.color_edit, self.engine_combo, self.voice_combo,
                       self.fx_combo, self.remove_btn):
                 w.setEnabled(enabled)
+            self.preview_btn.setEnabled(enabled and not self._previewing)
             self._show_scope(character)
             if character is None:
                 self.name_edit.clear()
                 self.color_edit.clear()
                 self.color_btn.setStyleSheet("")
+                self._fill_preview_variants(None)
                 return
             self.name_edit.setText(character.name)
             self._set_color_widgets(character.highlight_color)
@@ -283,6 +344,7 @@ class CharactersDialog(QDialog):
                 self.fx_combo.addItem(fx)
             self.fx_combo.setCurrentText(fx)
             self._fill_variants(character)
+            self._fill_preview_variants(character)
         finally:
             self._loading = False
 
@@ -340,6 +402,7 @@ class CharactersDialog(QDialog):
         variants = self.variant_rows()
         if variants != (self._current.variants or {}):
             self._current.variants = variants
+            self._fill_preview_variants(self._current)
             self._changed()
 
     def add_variant(self) -> None:
@@ -363,6 +426,72 @@ class CharactersDialog(QDialog):
         if row >= 0:
             self.variants_table.removeRow(row)
             self._commit_variants()
+
+    # -- preview ------------------------------------------------------------------
+
+    def _fill_preview_variants(self, character) -> None:
+        """The Preview button's variant combo: shown while the character has
+        variants on a cloning engine, keeping the choice if it still exists."""
+        names = []
+        if character is not None and self._supports_variants(character):
+            names = sorted((character.variants or {}).keys())
+        previous = self.preview_variant_combo.currentData()
+        self.preview_variant_combo.blockSignals(True)
+        try:
+            self.preview_variant_combo.clear()
+            self.preview_variant_combo.addItem(_VARIANT_DEFAULT, "")
+            for name in names:
+                self.preview_variant_combo.addItem(name, name)
+            index = self.preview_variant_combo.findData(previous or "")
+            self.preview_variant_combo.setCurrentIndex(max(0, index))
+        finally:
+            self.preview_variant_combo.blockSignals(False)
+        self.preview_variant_combo.setVisible(bool(names))
+
+    def preview_sample(self, character) -> str:
+        """What Preview speaks: `character`'s last clip in the open project,
+        else its engine's stock sentence in the language it speaks."""
+        text = cut_sample(last_clip_text(self.app.document, character))
+        if text:
+            return text
+        backend = self.app.backend_for_character(character)
+        return backend.preview_text(self.app.character_lang_code(character))
+
+    def preview_character(self) -> bool:
+        """Speaks the sample as the character in its current state, with the
+        chosen variant's reference when one is picked. False when nothing
+        started (no character, a missing engine, an engine still loading)."""
+        character = self._current
+        if character is None or self._previewing:
+            return False
+        backend = self.app.backend_for_character(character)
+        if isinstance(backend, MissingBackend):
+            self.preview_status_label.setText(f"{backend.message}: nothing to preview with.")
+            return False
+        speaker = character
+        variant = self.preview_variant_combo.currentData() or ""
+        reference = (character.variants or {}).get(variant) if variant else None
+        if reference:
+            # A copy for this one call, so the character itself is untouched.
+            speaker = copy.copy(character)
+            speaker.preset_data = {**character.preset_data, "voice": reference}
+        self._set_previewing(True)
+        self.preview_status_label.setText("Generating preview...")
+        if not self.app.preview_text(self.preview_sample(character), character=speaker):
+            self._set_previewing(False)
+            self.preview_status_label.setText("Nothing to preview with yet.")
+            return False
+        return True
+
+    def _set_previewing(self, on: bool) -> None:
+        self._previewing = on
+        self.preview_btn.setEnabled(not on and self._current is not None)
+
+    def _on_preview_finished(self, success: bool, payload: str) -> None:
+        if not self._previewing:
+            return
+        self._set_previewing(False)
+        self.preview_status_label.setText("Playing preview." if success else payload)
 
     def _set_color_widgets(self, color: str) -> None:
         self.color_edit.setText(color)
