@@ -81,6 +81,8 @@ Unreleased:
 -   Lexicon > Find words to check lists the names, acronyms and numbers in a book, plays each in its sentence, and adds
     a whole-word rule for every answer you type
 -   Options > Spellcheck underlines words the dictionary doesn't know, in the language of each clip's character
+-   Edit > Characters has a Preview button that plays the character from a line of its last clip, and the Mixing tab has a Live
+    checkbox that plays the Mix again when you let go of the slider, with no file written until you save
 -   The window says FX, Character, Reference, Mix and stale where it said FX Preset, Preset, voice reference, custom voice and dirty
 -   Chapter and heading gaps, heading speed, a varied gap between speakers, and `[Sam, overlap:0.3]:` to start a line over the one before it
 -   Playback runs at 0.5x to 2x with the voices keeping their pitch (a speed box in the transport, `[` and `]`, and `L`

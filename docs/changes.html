@@ -535,6 +535,21 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Voices</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Preview a character in Edit &gt; Characters</h4>
+            <p>A Preview button sits next to the Voice box. It plays the character as the dialog shows it right now, so a voice, an engine or a variant you have just changed is what you hear, whether or not anything else has saved it. The line is the start of the character's last clip in the open project: up to 200 characters, cut at the last sentence end that fits. A character with no clip gets its engine's sample sentence in its language. A character on a cloning engine that has variants gets a box beside the button to hear one variant's Reference instead of its voice. The button is greyed out while a preview is generating, and a label under the Voice row says what happened, including "isn't installed" for a character whose engine this install lacks. The preview goes through the same path as the Preview button in the transport, with the project's model settings and lexicon.</p>
+          </li>
+          <li>
+            <h4>A Live preview for Mixes</h4>
+            <p>The Mixing tab has a Live checkbox beside Preview. With it on, letting go of the ratio slider plays the Mix again. A key press or the mouse wheel on the slider, and a change to Voice A, Voice B, a language or the Operation, plays it after a 400 ms pause, so stepping through the voices doesn't queue a sentence for each one. Live speaks only the first sentence. A new request cancels the sound of the one before it, and a result that arrives after a newer request is dropped: three quick releases play once, for the last position.</p>
+            <p>Preview, live or not, now blends the two voices in memory. Before, it saved a temporary <code>.pt</code> in the voice store and deleted it afterwards. Now nothing is written until Create &amp; Save.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Audio FX</h3>
         <ul class="change-list">
           <li>
