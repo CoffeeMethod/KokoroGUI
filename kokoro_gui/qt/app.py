@@ -3704,21 +3704,23 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, ListenThroughMixin, QMainWindow):
                          "It demonstrates the voice quality and speed settings.")
         self.preview_text(text_data[:1000])
 
-    def preview_text(self, text: str, character=None, lexicon=None) -> None:
+    def preview_text(self, text: str, character=None, lexicon=None) -> bool:
         """Speaks `text` (up to two segments) as `character` on its own
         engine, the active character when None, with the project's model
         settings and FX. `lexicon` replaces the saved rules for this one
         preview (the Find Words to Check dialog tries a rule before it is
-        added); None uses `settings["lexicon"]`. Plays when it finishes."""
+        added); None uses `settings["lexicon"]`. Plays when it finishes
+        (`previewFinished`). Returns False when nothing started (a missing
+        engine, one still loading), True once the preview is running."""
         if character is None:
             character = self.active_character()
         backend = self.backend_for_character(character)
         if isinstance(backend, MissingBackend):
             self.set_status(f"{backend.message}: nothing to preview with.", "warning")
-            return
+            return False
         if not backend.is_ready():
             QMessageBox.information(self, "Wait", "Engine is initializing... please wait 2 seconds and try again.")
-            return
+            return False
 
         # The character's voice on its own engine (the selected clip's
         # character, else the first), over the project defaults.
@@ -3761,6 +3763,7 @@ class QtTTSApp(SubprojectsMixin, ProofMixin, ListenThroughMixin, QMainWindow):
         future = backend.preview(text, state["voice"], state["speed"], tmp_path,
                                  extra_config, lang_code=state["lang_code"])
         future.add_done_callback(_done)
+        return True
 
     # --- spelling ----------------------------------------------------------
 

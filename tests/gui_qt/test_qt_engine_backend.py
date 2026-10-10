@@ -369,3 +369,10 @@ def test_save_as_keeps_a_missing_engines_files(qt_app, tmp_path):
 
     with zipfile.ZipFile(copy) as zf:
         assert zf.read("engines/ghost/voices/boo.bin") == b"the ghost's voice"
+
+
+def test_preview_text_says_whether_a_preview_started(qt_app):
+    assert qt_app.preview_text("Hello there") is True
+    ghost = Character(name="Ghost", backend_id="ghost")
+    qt_app.document.characters.append(ghost)
+    assert qt_app.preview_text("Hello there", character=ghost) is False
