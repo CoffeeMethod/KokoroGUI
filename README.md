@@ -62,6 +62,8 @@ Unreleased:
 -   Keys for the transport and timeline (arrows, Home, End, J/K/L, Delete, Ctrl+G, Esc) that work only with the timeline
     focused, with Ctrl+Alt versions of the arrows, Home and End for any panel, and a Snap to grid button that also snaps to markers
 -   Edit > Remove Filler Words finds um, uh and the like in a recording, lets you check each one and play it, and cuts them in one undo step
+-   Edit > Find (Ctrl+F) and Find and Replace (Ctrl+H) search the transcript and every open subproject, with Match case and
+    Whole word, and say how many clips Replace all will turn stale before it runs
 -   Export can normalize to a LUFS target, File > Measure Loudness reports a mix, and the transport has a level meter
 -   The Export dialog has tabs, an MP3 bitrate, a sample rate and a filename template, and asks before it overwrites a file
 -   Export presets for ACX, Apple Podcasts, Spotify and YouTube that check each file, an RMS mode with a peak limiter,

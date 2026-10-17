@@ -333,6 +333,24 @@
             <p>Two kinds. "um", "uh", "er", "erm", "ah" and "hmm", with stretched spellings such as "ummm" or "uhh", start checked. A hyphenated word ("uh-huh") and a real word ("err", "umbrella") never match. "like", "you know", "I mean", "sort of" and "kind of" start unchecked, and only match when the speaker set them off: a comma after the phrase, and either a comma before it or the start of a sentence. "So, like, we went" matches. "I like it" and "you know what I mean" don't. Only recording text with a timed word under it is listed, so generated clips, music beds and text you typed into a recording are left alone, and no filler spans two clips.</p>
             <p>Each cut takes the word, the comma after it and one space, so "Well, uh, we went" reads "Well, we went". A filler at the end of a sentence takes the space before it, and the comma before that when a full stop follows ("the store, um." becomes "the store."). The audio goes with the words, the same way deleting them by hand does, and the remaining words keep their times. All the cuts are one undo step: Ctrl+Z gives back every word and its audio.</p>
           </li>
+          <li>
+            <h4>Find and replace in the transcript</h4>
+            <p>Edit &gt; Find (Ctrl+F) opens a bar under the transcript. It highlights every match, counts them ("3 of 17") and steps through them with F3 and Shift+F3, or Enter and Shift+Enter in the Find field. Match case and Whole word are checkboxes. The search is for the text you type, with no pattern mode. Esc closes the bar. Edit &gt; Find and Replace (Ctrl+H) adds a Replace field with Replace and Replace all.</p>
+            <p>The search covers the whole project: the transcript on screen and every subproject that is open. The other projects' matches are listed under the counter, and a double-click on a row shows that project. A subproject you haven't opened isn't searched, and the bar says how many it left out. A subproject's title line and a music bed's file name are never matches. Nothing is searched or replaced while a generate runs.</p>
+            <p>The bar says what Replace all will do before you press it: "Replaces 17 matches in 9 clips across 3 projects. 6 clips will turn stale. 2 recordings will split." A clip counts as turning stale when it holds a match and is up to date now, so a clip you never generated isn't in the number. A match that already reads as the replacement is skipped.</p>
+            <p>Replace all is one undo step in the project on screen, and the typing before it keeps its own steps. Each other project gets one undo step on its own stack: show that project and press Ctrl+Z. A question asks first when other projects are involved. A clip whose whole text is the match keeps its character and its place, and undo gives back the clip with its audio.</p>
+            <p>Inside an imported recording a replacement works like typing over the words: the replaced words lose their audio, the new text has none, and the recording splits around it. Replace changes the selected match and moves to the next one, each as its own undo step. A thousand matches in a transcript of a thousand clips take about ten seconds, and the cursor shows a wait meanwhile.</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Key</th><th>Does</th></tr></thead>
+                <tbody>
+                  <tr><td>Ctrl+F</td><td>Find, from any panel</td></tr>
+                  <tr><td>Ctrl+H</td><td>Find and replace, from any panel</td></tr>
+                  <tr><td>F3 / Shift+F3</td><td>Next and previous match; opens the bar when it is closed</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </li>
         </ul>
       </div>
 
