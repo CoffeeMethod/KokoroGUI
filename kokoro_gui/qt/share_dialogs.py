@@ -22,7 +22,7 @@ import re
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QLabel, QListWidget,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QLabel, QListWidget,
     QListWidgetItem, QMessageBox, QPlainTextEdit, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
