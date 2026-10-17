@@ -390,6 +390,7 @@
             <tr><td>Variants <span class="engine-note">Audio8 and LuxTTS</span></td><td>Named alternative References, such as "angry" or "whisper". The transcript's Variant box picks one per clip.</td></tr>
             <tr><td>Scope</td><td>Global lives in the character library (<code>characters/</code>), and every project that links it follows its voice, FX, color, engine and variants. Project belongs to the top-level project and is shared by its subprojects. Local belongs to this file only. A project always keeps its own copy, so it opens on a machine whose library lacks the character; the dialog then says "Library (not found here)".</td></tr>
             <tr><td>Promote to Library / Promote to Project</td><td>Turns a local character into a library entry, or, inside a subproject, shares it with the whole project.</td></tr>
+            <tr><td>Export... / Import...</td><td>Moves characters to or from another machine as a <code>.kgshare</code> file, with the FX and voice files they use. Import adds to the library and asks what to do where a name is taken.</td></tr>
             <tr><td>Rename in library</td><td>Each project keeps its own name for a library character. This copies this project's name to the library entry.</td></tr>
             <tr><td>Add &gt; From library...</td><td>Brings library characters into the project. File &gt; New starts with every library character.</td></tr>
           </tbody>
@@ -650,7 +651,7 @@
     <div class="wrap">
       <h2><span class="idx">Files on disk</span>Preset files</h2>
       <div class="prose reveal">
-        <p><strong>Saved FX</strong> are <code>presets/fx/&lt;name&gt;.json</code>, written by "Save FX..." in the Audio FX tab. A project bundles the ones it uses under <code>fx/</code>, and its own copy wins over yours.</p>
+        <p><strong>Saved FX</strong> are <code>presets/fx/&lt;name&gt;.json</code>, written by "Save FX..." in the Audio FX tab. A project bundles the ones it uses under <code>fx/</code>, and its own copy wins over yours. Share &gt; Export FX... in the same tab writes chosen FX, with the impulse responses they name, to a <code>.kgshare</code> file, and Import FX... reads them from one.</p>
         <p><strong>Character presets</strong>, <code>presets/&lt;name&gt;.json</code>, are from before characters existed. Nothing in the app writes them now. The first launch with the character library copies each one into <code>characters/</code> and links matching characters in the open project. After that, only the <a class="link" href="scripting.html#whole-document">whole-document path</a> reads them, for <code>[Name]:</code> tags in a project with no clips.</p>
       </div>
     </div>
