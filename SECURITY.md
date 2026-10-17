@@ -18,6 +18,11 @@ KokoroGUI is a desktop app that reads files you give it. The parts worth a secon
   absolute, drive-relative, `..` and symlink entries before extracting, and refuses a bundle
   carrying a `.pt` voice file unless `torch >= 2.6`. A way past either of those is a bug we want
   to hear about.
+- `.kgshare` files (shared characters and FX) are zip files from anywhere too, in their own format.
+  `kokoro_gui/daw/share.py` refuses absolute, drive-relative, `..`, symlink, encrypted and repeated
+  entries, caps the entry count, each entry's size and the total, ignores entry names it doesn't
+  know, names every file it writes from a checked name, and refuses a `.pt` unless `torch >= 2.6`.
+  A way past any of those is a bug we want to hear about.
 - Voice, preset, mix and reference names come from the GUI and end up in file paths. Every
   resolver sanitizes with `os.path.basename()`. A name that escapes its directory is a bug.
 - Text input: `.txt`, `.pdf` (`pypdf`) and `.epub` (`ebooklib` + BeautifulSoup) go through

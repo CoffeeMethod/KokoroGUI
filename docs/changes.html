@@ -485,6 +485,18 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Sharing</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Share characters and FX as one file</h4>
+            <p>Edit &gt; Characters has Export... and Import... buttons, and the Audio FX tab has a Share menu with Export FX... and Import FX.... Export writes a <code>.kgshare</code> file. Pick the characters (the one you are on is ticked), and choose whether the FX they use and their voice files go in too. The file then holds each character's settings, the FX it names, the impulse response an FX names, and the voice itself: a Kokoro Mix as its <code>.pt</code>, a Reference as its WAV and transcript. Leave the voice files out when the other person already has the voice. The Audio FX tab exports FX the same way, with their impulse responses and no characters.</p>
+            <p>Import shows what the file holds, one row each with a tick. Where a name is taken on your machine, the row has a choice: Keep both (the new one becomes "Hall (2)"), Replace, or Skip. A character follows what it names, so if its FX comes in as "Radio (2)", the character points at "Radio (2)", and an FX follows its impulse response the same way. Something already here and identical shows "Already here" and is left alone. Imported characters go into the character library, not the open project; Add &gt; From library... in the Characters dialog brings one in. A voice for an engine you have not installed is listed as not importable. The Audio FX tab's import offers only FX and impulse responses from a file.</p>
+            <p>A share file is untrusted input and is checked like a <code>.tbaw</code>, a little stricter. An entry name that is absolute, has a drive letter or a <code>..</code>, a symlink, an encrypted entry, or a name used twice refuses the whole file. The file has at most 500 entries, 200 MB uncompressed, and a size limit per kind of file (50 MB for an impulse response, 100 MB for a Reference WAV, 64 MB for a Mix, 256 KB for an FX). Only the entry names the app knows are used, and every file it writes is named from a checked name, never from the entry. A file with a Mix is refused on a machine whose torch is older than 2.6, which cannot load it safely. Character settings keep only the keys a character has, each of the right type, and FX values are clamped to their slider ranges, as for an FX file you copy in by hand. A <code>.kgshare</code> is its own zip format, not a <code>.tbaw</code>, and no project file changes.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Lexicon</h3>
         <ul class="change-list">
           <li>
