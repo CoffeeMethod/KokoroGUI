@@ -88,7 +88,7 @@ from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QMenu, QTextEdit, QToolTip, QWidget
 
 from kokoro_gui.daw import fit as fit_ops
-from kokoro_gui.daw import derived, imported, segment_view, spell
+from kokoro_gui.daw import derived, imported, segment_view, spell, textsearch
 from kokoro_gui.daw.auto_split import plan_auto_split_clips
 from kokoro_gui.daw.undo import ApplyWordsCommand, AssignCharacterCommand, TextEditCommand
 from kokoro_gui.engine.segmenting import PAUSE, WORD
@@ -881,6 +881,10 @@ class TranscriptEditor(QTextEdit):
         # then goes through `TextEditCommand`, so the insert and its
         # `ApplyWordsCommand` undo as one step (`push_joined`).
         self._joined_edit = False
+        # True while `replace_ranges` makes many edits: the highlighter is
+        # detached for the batch, so `_on_contents_change` leaves the blocks
+        # alone and the whole document is highlighted once at the end.
+        self._batch_edit = False
         # Guards against _on_selection_model_changed's own setTextCursor()
         # call bouncing straight back into _on_cursor_position_changed.
         self._updating_from_model = False
@@ -971,14 +975,15 @@ class TranscriptEditor(QTextEdit):
         # connected first, at construction) against the pre-edit run list -
         # re-paint the touched blocks now that the run list caught up.
         self._highlighter.invalidate_dirty()
-        first = self.document().findBlock(position)
-        last = self.document().findBlock(position + max(chars_added, 0))
-        block = first
-        while block.isValid():
-            self._highlighter.rehighlightBlock(block)
-            if block == last:
-                break
-            block = block.next()
+        if not self._batch_edit:
+            first = self.document().findBlock(position)
+            last = self.document().findBlock(position + max(chars_added, 0))
+            block = first
+            while block.isValid():
+                self._highlighter.rehighlightBlock(block)
+                if block == last:
+                    break
+                block = block.next()
         self._split_timer.start()
         self.app.schedule_save()
         # Deferred: a burst of typing costs one timeline refresh.
@@ -1696,9 +1701,15 @@ class TranscriptEditor(QTextEdit):
         replacement."""
         document = self.app.document
         text = document.text
+        blocked = textsearch.placeholder_spans(document)
+        blocked_starts = [a for a, _b in blocked]
         spans: list = []
         for start, end, new in sorted((max(0, int(s)), min(len(text), int(e)), str(n)) for s, e, n in edits):
-            if end <= start or text[start:end] == new or self.edit_touches_placeholder(start, end):
+            if end <= start or text[start:end] == new:
+                continue
+            # The last placeholder starting before `end` is the only one that can reach into the range.
+            i = bisect.bisect_left(blocked_starts, end) - 1
+            if i >= 0 and blocked[i][1] > start:
                 continue
             if spans and start < spans[-1][1]:
                 continue
@@ -1712,6 +1723,10 @@ class TranscriptEditor(QTextEdit):
             steps.append((start, end, ""))
         cursor = QTextCursor(self.document())
         was_joined, self._joined_edit = self._joined_edit, True
+        # Every change re-highlights the blocks after it while the document
+        # is half way through the batch; one highlight at the end is enough.
+        self._batch_edit = True
+        self._attach_highlighter(None)
         try:
             with self.undo_coordinator.one_step():
                 for number, (start, end, new) in enumerate(steps):
@@ -1730,7 +1745,21 @@ class TranscriptEditor(QTextEdit):
                         cursor.endEditBlock()
         finally:
             self._joined_edit = was_joined
+            self._batch_edit = False
+            self._attach_highlighter(self.document())
+            self.rehighlight_all()
         return len(spans)
+
+    def _attach_highlighter(self, document) -> None:
+        """Points the highlighter at `document` (None detaches it). Qt clears
+        the highlight formats of a document the highlighter leaves and
+        reports it as a content change over the whole text, which
+        `_on_contents_change` must not take for an edit."""
+        was, self._suppress_contents_change = self._suppress_contents_change, True
+        try:
+            self._highlighter.setDocument(document)
+        finally:
+            self._suppress_contents_change = was
 
     def _key_may_edit_imported(self, event, start: int, end: int, inserting: bool) -> bool:
         """True when the key's edit (`_key_edit_range`) may change imported

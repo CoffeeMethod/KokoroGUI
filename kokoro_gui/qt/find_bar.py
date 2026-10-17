@@ -25,10 +25,9 @@ from bisect import bisect_left, bisect_right
 from typing import Optional
 
 from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
-    QCheckBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout,
-    QWidget,
+    QApplication, QCheckBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
+    QVBoxLayout, QWidget,
 )
 
 from kokoro_gui.daw import textsearch
@@ -255,19 +254,39 @@ class FindBar(QWidget):
         if needle and not self._busy and self._active:
             document = self.app.document
             self._hits = textsearch.find_in_document(document, needle, match_case, whole_word)
-            for project in self.app.open_projects():
+            projects = self._ordered_projects()
+            for project in projects:
                 if project.document is document:
                     continue
                 found = textsearch.find_in_document(project.document, needle, match_case, whole_word)
                 if found:
                     self._others.append((project, found))
             self._closed_children = sum(
-                1 for project in self.app.open_projects() for clip in project.document.nested_clips()
+                1 for project in projects for clip in project.document.nested_clips()
                 if self.app.child_project(clip) is None)
         if select and self._hits and self._current_index() is None:
             self._select(self._first_from(self.editor.textCursor().selectionStart()))
             return
         self._render()
+
+    def _ordered_projects(self) -> list:
+        """The open projects in transcript order: the root, then each
+        subproject where its line sits, depth first."""
+        opened = self.app.open_projects()
+        ordered: list = []
+
+        def walk(project) -> None:
+            ordered.append(project)
+            document = project.document
+            nested = sorted(document.nested_clips(), key=lambda clip: (document.clip_extent(clip.id) or (0, 0))[0])
+            for clip in nested:
+                child = self.app.child_project(clip)
+                if child is not None and not any(child is seen for seen in ordered):
+                    walk(child)
+
+        walk(self.app.root)
+        ordered = [project for project in ordered if any(project is item for item in opened)]
+        return ordered + [project for project in opened if not any(project is item for item in ordered)]
 
     def _current_index(self) -> Optional[int]:
         cursor = self.editor.textCursor()
@@ -409,12 +428,18 @@ class FindBar(QWidget):
             if answer != QMessageBox.StandardButton.Yes:
                 return 0
         replaced = 0
-        for project, plan in plans:
-            if project.document is self.app.document:
-                replaced += self.editor.replace_ranges(plan.edits)
-            else:
-                project.document.undo_stack.push(textsearch.replace_command(project.document, plan.edits))
-                replaced += plan.matches
+        # A long replacement runs on the GUI thread, about 5 ms an edit in a
+        # transcript of a thousand clips.
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for project, plan in plans:
+                if project.document is self.app.document:
+                    replaced += self.editor.replace_ranges(plan.edits)
+                else:
+                    project.document.undo_stack.push(textsearch.replace_command(project.document, plan.edits))
+                    replaced += plan.matches
+        finally:
+            QApplication.restoreOverrideCursor()
         clips = sum(plan.clips for _project, plan in plans)
         stale = sum(plan.stale for _project, plan in plans)
         message = f"Replaced {_count(replaced, 'match', 'matches')} in {_count(clips, 'clip', 'clips')}"

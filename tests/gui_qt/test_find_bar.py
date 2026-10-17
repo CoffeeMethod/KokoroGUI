@@ -4,7 +4,6 @@ all, over the open project and its subprojects."""
 import copy
 
 import numpy as np
-import pytest
 import soundfile as sf
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QTextCursor
@@ -33,7 +32,6 @@ def _load(qt_app, lines=LINES, clip_lines=(0, 1, 2)):
     first character."""
     document, editor = qt_app.document, qt_app.editor
     document.set_plain_text("\n".join(lines))
-    text = document.text
     character = document.characters[0]
     for number in (n for n in clip_lines if n < len(lines)):
         start = sum(len(line) + 1 for line in lines[:number])
@@ -498,3 +496,125 @@ def test_one_replace_all_over_a_recording_and_a_generated_clip(qt_app, tmp_path)
     qt_app.undo()
     assert document.text == before_text and document.runs == before_runs
     assert document.get_clip(clip.id) not in document.dirty_clips()
+
+
+# -- subprojects ------------------------------------------------------------------------------
+
+def _book(qt_app):
+    """"The cat sat. A cat tale. Another cat story. End cat." with the two
+    middle clips in subprojects "Tale" and "Story"; every clip generated."""
+    from tests.gui_qt.test_subprojects import _generated_clip
+
+    text = "The cat sat. A cat tale. Another cat story. End cat."
+    qt_app.document.text = text
+    qt_app.editor.load_text(text)
+    for piece in ("The cat sat.", "A cat tale.", "Another cat story.", "End cat."):
+        start = text.index(piece)
+        _generated_clip(qt_app, start, start + len(piece))
+    story_at = text.index("Another")
+    story = qt_app.new_subproject(story_at, story_at + len("Another cat story."), title="Story")
+    tale_at = text.index("A cat tale.")
+    tale = qt_app.new_subproject(tale_at, tale_at + len("A cat tale."), title="Tale")
+    assert qt_app.document.text == "The cat sat. Tale Story End cat."
+    return tale, story
+
+
+def test_the_bar_lists_the_matches_of_every_open_subproject(qt_app):
+    tale, story = _book(qt_app)
+
+    bar = _search(qt_app, "cat", replacement="dog")
+
+    assert len(bar.hits()) == 2
+    assert [(p.title(), n) for p, n in bar.other_hits()] == [("Tale", 1), ("Story", 1)]
+    rows = [bar.projects_list.item(i).text() for i in range(bar.projects_list.count())]
+    assert rows == ["Tale: 1 match", "Story: 1 match"]
+    assert bar.summary_label.text() == "Replaces 4 matches in 4 clips across 3 projects. 4 clips will turn stale."
+    assert tale.document.text == "A cat tale." and story.document.text == "Another cat story."
+
+
+def test_replace_all_reaches_every_subproject_and_each_undoes_on_its_own_stack(qt_app, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    tale, story = _book(qt_app)
+    root = qt_app.document
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: asked.append(a[2]) or QMessageBox.StandardButton.Yes))
+    bar = _search(qt_app, "cat", replacement="dog")
+
+    assert bar.replace_all() == 4
+
+    assert len(asked) == 1 and "Tale (1)" in asked[0] and "Story (1)" in asked[0]
+    assert root.text == "The dog sat. Tale Story End dog."
+    assert tale.document.text == "A dog tale." and story.document.text == "Another dog story."
+    assert all(c in c_doc.dirty_clips() for c_doc in (root, tale.document, story.document)
+               for c in c_doc.clips if not c.is_nested)
+    assert qt_app.editor.toPlainText() == root.text
+    qt_app._autosave_project_dir()
+    assert tale.dirty and story.dirty
+
+    # The editor's undo is the open project's own.
+    qt_app.undo()
+    assert root.text == "The cat sat. Tale Story End cat."
+    assert tale.document.text == "A dog tale." and story.document.text == "Another dog story."
+    # A subproject has its own stack: one undo takes back all of its matches.
+    story.document.undo_stack.undo()
+    assert story.document.text == "Another cat story." and tale.document.text == "A dog tale."
+
+
+def test_a_subproject_undoes_with_ctrl_z_once_it_has_the_editor(qt_app):
+    tale, story = _book(qt_app)
+    bar = _search(qt_app, "cat", replacement="dog")
+    bar.replace_all()
+
+    qt_app.set_focus(story)
+    assert qt_app.document is story.document
+    qt_app.undo()
+    assert story.document.text == "Another cat story."
+    assert qt_app.editor.toPlainText() == "Another cat story."
+    assert tale.document.text == "A dog tale."
+    qt_app.redo()
+    assert story.document.text == "Another dog story."
+
+
+def test_declining_the_question_changes_nothing(qt_app, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    tale, story = _book(qt_app)
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No))
+    bar = _search(qt_app, "cat", replacement="dog")
+
+    assert bar.replace_all() == 0
+
+    assert qt_app.document.text == "The cat sat. Tale Story End cat."
+    assert tale.document.text == "A cat tale." and story.document.text == "Another cat story."
+
+
+def test_a_double_click_on_a_row_shows_that_subproject(qt_app):
+    tale, _story = _book(qt_app)
+    bar = _search(qt_app, "cat")
+
+    bar.projects_list.itemDoubleClicked.emit(bar.projects_list.item(0))
+
+    assert qt_app.focus is tale
+    assert qt_app.document is tale.document
+    assert bar.hits() == [(2, 5)]
+    # The root is now one of the other projects.
+    assert [(p.title(), n) for p, n in bar.other_hits()] == [(qt_app.root.title(), 2), ("Story", 1)]
+
+
+def test_a_subproject_that_is_not_open_is_left_out_with_a_note(qt_app, monkeypatch):
+    tale, story = _book(qt_app)
+    story_clip = qt_app.document.get_clip(story.clip_id)
+    real = qt_app.child_project
+    monkeypatch.setattr(qt_app, "child_project", lambda clip: None if clip.id == story_clip.id else real(clip))
+    monkeypatch.setattr(qt_app, "open_projects", lambda: [qt_app.root, tale])
+
+    bar = _search(qt_app, "cat", replacement="dog")
+
+    assert [(p.title(), n) for p, n in bar.other_hits()] == [("Tale", 1)]
+    assert bar.closed_label.text() == "1 subproject not opened, so not searched."
+    assert not bar.closed_label.isHidden()
+    bar.replace_all()
+    assert story.document.text == "Another cat story."
+    assert tale.document.text == "A dog tale."
