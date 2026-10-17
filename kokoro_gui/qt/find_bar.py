@@ -172,7 +172,7 @@ class FindBar(QWidget):
         selected = cursor.selectedText()
         self._active = True
         self.show()
-        if cursor.hasSelection() and 0 < len(selected) <= MAX_PREFILL and " " not in selected \
+        if cursor.hasSelection() and 0 < len(selected) <= MAX_PREFILL and "\u2029" not in selected \
                 and "\n" not in selected:
             self.find_edit.setText(selected)
         self.find_edit.setFocus()
