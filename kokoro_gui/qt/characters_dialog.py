@@ -30,6 +30,10 @@ Edits `app.document.characters` directly. Adding a character makes no
 (grill PR4). Removing one is refused while any clip still uses it; the
 library entry stays.
 
+Export... and Import... (plan 40) move characters between machines as a share
+file (`qt/share_dialogs.py`, `daw/share.py`). Import adds to the library; Add >
+From library... brings an imported character into the project.
+
 Every button calls a public method (`add_character`, `add_from_library`,
 `promote_current`, `rename_in_library`, ...), so tests drive the dialog
 without `exec()`.
@@ -50,7 +54,7 @@ from kokoro_gui.daw import library as library_ops
 from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character
 from kokoro_gui.engines.missing import MissingBackend
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
-from kokoro_gui.qt import theme
+from kokoro_gui.qt import share_dialogs, theme
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
 
 # NP3's three scopes (phase 4): the global library, the project (a root
@@ -159,6 +163,17 @@ class CharactersDialog(QDialog):
         self.promote_btn.setToolTip("Make this character a library entry, shared with every project.")
         self.promote_btn.clicked.connect(self.promote_current)
         left.addWidget(self.promote_btn)
+        # Share files (plan 40): characters out to a `.kgshare`, and in.
+        share_row = QHBoxLayout()
+        self.export_btn = QPushButton("Export...")
+        self.export_btn.setToolTip("Save characters, with their FX and voice files, to a share file for another machine.")
+        self.export_btn.clicked.connect(self.export_characters)
+        self.import_btn = QPushButton("Import...")
+        self.import_btn.setToolTip("Add the characters, FX and voices in a share file to the library.")
+        self.import_btn.clicked.connect(self.import_characters)
+        share_row.addWidget(self.export_btn)
+        share_row.addWidget(self.import_btn)
+        left.addLayout(share_row)
         # In a subproject (NP3): share a character with the whole book.
         self.promote_project_btn = QPushButton("Promote to Project")
         self.promote_project_btn.setToolTip("Make this character the top-level project's, shared by every "
@@ -652,6 +667,22 @@ class CharactersDialog(QDialog):
         if picker.exec() != QDialog.DialogCode.Accepted:
             return []
         return self.add_from_library([item.data(_ID_ROLE) for item in listing.selectedItems()])
+
+    def export_characters(self, path: str | None = None):
+        """Asks which characters to put in a share file (the selected one is
+        ticked) and writes it. Returns the `ExportReport` or None."""
+        characters = list(self.app.document.characters)
+        preselect = {self._current.id} if self._current is not None else set()
+        return share_dialogs.export_to_file(self.app, self, characters=characters, preselect=preselect,
+                                            title="Export Characters", path=path)
+
+    def import_characters(self, path: str | None = None):
+        """Reads a share file into the library (characters, and the FX and
+        voice files they use). Returns the `ImportResult` or None."""
+        result = share_dialogs.import_from_file(self.app, self, title="Import Characters", path=path)
+        if result is not None:
+            self.reload()
+        return result
 
     def promote_current(self) -> str | None:
         """WF7: saves a local character as a new library entry and links this

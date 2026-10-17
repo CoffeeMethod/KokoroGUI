@@ -29,6 +29,11 @@ A `spec.FXFileSpec` field (the convolution reverb's impulse response) is a
 combo of names from its store, project-local first (`fx_presets.list_ir_names`),
 with a "None" entry that stores "", and an "Add..." button that copies a wav
 into the global store (`fx_presets.import_ir_file`).
+
+The Share menu next to the preset combo exports FX (with the impulse responses
+they name) to a `.kgshare` file and imports FX from one (`export_fx`,
+`import_fx`; plan 40, `qt/share_dialogs.py`, `daw/share.py`). A share file's
+characters and voices are not offered here.
 """
 from __future__ import annotations
 
@@ -39,15 +44,15 @@ import re
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
-    QGroupBox, QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPushButton,
-    QScrollArea, QVBoxLayout, QWidget,
+    QGroupBox, QHBoxLayout, QInputDialog, QLabel, QMenu, QMessageBox, QPushButton,
+    QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 
 import kokoro_gui.qt.app as qt_app_module
-from kokoro_gui.daw import revision
+from kokoro_gui.daw import revision, share
 from kokoro_gui.daw.undo import SetClipFxCommand
 from kokoro_gui.engine.presets import filter_fx_preset_values
-from kokoro_gui.qt import fx_resolve, spec
+from kokoro_gui.qt import fx_resolve, share_dialogs, spec
 from kokoro_gui.qt.fx_presets import import_ir_file, list_fx_preset_names, list_ir_names
 from kokoro_gui.qt.fx_resolve import PLACEHOLDER as _PLACEHOLDER
 from kokoro_gui.qt.fx_resolve import PLACEHOLDER_LABEL as _PLACEHOLDER_LABEL
@@ -99,8 +104,21 @@ class FXDock(QDockWidget):
         refresh_btn.clicked.connect(self.refresh_presets)
         preset_row.addWidget(QLabel("FX:"))
         preset_row.addWidget(self.preset_combo, 1)
+        # Share files (plan 40): FX, with their impulse responses, out to a
+        # `.kgshare` and in.
+        self.share_btn = QToolButton()
+        self.share_btn.setText("Share")
+        self.share_btn.setToolTip("Move FX to or from another machine as a share file.")
+        self.share_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        share_menu = QMenu(self.share_btn)
+        self.export_action = share_menu.addAction("Export FX...")
+        self.export_action.triggered.connect(lambda _checked=False: self.export_fx())
+        self.import_action = share_menu.addAction("Import FX...")
+        self.import_action.triggered.connect(lambda _checked=False: self.import_fx())
+        self.share_btn.setMenu(share_menu)
         preset_row.addWidget(save_btn)
         preset_row.addWidget(refresh_btn)
+        preset_row.addWidget(self.share_btn)
         outer.addLayout(preset_row)
 
         scroll = QScrollArea()
@@ -436,6 +454,23 @@ class FXDock(QDockWidget):
             QMessageBox.information(self, "Saved", f"FX '{name}' saved.")
             self.refresh_presets()
             self._set_combo_text(name)
+
+    def export_fx(self, names=None, path: str | None = None):
+        """Asks which FX to put in a share file (the one the combo shows is
+        ticked) and writes it, impulse responses included. Returns the
+        `ExportReport` or None."""
+        available = list_fx_preset_names(self.app.project_dir)
+        current = self.preset_combo.currentData()
+        preselect = set(names) if names is not None else ({current} if current in available else set())
+        return share_dialogs.export_to_file(self.app, self, fx_names=available, preselect=preselect,
+                                            title="Export FX", path=path)
+
+    def import_fx(self, path: str | None = None):
+        """Reads the FX (and impulse responses) in a share file into the
+        global FX folder; characters and voices in it are not offered here.
+        Returns the `ImportResult` or None."""
+        return share_dialogs.import_from_file(self.app, self, kinds=(share.KIND_FX, share.KIND_IR),
+                                              title="Import FX", path=path)
 
     def load_preset(self, name: str) -> None:
         """Project-scope load: applies the preset's values to the "none"

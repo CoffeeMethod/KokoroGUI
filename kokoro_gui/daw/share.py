@@ -581,7 +581,8 @@ class ImportItem:
     kind: str
     key: str
     name: str
-    detail: str = ""
+    detail: str = ""  # the engine id, for a character or a voice
+    label: str = ""  # what to call the kind in a list: Character, FX, Impulse response, Mix, Reference
     clash: bool = False
     same: bool = False
     unavailable: str = ""
@@ -655,24 +656,25 @@ def plan_import(info: ShareInfo, *, library, fx_dir: str | None = None, store_fo
     names_here = {c.name.casefold() for c in library.list()}
     for index, character in enumerate(info.characters):
         items.append(ImportItem(KIND_CHARACTER, f"{KIND_CHARACTER}:{index}", character.name, character.backend_id,
-                                clash=character.name.casefold() in names_here))
+                                "Character", clash=character.name.casefold() in names_here))
     with zipfile.ZipFile(info.path) as zf:
         for name in sorted(info.fx):
             path = _inside(fx_dir, name, ".json")
-            item = ImportItem(KIND_FX, f"{KIND_FX}:{name}", name)
+            item = ImportItem(KIND_FX, f"{KIND_FX}:{name}", name, label="FX")
             if path and os.path.isfile(path):
                 item.same = _fx_values_on_disk(path) == info.fx[name]
                 item.clash = not item.same
             items.append(item)
         for name in sorted(info.irs):
             path = _inside(os.path.join(fx_dir, "ir"), name, ".wav")
-            item = ImportItem(KIND_IR, f"{KIND_IR}:{name}", name)
+            item = ImportItem(KIND_IR, f"{KIND_IR}:{name}", name, label="Impulse response")
             if path and os.path.isfile(path):
                 item.same = _zip_matches_file(zf, f"fx/ir/{name}.wav", path)
                 item.clash = not item.same
             items.append(item)
         for voice in info.voices:
-            item = ImportItem(KIND_VOICE, f"{KIND_VOICE}:{voice.engine_id}:{voice.name}", voice.name, voice.engine_id)
+            item = ImportItem(KIND_VOICE, f"{KIND_VOICE}:{voice.engine_id}:{voice.name}", voice.name, voice.engine_id,
+                              "Mix" if ".pt" in voice.files else "Reference")
             store = store_for(voice.engine_id)
             plan = _voice_plan(voice, store)
             if isinstance(plan, str):
