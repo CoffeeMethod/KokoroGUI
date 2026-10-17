@@ -81,6 +81,9 @@ class Palette:
     spell_underline: str
     # Proof by ASR: the corner mark on a clip whose audio doesn't match its text.
     proof_flag: str
+    # Find and replace: every match in the transcript, and the current one.
+    find_match: str
+    find_current: str
     # Transport level meter: the bar's zones (below -6 dBFS, up to -1, over).
     meter_ok: str
     meter_warn: str
@@ -124,6 +127,8 @@ LIGHT = Palette(
     status_approved="#16a34a",
     spell_underline="#0891b2",
     proof_flag="#9333ea",
+    find_match="#bfdbfe",
+    find_current="#60a5fa",
     meter_ok="#16a34a",
     meter_warn="#f59e0b",
     meter_clip="#dc2626",
@@ -162,6 +167,8 @@ DARK = Palette(
     status_approved="#4ade80",
     spell_underline="#22d3ee",
     proof_flag="#c084fc",
+    find_match="#1e3a5f",
+    find_current="#2f6fb5",
     meter_ok="#4ade80",
     meter_warn="#fbbf24",
     meter_clip="#ef4444",

@@ -31,6 +31,7 @@ SCOPES = (WINDOW, TIMELINE, APP)
 TRANSPORT = "Transport"
 TIMELINE_GROUP = "Timeline"
 GENERATE = "Generate"
+FIND = "Find"
 
 # How far a jump has to move the playhead, so a press at a clip's start goes
 # to the one before instead of staying put.
@@ -100,6 +101,11 @@ KEYS: tuple = (
                "delete_selected_bed", TIMELINE_GROUP),
     KeyBinding("generate_stale", "Ctrl+G", APP, "Generate stale clips (works in any panel)",
                "generate_stale_key", GENERATE),
+    KeyBinding("find", "Ctrl+F", APP, "Find in the transcript (works in any panel)", "find_in_transcript", FIND),
+    KeyBinding("replace", "Ctrl+H", APP, "Find and replace in the transcript (works in any panel)",
+               "replace_in_transcript", FIND),
+    KeyBinding("find_next", "F3", WINDOW, "Next match", "find_next_match", FIND),
+    KeyBinding("find_previous", "Shift+F3", WINDOW, "Previous match", "find_previous_match", FIND),
     KeyBinding("cancel_generate", "Esc", WINDOW, "Cancel the running generate",
                "cancel_generate_key", GENERATE, while_generating=True),
 )

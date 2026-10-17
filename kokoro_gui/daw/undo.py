@@ -129,6 +129,10 @@ class UndoStack:
     def can_undo(self) -> bool:
         return bool(self._undo)
 
+    def undo_depth(self) -> int:
+        """How many commands `undo` can take back."""
+        return len(self._undo)
+
     def can_redo(self) -> bool:
         return bool(self._redo)
 

@@ -73,7 +73,11 @@ class UndoCoordinator:
         # `on_custom_stack_changed`.
         self._run_joined = run_joined
 
-        self._order: list = []  # NATIVE | CUSTOM | _Joined, most-recent last
+        # NATIVE | CUSTOM | _Joined, most-recent last. A stack that already
+        # holds commands (a subproject Find and replace changed while another
+        # project had the editor, then took the editor) starts with an entry
+        # for each, so Ctrl+Z reaches them.
+        self._order: list = [CUSTOM] * daw_undo_stack.undo_depth()
         self._redo_order: list = []  # undone entries, most-recently-undone last
         # True between Qt adding an undo command and the editor handling
         # the text change it belongs to (`edit_seen`): the change got a

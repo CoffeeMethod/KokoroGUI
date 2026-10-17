@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from kokoro_gui.daw.undo import SetClipFxCommand, SetFieldCommand
 from kokoro_gui.engine import presets
 from kokoro_gui.engine.presets import filter_fx_preset_values
+from kokoro_gui.qt.find_bar import FindBar
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
 from kokoro_gui.qt.transcript_editor import TranscriptEditor, clip_fx_name
 
@@ -89,6 +90,10 @@ class TranscriptDock(QDockWidget):
         self.editor = TranscriptEditor(self.app)
         layout.addWidget(self.editor, 1)
 
+        # Edit > Find / Find and Replace (plan 34); hidden until asked for.
+        self.find_bar = FindBar(self.app, self.editor)
+        layout.addWidget(self.find_bar)
+
         # Transcript details (grill TE10): one line on the caret's clip,
         # shown while details and Clip info are on.
         self.info_strip = QLabel()
@@ -106,6 +111,18 @@ class TranscriptDock(QDockWidget):
         self.variant_combo.activated.connect(self._on_variant_activated)
         self.editor.cursorPositionChanged.connect(self.sync_header)
 
+    def show_find(self, replace: bool = False) -> None:
+        """Edit > Find or Find and Replace: shows the dock and opens the bar."""
+        self.show()
+        self.raise_()
+        self.find_bar.open(replace=replace)
+
+    def find_step(self, forward: bool = True) -> None:
+        """F3 and Shift+F3; a closed bar opens first."""
+        if not self.find_bar.is_open():
+            self.show_find()
+        self.find_bar.find_next() if forward else self.find_bar.find_previous()
+
     def refresh_scope(self) -> None:
         """The subproject bar: its title and a way back to the level."""
         text = self.app.scope_text() if hasattr(self.app, "scope_text") else None
@@ -113,6 +130,7 @@ class TranscriptDock(QDockWidget):
         if text:
             self.scope_label.setText(text)
             self.scope_back_btn.setText(f"Back to {self.app.level.title()}")
+        self.find_bar.on_busy_changed()
         self.app.selection.changed.connect(self.sync_header)
         self.sync_header()
 

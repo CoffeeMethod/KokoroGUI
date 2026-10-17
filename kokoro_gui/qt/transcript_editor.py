@@ -910,6 +910,12 @@ class TranscriptEditor(QTextEdit):
         self._playing_clip_id: Optional[str] = None
         self._playing_clip_selections: list = []
         self._playing_word: Optional[tuple] = None
+        # Find and replace: the bar's matches as sorted `(start, end)` and
+        # the index of the current one. Only the matches on screen become
+        # `ExtraSelection`s (`_find_selections`).
+        self._find_spans: list = []
+        self._find_current: Optional[int] = None
+        self.verticalScrollBar().valueChanged.connect(self._on_scrolled_for_find)
 
         self.document().contentsChange.connect(self._on_contents_change)
         self.cursorPositionChanged.connect(self._on_cursor_position_changed)
@@ -1364,8 +1370,79 @@ class TranscriptEditor(QTextEdit):
     def playing_word(self) -> Optional[tuple]:
         return self._playing_word
 
+    # -- Find and replace highlights ----------------------------------------
+
+    def set_find_matches(self, spans, current: Optional[int] = None) -> None:
+        """Highlights `spans` (sorted `(start, end)` offsets) with the
+        `find_match` color and `spans[current]` with `find_current`."""
+        self._find_spans = list(spans)
+        self._find_current = current if current is not None and 0 <= current < len(self._find_spans) else None
+        self._apply_extra_selections()
+
+    def select_span(self, start: int, end: int) -> None:
+        """Selects `[start, end)` and scrolls to it. The app follows the clip
+        under the selection as it does for a click, but the editor keeps the
+        span: `_on_selection_model_changed` would widen it to the whole clip
+        when the span is in a clip other than the selected one."""
+        text_len = self._text_length()
+        start, end = max(0, min(start, text_len)), max(0, min(end, text_len))
+        cursor = QTextCursor(self.document())
+        cursor.setPosition(start)
+        cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(cursor)
+        was, self._updating_from_model = self._updating_from_model, True
+        try:
+            self.setTextCursor(cursor)
+        finally:
+            self._updating_from_model = was
+        self.ensureCursorVisible()
+
+    def clear_find_matches(self) -> None:
+        if self._find_spans:
+            self.set_find_matches([])
+
+    def find_matches(self) -> list:
+        return list(self._find_spans)
+
+    def _on_scrolled_for_find(self, _value: int) -> None:
+        if self._find_spans:
+            self._apply_extra_selections()
+
+    def _find_selections(self) -> list:
+        """`ExtraSelection`s for the matches in view, and for the current
+        one wherever it is, so a long list of matches costs what is on
+        screen."""
+        spans = self._find_spans
+        if not spans:
+            return []
+        text_len = self._text_length()
+        lo, hi = self._visible_range()
+        first = bisect.bisect_left(spans, (lo, lo)) - 1
+        pal = theme.current()
+        shown: list = []
+        for i in range(max(0, first), len(spans)):
+            start, end = spans[i]
+            if start > hi:
+                break
+            if end >= lo:
+                shown.append(i)
+        if self._find_current is not None and self._find_current not in shown:
+            shown.append(self._find_current)
+        selections = []
+        for i in shown:
+            start, end = (max(0, min(v, text_len)) for v in spans[i])
+            if end <= start:
+                continue
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = QTextCursor(self.document())
+            sel.cursor.setPosition(start)
+            sel.cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+            sel.format.setBackground(QColor(pal.find_current if i == self._find_current else pal.find_match))
+            selections.append(sel)
+        return selections
+
     def _apply_extra_selections(self) -> None:
-        selections = list(self._playing_clip_selections)
+        selections = list(self._playing_clip_selections) + self._find_selections()
         if self._playing_word is not None:
             text_len = len(self.toPlainText())
             start, end = (max(0, min(v, text_len)) for v in self._playing_word)
@@ -1592,6 +1669,67 @@ class TranscriptEditor(QTextEdit):
                     cursor.removeSelectedText()
                 finally:
                     cursor.endEditBlock()
+        return len(spans)
+
+    def replace_ranges(self, edits) -> int:
+        """Replaces every `(start, end, new_text)` of `edits` as one edit and
+        returns how many it applied (Find and replace's Replace and Replace
+        all). It generalises `delete_ranges`: the ranges are handled from the
+        last to the first so no offset moves, each text change is its own
+        edit block (the first opens one, the rest `joinPreviousEditBlock`) so
+        Qt keeps one native undo command while every change reaches
+        `_on_contents_change` alone, and `UndoCoordinator.one_step` folds
+        the log entries into one undo step.
+
+        A replacement is two changes, the new text inserted at the end of
+        the match and the match then deleted. One change over the match
+        would consume a clip whose whole text is the match and leave the new
+        text untagged; inserted first, the new text takes the clip of the
+        text on its left. Every change goes through `TextEditCommand`
+        (`_joined_edit`), whose snapshot gives the clips back on undo; the
+        native undo alone would bring the deleted text back untagged.
+        Inside an imported recording the new text is untagged and the
+        recording splits around it, as typing does (grill PG10).
+
+        A range that touches a subproject's line or a bed's is skipped, as
+        typing there is, and so is one that already reads as its
+        replacement."""
+        document = self.app.document
+        text = document.text
+        spans: list = []
+        for start, end, new in sorted((max(0, int(s)), min(len(text), int(e)), str(n)) for s, e, n in edits):
+            if end <= start or text[start:end] == new or self.edit_touches_placeholder(start, end):
+                continue
+            if spans and start < spans[-1][1]:
+                continue
+            spans.append((start, end, new))
+        if not spans:
+            return 0
+        steps: list = []
+        for start, end, new in reversed(spans):
+            if new:
+                steps.append((end, end, new))
+            steps.append((start, end, ""))
+        cursor = QTextCursor(self.document())
+        was_joined, self._joined_edit = self._joined_edit, True
+        try:
+            with self.undo_coordinator.one_step():
+                for number, (start, end, new) in enumerate(steps):
+                    if number == 0:
+                        cursor.beginEditBlock()
+                    else:
+                        cursor.joinPreviousEditBlock()
+                    try:
+                        cursor.setPosition(start)
+                        if end > start:
+                            cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+                            cursor.removeSelectedText()
+                        else:
+                            cursor.insertText(new)
+                    finally:
+                        cursor.endEditBlock()
+        finally:
+            self._joined_edit = was_joined
         return len(spans)
 
     def _key_may_edit_imported(self, event, start: int, end: int, inserting: bool) -> bool:

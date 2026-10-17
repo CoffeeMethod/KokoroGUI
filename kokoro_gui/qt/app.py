@@ -1011,6 +1011,18 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         for a in (self.cut_action, self.copy_action, self.paste_action):
             self.edit_menu.addAction(a)
         self.edit_menu.addSeparator()
+        # Ctrl+F, Ctrl+H, F3 and Shift+F3 are rows of keymap.KEYS.
+        self.find_action = self._action("Fin&d...", self.find_in_transcript)
+        self.find_action.setToolTip("Search the transcript and the open subprojects (Ctrl+F).")
+        self.find_replace_action = self._action("Find and &Replace...", self.replace_in_transcript)
+        self.find_replace_action.setToolTip("Search and replace in the transcript and the open subprojects (Ctrl+H).")
+        self.find_next_action = self._action("Find &Next", self.find_next_match)
+        self.find_next_action.setToolTip("Go to the next match (F3).")
+        self.find_previous_action = self._action("Find Pre&vious", self.find_previous_match)
+        self.find_previous_action.setToolTip("Go to the previous match (Shift+F3).")
+        for a in (self.find_action, self.find_replace_action, self.find_next_action, self.find_previous_action):
+            self.edit_menu.addAction(a)
+        self.edit_menu.addSeparator()
         self.split_clip_action = self._action("&Split Clip at Playhead", self.split_clip_at_playhead)
         self.split_clip_action.setToolTip("Cut the clip under the playhead in two at the word it is on. "
                                           "S does the same with the timeline focused.")
@@ -3706,6 +3718,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             # handler is done.
             QTimer.singleShot(0, self.pump_queue)
         self.transport_dock.set_busy(is_running)
+        if self.transcript_dock is not None:
+            self.transcript_dock.find_bar.on_busy_changed()
         self.settings_dock.volume_spin.setEnabled(not is_running)
         self.settings_dock.pitch_spin.setEnabled(not is_running)
         if not is_running:
@@ -4125,6 +4139,22 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if self.is_busy():
             return
         self.on_generate_clicked()
+
+    def find_in_transcript(self) -> None:
+        """Edit > Find (Ctrl+F): the find bar under the transcript."""
+        self.transcript_dock.show_find(replace=False)
+
+    def replace_in_transcript(self) -> None:
+        """Edit > Find and Replace (Ctrl+H): the find bar with its replace row."""
+        self.transcript_dock.show_find(replace=True)
+
+    def find_next_match(self) -> None:
+        """Edit > Find Next (F3); opens the bar when it is closed."""
+        self.transcript_dock.find_step(forward=True)
+
+    def find_previous_match(self) -> None:
+        """Edit > Find Previous (Shift+F3)."""
+        self.transcript_dock.find_step(forward=False)
 
     def cancel_generate_key(self) -> None:
         """Esc: only armed while a generate runs (`_arm_generate_keys`)."""
