@@ -7,6 +7,7 @@ import pytest
 import soundfile as sf
 
 from kokoro_gui.audio import mixer
+from kokoro_gui.audio import transport as transport_module
 from kokoro_gui.audio.transport import ScheduledClip, Transport, render_block_for_test
 
 pytest.importorskip("PySide6")
@@ -649,3 +650,29 @@ def test_mixdown_matches_the_transport_with_a_ducked_bed(tmp_path, make_transpor
     # really was ducked while the speech played.
     assert np.abs(exported[int(1.2 * rate):int(1.4 * rate), 1]).max() < 0.2 * 10 ** (-9 / 20) + 1e-3
     assert np.abs(exported[int(2.5 * rate):, 1]).max() > 0.15
+
+
+def test_default_stream_factory_asks_for_a_fixed_block(monkeypatch):
+    """The stream opens with an explicit `blocksize`.
+
+    Left at PortAudio's choice, a stream opened below the device's native
+    rate (Kokoro's 24000 Hz against a 44100/48000 Hz device) is
+    rate-converted by CoreAudio, which then hands the callback ~14 frames
+    - 0.58 ms of audio, ~1700 calls a second - and playback clicks.
+    """
+    opened = {}
+
+    class _Sd:
+        @staticmethod
+        def OutputStream(**kwargs):
+            opened.update(kwargs)
+            return object()
+
+    monkeypatch.setattr(transport_module.playback, "AVAILABLE", True)
+    monkeypatch.setattr(transport_module.playback, "sd", _Sd)
+
+    transport_module.default_stream_factory(24000, lambda *a: None)
+
+    assert opened["blocksize"] == transport_module.BLOCKSIZE
+    assert opened["blocksize"] > 0
+    assert opened["samplerate"] == 24000

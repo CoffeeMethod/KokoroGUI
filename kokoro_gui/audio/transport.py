@@ -40,6 +40,7 @@ loads and changes state, it just never advances.
 """
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass, replace
 from typing import Callable, Optional
@@ -116,11 +117,20 @@ class _NullStream:
         self.active = False
 
 
+# PortAudio picks the block size when it's left at 0. On macOS/CoreAudio a
+# stream opened below the device's native rate (24000 Hz against a 44100 or
+# 48000 Hz device) is rate-converted, and the callback is then handed ~14
+# frames at a time - about 1700 calls a second, 0.6 ms of audio each. Asking
+# for a fixed block instead gives the normal ~24 calls a second.
+# Override with KOKORO_BLOCKSIZE=0 to restore PortAudio's choice.
+BLOCKSIZE = int(os.environ.get("KOKORO_BLOCKSIZE", "1024"))
+
+
 def default_stream_factory(sample_rate: int, callback: Callable):
     if not playback.AVAILABLE or playback.sd is None:
         return _NullStream()
     return playback.sd.OutputStream(samplerate=sample_rate, channels=mixer.CHANNELS, dtype="float32",
-                                    callback=callback)
+                                    blocksize=BLOCKSIZE, callback=callback)
 
 
 class Transport(QObject):
