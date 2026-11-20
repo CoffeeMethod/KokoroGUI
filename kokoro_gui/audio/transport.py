@@ -48,6 +48,12 @@ RMS (four floats under the lock; the reductions allocate no per-frame
 arrays), and a pause, stop or end sends zeros. `play()`,
 `pause()`, `stop()`, `seek()`, `toggle()` are GUI-thread API.
 
+`default_stream_factory` opens the stream with `playback.stream_blocksize`:
+a fixed block on macOS, PortAudio's choice elsewhere (see `playback.py`).
+The callback counts output underflows from its status flags (an int, no
+logging there), and the 30Hz tick logs a warning when the count moves, at
+most once every `UNDERFLOW_LOG_INTERVAL_S`.
+
 `stream_factory` is injectable: tests pass a fake whose `pull(frames)`
 drives the callback synchronously, so the mixing math and state machine
 are testable without a device (same rule as `conftest.py`'s `playback`
@@ -56,7 +62,9 @@ loads and changes state, it just never advances.
 """
 from __future__ import annotations
 
+import logging
 import threading
+import time
 from dataclasses import dataclass, replace
 from typing import Callable, Optional
 
@@ -66,7 +74,10 @@ from PySide6.QtCore import QObject, QTimer, Signal
 import playback
 from kokoro_gui.audio import mixer, stretch
 
+logger = logging.getLogger(__name__)
+
 POSITION_TIMER_MS = 33
+UNDERFLOW_LOG_INTERVAL_S = 10.0
 DEFAULT_SAMPLE_RATE = 24000
 MONITOR_MODES = ("dub", "original", "both")
 # Each side's gain in the "both" monitor mode: -6 dB.
@@ -152,7 +163,7 @@ def default_stream_factory(sample_rate: int, callback: Callable):
     if not playback.AVAILABLE or playback.sd is None:
         return _NullStream()
     return playback.sd.OutputStream(samplerate=sample_rate, channels=mixer.CHANNELS, dtype="float32",
-                                    callback=callback)
+                                    blocksize=playback.stream_blocksize(sample_rate), callback=callback)
 
 
 class Transport(QObject):
@@ -194,6 +205,11 @@ class Transport(QObject):
         # (peak_l, peak_r, rms_l, rms_r), written by the callback and read
         # (and the peaks reset) by `_on_tick`.
         self._levels = _SILENT_LEVELS
+        # Output underflows the callback has seen, and how many of them the
+        # GUI thread has logged (`_report_underflows`).
+        self._underflows = 0
+        self._underflows_logged = 0
+        self._underflow_logged_at: Optional[float] = None
         self._timer = QTimer(self)
         self._timer.setInterval(POSITION_TIMER_MS)
         self._timer.timeout.connect(self._on_tick)
@@ -219,6 +235,11 @@ class Transport(QObject):
 
     def duration(self) -> float:
         return self._total_frames / float(self._sample_rate)
+
+    @property
+    def underflow_count(self) -> int:
+        """Output underflows PortAudio has reported since this transport was made."""
+        return self._underflows
 
     def loaded_clips(self) -> list:
         with self._lock:
@@ -428,9 +449,14 @@ class Transport(QObject):
                 getattr(stream, method)()
             except Exception:
                 pass
+        # The tick stops with the stream; underflows from its last blocks
+        # still get their line.
+        self._report_underflows()
 
     def _callback(self, outdata, frames, _time_info=None, _status=None) -> None:
         """PortAudio callback thread. Never touches Qt."""
+        if _status is not None and getattr(_status, "output_underflow", False):
+            self._underflows += 1
         with self._lock:
             frame = self._frame
             clips = self._mixes[self._monitor]
@@ -555,7 +581,23 @@ class Transport(QObject):
         else:
             outdata[:] = block.mean(axis=1)
 
+    def _report_underflows(self) -> None:
+        """GUI thread: a warning when the underflow count has moved, at most
+        once every `UNDERFLOW_LOG_INTERVAL_S`."""
+        count = self._underflows
+        if count == self._underflows_logged:
+            return
+        now = time.monotonic()
+        if self._underflow_logged_at is not None and now - self._underflow_logged_at < UNDERFLOW_LOG_INTERVAL_S:
+            return
+        logger.warning("Playback output underflow: %d new, %d in all (rate %d Hz, blocksize %d)",
+                       count - self._underflows_logged, count, self._sample_rate,
+                       playback.stream_blocksize(self._sample_rate))
+        self._underflows_logged = count
+        self._underflow_logged_at = now
+
     def _on_tick(self) -> None:
+        self._report_underflows()
         with self._lock:
             ended = self._ended
             levels = self._levels
