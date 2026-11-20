@@ -1,6 +1,7 @@
 """Dialogue attribution (plan 26): `daw/attribution.py`'s quote finder,
 speech-tag reader and planner."""
-from kokoro_gui.daw.attribution import HIGH, LOW, Quote, find_quotes, find_tag
+from kokoro_gui.daw.attribution import HIGH, LOW, MEDIUM, Quote, find_quotes, find_tag, name_variants, plan
+from kokoro_gui.daw.models import Character
 
 NAMES = ["Marta", "Jon"]
 
@@ -151,3 +152,144 @@ def test_lowercase_noun_is_no_name():
 
 def test_name_before_another_clause_does_not_count():
     assert _tag('She looked at Marta and said, "No."') is None
+
+
+# -- plan ------------------------------------------------------------------------
+
+PARAGRAPHS = [
+    "Marta came into the kitchen. Jon was reading.",
+    '"Morning," said Marta.',
+    '"Is it?" Jon asked.',
+    '"It was."',
+    '"Coffee?"',
+    "She shook her head and sat down.",
+    '"We need to talk," she said.',
+    '"About what?" said Jon.',
+    '"About Bob," said Lena.',
+    '"Fine," Marta said.',
+]
+FIXTURE = "\n\n".join(PARAGRAPHS)
+
+
+def _cast():
+    return {name: Character(name=name) for name in ("Narrator", "Marta", "Jon", "Lena")}
+
+
+def _quotes(assignments):
+    return {FIXTURE[a.start:a.end]: a for a in assignments if a.is_quote}
+
+
+def test_plan_named_tags_are_high_confidence():
+    cast = _cast()
+    quotes = _quotes(plan(FIXTURE, cast.values()))
+    assert quotes['"Morning,"'].character_id == cast["Marta"].id
+    assert quotes['"Is it?"'].character_id == cast["Jon"].id
+    assert quotes['"About Bob,"'].character_id == cast["Lena"].id
+    assert quotes['"Fine,"'].character_id == cast["Marta"].id
+    assert quotes['"Morning,"'].confidence == HIGH
+    assert quotes['"Morning,"'].reason == "Tag: said Marta"
+
+
+def test_plan_alternates_inside_a_two_person_exchange():
+    cast = _cast()
+    quotes = _quotes(plan(FIXTURE, cast.values()))
+    assert quotes['"It was."'].character_id == cast["Marta"].id
+    assert quotes['"Coffee?"'].character_id == cast["Jon"].id
+    assert quotes['"Coffee?"'].confidence == MEDIUM
+    assert quotes['"Coffee?"'].reason == "Turn-taking with Marta"
+
+
+def test_plan_third_speaker_stops_the_alternation():
+    cast = _cast()
+    quotes = _quotes(plan(FIXTURE, cast.values()))
+    talk = quotes['"We need to talk,"']
+    assert (talk.character_id, talk.confidence) == (None, LOW)
+    assert talk.reason == "Pronoun tag: she said"
+
+
+def test_plan_gives_narration_to_the_narrator():
+    cast = _cast()
+    narrator = cast["Narrator"].id
+    narration = [FIXTURE[a.start:a.end] for a in plan(FIXTURE, cast.values(), narrator) if not a.is_quote]
+    assert narration == [PARAGRAPHS[0], "said Marta.", "Jon asked.", PARAGRAPHS[5], "she said.", "said Jon.",
+                         "said Lena.", "Marta said."]
+    assert all(a.character_id == narrator for a in plan(FIXTURE, cast.values(), narrator) if not a.is_quote)
+
+
+def test_plan_assigns_no_narration_without_a_narrator():
+    assignments = plan(FIXTURE, _cast().values())
+    assert all(a.is_quote for a in assignments)
+    assert len(assignments) == 8
+
+
+def test_plan_is_sorted_and_never_overlaps():
+    assignments = plan(FIXTURE, _cast().values(), _cast()["Narrator"].id)
+    for first, second in zip(assignments, assignments[1:]):
+        assert first.end <= second.start
+
+
+def test_plan_untagged_quote_in_a_tagged_paragraph_takes_its_speaker():
+    jon = Character(name="Jon")
+    text = '"Well," said Jon. "I suppose so."'
+    second = plan(text, [jon])[1]
+    assert (second.character_id, second.confidence) == (jon.id, MEDIUM)
+    assert second.reason == "Same paragraph as Jon"
+
+
+def test_plan_name_that_is_not_a_character_stops_the_alternation():
+    marta, jon = Character(name="Marta"), Character(name="Jon")
+    text = '"A," said Marta.\n"B," said Jon.\n"C," said Bob.\n"D."'
+    last = plan(text, [marta, jon])[-1]
+    assert last.character_id is None
+    assert plan(text, [marta, jon])[2].reason == "Not a character: Bob"
+
+
+def test_plan_one_speaker_alone_cannot_alternate():
+    marta = Character(name="Marta")
+    text = '"A," said Marta.\n"B."'
+    assert plan(text, [marta])[1].character_id is None
+
+
+def test_plan_alternation_backwards_from_the_first_tag():
+    marta, jon = Character(name="Marta"), Character(name="Jon")
+    text = '"A."\n"B," said Marta.\n"C," said Jon.'
+    first = plan(text, [marta, jon])[0]
+    assert first.character_id == jon.id
+
+
+def test_plan_long_speech_counts_as_one_turn():
+    marta, jon = Character(name="Marta"), Character(name="Jon")
+    text = ('"A," said Marta.\n'
+            '"B, the first part.\n"B, the second part," said Jon.\n'
+            '"C."')
+    assignments = plan(text, [marta, jon])
+    assert len(assignments) == 3
+    assert assignments[1].character_id == jon.id
+    assert assignments[2].character_id == marta.id
+
+
+def test_plan_over_a_range_returns_offsets_into_the_whole_text():
+    cast = _cast()
+    lo = FIXTURE.index(PARAGRAPHS[7])
+    hi = FIXTURE.index(PARAGRAPHS[8]) + len(PARAGRAPHS[8])
+    assignments = plan(FIXTURE, cast.values(), cast["Narrator"].id, lo, hi)
+    assert [FIXTURE[a.start:a.end] for a in assignments] == ['"About what?"', "said Jon.", '"About Bob,"',
+                                                            "said Lena."]
+
+
+def test_plan_matches_first_names():
+    marta = Character(name="Marta Lind")
+    assert plan('"Hi," said Marta.', [marta])[0].character_id == marta.id
+
+
+def test_name_variants_drop_a_shared_first_name():
+    a, b = Character(name="Anna Berg"), Character(name="Anna Holm")
+    variants = name_variants([a, b])
+    assert "anna" not in variants
+    assert variants["berg"] == a.id
+    assert variants["anna holm"] == b.id
+
+
+def test_name_variants_skip_honorifics():
+    holmes = Character(name="Mr. Holmes")
+    assert name_variants([holmes]) == {"mr. holmes": holmes.id, "holmes": holmes.id}

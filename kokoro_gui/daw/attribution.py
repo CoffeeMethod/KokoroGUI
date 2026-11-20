@@ -257,3 +257,195 @@ def find_tag(text: str, quote: Quote, names: Iterable[str]) -> Optional[Tag]:
         if match:
             return _tag_from(match, lookup)
     return None
+
+
+# -- plan ----------------------------------------------------------------------
+
+
+def name_variants(characters) -> dict:
+    """`{lowercased name: character id}` for each character's full name,
+    its first name and, for a name of several words, its last. An honorific
+    (`Mr.`) is never a variant. A short form two characters share is
+    dropped; a full name always wins."""
+    full: dict = {}
+    short: dict = {}
+    for character in characters:
+        name = (character.name or "").strip()
+        if not name:
+            continue
+        full.setdefault(name.lower(), character.id)
+        tokens = [t for t in name.split() if t.rstrip(".").lower() not in HONORIFICS]
+        variants = {tokens[0], tokens[-1]} if tokens else set()
+        for variant in variants:
+            short.setdefault(variant.lower(), set()).add(character.id)
+    out = {key: ids.pop() for key, ids in short.items() if len(ids) == 1}
+    out.update(full)
+    return out
+
+
+class _Unit:
+    """The quotes of one paragraph (or of the paragraphs one long speech
+    runs across): the speaker the tags in it name, if it is one."""
+    __slots__ = ("first", "last", "rows", "speakers", "others")
+
+    def __init__(self, first: int, last: int):
+        self.first = first
+        self.last = last
+        self.rows: list = []  # [quote, tag, character_id, confidence, reason]
+        self.speakers: set = set()
+        self.others: set = set()
+
+    def speaker(self) -> Optional[str]:
+        if len(self.speakers) == 1 and not self.others:
+            return next(iter(self.speakers))
+        return None
+
+    def is_open(self) -> bool:
+        return not self.speakers and not self.others
+
+
+def _paragraph_starts(text: str) -> list:
+    """The start offset of every paragraph that isn't blank, in order."""
+    starts = []
+    pos = 0
+    for line in text.split("\n"):
+        if line.strip():
+            starts.append(pos)
+        pos += len(line) + 1
+    return starts
+
+
+def _narration(text: str, lo: int, hi: int) -> list:
+    """`(start, end)` for each paragraph's piece of `text[lo:hi]` with a
+    letter or digit in it, whitespace trimmed."""
+    pieces = []
+    pos = lo
+    while pos < hi:
+        nl = text.find("\n", pos, hi)
+        end = hi if nl < 0 else nl
+        a, b = pos, end
+        while a < b and text[a].isspace():
+            a += 1
+        while b > a and text[b - 1].isspace():
+            b -= 1
+        if any(ch.isalnum() for ch in text[a:b]):
+            pieces.append((a, b))
+        pos = end + 1
+    return pieces
+
+
+def _tag_reason(tag: Optional[Tag]) -> str:
+    if tag is None:
+        return "No tag"
+    if tag.speaker is not None:
+        return f"Tag: {tag.text}"
+    if tag.pronoun is not None:
+        return f"Pronoun tag: {tag.text}"
+    return f"Not a character: {tag.other}"
+
+
+def plan(text: str, characters, narrator_id: Optional[str] = None, start: int = 0,
+         end: Optional[int] = None) -> list:
+    """Who speaks each quote in `text[start:end]`, as `Assignment`s sorted by
+    `start`, with offsets into `text`.
+
+    1. A quote whose tag names a character goes to that character (high).
+    2. Untagged and pronoun-tagged quotes in a paragraph whose tags name one
+       character go to that character (medium).
+    3. In a run of consecutive paragraphs that all hold quotes, with exactly
+       two speakers named in the run, a paragraph nobody is named in takes
+       turns from the nearest named one: A, B, A, B (medium). A third
+       speaker, or a name that is no character, stops the guess.
+    4. With `narrator_id`, each paragraph's text outside the quotes (the
+       tags included) goes to the narrator, one assignment per paragraph.
+    5. A quote nothing settles keeps `character_id` None (low).
+    """
+    end = len(text) if end is None else end
+    scope = text[start:end]
+    names_map = name_variants(characters)
+    names = tuple(names_map)
+    by_id = {c.id: c for c in characters}
+    paragraphs = _paragraph_starts(scope)
+
+    def paragraph_of(offset: int) -> int:
+        return bisect.bisect_right(paragraphs, offset) - 1
+
+    units: list = []
+    for quote in find_quotes(scope):
+        first, last = paragraph_of(quote.start), paragraph_of(max(quote.start, quote.end - 1))
+        if units and first <= units[-1].last:
+            unit = units[-1]
+            unit.last = max(unit.last, last)
+        else:
+            unit = _Unit(first, last)
+            units.append(unit)
+        tag = find_tag(scope, quote, names)
+        character_id = names_map.get(tag.speaker.lower()) if tag and tag.speaker else None
+        if character_id is not None:
+            unit.speakers.add(character_id)
+            unit.rows.append([quote, tag, character_id, HIGH, _tag_reason(tag)])
+            continue
+        if tag is not None and tag.other:
+            unit.others.add(tag.other)
+        unit.rows.append([quote, tag, None, LOW, _tag_reason(tag)])
+
+    # Step 2: one speaker named in the paragraph speaks all of it.
+    for unit in units:
+        speaker = unit.speaker()
+        if speaker is None:
+            continue
+        for row in unit.rows:
+            if row[2] is None:
+                name = by_id[speaker].name
+                row[2], row[3] = speaker, MEDIUM
+                row[4] = f"Same paragraph as {name}" + (f" ({row[1].text})" if row[1] else "")
+
+    # Step 3: turn-taking inside a run of quoted paragraphs.
+    run: list = []
+    for unit in units + [None]:
+        if unit is not None and (not run or unit.first == run[-1].last + 1):
+            run.append(unit)
+            continue
+        _alternate(run, by_id)
+        run = [unit] if unit is not None else []
+
+    out = []
+    for unit in units:
+        for quote, _tag, character_id, confidence, reason in unit.rows:
+            out.append(Assignment(start + quote.start, start + quote.end, character_id, confidence, reason))
+
+    if narrator_id is not None:
+        cursor = 0
+        quotes = [(a.start - start, a.end - start) for a in out]
+        for q_start, q_end in quotes + [(len(scope), len(scope))]:
+            for a, b in _narration(scope, cursor, q_start):
+                out.append(Assignment(start + a, start + b, narrator_id, HIGH, "Narration", is_quote=False))
+            cursor = max(cursor, q_end)
+    out.sort(key=lambda a: a.start)
+    return out
+
+
+def _alternate(run: list, by_id: dict) -> None:
+    """Fills the open paragraphs of `run` by turn-taking (step 3 of `plan`)."""
+    if len(run) < 2:
+        return
+    speakers = set()
+    others = set()
+    for unit in run:
+        speakers |= unit.speakers
+        others |= unit.others
+    if len(speakers) != 2 or others:
+        return
+    anchors = [(i, unit.speaker()) for i, unit in enumerate(run) if unit.speaker() is not None]
+    if not anchors:
+        return
+    a, b = sorted(speakers)
+    for i, unit in enumerate(run):
+        if not unit.is_open():
+            continue
+        k, anchor = min(anchors, key=lambda pair: (abs(pair[0] - i), pair[0] > i))
+        speaker = anchor if (i - k) % 2 == 0 else (b if anchor == a else a)
+        other = b if speaker == a else a
+        for row in unit.rows:
+            row[2], row[3] = speaker, MEDIUM
+            row[4] = f"Turn-taking with {by_id[other].name}" + (f" ({row[1].text})" if row[1] else "")
