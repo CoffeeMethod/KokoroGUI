@@ -1924,6 +1924,84 @@ def test_a_source_replaced_by_another_project_is_not_carried_from(tmp_path, isol
     assert project_io._carry_source(plan) is None  # another project's file; nothing at the new path
 
 
+def _opened_then_source_deleted(tmp_path):
+    """A bundle carrying an uninstalled engine's file, opened into its
+    working copy (Open extracts `engines/`), then the `.tbaw` deleted."""
+    doc, project_dir, project_id, source = _bundle_with_unknown_entry(tmp_path)
+    project_io.extract_small(project_io.inspect_bundle(source), project_dir)
+    os.remove(source)
+    return doc, project_dir, project_id
+
+
+def test_save_as_carries_an_uninstalled_engines_files_from_the_working_copy(tmp_path, isolated_dirs):
+    doc, project_dir, project_id = _opened_then_source_deleted(tmp_path)
+    copy = str(tmp_path / "elsewhere" / "copy.tbaw")
+
+    project_io.save_project(doc, copy, {}, project_dir, project_id, fx_presets_dir=str(tmp_path / "no_fx"),
+                            known_engine_ids=("kokoro",))
+
+    with zipfile.ZipFile(copy) as zf:
+        assert zf.read("engines/ghost/voices/boo.bin") == b"from the source"
+        # Only `engines/<id>/`: a top-level unknown entry stays lost.
+        assert "future/thing.json" not in zf.namelist()
+        manifest = json.loads(zf.read("manifest.json"))
+    # A pass-through: the manifest says nothing about it (grill PG15).
+    assert not any(name.startswith("engines/ghost/") for name in manifest["assets"])
+
+
+def test_an_installed_engines_stale_file_is_not_carried_from_the_working_copy(tmp_path, isolated_dirs):
+    doc, project_dir, project_id = _opened_then_source_deleted(tmp_path)
+    stale = os.path.join(project_dir, "engines", "kokoro", "voices", "old_mix.pt")
+    os.makedirs(os.path.dirname(stale))
+    with open(stale, "wb") as f:
+        f.write(b"stale")
+    copy = str(tmp_path / "copy.tbaw")
+
+    project_io.save_project(doc, copy, {}, project_dir, project_id, fx_presets_dir=str(tmp_path / "no_fx"),
+                            known_engine_ids=("kokoro",))
+
+    with zipfile.ZipFile(copy) as zf:
+        assert "engines/kokoro/voices/old_mix.pt" not in zf.namelist()
+        assert "engines/ghost/voices/boo.bin" in zf.namelist()
+
+
+def test_the_working_copy_is_not_read_while_the_source_bundle_exists(tmp_path, isolated_dirs):
+    doc, project_dir, project_id, source = _bundle_with_unknown_entry(tmp_path)
+    project_io.extract_small(project_io.inspect_bundle(source), project_dir)
+    with open(os.path.join(project_dir, "engines", "ghost", "voices", "boo.bin"), "wb") as f:
+        f.write(b"edited in the working copy")
+    with open(os.path.join(project_dir, "engines", "ghost", "voices", "extra.bin"), "wb") as f:
+        f.write(b"x")
+    copy = str(tmp_path / "copy.tbaw")
+
+    project_io.save_project(doc, copy, {}, project_dir, project_id, fx_presets_dir=str(tmp_path / "no_fx"),
+                            known_engine_ids=("kokoro",))
+
+    with zipfile.ZipFile(copy) as zf:
+        assert zf.read("engines/ghost/voices/boo.bin") == b"from the source"
+        assert "engines/ghost/voices/extra.bin" not in zf.namelist()
+
+
+def test_working_copy_engine_files_skip_a_link_out_of_the_project(tmp_path):
+    project_dir = tmp_path / "work"
+    ghost = project_dir / "engines" / "ghost"
+    ghost.mkdir(parents=True)
+    (ghost / "voice.bin").write_bytes(b"v")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_bytes(b"s")
+    try:
+        os.symlink(str(outside / "secret.txt"), str(ghost / "link.txt"))
+        os.symlink(str(outside), str(ghost / "linked_dir"), target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks need extra rights here")
+
+    found = project_io._working_copy_engine_files(str(project_dir), ["kokoro"])
+
+    assert [name for name, _src in found] == ["engines/ghost/voice.bin"]
+    assert project_io._working_copy_engine_files(str(project_dir), ["ghost"]) == []
+
+
 def test_an_embedded_childs_source_is_never_a_carry_file(tmp_path):
     assert project_io._carry_candidate(str(tmp_path / "child.tbaw"),
                                        {"source_path": str(tmp_path / "parent.tbaw") + "#abc"}) is None
