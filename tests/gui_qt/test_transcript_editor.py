@@ -326,8 +326,6 @@ def test_word_at_maps_the_playhead_through_the_lexicon(qt_app):
 
 
 def test_ctrl_click_seeks_to_the_word(qt_app, qtbot):
-    from PySide6.QtCore import Qt
-
     from kokoro_gui.daw.models import Segment
 
     qt_app.document.text = "hello brave world"

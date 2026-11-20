@@ -1,6 +1,5 @@
 """kokoro_gui/audio/limiter.py: the export peak limiter."""
 import numpy as np
-import pytest
 
 from kokoro_gui.audio.limiter import limit_peaks, limit_peaks_together
 

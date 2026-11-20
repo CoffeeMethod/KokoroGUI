@@ -23,17 +23,17 @@ jobs:
     # (tests/test_mixer_transport.py needs QtCore only), so the Linux leg
     # needs no Qt runtime libraries and no QT_QPA_PLATFORM. It still needs
     # libportaudio2, the system PortAudio library `sounddevice` dlopens.
-    # macos-latest is left out for now (unverified) - see ROADMAP.md's
-    # "CI expansion" item.
+    # macOS needs brew's portaudio. torch 2.13.0 and pedalboard 0.9.23 both
+    # ship macOS arm64 wheels for Python 3.11.
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
           # torch alone is several hundred MB; keyed on both requirements files.
@@ -47,6 +47,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libportaudio2
+
+      - name: Install PortAudio (macOS)
+        if: runner.os == 'macOS'
+        run: brew install portaudio
 
       - name: Install dependencies
         run: |
@@ -67,3 +71,20 @@ jobs:
         # NG or model download needed. The real-synthesis integration suite
         # (`pytest -m integration tests/integration`) is intentionally
         # left out of CI - it's slow and pulls model weights.
+
+  lint:
+    # ruff.toml selects syntax errors, undefined names, unused imports and
+    # variables, and mutable defaults. No formatter, nothing auto-fixed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff==0.17.6
+
+      - name: Run ruff
+        run: ruff check .

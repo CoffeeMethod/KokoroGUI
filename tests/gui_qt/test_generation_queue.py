@@ -2,10 +2,7 @@
 eight, each lands when it ends, and the queue pauses, cancels, reorders and
 survives a reopen (kokoro_gui/qt/gen_queue.py, daw/genqueue.py)."""
 import concurrent.futures
-import os
 
-import numpy as np
-import soundfile as sf
 
 import kokoro_gui.qt.app as qt_app_module
 from kokoro_gui.daw import genqueue

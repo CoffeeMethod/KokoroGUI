@@ -180,7 +180,7 @@ pytest                                     # fast suite, mocked, no model needed
 pytest -m integration tests/integration -s # real generation, needs eSpeak NG
 ```
 
-CI runs the fast suite on Windows and Ubuntu, without the Qt widget tests. Those run locally,
+CI runs the fast suite on Windows, Ubuntu and macOS, without the Qt widget tests. Those run locally,
 headless. The integration tests write each sample next to a transcript under `tests/output/` for
 you to listen to.
 

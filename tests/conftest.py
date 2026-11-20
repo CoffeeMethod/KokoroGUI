@@ -12,7 +12,6 @@ import re
 import time
 import threading
 import concurrent.futures
-import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock

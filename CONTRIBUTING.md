@@ -30,8 +30,8 @@ pytest
 
 That's the fast suite: the Kokoro pipeline is mocked, playback is mocked, no model download, runs
 in well under a minute. The Qt tests run headless (`tests/gui_qt/conftest.py` sets
-`QT_QPA_PLATFORM=offscreen`), so no display is needed. CI runs the suite on `windows-latest` and
-`ubuntu-latest` without `tests/gui_qt/` (`pytest --ignore=tests/gui_qt -p no:pytest-qt`), so the
+`QT_QPA_PLATFORM=offscreen`), so no display is needed. CI runs the suite on `windows-latest`,
+`ubuntu-latest` and `macos-latest` without `tests/gui_qt/` (`pytest --ignore=tests/gui_qt -p no:pytest-qt`), so the
 GUI tests only run on your machine. Run plain `pytest` before you push.
 
 Three conventions the suite enforces, all from `tests/conftest.py`:
@@ -68,7 +68,9 @@ opt-in. It isn't run in CI.
 - If a user can see the change, update two files: a one-line bullet in the README's "What's new"
   (and its Features list if a line there is now wrong), and the full entry under "Unreleased" in
   `docs/changes.html`.
-- No formatter or linter is configured. Match the style of the file you're in.
+- Run `ruff check .` before a PR (`pip install -r requirements-test.txt` has it). It checks for
+  syntax errors, undefined names, unused imports and variables, and mutable defaults, and CI runs
+  it. There is no formatter: match the style of the file you're in.
 
 ## Adding an engine
 

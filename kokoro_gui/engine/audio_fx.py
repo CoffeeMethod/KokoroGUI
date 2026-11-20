@@ -10,7 +10,7 @@ from pedalboard import time_stretch as pedalboard_time_stretch
 from pedalboard import (
     Pedalboard, Reverb, Compressor, HighShelfFilter, LowShelfFilter,
     Chorus, Distortion, Phaser, Clipping, Gain, Limiter,
-    HighpassFilter, LowpassFilter, LadderFilter, Delay, PitchShift,
+    HighpassFilter, LowpassFilter, Delay, PitchShift,
     GSMFullRateCompressor, Bitcrush, Convolution, Chain, Mix
 )
 

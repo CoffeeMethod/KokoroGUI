@@ -1,6 +1,5 @@
 """Project templates and credits (plan 25): Save as Template, New from
 Template, the welcome button, and Add Credits."""
-import os
 
 import pytest
 from PySide6.QtWidgets import QDialog, QMessageBox

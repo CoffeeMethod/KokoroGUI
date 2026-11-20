@@ -38,7 +38,6 @@ model-specific piece of this otherwise-generic pipeline.
 """
 import hashlib
 import os
-import re
 
 import numpy as np
 import soundfile as sf

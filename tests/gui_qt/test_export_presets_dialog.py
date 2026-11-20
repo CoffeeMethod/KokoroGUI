@@ -3,10 +3,8 @@ split export does (plan 14): kokoro_gui/qt/docks/export_dialog.py."""
 import asyncio
 import os
 
-import numpy as np
 import pytest
 import soundfile as sf
-from PySide6.QtGui import QTextCursor
 
 import kokoro_gui.qt.app  # noqa: F401 - app.py must load before any docks module (circular import)
 from kokoro_gui.audio import loudness  # noqa: E402

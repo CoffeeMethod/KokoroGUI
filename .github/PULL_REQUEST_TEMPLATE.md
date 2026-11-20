@@ -12,6 +12,7 @@
 
 ## Checklist
 
-- [ ] `pytest` passes locally (the fast suite; CI runs it on Windows and Linux)
+- [ ] `pytest` passes locally (the fast suite; CI runs it on Windows, Linux and macOS)
+- [ ] `ruff check .` is clean
 - [ ] New settings are threaded through `_assemble_config` and `tests/gui_qt/test_qt_config_assembly.py`
 - [ ] README's "What's new" (one line) and `docs/changes.html` (full entry) updated if a user can see the change
