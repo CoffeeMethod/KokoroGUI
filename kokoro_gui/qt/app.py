@@ -1037,6 +1037,10 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.remove_fillers_action.setToolTip("Find um, uh and the like in the imported recordings, pick the ones "
                                               "to cut, and remove them with their audio in one undo step.")
         self.edit_menu.addAction(self.remove_fillers_action)
+        self.attribute_dialogue_action = self._action("&Attribute Dialogue...", self.attribute_dialogue)
+        self.attribute_dialogue_action.setToolTip("Find the quotes in the transcript, guess who speaks each from its "
+                                                  "speech tag, review the guesses and assign them in one undo step.")
+        self.edit_menu.addAction(self.attribute_dialogue_action)
         self.edit_menu.addSeparator()
         self.characters_action = self._action("&Characters...", self.open_characters_dialog)
         self.edit_menu.addAction(self.characters_action)
@@ -4506,6 +4510,34 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if removed:
             self.set_status(f"Removed {removed} filler {'word' if removed == 1 else 'words'}.", "success")
         return removed
+
+    # --- dialogue attribution (plan 26) ------------------------------------
+
+    def attribute_dialogue(self):
+        """Edit > Attribute Dialogue: opens the modeless review dialog for
+        the project on screen, over the selection when there is one.
+        Returns the dialog, or None when it couldn't open."""
+        from kokoro_gui.qt.attribution_dialog import AttributionDialog
+
+        dialog = getattr(self, "_attribution_dialog", None)
+        if dialog is not None:
+            dialog.raise_()
+            dialog.activateWindow()
+            return dialog
+        editor = self.editor
+        if editor is None:
+            return None
+        if self.is_busy():
+            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before attributing dialogue.")
+            return None
+        cursor = editor.textCursor()
+        selection = (cursor.selectionStart(), cursor.selectionEnd()) if cursor.hasSelection() else None
+        dialog = AttributionDialog(self, self.document, editor, selection, self)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._attribution_dialog = dialog
+        dialog.finished.connect(lambda _result: setattr(self, "_attribution_dialog", None))
+        dialog.show()
+        return dialog
 
     def _ask_fillers(self, dialog) -> bool:
         """Runs the filler dialog; True on Remove. Its own method so tests
