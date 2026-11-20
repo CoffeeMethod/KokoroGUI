@@ -351,6 +351,13 @@
               </table>
             </div>
           </li>
+          <li>
+            <h4>Attribute dialogue to characters</h4>
+            <p>Edit &gt; Attribute Dialogue... finds the quotes in the transcript on screen, or in the selection, and proposes a character for each. It reads the speech tag next to a quote: "said Marta", "Marta asked", "Jon told her," before the quote, with an adverb allowed ("Marta quietly replied"). A tag can name a character by its full name, its first name or its last name. Straight and curly double quotes count, and single curly quotes when the closing mark isn't an apostrophe, so "don’t" stays inside its quote. A speech that runs over several paragraphs, each opening with a quote mark and only the last one closing, is one quote.</p>
+            <p>Three rules settle the rest. A paragraph whose tags name one character gives that character its other quotes too, as in "Well," said Jon, "I suppose so." In a run of paragraphs that all hold quotes, with exactly two characters named, an untagged paragraph takes turns from the nearest tagged one. A narration paragraph ends the run, and a third speaker, or a name that isn't a character, stops the guess for that run. Pick a narrator and the text between the quotes goes to it, tags included, a clip per paragraph. Leave it on "Leave narration alone" and that text is untouched.</p>
+            <p>What the dialog leaves to you: a quote with no tag outside a two-person exchange, a pronoun tag ("she whispered") the turns don't settle, and a tag naming someone who isn't a character. Those rows say Low, with the reason, and the transcript tints them in the warning color while the rest take their character's color. Only uncertain hides the sure rows. Each row has a character list to change the guess, and clicking a row selects its quote in the transcript, which stays usable because the dialog doesn't block it.</p>
+            <p>Apply makes the clips in one undo step, so Ctrl+Z takes them all back. Cancel changes nothing and clears the tint. If you edit the transcript while the dialog is open, Apply plans again instead and asks you to check the list.</p>
+          </li>
         </ul>
       </div>
 

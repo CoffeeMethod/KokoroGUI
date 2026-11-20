@@ -19,7 +19,7 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 -   **Transcript first.** Type, paste or import `.txt`, `.pdf`, `.epub` or subtitles. Each run of
     text belongs to a character, and only the clips whose text or voice changed need generating
-    again.
+    again. Edit > Attribute Dialogue hands each quote in a book to the character its speech tag names.
 -   **Timeline and mixer.** One track per character, with mute, solo, fader, pan, automation,
     fades, markers, loops and timecode.
 -   **Multiple engines.** Kokoro's named and mixable voices in 8 languages, Audio8 voice cloning,
@@ -95,6 +95,8 @@ Unreleased:
     `.kgshare` file, and import one from another machine, asking what to do where a name is taken
 -   Playback runs at 0.5x to 2x with the voices keeping their pitch (a speed box in the transport, `[` and `]`, and `L`
     steps 1x, 1.5x, 2x), `M` drops a flag at the playhead with an optional note, and `N` jumps to the next flag
+-   Edit > Attribute Dialogue assigns each quote to the character its tag names (`said Marta`), guesses the turns in a
+    two-person exchange, gives the narration to a narrator, and marks what it isn't sure of for you to check
 
 In 4.0.0-beta.2:
 
