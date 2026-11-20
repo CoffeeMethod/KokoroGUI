@@ -919,6 +919,11 @@ class TranscriptEditor(QTextEdit):
         # `ExtraSelection`s (`_find_selections`).
         self._find_spans: list = []
         self._find_current: Optional[int] = None
+        # Edit > Attribute Dialogue (plan 26) while its dialog is open: the
+        # planned quotes as sorted `(start, end, color)`, color None for the
+        # theme's warning color. Drawn like the find matches, only in view.
+        self._attribution_marks: list = []
+        self._attribution_starts: list = []
         self.verticalScrollBar().valueChanged.connect(self._on_scrolled_for_find)
 
         self.document().contentsChange.connect(self._on_contents_change)
@@ -1000,6 +1005,8 @@ class TranscriptEditor(QTextEdit):
         # A reload isn't the user moving the caret: it mustn't select the
         # clip that happens to sit at offset 0 (a subproject's line would
         # move the docks into it).
+        # Attribution marks are offsets into the old text.
+        self._attribution_marks, self._attribution_starts = [], []
         self._suppress_contents_change = True
         was_updating, self._updating_from_model = self._updating_from_model, True
         try:
@@ -1410,8 +1417,55 @@ class TranscriptEditor(QTextEdit):
         return list(self._find_spans)
 
     def _on_scrolled_for_find(self, _value: int) -> None:
-        if self._find_spans:
+        if self._find_spans or self._attribution_marks:
             self._apply_extra_selections()
+
+    # -- Attribute Dialogue highlights (plan 26) ------------------------------
+
+    def set_attribution_marks(self, marks) -> None:
+        """Tints each `(start, end, color)` with `color`, a hex string, or
+        with the theme's warning color when it is None. The attribution
+        dialog sets these while it is open and clears them when it closes."""
+        self._attribution_marks = sorted(marks, key=lambda mark: (mark[0], mark[1]))
+        self._attribution_starts = [mark[0] for mark in self._attribution_marks]
+        self._apply_extra_selections()
+
+    def clear_attribution_marks(self) -> None:
+        if self._attribution_marks:
+            self.set_attribution_marks([])
+
+    def attribution_marks(self) -> list:
+        return list(self._attribution_marks)
+
+    def _attribution_selections(self) -> list:
+        marks = self._attribution_marks
+        if not marks:
+            return []
+        text_len = self._text_length()
+        lo, hi = self._visible_range()
+        first = max(0, bisect.bisect_left(self._attribution_starts, lo) - 1)
+        warn = QColor(theme.current().meter_warn)
+        warn.setAlpha(140)
+        selections = []
+        for start, end, color in marks[first:]:
+            if start > hi:
+                break
+            if end < lo:
+                continue
+            start, end = max(0, min(start, text_len)), max(0, min(end, text_len))
+            if end <= start:
+                continue
+            tint = warn
+            if color is not None:
+                tint = QColor(color)
+                tint.setAlpha(90)
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = QTextCursor(self.document())
+            sel.cursor.setPosition(start)
+            sel.cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+            sel.format.setBackground(tint)
+            selections.append(sel)
+        return selections
 
     def _find_selections(self) -> list:
         """`ExtraSelection`s for the matches in view, and for the current
@@ -1447,7 +1501,8 @@ class TranscriptEditor(QTextEdit):
         return selections
 
     def _apply_extra_selections(self) -> None:
-        selections = list(self._playing_clip_selections) + self._find_selections()
+        selections = (self._attribution_selections() + list(self._playing_clip_selections)
+                      + self._find_selections())
         if self._playing_word is not None:
             text_len = len(self.toPlainText())
             start, end = (max(0, min(v, text_len)) for v in self._playing_word)
