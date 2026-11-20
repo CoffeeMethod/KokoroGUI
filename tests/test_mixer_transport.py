@@ -6,7 +6,9 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+import playback
 from kokoro_gui.audio import mixer
+from kokoro_gui.audio import transport as transport_module
 from kokoro_gui.audio.transport import ScheduledClip, Transport, render_block_for_test
 
 pytest.importorskip("PySide6")
@@ -884,3 +886,154 @@ def test_a_clip_that_starts_later_is_heard_at_a_rate(tmp_path, make_transport):
     transport.seek(1.25)
     inside = render_block_for_test(transport, 1000)
     assert np.allclose(inside, 0.5, atol=1e-4)
+
+
+# -- output block size and underflows (plan 48, GitHub PR 56) ---------------------
+
+
+@pytest.mark.parametrize("rate, block", [(24000, 1024), (22050, 1024), (44100, 2048), (48000, 2048), (8000, 512)])
+def test_choose_blocksize_gives_macos_a_fixed_block_of_at_least_40_ms(rate, block):
+    assert playback.choose_blocksize("darwin", rate, {}) == block
+    assert block >= rate * playback.FIXED_BLOCK_S
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux", "cygwin"])
+def test_choose_blocksize_leaves_other_platforms_to_portaudio(platform):
+    assert playback.choose_blocksize(platform, 24000, {}) == 0
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
+def test_choose_blocksize_env_override_wins(platform):
+    assert playback.choose_blocksize(platform, 24000, {"KOKOROGUI_BLOCKSIZE": "512"}) == 512
+    assert playback.choose_blocksize(platform, 24000, {"KOKOROGUI_BLOCKSIZE": " 0 "}) == 0
+
+
+@pytest.mark.parametrize("bad", ["abc", "-1", "1.5", "70000"])
+def test_choose_blocksize_ignores_a_bad_env_value_and_logs_it_once(bad, caplog):
+    playback._warned_env_values.discard(bad)
+    env = {"KOKOROGUI_BLOCKSIZE": bad}
+    with caplog.at_level("WARNING", logger="playback"):
+        assert playback.choose_blocksize("darwin", 24000, env) == 1024
+        assert playback.choose_blocksize("linux", 24000, env) == 0
+    assert sum("KOKOROGUI_BLOCKSIZE" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_choose_blocksize_treats_an_empty_env_value_as_unset():
+    assert playback.choose_blocksize("darwin", 24000, {"KOKOROGUI_BLOCKSIZE": ""}) == 1024
+    assert playback.choose_blocksize("win32", 24000, {"KOKOROGUI_BLOCKSIZE": "  "}) == 0
+
+
+class _FakeSd:
+    def __init__(self):
+        self.opened = []
+        self.played = []
+
+    def OutputStream(self, **kwargs):
+        self.opened.append(kwargs)
+        return object()
+
+    def play(self, data, samplerate, **kwargs):
+        self.played.append((samplerate, kwargs))
+
+
+@pytest.mark.parametrize("platform, block", [("darwin", 1024), ("win32", 0), ("linux", 0)])
+def test_default_stream_factory_passes_the_chosen_blocksize(monkeypatch, platform, block):
+    fake = _FakeSd()
+    monkeypatch.setattr(playback, "AVAILABLE", True)
+    monkeypatch.setattr(playback, "sd", fake)
+    monkeypatch.setattr(playback.sys, "platform", platform)
+    monkeypatch.delenv("KOKOROGUI_BLOCKSIZE", raising=False)
+
+    transport_module.default_stream_factory(24000, lambda *a: None)
+
+    assert fake.opened == [{"samplerate": 24000, "channels": mixer.CHANNELS, "dtype": "float32",
+                            "blocksize": block, "callback": fake.opened[0]["callback"]}]
+
+
+def test_default_stream_factory_honours_the_env_override(monkeypatch):
+    fake = _FakeSd()
+    monkeypatch.setattr(playback, "AVAILABLE", True)
+    monkeypatch.setattr(playback, "sd", fake)
+    monkeypatch.setattr(playback.sys, "platform", "win32")
+    monkeypatch.setenv("KOKOROGUI_BLOCKSIZE", "2048")
+
+    transport_module.default_stream_factory(24000, lambda *a: None)
+
+    assert fake.opened[0]["blocksize"] == 2048
+
+
+@pytest.mark.parametrize("platform, block", [("darwin", 1024), ("linux", 0)])
+def test_preview_playback_uses_the_same_blocksize(monkeypatch, tmp_path, platform, block):
+    path = _write(tmp_path / "a.wav", np.zeros(2400), rate=24000)
+    fake = _FakeSd()
+    monkeypatch.setattr(playback, "AVAILABLE", True)
+    monkeypatch.setattr(playback, "sd", fake)
+    monkeypatch.setattr(playback.sys, "platform", platform)
+    monkeypatch.delenv("KOKOROGUI_BLOCKSIZE", raising=False)
+
+    playback.play(path)
+    playback.play_range(path, 0.0, 0.05)
+
+    assert fake.played == [(24000, {"blocksize": block}), (24000, {"blocksize": block})]
+
+
+class _Status:
+    def __init__(self, output_underflow):
+        self.output_underflow = output_underflow
+
+
+def test_callback_counts_output_underflows(make_transport):
+    transport = make_transport()
+    out = np.zeros((16, 2), dtype=np.float32)
+
+    transport._callback(out, 16, None, None)
+    transport._callback(out, 16, None, _Status(False))
+    transport._callback(out, 16, None, _Status(True))
+    transport._callback(out, 16, None, _Status(True))
+
+    assert transport.underflow_count == 2
+
+
+def test_underflows_are_logged_from_the_tick_and_rate_limited(make_transport, monkeypatch, caplog):
+    transport = make_transport()
+    out = np.zeros((16, 2), dtype=np.float32)
+    clock = [100.0]
+    monkeypatch.setattr(transport_module.time, "monotonic", lambda: clock[0])
+
+    def warnings():
+        return [r for r in caplog.records if "underflow" in r.getMessage()]
+
+    with caplog.at_level("WARNING", logger=transport_module.__name__):
+        transport.process_pending()
+        assert warnings() == []
+
+        transport._callback(out, 16, None, _Status(True))
+        transport.process_pending()
+        assert len(warnings()) == 1
+
+        transport._callback(out, 16, None, _Status(True))
+        clock[0] += 1.0
+        transport.process_pending()
+        assert len(warnings()) == 1
+
+        clock[0] += transport_module.UNDERFLOW_LOG_INTERVAL_S
+        transport.process_pending()
+        assert len(warnings()) == 2
+        assert "1 new, 2 in all" in warnings()[-1].getMessage()
+
+        clock[0] += transport_module.UNDERFLOW_LOG_INTERVAL_S
+        transport.process_pending()
+        assert len(warnings()) == 2
+
+
+def test_underflows_from_the_last_blocks_are_logged_when_the_stream_closes(tmp_path, make_transport, caplog):
+    transport = make_transport()
+    transport.load([ScheduledClip("a", 0.0, _write(tmp_path / "a.wav", np.full(800, 0.1)))], sample_rate=8000)
+    transport.play()
+    out = np.zeros((16, 2), dtype=np.float32)
+    transport._callback(out, 16, None, _Status(True))
+
+    with caplog.at_level("WARNING", logger=transport_module.__name__):
+        transport.stop()
+
+    assert sum("underflow" in r.getMessage() for r in caplog.records) == 1
