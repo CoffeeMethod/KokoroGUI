@@ -4,6 +4,7 @@ from .fx_dock import FXDock
 from .mixing_dock import MixingDock
 from .lexicon_dock import LexiconDock
 from .outline_dock import OutlineDock
+from .output_dock import OutputDock
 from .proof_dock import ProofDock
 from .queue_dock import QueueDock
 from .voice_clone_dock import VoiceCloneDock
@@ -12,6 +13,6 @@ from .transport_dock import TransportDock
 from .video_dock import VideoDock
 
 __all__ = [
-    "TranscriptDock", "SettingsDock", "FXDock", "MixingDock", "LexiconDock", "OutlineDock", "ProofDock", "QueueDock", "VoiceCloneDock",
+    "TranscriptDock", "SettingsDock", "FXDock", "MixingDock", "LexiconDock", "OutlineDock", "OutputDock", "ProofDock", "QueueDock", "VoiceCloneDock",
     "TimelineDock", "TransportDock", "VideoDock",
 ]

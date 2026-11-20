@@ -100,6 +100,9 @@ class ExportFile:
     report: Optional[object] = None
     failed: list = field(default_factory=list)
     tagged: bool = False
+    # Every other file this mixdown wrote beside it (stems, per-clip files,
+    # SRT, cue sheet, text extras); the Exports dock deletes them with it.
+    extras: list = field(default_factory=list)
 
 
 @dataclass
@@ -650,7 +653,8 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
     if tags and tagging.supports(ext):
         tagged = _tag_file(out_path, ext, tags, document, arrangement_out, range_s, head_s, result.duration_s,
                            result.warnings)
-    result.files.append(ExportFile(out_path, base, result.duration_s, report, failed, tagged))
+    exported = ExportFile(out_path, base, result.duration_s, report, failed, tagged)
+    result.files.append(exported)
 
     if stem_samples:
         used = {os.path.basename(out_path).lower()}
@@ -682,6 +686,9 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
             document, arrangement_out, out_dir, base, extras, speakers=transcript_speakers,
             range_s=range_s, head_s=head_s)
         result.warnings.extend(text_warnings)
+
+    exported.extras = [*result.stem_files, *result.clip_files,
+                       *[p for p in (result.srt_path, result.cue_sheet_path) if p], *result.text_files]
 
     if progress:
         progress(1.0, "Export finished")

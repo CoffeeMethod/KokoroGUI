@@ -908,6 +908,10 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
     def _progress(fraction: float, detail: str) -> None:
         app.exportProgress.emit(fraction * 100.0, detail)
 
+    # The exports log's project, read here because `_done` runs on the export thread.
+    log_context = {"title": project_io.display_title(app.root.project_settings, app.project_path),
+                   "path": app.project_path or ""}
+
     options = dict(
         fmt=values["format"], include_srt=values["srt"], keep_clip_files=values["keep_clip_files"],
         progress=_progress, channels=values.get("channels", 2),
@@ -962,6 +966,7 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
             for warning in result.warnings:
                 message += f". {warning[0].upper()}{warning[1:]}"
             app.exportWrote.emit(result.audio_path)
+            app.exportFiles.emit(result, log_context)
             if len(result.files) > 1 or failed or result.warnings:
                 app.exportReport.emit(result, preset.label if checks else "")
             app.exportFinished.emit(True, message)
