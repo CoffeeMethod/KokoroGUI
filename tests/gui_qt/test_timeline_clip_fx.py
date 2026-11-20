@@ -4,7 +4,6 @@ preset (or "Clear FX") from a timeline clip block's FX menu
 `on_fx_preset_requested`, and `_assemble_clip_config`'s (kokoro_gui/qt/app.py)
 "clip-level FX always wins" merge - mirrors test_timeline_clip_generate.py's
 conventions (qt_app fixture, StubEngine's mocked engine calls)."""
-from kokoro_gui.daw.undo import SetClipFxCommand
 
 
 def _make_clip(qt_app, start=0, end=5, text="hello world"):

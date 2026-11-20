@@ -141,8 +141,8 @@ class JITMixin:
                     playback_finished_event.set()
 
             # Start loops
-            gen_task = asyncio.create_task(generation_loop())
-            play_task = asyncio.create_task(playback_loop())
+            gen_task = asyncio.create_task(generation_loop())  # noqa: F841  (strong ref: the loop holds tasks weakly)
+            play_task = asyncio.create_task(playback_loop())  # noqa: F841
 
             await playback_finished_event.wait()
 

@@ -1,0 +1,7 @@
+target-version = "py311"
+line-length = 120
+exclude = [".venv", "tests/output", "Claude"]
+
+[lint]
+# Syntax errors, undefined names, unused imports and variables, mutable defaults.
+select = ["E9", "F63", "F7", "F82", "F401", "F811", "F841", "B006", "B008"]

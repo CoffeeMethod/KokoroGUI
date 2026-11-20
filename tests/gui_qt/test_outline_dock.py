@@ -1,7 +1,6 @@
 """The Outline dock (plan 20): chapters with status and length, proofing as
 one undoable step, double-click to the line and the playhead, the marker
 fallback and the dock's place in the shell."""
-import pytest
 from PySide6.QtCore import Qt
 
 from kokoro_gui.daw import outline

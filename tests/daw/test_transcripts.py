@@ -3,7 +3,6 @@
 from fixed clip lengths."""
 import json
 
-import pytest
 
 from kokoro_gui.daw import markers as marker_ops
 from kokoro_gui.daw.arrangement import compute_arrangement

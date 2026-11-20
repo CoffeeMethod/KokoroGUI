@@ -1,7 +1,6 @@
 """Tests for per-clip Generate: the right-click "Generate" action on a
 timeline clip block (kokoro_gui/qt/timeline_view.py's context menu +
 kokoro_gui/qt/docks/timeline_dock.py's dispatch/completion handling)."""
-from kokoro_gui.daw.dirty import compute_expected_cache_hash
 
 
 def _make_clip(qt_app, start=0, end=5, text="hello world"):

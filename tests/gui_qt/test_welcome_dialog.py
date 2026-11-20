@@ -1,6 +1,5 @@
 """Welcome dialog (grill WF2, revised): kokoro_gui/qt/welcome_dialog.py and
 the `show_welcome` / File > Welcome... wiring in app.py."""
-import os
 
 from PySide6.QtGui import QTextCursor
 

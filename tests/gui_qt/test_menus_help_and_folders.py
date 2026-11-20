@@ -1,6 +1,5 @@
 """File > Show in Folder, File > Recent > Clear list, and the Help menu
 (plan 06)."""
-import os
 
 import pytest
 

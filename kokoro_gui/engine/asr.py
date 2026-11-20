@@ -70,6 +70,9 @@ import soundfile as sf
 from dotenv import find_dotenv, load_dotenv, set_key
 
 AUDIO8_MODEL_ID = "Audio8/Audio8-ASR-0.1B"
+# Pinned because the repo ships code we run (trust_remote_code). To bump: read the new commit with
+# HfApi().model_info(AUDIO8_MODEL_ID).sha, review the diff on the Hub, paste it here.
+AUDIO8_MODEL_REVISION = "8487da63d581fa4fc9b5c60444cb57c3a523d7aa"
 # Kept as an alias - some external callers/notes may still reference the old
 # name from before this module supported more than one engine.
 ASR_MODEL_ID = AUDIO8_MODEL_ID
@@ -220,8 +223,12 @@ def _get_model():
             ) from e
 
         try:
-            processor = AutoProcessor.from_pretrained(AUDIO8_MODEL_ID, trust_remote_code=True)
-            model = AutoModelForCausalLM.from_pretrained(AUDIO8_MODEL_ID, trust_remote_code=True)
+            processor = AutoProcessor.from_pretrained(
+                AUDIO8_MODEL_ID, revision=AUDIO8_MODEL_REVISION, trust_remote_code=True
+            )
+            model = AutoModelForCausalLM.from_pretrained(
+                AUDIO8_MODEL_ID, revision=AUDIO8_MODEL_REVISION, trust_remote_code=True
+            )
         except Exception as e:
             raise RuntimeError(f"Failed to load {AUDIO8_MODEL_ID}: {e}") from e
 

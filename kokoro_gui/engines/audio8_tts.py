@@ -48,6 +48,9 @@ from kokoro_gui.engines.registry import register_engine
 from kokoro_gui.engines.voice_store import ReferenceStore
 
 TTS_MODEL_ID = "Audio8/Audio8-TTS-Preview-0.6b"
+# Pinned because the repo ships code we run (trust_remote_code). To bump: read the new commit with
+# HfApi().model_info(TTS_MODEL_ID).sha, review the diff on the Hub, paste it here.
+TTS_MODEL_REVISION = "20e519d6e2c485ea1544f95f1fcaa6de6712bfc2"
 SAMPLE_RATE = 44100
 
 # Where a `.tbaw` project keeps the references it bundles (relative to the
@@ -135,8 +138,12 @@ def _get_model():
                 "(pip install -r requirements.txt)."
             ) from e
         try:
-            processor = AutoProcessor.from_pretrained(TTS_MODEL_ID, trust_remote_code=True)
-            model = AutoModel.from_pretrained(TTS_MODEL_ID, trust_remote_code=True)
+            processor = AutoProcessor.from_pretrained(
+                TTS_MODEL_ID, revision=TTS_MODEL_REVISION, trust_remote_code=True
+            )
+            model = AutoModel.from_pretrained(
+                TTS_MODEL_ID, revision=TTS_MODEL_REVISION, trust_remote_code=True
+            )
         except Exception as e:
             raise RuntimeError(f"Failed to load {TTS_MODEL_ID}: {e}") from e
         _model, _processor = model, processor

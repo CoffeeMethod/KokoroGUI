@@ -3,7 +3,7 @@ needed, mirroring how tests/test_caching.py tests kokoro_gui/engine/caching.py
 with zero GUI dependency."""
 import pytest
 
-from kokoro_gui.daw.models import Character, Clip, Document, Run, Segment, Track
+from kokoro_gui.daw.models import Character, Clip, Document, Run, Track
 
 
 # ---------------------------------------------------------------------------

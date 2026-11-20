@@ -1,6 +1,5 @@
 """kokoro_gui/qt/crash_dialog.py: the dialog and the bridge that opens it
 from any thread, and Help > Open Log Folder (plan 07)."""
-import os
 import threading
 
 import pytest

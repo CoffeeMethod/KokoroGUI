@@ -26,7 +26,6 @@ import os
 import pytest
 
 import kokoro_engine
-from kokoro_engine import KokoroEngine
 
 
 def _espeak_available():

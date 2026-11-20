@@ -670,6 +670,17 @@
           </li>
         </ul>
       </div>
+
+      <div class="change-group reveal">
+        <h3>Maintenance</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Pinned model revisions and actions, a macOS test leg, a lint job</h4>
+            <p>The two Audio8 models (speech and recognition) run code from their Hugging Face repos, so they now load from a fixed commit instead of whatever the repo's main branch holds. The commit is a constant next to each model id, with a note on how to bump it. A copy of either model already in your Hugging Face cache under another revision downloads once more on first use.</p>
+            <p>CI runs the fast suite on macOS as well as Windows and Ubuntu, and a new lint job runs <code>ruff check .</code> (syntax errors, undefined names, unused imports and variables, mutable defaults). The workflow's actions are pinned to commit hashes, with Dependabot proposing bumps weekly, and the test requirements are pinned too.</p>
+          </li>
+        </ul>
+      </div>
     </div>
   </section>
 

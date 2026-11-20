@@ -17,7 +17,6 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-import kokoro_engine
 from kokoro_gui.engines import audio8_tts, registry
 from kokoro_gui.engines.audio8_tts import (
     Audio8BackendAdapter, Audio8Engine, Audio8ReferenceStore,
