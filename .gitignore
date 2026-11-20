@@ -186,3 +186,5 @@ document.tbaw
 config_qt.json
 /characters/
 config_qt.json.tmp
+exports.json
+exports.json.tmp

@@ -50,7 +50,7 @@ from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character, Document
 from kokoro_gui.daw.arrangement import compute_arrangement, heading_clip_id, heading_speed, segment_timeline
 from kokoro_gui.daw.mixplan import clip_mixes
 from kokoro_gui.daw.imported import segment_plays
-from kokoro_gui.daw import spell
+from kokoro_gui.daw import exports_log, spell
 from kokoro_gui.daw.auto_split import (
     plan_auto_split_clips, plan_pause_gaps, plan_tag_fx, plan_tag_option_warnings, plan_tag_overrides,
 )
@@ -90,6 +90,8 @@ from kokoro_gui.qt.signals import EngineSignalBridge, wire_engine
 from kokoro_gui.qt.workspace import ADVANCED, SIMPLE, WorkspaceManager
 
 CONFIG_FILE = "config_qt.json"
+# The whole-document path's last status line, `engine/conversion.py`: `Done! Saved: <combined file>`.
+WHOLE_DOCUMENT_SAVED = "Done! Saved: "
 DOCS_URL = "https://coffeemethod.github.io/KokoroGUI/"
 PRESETS_DIR = "presets"
 FX_PRESETS_DIR = os.path.join(PRESETS_DIR, "fx")
@@ -102,7 +104,7 @@ from kokoro_gui.daw.arrangement import clip_audio_duration_s  # noqa: E402
 from kokoro_gui.qt.characters_dialog import CharactersDialog  # noqa: E402
 from kokoro_gui.qt.fx_presets import list_fx_preset_names  # noqa: E402
 from kokoro_gui.qt.docks import (  # noqa: E402
-    FXDock, LexiconDock, MixingDock, OutlineDock, ProofDock, QueueDock, SettingsDock, TimelineDock, TranscriptDock,
+    FXDock, LexiconDock, MixingDock, OutlineDock, OutputDock, ProofDock, QueueDock, SettingsDock, TimelineDock, TranscriptDock,
     TransportDock, VideoDock, VoiceCloneDock,
 )
 from kokoro_gui.qt.docks.export_dialog import (  # noqa: E402
@@ -134,6 +136,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     exportProgress = Signal(float, str)
     exportFinished = Signal(bool, str)
     exportWrote = Signal(str)  # the mix's path, just before a successful exportFinished
+    exportFiles = Signal(object, dict)  # (ExportResult, {title, path}), for the exports log
     exportReport = Signal(object, str)  # (ExportResult, preset label), when an export split, warned or failed a check
     loudnessMeasured = Signal(object, str)  # (LoudnessReport or None, note or error)
     # Background project I/O (Open's audio extraction, Save's zip write):
@@ -323,6 +326,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.timeline_dock: TimelineDock | None = None
         self.transport_dock: TransportDock | None = None
         self.video_dock: VideoDock | None = None
+        self.output_dock: OutputDock | None = None
 
         # --- Engines: one resident backend per engine id in use ---
         # The storage dirs first (private, see runtime.prepare_storage), then
@@ -343,9 +347,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.exportFinished.connect(self._on_export_finished)
         self.exportWrote.connect(self._on_export_wrote)
         self.exportReport.connect(self._on_export_report)
+        self.exportFiles.connect(self._on_export_files)
         self.loudnessMeasured.connect(self._on_loudness_measured)
         self._loudness_dialog = None
         self._last_export_path: str | None = None
+        self.exports_log_file = exports_log.log_path(CONFIG_FILE)
 
         # Theme before any custom-painted widget exists, so their first
         # paint already reads the right palette.
@@ -1243,6 +1249,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.outline_dock = OutlineDock(self)
         self.proof_dock = ProofDock(self)
         self.queue_dock = QueueDock(self)
+        self.output_dock = OutputDock(self)
         self.timeline_dock = TimelineDock(self)
         self.transport_dock = TransportDock(self)
         self.video_dock = VideoDock(self)
@@ -1293,7 +1300,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         bottom = Qt.DockWidgetArea.LeftDockWidgetArea
         self.addDockWidget(top, self.transcript_dock)
         self.addDockWidget(top, self.settings_dock)
-        for dock in (self.fx_dock, self.lexicon_dock, self.outline_dock, self.proof_dock, self.queue_dock):
+        for dock in (self.fx_dock, self.lexicon_dock, self.outline_dock, self.proof_dock, self.queue_dock,
+                     self.output_dock):
             self.addDockWidget(top, dock)
             self.tabifyDockWidget(self.settings_dock, dock)
         self._follow_active_for_voices()
@@ -1345,7 +1353,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
     def _all_docks(self) -> list:
         docks = [self.transcript_dock, self.settings_dock, self.fx_dock, self.lexicon_dock,
-                 self.outline_dock, self.proof_dock, self.queue_dock, self.mixing_dock, self.voice_clone_dock, self.timeline_dock, self.transport_dock,
+                 self.outline_dock, self.proof_dock, self.queue_dock, self.output_dock, self.mixing_dock, self.voice_clone_dock, self.timeline_dock, self.transport_dock,
                  self.video_dock]
         return [d for d in docks if d is not None]
 
@@ -2476,6 +2484,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self.fx_dock.refresh_ir_choices()
             self.fx_dock.refresh_for_selection()
         self._sync_video_dock()
+        if self.output_dock is not None:
+            self.output_dock.refresh()
         self.refresh_timeline()
         session = project_io.read_session(self.root.project_dir) if self.root.project_dir else None
         loop = (session or {}).get("loop_s")
@@ -3646,6 +3656,32 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._last_export_path = path
         self._sync_show_in_folder_actions()
 
+    def _on_export_files(self, result, context: dict) -> None:
+        """Logs every mixdown of a finished export (one per file of a split)."""
+        for exported in result.files:
+            exports_log.record(
+                self.exports_log_file, exported.path, project_title=context.get("title", ""),
+                project_path=context.get("path", ""), duration_s=exported.duration_s,
+                fmt=os.path.splitext(exported.path)[1].lstrip("."), extras=exported.extras)
+        if self.output_dock is not None:
+            self.output_dock.refresh()
+
+    def _log_whole_document_output(self, path: str) -> None:
+        """The legacy whole-document path reports its combined file only in a status line."""
+        extras = [p for p in (os.path.splitext(path)[0] + ".srt",) if os.path.isfile(p)]
+        try:
+            import soundfile as sf
+            duration = float(sf.info(path).duration)
+        except Exception:  # noqa: BLE001 - a format libsndfile can't read: log it without a length
+            duration = 0.0
+        exports_log.record(
+            self.exports_log_file, path, project_title=project_io.display_title(self.root.project_settings,
+                                                                                 self.project_path),
+            project_path=self.project_path or "", duration_s=duration,
+            fmt=os.path.splitext(path)[1].lstrip("."), extras=extras)
+        if self.output_dock is not None:
+            self.output_dock.refresh()
+
     def _on_export_report(self, result, preset_label: str) -> None:
         self._export_report_dialog = ExportReportDialog(result, preset_label, parent=self)
         self._export_report_dialog.show()
@@ -3689,6 +3725,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     # --- engine callbacks (queued automatically across threads - see signals.py) -
 
     def on_engine_status(self, msg: str, is_error: bool) -> None:
+        if not is_error and msg.startswith(WHOLE_DOCUMENT_SAVED) and os.path.isfile(msg[len(WHOLE_DOCUMENT_SAVED):]):
+            self._log_whole_document_output(msg[len(WHOLE_DOCUMENT_SAVED):])
         self.set_status(msg, "error" if is_error else "info")
         if is_error and "pip install" in msg:
             QMessageBox.critical(self, "Missing Dependencies", msg)

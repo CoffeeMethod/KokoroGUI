@@ -156,6 +156,11 @@
         <h3>Export and loudness</h3>
         <ul class="change-list">
           <li>
+            <h4>An Exports tab</h4>
+            <p>The Exports tab joins Queue, Outline and Proof. It lists what you exported, newest first, with the project, the date, the length and the format. Select a row for Play (click again to stop), Show in Folder and Delete. Delete lists the files first, then removes the audio and the files that export wrote beside it (its SRT, cue sheet, stems, per-clip files and text extras), and nothing else in the folder. "This project only" hides other projects' exports. A split export is one row per file. Generating the whole document without clips adds its combined file as well.</p>
+            <p>The list comes from <code>exports.json</code> beside <code>config_qt.json</code>, not from a scan of <code>audio_output/</code>, so exports in any folder show up and unrelated files don't. It keeps the last 200 exports, and a file you removed yourself stays listed as missing. The log is not part of a project and a damaged one reads as empty.</p>
+          </li>
+          <li>
             <h4>Normalize loudness on export</h4>
             <p>The Export dialog has a "Normalize loudness" checkbox, off by default, with a "Target (LUFS)" box (-30 to -5, default -16) and a "True peak ceiling (dBTP)" box (-6 to 0, default -1). The export gets one gain that brings the integrated loudness (ITU-R BS.1770) to the target. If that gain would push the true peak past the ceiling, the gain stops at the ceiling and the target isn't reached. There is no limiter. The status line then reports what the file measures, for example "Measured -16.0 LUFS, -1.2 dBTP", and adds "target not reached: peak-limited" when the ceiling won, with the loudness it did reach. A stereo export reads 3 LU louder than the same signal as mono, because both channels count, so pick the target for the channel setting you export. Per-clip files are not normalized. The three settings are kept per project in <code>project.json</code>, which older versions ignore. Normalizing and measuring need the <code>pyloudnorm</code> package, now in <code>requirements.txt</code>. Without it the row is greyed out.</p>
           </li>
