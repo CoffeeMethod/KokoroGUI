@@ -615,6 +615,10 @@
         <h3>Fixes</h3>
         <ul class="change-list">
           <li>
+            <h4>Save As keeps an uninstalled engine's voices after the original file is gone</h4>
+            <p>A project can hold voice files for an engine this machine doesn't have, under <code>engines/&lt;id&gt;/</code>. Save copied them from the <code>.tbaw</code> the project was opened from, so once that file was deleted or moved, Save As wrote a bundle without them. Save now takes them from the project's working folder, where Open put them, byte for byte. Files a newer version of KokoroGUI added at the top of the bundle are still lost in that case, because the working folder can't tell them apart from its own files.</p>
+          </li>
+          <li>
             <h4>The loop region and the monitor choice survive reopening a project</h4>
             <p>Open rewrote <code>session.json</code> from scratch, so the loop region and the Dub / Original / Both choice were lost each time a project was reopened from its working folder, including on relaunch. They now carry over when the same file reopens into its own folder.</p>
           </li>

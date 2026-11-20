@@ -1521,6 +1521,43 @@ def _carry_source(plan: SavePlan) -> str | None:
     return plan.path if os.path.isfile(plan.path) else None
 
 
+def _working_copy_engine_files(project_dir: str | None, known_engine_ids) -> list:
+    """`(bundle_path, source)` for each file under `<project_dir>/engines/<id>/`
+    of an engine `known_engine_ids` doesn't name: the files Open extracted
+    for an uninstalled engine. `write_bundle` carries them when no old bundle
+    is left to carry from (grill PG15: passed through as they are). Regular
+    files only; a symlink, or anything whose realpath leaves the project dir,
+    is skipped."""
+    if not project_dir:
+        return []
+    root = os.path.realpath(project_dir)
+    engines_root = os.path.join(root, ENGINES_DIR)
+    if os.path.islink(engines_root) or not os.path.isdir(engines_root):
+        return []
+    known = {str(e) for e in known_engine_ids}
+    found = []
+    for engine_id in sorted(os.listdir(engines_root)):
+        folder = os.path.join(engines_root, engine_id)
+        if engine_id in known or os.path.islink(folder) or not os.path.isdir(folder):
+            continue
+        if not os.path.realpath(folder).startswith(engines_root + os.sep):
+            continue
+        for dirpath, dirnames, filenames in os.walk(folder, followlinks=False):
+            dirnames[:] = sorted(d for d in dirnames if not os.path.islink(os.path.join(dirpath, d)))
+            for filename in sorted(filenames):
+                full = os.path.join(dirpath, filename)
+                if os.path.islink(full) or not os.path.isfile(full):
+                    continue
+                real = os.path.realpath(full)
+                if not real.startswith(root + os.sep):
+                    continue
+                rel = os.path.relpath(real, root).replace("\\", "/")
+                if not rel.startswith(f"{ENGINES_DIR}/{engine_id}/"):
+                    continue
+                found.append((rel, real))
+    return found
+
+
 def _owned_entry(name: str, known_engine_ids) -> bool:
     name = name.replace("\\", "/")
     if name in _OWNED_FILES or name.startswith(_OWNED_DIRS):
@@ -1572,7 +1609,10 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
     keeps failing leaves the `.tmp` and says where it is. An entry
     `_refused_entry` names is left out. The old file is `_carry_source`'s:
     for Save As, the bundle the project came from, not whatever file sits
-    at the new path."""
+    at the new path. With no old file, an uninstalled engine's
+    `engines/<id>/` files come from the working copy instead
+    (`_working_copy_engine_files`); nothing is added to the manifest for
+    them, as for entries carried from an old file."""
     assets = [(name, src) for name, src in plan.assets if not _refused_entry(name, src, plan.project_dir)]
     audio_files = [(name, src) for name, src in plan.audio_files
                    if not _refused_entry(name, src, plan.project_dir)]
@@ -1631,6 +1671,19 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
                         needed += info.file_size
         except (OSError, zipfile.BadZipFile):
             carried = []
+    # No old bundle (the source was moved or deleted): an uninstalled
+    # engine's files still sit in the working copy, so they go in from there,
+    # byte for byte (grill PG15). Top-level unknown entries are not carried.
+    from_dir = []
+    if not previous_path:
+        for bundle_path, source in _working_copy_engine_files(plan.project_dir, known_engine_ids):
+            if bundle_path in written or _refused_entry(bundle_path, source, plan.project_dir):
+                continue
+            try:
+                needed += os.path.getsize(source)
+            except OSError:
+                continue
+            from_dir.append((bundle_path, source))
     check_free_space(plan.path, needed, "save the project")
 
     tmp = plan.path + ".tmp"
@@ -1665,6 +1718,10 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
                         with old.open(info) as src, zf.open(zipfile.ZipInfo(info.filename, info.date_time), "w") as dst:
                             shutil.copyfileobj(src, dst, 1024 * 1024)
                         done += info.file_size
+            for bundle_path, source in from_dir:
+                if os.path.isfile(source):
+                    zf.write(source, bundle_path, compress_type=zipfile.ZIP_DEFLATED)
+                    done += os.path.getsize(source)
         _replace_with_retries(tmp, plan.path)
     except PermissionError as e:
         raise ProjectError(f"Couldn't replace {plan.path} (another program holds it): {e}. "

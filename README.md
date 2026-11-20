@@ -96,6 +96,7 @@ Unreleased:
     `.kgshare` file, and import one from another machine, asking what to do where a name is taken
 -   Playback runs at 0.5x to 2x with the voices keeping their pitch (a speed box in the transport, `[` and `]`, and `L`
     steps 1x, 1.5x, 2x), `M` drops a flag at the playhead with an optional note, and `N` jumps to the next flag
+-   Save As keeps an uninstalled engine's voice files after the original `.tbaw` was deleted or moved
 
 In 4.0.0-beta.2:
 

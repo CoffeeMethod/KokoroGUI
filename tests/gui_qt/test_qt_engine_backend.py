@@ -371,6 +371,32 @@ def test_save_as_keeps_a_missing_engines_files(qt_app, tmp_path):
         assert zf.read("engines/ghost/voices/boo.bin") == b"the ghost's voice"
 
 
+def test_save_as_keeps_a_missing_engines_files_after_the_source_is_deleted(qt_app, tmp_path):
+    import os
+    import shutil
+    import zipfile
+
+    _ghost_project(qt_app)
+    path = str(tmp_path / "ghost.tbaw")
+    qt_app.save_project_as(path)
+    qt_app.wait_for_project_io()
+    with zipfile.ZipFile(path, "a") as zf:
+        zf.writestr("engines/ghost/voices/boo.bin", b"the ghost's voice")
+    # Moved, so Open extracts it (the same path would be "already open").
+    moved = str(tmp_path / "moved.tbaw")
+    shutil.move(path, moved)
+    qt_app.open_project(moved)
+    qt_app.wait_for_project_io()
+    os.remove(moved)
+
+    copy = str(tmp_path / "elsewhere" / "copy.tbaw")
+    qt_app.save_project_as(copy)
+    qt_app.wait_for_project_io()
+
+    with zipfile.ZipFile(copy) as zf:
+        assert zf.read("engines/ghost/voices/boo.bin") == b"the ghost's voice"
+
+
 def test_preview_text_says_whether_a_preview_started(qt_app):
     assert qt_app.preview_text("Hello there") is True
     ghost = Character(name="Ghost", backend_id="ghost")
