@@ -50,6 +50,7 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 Unreleased:
 
+-   The Qt widget tests run in CI on Linux in their own job, and the full GUI suite takes 4 minutes locally instead of 38
 -   Generate fills a book in as it goes: the stale clips run eight at a time, a Queue tab lists the batches with the time
     left, and Pause, reorder and Resume work on them, even after a restart
 -   An Exports tab lists every export, newest first, with Play, Show in Folder and Delete

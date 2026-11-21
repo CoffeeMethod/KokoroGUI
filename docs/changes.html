@@ -735,6 +735,11 @@
             <p>The two Audio8 models (speech and recognition) run code from their Hugging Face repos, so they now load from a fixed commit instead of whatever the repo's main branch holds. The commit is a constant next to each model id, with a note on how to bump it. A copy of either model already in your Hugging Face cache under another revision downloads once more on first use.</p>
             <p>CI runs the fast suite on macOS as well as Windows and Ubuntu, and a new lint job runs <code>ruff check .</code> (syntax errors, undefined names, unused imports and variables, mutable defaults). The workflow's actions are pinned to commit hashes, with Dependabot proposing bumps weekly, and the test requirements are pinned too.</p>
           </li>
+          <li>
+            <h4>The Qt widget tests run in CI, and the GUI suite takes 4 minutes</h4>
+            <p>CI has a new <code>gui</code> job that runs <code>tests/gui_qt</code> on Ubuntu with the offscreen Qt platform. It is not a required check, so a red run there doesn't block a merge.</p>
+            <p>The full GUI suite took 38 minutes locally and now takes 4. A few tests built a second app window without handing it to the test fixture, and every later test re-styled that leftover window. The fixture now deletes any window a test leaves behind. One test that fitted 300 clips, 46 seconds under verify mode, now fits 100 and takes under 2.</p>
+          </li>
         </ul>
       </div>
     </div>
