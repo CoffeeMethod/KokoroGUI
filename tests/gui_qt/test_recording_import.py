@@ -304,6 +304,12 @@ def test_a_whisper_result_for_a_project_no_longer_open_is_dropped(qt_app, tmp_pa
     started_in = qt_app.document
 
     assert qt_app.import_recording(_wav(tmp_path))
+    # File > New is refused while the transcription runs (plan 46 F4)...
+    monkeypatch.setattr("kokoro_gui.qt.app.QMessageBox.warning", lambda *a, **k: None)
+    qt_app.new_project()
+    assert qt_app.document is started_in
+    # ...so force the switch to check that a late result is still dropped.
+    monkeypatch.setattr(qt_app, "_replace_blocked", lambda what: False)
     qt_app.new_project()
     assert qt_app.document is not started_in
     gate.set()
