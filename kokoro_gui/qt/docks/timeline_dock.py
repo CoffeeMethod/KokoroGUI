@@ -47,10 +47,12 @@ from kokoro_gui.daw.arrangement import OVERLAP_EPSILON_S, plan_ripple
 from kokoro_gui.daw.dirty import build_segments_from_results, carry_segment_timing, take_from_results
 from kokoro_gui.daw.undo import (
     AssignCharacterCommand, CompositeCommand, DeleteTakeCommand, MoveClipBeforeCommand, MoveClipCommand,
-    ReassignTrackCommand, RippleCommand, SetActiveTakeCommand, SetClipTimestampCommand, SetFieldCommand,
-    TextEditCommand,
+    ReassignTrackCommand, RippleCommand, SetActiveTakeCommand, SetClipFxCommand, SetClipTimestampCommand,
+    SetFieldCommand, TextEditCommand,
 )
+from kokoro_gui.engine import presets
 from kokoro_gui.engine.audio_fx import clamp_time_stretch
+from kokoro_gui.engine.presets import filter_fx_preset_values
 from kokoro_gui.qt.timeline_view import TimelineWidget
 
 
@@ -118,6 +120,7 @@ class TimelineDock(QDockWidget):
         self.timeline_view.takeDeleteRequested.connect(self.on_take_delete_requested)
         self.timeline_view.statusChangeRequested.connect(self.on_status_change_requested)
         self.timeline_view.alignWordsRequested.connect(self.on_align_words_requested)
+        self.timeline_view.batchActionRequested.connect(self.on_batch_action_requested)
         self.timeline_view.fitToSlotRequested.connect(self.on_fit_to_slot_requested)
         self.timeline_view.markerAddRequested.connect(self.on_marker_add_requested)
         self.timeline_view.markerMoved.connect(self.on_marker_moved)
@@ -353,6 +356,42 @@ class TimelineDock(QDockWidget):
 
     def on_align_words_requested(self, clip_id: str) -> None:
         self.app.schedule_word_alignment([clip_id], force=True)
+
+    def on_batch_action_requested(self, clip_ids, action: str, value=None) -> None:
+        """The block menu with several clips selected (plan 35). Each edit is
+        one `CompositeCommand`, so one undo puts every clip back; Generate
+        queues the stale ones as one request. Subprojects and music beds
+        are skipped: none of these actions means anything for them."""
+        clips = [c for c in (self._doc.get_clip(cid) for cid in clip_ids)
+                 if c is not None and not c.is_nested and not c.is_bed]
+        if not clips:
+            return
+        ids = [c.id for c in clips]
+        if action == "generate":
+            if not self.generate_dirty_clips_requested(self.app.level, clip_ids=set(ids)):
+                self.app.set_status("Nothing stale in the selection", "warning")
+            return
+        if action == "align":
+            self.app.schedule_word_alignment(ids, force=True)
+            return
+        if action == "status":
+            commands = [SetFieldCommand("clip", c.id, "status", value) for c in clips if c.status != value]
+        elif action == "clear_gap":
+            commands = [SetFieldCommand("clip", c.id, "gap_before_s", None) for c in clips
+                        if c.gap_before_s is not None]
+        elif action == "fx":
+            fx_values = None
+            if value:
+                preset = presets.load_fx_preset(value, self.app.project_dir)
+                fx_values = filter_fx_preset_values(preset) if preset else None
+            commands = [SetClipFxCommand(c.id, fx_values, preset_name=value or None) for c in clips]
+        else:
+            return
+        if not commands:
+            return
+        self._push(commands[0] if len(commands) == 1 else CompositeCommand(commands), rehighlight=action == "fx")
+        if action == "fx" and self.app.fx_dock is not None:
+            self.app.fx_dock.refresh_for_selection()
 
     def _set_markers(self, new_list: list) -> None:
         self._push(SetFieldCommand("document", None, "settings", new_list, key=marker_ops.MARKERS_KEY))

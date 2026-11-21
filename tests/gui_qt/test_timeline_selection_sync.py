@@ -117,4 +117,4 @@ def test_selection_of_removed_clip_does_not_crash_and_clears_highlight(qtbot):
     view.render_document(doc)  # must not raise
 
     assert _clip_block_items(view) == []
-    assert view._selected_block is None
+    assert view._selected_blocks == []

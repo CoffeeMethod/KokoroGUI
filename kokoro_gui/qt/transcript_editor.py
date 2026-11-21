@@ -1583,7 +1583,14 @@ class TranscriptEditor(QTextEdit):
             return
         cursor = self.textCursor()
         clip = self.app.document.clip_covering(cursor.selectionStart())
-        if clip is not None:
+        if clip is not None and cursor.hasSelection():
+            # A text range selects every clip it spans (plan 35), the first
+            # one primary, as a click there would make it.
+            ids = [run.clip_id for run, _s, _e in
+                   self.app.document.index().runs_in(cursor.selectionStart(), cursor.selectionEnd())
+                   if run.clip_id is not None]
+            self.app.selection.select_clips(ids, primary=clip.id)
+        elif clip is not None:
             self.app.selection.select_clip(clip.id)
         elif cursor.hasSelection():
             self.app.selection.select_range(cursor.selectionStart(), cursor.selectionEnd())
@@ -1605,6 +1612,8 @@ class TranscriptEditor(QTextEdit):
         cursor = self.textCursor()
         if cursor.selectionStart() == start and cursor.selectionEnd() == end:
             return
+        if len(self.app.selection.selected_clip_ids) > 1 and cursor.hasSelection()                 and cursor.selectionStart() < end and start < cursor.selectionEnd():
+            return  # a text range that made a several-clip selection: keep it
         if start <= cursor.position() < end and not cursor.hasSelection():
             return  # the caret already sits inside this clip - leave it alone
 
