@@ -48,7 +48,7 @@ from kokoro_gui.daw.dirty import build_segments_from_results, carry_segment_timi
 from kokoro_gui.daw.undo import (
     AssignCharacterCommand, CompositeCommand, DeleteTakeCommand, MoveClipBeforeCommand, MoveClipCommand,
     ReassignTrackCommand, RippleCommand, SetActiveTakeCommand, SetClipFxCommand, SetClipTimestampCommand,
-    SetFieldCommand, TextEditCommand,
+    SetFieldCommand, TextEditCommand, keep_recorded_take,
 )
 from kokoro_gui.engine import presets
 from kokoro_gui.engine.audio_fx import clamp_time_stretch
@@ -118,6 +118,7 @@ class TimelineDock(QDockWidget):
         self.timeline_view.fadeChanged.connect(self.on_fade_changed)
         self.timeline_view.takeSelected.connect(self.on_take_selected)
         self.timeline_view.takeDeleteRequested.connect(self.on_take_delete_requested)
+        self.timeline_view.recordTakeRequested.connect(self.app.record_guide_take)
         self.timeline_view.statusChangeRequested.connect(self.on_status_change_requested)
         self.timeline_view.alignWordsRequested.connect(self.on_align_words_requested)
         self.timeline_view.batchActionRequested.connect(self.on_batch_action_requested)
@@ -720,6 +721,8 @@ class TimelineDock(QDockWidget):
             )
         current_take = int(clip.overrides.get("take", 0) or 0)
         take = take_from_results(results, default=current_take)
+        # A recorded guide take at the landing index moves aside, parked.
+        keep_recorded_take(clip, take)
         new_segments = build_segments_from_results(fallback, results)
         carry_segment_timing(new_segments, [clip.segments, *clip.takes.values()])
         # A new take parks the one it replaces; re-rendering a parked take

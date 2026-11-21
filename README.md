@@ -108,6 +108,8 @@ Unreleased:
 -   Save As keeps an uninstalled engine's voice files after the original `.tbaw` was deleted or moved
 -   Edit > Attribute Dialogue assigns each quote to the character its tag names (`said Marta`), guesses the turns in a
     two-person exchange, gives the narration to a narrator, and marks what it isn't sure of for you to check
+-   Record a guide take on a clip after a three-beep count-in, with a pre-roll (block menu, `R` or Rec): it plays
+    without the beeps and the clip never goes stale while it's the active take
 
 In 4.0.0-beta.2:
 

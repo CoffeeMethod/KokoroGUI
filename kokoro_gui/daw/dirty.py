@@ -30,6 +30,12 @@ its file exists (TB9: a bundle from another machine's model version opens
 clean), and a segment whose `audio_path` is set but whose file is missing is
 dirty (TB11: close-time GC and an undo across it can't leave a clip playing
 silence).
+
+A recorded guide take (plan 31, grill PG8) is a take whose segments have no
+`cache_key` and a file under the project's `audio/imported/`
+(`is_recorded_take`). When it is the active take the clip is never stale:
+its audio is the recording, not a generation, so no text or setting change
+makes it out of date. Only a missing file does.
 """
 import os
 
@@ -38,6 +44,10 @@ from kokoro_gui.engine import caching
 from kokoro_gui.engine.caching import compute_cache_key, effective_speed
 from kokoro_gui.engine.lexicon import spoken
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
+
+# Where `qt/project.py::import_audio_file` puts a copied file
+# (`project.AUDIO_IMPORTED`; this layer doesn't import qt).
+IMPORTED_AUDIO_DIR = "audio/imported"
 
 # Compiled lexicon patterns, shared across dirty checks (the engine keeps
 # its own per instance).
@@ -93,6 +103,21 @@ def segment_file_missing(segment, file_exists=None) -> bool:
     return bool(segment.audio_path) and not (file_exists or os.path.isfile)(segment.audio_path)
 
 
+def is_recorded_segment(segment) -> bool:
+    """True for a segment of a recorded guide take: no `cache_key` (no
+    generation made it) and a file under `audio/imported/`. A generated
+    segment always has a key and lives in `audio/generated/`."""
+    path = getattr(segment, "audio_path", None)
+    if getattr(segment, "cache_key", None) or not path:
+        return False
+    return f"/{IMPORTED_AUDIO_DIR}/" in "/" + str(path).replace("\\", "/")
+
+
+def is_recorded_take(segments) -> bool:
+    """True when every segment of a take is recorded (`is_recorded_segment`)."""
+    return bool(segments) and all(is_recorded_segment(s) for s in segments)
+
+
 def is_clip_dirty(clip, text: str, config: dict, key_fn=None, file_exists=None) -> bool:
     """True if `clip` needs (re)generation: it has never been generated, or
     its current text/generation inputs no longer match what its stored
@@ -100,7 +125,8 @@ def is_clip_dirty(clip, text: str, config: dict, key_fn=None, file_exists=None) 
     `Clip` object, now dirty; models.Document.replace_text is what
     guarantees a fully-deleted-then-retyped clip never reaches this function
     as the *same* object in the first place - see Q18), or a segment's file
-    is gone. An imported clip is never stale. A nested clip (a subproject)
+    is gone. An imported clip is never stale, and neither is a clip whose
+    active take is a recorded guide take with its file. A nested clip (a subproject)
     has no segments to compare; `Document.dirty_clips` asks the app about
     it, and this headless answer is "stale"."""
     if getattr(clip, "source", None) == "imported":
@@ -112,6 +138,11 @@ def is_clip_dirty(clip, text: str, config: dict, key_fn=None, file_exists=None) 
         return False
     if getattr(clip, "source", None) == "nested":
         return True
+    if is_recorded_take(clip.segments):
+        # A recorded guide take (grill PG8) is the clip's audio as it
+        # stands; only a missing file makes it stale, so Generate can fill
+        # the clip again.
+        return any(segment_file_missing(s, file_exists) for s in clip.segments)
     if not clip.segments:
         return True
     # A segment baked with its FX at generation time (pre non-destructive

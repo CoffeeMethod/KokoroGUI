@@ -28,9 +28,9 @@ def test_context_menu_shows_generate_action_over_a_clip_block(qt_app):
 
     assert menu is not None
     # No audio, one take: Generate, Split here, Join with next, Lock in time,
-    # then the Status submenu (no Play, Take or Align words).
+    # Record guide take, then the Status submenu (no Play, Take or Align words).
     assert [a.text() for a in menu.actions() if not a.isSeparator()] == [
-        "Generate", "Split here", "Join with next", "Lock in time", "Status"]
+        "Generate", "Split here", "Join with next", "Lock in time", "Record guide take...", "Status"]
 
 
 def test_context_menu_empty_over_lane_background(qt_app):

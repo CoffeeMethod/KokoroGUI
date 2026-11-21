@@ -49,7 +49,8 @@ Mouse gestures on the main view (all resolved in `mouseReleaseEvent`):
 The header column has, per track, `M` (mute), `S` (solo), `A` (show the
 automation lane), `D` (duck under speech, `Track.duck`), a fader and a pan
 slider (`trackFieldChanged`).
-The block context menu adds Take (pick or delete a parked take), Status,
+The block context menu adds Take (pick or delete a parked take; a recorded
+guide take says so), "Record guide take..." (`recordTakeRequested`), Status,
 "Align words" and "Lock in time" (`Clip.pinned`: ripple on regenerate
 won't move it). A music bed's menu is Play, Loop, Reset trim, Lock in time
 and Remove (`bedActionRequested`). Two clips overlapping on one track get a
@@ -80,6 +81,7 @@ from kokoro_gui.daw import fit as fit_ops
 from kokoro_gui.daw import markers as marker_ops, revision
 from kokoro_gui.daw.arrangement import Arrangement, compute_arrangement, overlaps
 from kokoro_gui.daw.beds import bed_segments
+from kokoro_gui.daw.dirty import is_recorded_take
 from kokoro_gui.daw.models import CLIP_STATUSES
 from kokoro_gui.daw.timecode import format_position
 from kokoro_gui.qt import theme, waveform_data
@@ -949,6 +951,7 @@ class TimelineView(QGraphicsView):
     fadeChanged = Signal(str, str, float)  # (clip_id, "fade_in_s" | "fade_out_s", seconds)
     takeSelected = Signal(str, int)
     takeDeleteRequested = Signal(str, int)
+    recordTakeRequested = Signal(str)  # clip_id: the block menu's Record guide take...
     statusChangeRequested = Signal(str, str)
     alignWordsRequested = Signal(str)
     fitToSlotRequested = Signal(str)
@@ -1125,6 +1128,9 @@ class TimelineView(QGraphicsView):
             lock.triggered.connect(lambda checked=False, cid=clip.id: self.lockInTimeRequested.emit(cid, bool(checked)))
             menu.addSeparator()
             self._add_take_menu(menu, clip)
+            record = menu.addAction("Record guide take...")
+            record.setToolTip("Record yourself reading this line, after a count-in. The take is the clip's audio.")
+            record.triggered.connect(lambda checked=False, cid=clip.id: self.recordTakeRequested.emit(cid))
             status_menu = menu.addMenu("Status")
             for status in CLIP_STATUSES:
                 action = status_menu.addAction(STATUS_LABELS[status])
@@ -1251,7 +1257,9 @@ class TimelineView(QGraphicsView):
             seconds = sum(float(s.duration or 0.0) for s in segments)
             text = " ".join(" ".join(s.text for s in segments).split())
             label = f"Take {index + 1} ({seconds:.1f}s)"
-            if text != current_text:
+            if is_recorded_take(segments):
+                label = f"Take {index + 1} (recorded, {seconds:.1f}s)"
+            elif text != current_text:
                 label += " - old text"
             action = take_menu.addAction(label)
             action.setToolTip(text)

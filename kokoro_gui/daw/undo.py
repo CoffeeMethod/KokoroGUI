@@ -727,6 +727,72 @@ class DeleteTakeCommand(Command):
             clip.takes[self.index] = self._segments
 
 
+def next_take_index(clip) -> int:
+    """The take index after every one the clip holds (the active one
+    counts only when it has segments); 0 for a clip with no audio."""
+    used = set(clip.takes)
+    if clip.segments:
+        used.add(int(clip.overrides.get("take", 0) or 0))
+    return max(used) + 1 if used else 0
+
+
+def keep_recorded_take(clip, landing: int) -> None:
+    """Moves a recorded guide take out of take index `landing` before a
+    generation lands there: to the next free index, parked. A recorded
+    take has no segment key, so the engine's take bump can pick its index,
+    and the generated take must not write over or drop it."""
+    from kokoro_gui.daw.dirty import is_recorded_take
+
+    active = int(clip.overrides.get("take", 0) or 0)
+    # The free index is read before anything moves, so it is past `landing`.
+    free = next_take_index(clip)
+    if landing == active and is_recorded_take(clip.segments):
+        clip.takes[free] = clip.segments
+        clip.segments = []
+    elif is_recorded_take(clip.takes.get(landing)):
+        clip.takes[free] = clip.takes.pop(landing)
+
+
+class AddTakeCommand(Command):
+    """Adds `segments` to a clip as a new take and makes it the active one
+    (a recorded guide take, plan 31). The outgoing active take is parked
+    under its index. The new take keeps its index across redo; undo drops
+    it and puts the previous active take back."""
+
+    def __init__(self, clip_id: str, segments: list):
+        self.clip_id = clip_id
+        self.segments = list(segments)
+        self.index = None
+        self._previous_index = None
+
+    def do(self, document) -> None:
+        clip = document.get_clip(self.clip_id)
+        if clip is None:
+            self._previous_index = None
+            return
+        if self.index is None:
+            self.index = next_take_index(clip)
+        self._previous_index = int(clip.overrides.get("take", 0) or 0)
+        if clip.segments:
+            clip.takes[self._previous_index] = clip.segments
+        clip.takes.pop(self.index, None)
+        clip.segments = list(self.segments)
+        if self.index:
+            clip.overrides["take"] = self.index
+        else:
+            clip.overrides.pop("take", None)
+
+    def undo(self, document) -> None:
+        clip = document.get_clip(self.clip_id)
+        if clip is None or self._previous_index is None:
+            return
+        clip.segments = clip.takes.pop(self._previous_index, [])
+        if self._previous_index:
+            clip.overrides["take"] = self._previous_index
+        else:
+            clip.overrides.pop("take", None)
+
+
 class ReplaceWithNestedCommand(Command):
     """New Subproject (phase 4): `[start, end)` of the text, with the clips
     inside it, leaves this document (the app has already copied them into

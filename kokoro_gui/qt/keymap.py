@@ -94,6 +94,8 @@ KEYS: tuple = (
                "go_to_next_flag", TIMELINE_GROUP),
     KeyBinding("split", "S", TIMELINE, "Split clip at playhead (timeline focused)",
                "split_clip_at_playhead", TIMELINE_GROUP),
+    KeyBinding("record_take", "R", TIMELINE, "Record a guide take on the selected clip (timeline focused)",
+               "record_guide_take_key", TIMELINE_GROUP),
     KeyBinding("zoom_fit", "F", TIMELINE, "Zoom to fit (timeline focused)", "zoom_timeline_to_fit", TIMELINE_GROUP),
     KeyBinding("snap_grid", "G", TIMELINE, "Snap to grid on or off (timeline focused)",
                "toggle_snap_to_grid", TIMELINE_GROUP),
