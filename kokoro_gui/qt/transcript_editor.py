@@ -67,6 +67,11 @@ read through `app.details_flags()`):
   sits on the line's top edge, where a clip rule covers it.
 - Gaps: `app.gap_label` on each rule at the start of a line.
 
+A stale clip that queued or running work will generate (plan 29) shows a
+ring (queued) or a dot (generating) where its play button would be, in the
+`queue_waiting` and `queue_running` theme colors; the gutter reads
+`app.queued_clip_ids()` once per paint.
+
 Note: `self.document()` (Qt's `QTextDocument`) and `self.app.document` (the
 DAW `Document`) are two different objects with the same short name. Always
 spell `self.app.document` out in full in this class.
@@ -529,6 +534,8 @@ class TranscriptGutter(QWidget):
         layout = qt_doc.documentLayout()
         scroll = self.editor.verticalScrollBar().value()
         dirty_ids = daw_doc.dirty_ids()
+        queued_fn = getattr(self.editor.app, "queued_clip_ids", None)
+        queue_states = queued_fn() if callable(queued_fn) else {}
         labelled_dirty: set = set()
         recording: dict = {}
 
@@ -641,6 +648,11 @@ class TranscriptGutter(QWidget):
                     # Its engine isn't installed (grill EN6): no button, the
                     # reason as the tooltip over where it would be.
                     self._blocked_rects.append((btn, blocked))
+                elif clip.id in queue_states:
+                    # Queued or generating: a mark instead of the button. A
+                    # click still generates it next.
+                    self._draw_queue_mark(painter, btn, pal, queue_states[clip.id])
+                    self._button_rects.append((btn, clip.id))
                 else:
                     self._draw_play_button(painter, btn, pal)
                     self._button_rects.append((btn, clip.id))
@@ -731,6 +743,22 @@ class TranscriptGutter(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(color)
         painter.drawEllipse(rect)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+    @staticmethod
+    def _draw_queue_mark(painter: QPainter, rect: QRect, pal, state: str) -> None:
+        """A stale clip in the generation queue: a ring while it waits, a
+        filled dot while it generates, the status dot's size."""
+        dot = QRect(0, 0, STATUS_DOT_PX + 2, STATUS_DOT_PX + 2)
+        dot.moveCenter(rect.center())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if state == "running":
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(pal.queue_running))
+        else:
+            painter.setPen(QPen(QColor(pal.queue_waiting), 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(dot)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
     @staticmethod
@@ -1040,6 +1068,10 @@ class TranscriptEditor(QTextEdit):
                 highlighter.rehighlightBlock(block)
             block = block.next()
         self._after_rehighlight()
+
+    def update_gutter(self) -> None:
+        """Repaints the gutter (the queue's marks changed)."""
+        self._gutter.update()
 
     def rehighlight_all(self) -> None:
         """`rehighlight` of every block, whatever it was painted with

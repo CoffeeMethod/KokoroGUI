@@ -823,7 +823,9 @@ def test_project_summary_counts_subprojects_and_their_audio(qt_app, tmp_path):
     assert dialog.subprojects_label.text() == "1"
 
 
-def test_save_waits_while_a_subproject_is_generating(qt_app, tmp_path, monkeypatch):
+def test_save_runs_while_a_subproject_is_generating(qt_app, tmp_path, monkeypatch):
+    """Plan 29: Save no longer waits for a generate. It bundles only files
+    that clips already point at; the clip still generating stays stale."""
     from PySide6.QtWidgets import QMessageBox
 
     _intro, chapter, child = _book(qt_app)
@@ -833,15 +835,17 @@ def test_save_waits_while_a_subproject_is_generating(qt_app, tmp_path, monkeypat
     child.document.settings["gap_s"] = 0.4
     qt_app.save_settings()
     qt_app.timeline_dock.generate_dirty_clips_requested(child)  # in flight
+    assert qt_app.is_generating()
     warned = []
     monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: warned.append(a[1])))
     before = os.path.getmtime(qt_app.project_path)
 
     qt_app.save_project()
+    qt_app.wait_for_project_io()
 
-    assert warned == ["Busy"]
-    assert os.path.getmtime(qt_app.project_path) == before
-    assert child.dirty
+    assert warned == []
+    assert os.path.getmtime(qt_app.project_path) != before
+    assert chapter.id in {c.id for c in child.document.dirty_clips()}
 
 
 def test_copy_imported_audio_only_copies_files_from_the_parents_imported_folder(tmp_path, isolated_dirs):

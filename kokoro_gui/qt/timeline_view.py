@@ -220,6 +220,8 @@ class ClipBlockItem(QGraphicsItem):
         self._estimated = False
         self._overlap = False
         self._flagged = False
+        # The generation queue (plan 29): None, "queued" or "running".
+        self._queue_state = None
         # A subproject's block (phase 4): None for an ordinary clip, else
         # "ok", "stale" or "missing".
         self._nested_state = None
@@ -322,6 +324,18 @@ class ClipBlockItem(QGraphicsItem):
     @property
     def flagged(self) -> bool:
         return self._flagged
+
+    def set_queue_state(self, state) -> None:
+        """The generation queue holds this clip: "queued" hatches the block
+        in the theme's `queue_waiting` color, "running" in `queue_running`;
+        None clears it."""
+        if state != self._queue_state:
+            self._queue_state = state
+            self.update()
+
+    @property
+    def queue_state(self):
+        return self._queue_state
 
     def set_fit(self, slot_start_px: Optional[float], slot_width_px: Optional[float],
                 ratio: Optional[float]) -> None:
@@ -480,6 +494,17 @@ class ClipBlockItem(QGraphicsItem):
         if self._label and self._width >= LABEL_MIN_WIDTH_PX:
             painter.setPen(label_color_for(base) if not self._estimated else QColor(pal.text))
             painter.drawText(rect.adjusted(label_left, 3, -4, -2), 0, self._label)
+
+        if self._queue_state is not None:
+            # Queued or generating: a hatch over the fill, like a stale
+            # subproject's, in the queue's colors.
+            hatch = QColor(pal.queue_running if self._queue_state == "running" else pal.queue_waiting)
+            hatch.setAlpha(170)
+            painter.save()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(hatch, Qt.BrushStyle.FDiagPattern))
+            painter.drawRoundedRect(rect, CLIP_RADIUS_PX, CLIP_RADIUS_PX)
+            painter.restore()
 
         if self._flagged:
             # A triangle in the bottom-left corner: the top corners hold the
@@ -975,6 +1000,8 @@ class TimelineView(QGraphicsView):
         self._automation_shown: set = set()
         self._nested_state_fn = None
         self._flagged_fn = None
+        # `{clip_id: "queued" | "running"}` (`set_queue_states`).
+        self._queue_states: dict = {}
         self._automation_items: dict = {}
         # Reconciled rendering (`render_document`): per clip id, what its
         # block shows and what its waveform was drawn from; peaks by render
@@ -1663,6 +1690,14 @@ class TimelineView(QGraphicsView):
             marks.append(x)
         return marks
 
+    def set_queue_states(self, states: dict) -> None:
+        """`{clip_id: "queued" | "running"}` from `app.queued_clip_ids`: each
+        block's hatch follows it now, and `render_document` keeps it on the
+        blocks it makes."""
+        self._queue_states = dict(states)
+        for clip_id, block in self._blocks_by_clip_id.items():
+            block.set_queue_state(self._queue_states.get(clip_id))
+
     def forget_rendered(self) -> None:
         """Drops every item and remembered waveform, so the next
         `render_document` builds the scene from nothing (Options > Force
@@ -1863,6 +1898,7 @@ class TimelineView(QGraphicsView):
                 wave = None
                 block.clear_waveform()
             self._block_states[clip.id] = (state, wave)
+            block.set_queue_state(self._queue_states.get(clip.id))
 
         for clip_id in [cid for cid in self._blocks_by_clip_id if cid not in seen]:
             block = self._blocks_by_clip_id.pop(clip_id)

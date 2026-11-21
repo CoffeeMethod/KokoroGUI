@@ -22,6 +22,13 @@ Fit to slot (phase 5, D4): the block menu's "Fit to slot" and the header's
 "Fit all over slot" bring a clip's length to its
 `overrides["target_duration_s"]` by speed or time stretch (see the section
 comment above `clips_over_slot`).
+
+While a generate runs (plan 29), a per-clip generate and a fit are queued
+as task items ahead of the queued work (`app.enqueue_task`) instead of being
+refused; the task runs `_generate_clip_now` or the fit when its turn comes.
+A result for a clip that was deleted meanwhile is skipped; one for a clip
+whose text changed is stored but leaves the clip stale, since its segment
+key no longer matches.
 """
 from __future__ import annotations
 
@@ -203,6 +210,12 @@ class TimelineDock(QDockWidget):
         self._fit_looping = False
         self._fit_queue: list = []
         self._fit_batch: list = []
+        # Fits that ended without a fitted length, and the queue's
+        # `done(ok_ids, bad_ids)` of a fit that runs as a queue task.
+        self._fit_failed: list = []
+        self._fit_done = None
+        # clip id -> the queue's `done(ok_ids, bad_ids)` of a single-clip task.
+        self._clip_done: dict = {}
 
         self.refresh()
 
@@ -257,6 +270,21 @@ class TimelineDock(QDockWidget):
                                                nested_state=lambda clip: self.app.nested_state(clip, level),
                                                clip_render_key=lambda clip: self.app.clip_render_key(clip, level),
                                                flagged=self.app.is_clip_flagged)
+        self.refresh_queue_marks()
+
+    def refresh_queue_marks(self) -> None:
+        """Hatches the blocks of clips the generation queue holds."""
+        queued = getattr(self.app, "queued_clip_ids", None)
+        if callable(queued):
+            self.timeline_view.set_queue_states(queued(self.app.level))
+
+    def is_generating(self) -> bool:
+        """A single clip or a fit started outside the queue is in flight."""
+        return bool(self._pending_projects or self._fits or self._fit_queue)
+
+    def clips_generating(self, project) -> list:
+        """The ids of `project`'s clips a single-clip generate is running for."""
+        return [clip_id for clip_id, owner in self._pending_projects.items() if owner is project]
 
     # -- seconds-axis drags (UI9) ------------------------------------------------
 
@@ -465,20 +493,63 @@ class TimelineDock(QDockWidget):
         """`regenerate` is what the gutter button sends for a clip that is
         already clean; the engine then bumps the take instead of returning
         the present file (grill TB8). The dirty batch path never sets it.
-        Returns whether a generate started."""
-        if self.app.is_busy():
+        While a generate runs, the clip is queued ahead of the queued work
+        (the user is waiting for it). Returns whether a generate started or
+        was queued."""
+        if self.app.generate_blocked():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before generating a clip.")
             return False
 
         # The job holds its project: the results land there even when the
         # focus or the level moves while it runs (phase 4).
         project = project or self.app.project_of_clip_id(clip_id)
+        clip = self._generatable(clip_id, project)
+        if clip is None:
+            return False
+        if self.app.is_generating():
+            return self._enqueue_clip(clip, regenerate, project)
+        return self._generate_clip_now(clip_id, regenerate, project)
+
+    def _generatable(self, clip_id: str, project):
+        """`project`'s clip `clip_id` when a per-clip generate can run on it,
+        else None (with the reason on the status line when it's the engine)."""
         clip = project.document.get_clip(clip_id) if project is not None else None
         if clip is None or clip.is_nested or clip.source == "imported":
-            return False
+            return None
         blocked = self.app.cannot_generate(clip, project)
         if blocked:
             self.app.set_status(f"{blocked}: this clip can't be generated.", "warning")
+            return None
+        return clip
+
+    def _enqueue_clip(self, clip, regenerate: bool, project) -> bool:
+        """A per-clip generate asked for while a generate runs: a task item
+        at the front of the queue. When its turn comes, a plain generate of a
+        clip that is clean by then has nothing to do."""
+        clip_id = clip.id
+
+        def _start(done):
+            current = project.document.get_clip(clip_id)
+            if current is None:
+                return None
+            if not regenerate and current not in project.document.dirty_clips():
+                return None
+            self._clip_done[clip_id] = done
+            if not self._generate_clip_now(clip_id, regenerate, project):
+                self._clip_done.pop(clip_id, None)
+                return False
+            return True
+
+        title = project.document.clip_text(clip)[:60].strip() or "Clip"
+        self.app.enqueue_task(project, [clip_id], title, _start, front=True)
+        self.app.set_status("Queued that clip to generate next.", "info")
+        return True
+
+    def _generate_clip_now(self, clip_id: str, regenerate: bool = False, project=None) -> bool:
+        """Starts the per-clip generate. Returns whether it started."""
+        project = project or self.app.project_of_clip_id(clip_id)
+        clip = self._generatable(clip_id, project)
+        if clip is None:
             return False
 
         text = project.document.clip_text(clip)
@@ -503,6 +574,9 @@ class TimelineDock(QDockWidget):
 
         future = self.app.backend_for(clip, project).generate_clip((0, text, config))
         future.add_done_callback(_done)
+        self.refresh_queue_marks()
+        if self.app.editor is not None:
+            self.app.editor.update_gutter()
         return True
 
     def on_lock_in_time_requested(self, clip_id: str, pinned: bool) -> None:
@@ -548,6 +622,23 @@ class TimelineDock(QDockWidget):
         clip = project.document.get_clip(clip_id) if project is not None else None
         # A fit to slot pass: its ripple waits for the fit's end (one undo step).
         job = self._fits.get(clip_id)
+        # The queue's task that ran this clip, if one did.
+        done = self._clip_done.pop(clip_id, None)
+        self._clip_finished(clip_id, success, error, project, clip, job)
+        self.refresh_queue_marks()
+        if done is not None:
+            done([clip_id] if success and clip is not None else [],
+                 [clip_id] if not success and clip is not None else [])
+
+    def _clip_finished(self, clip_id: str, success: bool, error: str, project, clip, job) -> None:
+        if success and clip is None:
+            # Deleted (or moved into a subproject) while it generated: the
+            # file stays a cache entry and nothing lands.
+            self._pending_results.pop(clip_id, None)
+            if job is not None:
+                self._fits.pop(clip_id, None)
+                self._start_next_fit()
+            return
         if success and clip is not None:
             results = self._pending_results.pop(clip_id)
             before = self.app.build_arrangement(project)
@@ -632,21 +723,26 @@ class TimelineDock(QDockWidget):
         return over
 
     def on_fit_to_slot_requested(self, clip_id: str) -> bool:
-        """Context menu "Fit to slot". Returns whether a fit started."""
+        """Context menu "Fit to slot". While a generate runs the fit is
+        queued ahead of the queued work. Returns whether a fit started or
+        was queued."""
         project = self.app.project_of_clip_id(clip_id)
         if project is None:
             return False
-        if self.app.is_busy() or self._fits:
+        if self.app.generate_blocked():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before fitting a clip.")
             return False
+        if self.app.is_generating():
+            return self._enqueue_fits([(clip_id, project)], project)
         self._fit_batch = []
+        self._fit_failed = []
         return self._start_fit(clip_id, project)
 
     def fit_all_over_slot(self, project=None) -> int:
         """The header's "Fit all over slot": queues every clip
-        `clips_over_slot` lists and fits them one after another. Returns
-        how many were queued."""
-        if self.app.is_busy() or self._fits:
+        `clips_over_slot` lists and fits them one after another (as one
+        queue task while a generate runs). Returns how many were queued."""
+        if self.app.generate_blocked():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before fitting clips.")
             return 0
         project = project or self.app.level
@@ -654,10 +750,36 @@ class TimelineDock(QDockWidget):
         if not clips:
             self.app.set_status("No clip runs over its slot.")
             return 0
-        self._fit_queue = [(clip.id, project) for clip in clips]
+        pairs = [(clip.id, project) for clip in clips]
+        if self.app.is_generating():
+            self._enqueue_fits(pairs, project)
+            return len(clips)
+        self._fit_queue = pairs
         self._fit_batch = []
+        self._fit_failed = []
         self._start_next_fit()
         return len(clips)
+
+    def _enqueue_fits(self, pairs: list, project) -> bool:
+        """Fits asked for while a generate runs: one task item at the front
+        of the queue that fits `pairs` one after another when its turn comes."""
+
+        def _start(done):
+            if self._fits or self._fit_queue:
+                return False
+            self._fit_done = done
+            self._fit_queue = list(pairs)
+            self._fit_batch = []
+            self._fit_failed = []
+            self._start_next_fit()
+            return True
+
+        clip = project.document.get_clip(pairs[0][0])
+        title = "Fit to slot" if len(pairs) > 1 or clip is None else \
+            f"Fit to slot: {project.document.clip_text(clip)[:50].strip()}"
+        self.app.enqueue_task(project, [clip_id for clip_id, _project in pairs], title, _start, front=True)
+        self.app.set_status("Queued the fit to run next.", "info")
+        return True
 
     def _start_next_fit(self) -> None:
         # A fit that needs no generate (a time stretch, a speed already at
@@ -679,6 +801,11 @@ class TimelineDock(QDockWidget):
             if rewrites:
                 message += f" {rewrites} marked Needs rewrite."
             self.app.set_status(message, "warning" if rewrites else "success")
+        if not self._fits and not self._fit_queue and self._fit_done is not None:
+            # The fit ran as a queue task. Its clips aren't counted as
+            # generated, so the fit's own status line stays.
+            done, self._fit_done = self._fit_done, None
+            done([], list(self._fit_failed))
 
     def _start_fit(self, clip_id: str, project) -> bool:
         clip = project.document.get_clip(clip_id)
@@ -694,7 +821,7 @@ class TimelineDock(QDockWidget):
         if not stale:
             self._advance_fit(job)
             return True
-        if not self.on_generate_clip_requested(clip_id, project=project):
+        if not self._generate_clip_now(clip_id, project=project):
             self._fits.pop(clip_id, None)
             return False
         return True
@@ -724,7 +851,7 @@ class TimelineDock(QDockWidget):
             return
         _set_override(clip, "speed", new_speed)
         job.passes += 1
-        if not self.on_generate_clip_requested(clip.id, project=job.project):
+        if not self._generate_clip_now(clip.id, project=job.project):
             self._finish_fit(job, failed=True)
 
     def _finish_fit(self, job, failed: bool = False) -> None:
@@ -734,6 +861,8 @@ class TimelineDock(QDockWidget):
         self._fits.pop(job.clip_id, None)
         project = job.project
         clip = project.document.get_clip(job.clip_id)
+        if failed:
+            self._fit_failed.append(job.clip_id)
         if clip is not None:
             if failed:
                 _set_override(clip, job.key, job.good)
@@ -933,8 +1062,10 @@ class TimelineDock(QDockWidget):
         this method silently no-ops on an empty dirty list so it stays safe
         to call directly too. `clip_ids`, when given, keeps only the stale
         clips whose id is in it (Generate > "Generate stale clips in
-        selection"). Returns how many clips were queued."""
-        if self.app.is_busy():
+        selection"). While a generate runs this adds to the queue; any
+        other job (an Open, an export started first) refuses it. Returns how
+        many clips were queued."""
+        if self.app.generate_blocked():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before generating.")
             return 0
 
@@ -1041,7 +1172,13 @@ class TimelineDock(QDockWidget):
         for outcome in pending:
             clip_id = outcome["clip_id"]
             clip = project.document.get_clip(clip_id)
-            if outcome["success"] and clip is not None:
+            if clip is None:
+                # Deleted, or moved into a subproject, while it generated:
+                # its file stays a cache entry, and nothing lands or fails.
+                continue
+            if outcome["success"]:
+                # A clip edited meanwhile gets these segments too; their
+                # key is the old text's, so it stays stale (plan 29).
                 self._apply_results(clip, outcome["results"], project)
                 succeeded_ids.append(clip_id)
                 any_segments_updated = True

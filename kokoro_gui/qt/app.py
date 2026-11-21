@@ -18,7 +18,18 @@ rewrites the zip from it on a background thread behind `is_busy`, Open
 extracts into it the same way with the editor read-only, and Close asks
 Save / Discard / Cancel when the dir is ahead of the file. `project.py`
 holds the steps; this class holds the sequencing, the lock and the dirty
-flag.
+flag. One project IO runs at a time; another waits its turn
+(`_run_project_io`).
+
+Busy has two halves (plan 29): `is_generating()` (the generation queue, or
+a single clip, a fit or the whole-document path started outside it) and
+`is_io_busy()` (a project IO thread, an export, a recording's
+transcription, or any other job while nothing generates); `is_busy()` is
+either. While a generate runs, Generate, a gutter generate, Fit to slot and
+Auto-split queue instead of refusing (`generate_blocked`), and Save, New
+Subproject, an export and a recording import run beside it. Open, Save As,
+a device change and an engine change for an engine the queue uses still
+wait.
 
 `CONFIG_FILE`/`PRESETS_DIR`/`FX_PRESETS_DIR`/`DOCUMENT_FILE` are defined
 here, at module level, before the `kokoro_gui.qt.docks` import below - the
@@ -207,6 +218,12 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._pending_render_after_generate: dict = {}
         self._init_generation_queue()
         self._io_thread: threading.Thread | None = None
+        # Project IO asked for while another ran: `(work, done)`, in order.
+        self._io_waiting: list = []
+        # Jobs beside a generate that hold the window (`begin_side_job`), and
+        # the whole-document path (`start_conversion`) while it runs.
+        self._side_jobs = 0
+        self._converting = False
         self._pending_open_path: str | None = None
         self._closing_after_save = False
         # A generate is running (`set_ui_state`), and the window asked to
@@ -811,10 +828,18 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         generates with `engine_id` from now on. The backend is made resident
         and its pipeline loads. The voice follows grill EN2
         (`_voice_after_engine_change`); variants stay. Not undoable. Refused
-        while a job runs or for an unknown engine."""
-        if self.is_busy():
+        while another job runs, for an unknown engine, and while a generate
+        runs that uses the character's engine or `engine_id` (the engine
+        would load under the worker)."""
+        if self.generate_blocked():
             QMessageBox.warning(self, "Busy", "Cancel the current job before changing a character's engine.")
             return False
+        if self.is_generating():
+            in_use = self.generating_engine_ids()
+            if in_use is None or {engine_id, character.backend_id} & in_use:
+                QMessageBox.warning(self, "Busy", "A generate is using this engine. Wait for it to finish, or "
+                                                  "cancel it, before changing the character's engine.")
+                return False
         backend = self._backend_for(engine_id)
         if backend is None:
             return False
@@ -1385,7 +1410,69 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self.transport_dock.set_status(message, kind)
 
     def is_busy(self) -> bool:
+        """A job holds the window: a generate (`is_generating`) or another
+        one (`is_io_busy`)."""
         return self.transport_dock is not None and self.transport_dock.is_busy()
+
+    def is_generating(self) -> bool:
+        """A generate runs: the queue (from its first item until it goes
+        idle), or a single clip, a fit or the whole-document path started
+        outside it."""
+        if self.queue_active or self._converting:
+            return True
+        dock = getattr(self, "timeline_dock", None)
+        return dock is not None and dock.is_generating()
+
+    def is_io_busy(self) -> bool:
+        """A job that isn't a generate: a project open, save, extract or
+        render thread (or one waiting its turn), an export, a measure or a
+        recording's transcription, or any job while nothing generates."""
+        if self._io_thread is not None or self._io_waiting or self._side_jobs:
+            return True
+        return self.is_busy() and not self.is_generating()
+
+    def generate_blocked(self) -> bool:
+        """Generate (and a gutter generate, a fit, Auto-split) is refused:
+        a job that isn't a generate holds the window. While a generate runs
+        they queue instead."""
+        return self.is_busy() and not self.is_generating()
+
+    def generating_engine_ids(self):
+        """The engine ids queued and running work uses, or None when that
+        can't be told (a subproject not opened yet, a generate outside the
+        queue)."""
+        if not self.queue_active and self.is_generating():
+            return None
+        engines: set = set()
+        for item in self.generation_queue.pending():
+            if not item.engine_chars:
+                return None
+            engines.update(item.engine_chars)
+        return engines
+
+    def begin_side_job(self) -> None:
+        """An export, a loudness measure, a text import or a recording's
+        transcription starts: the window is busy until `end_side_job`. It may
+        run beside a generate."""
+        self._side_jobs += 1
+        self.transport_dock.set_busy(True)
+        self._sync_generate_button()
+
+    def end_side_job(self) -> None:
+        self._side_jobs = max(0, self._side_jobs - 1)
+        if not self._side_jobs and not self._generating and self._io_thread is None:
+            self.transport_dock.set_busy(False)
+            if not self.queue_paused and self.generation_queue.next_queued() is not None:
+                # Queued work waited for this job.
+                QTimer.singleShot(0, self.pump_queue)
+        self._sync_generate_button()
+
+    def _sync_generate_button(self) -> None:
+        """The Transport dock's Generate stays on while a generate runs: it
+        queues."""
+        dock = self.transport_dock
+        if dock is not None:
+            dock.generate_btn.setEnabled(not self.generate_blocked())
 
     @property
     def editor(self):
@@ -2290,6 +2377,17 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         return " · ".join(parts)
 
     def set_device(self, device: str) -> None:
+        """Options > Device: every loaded engine starts again on `device`.
+        Refused while a generate runs (the engines would reload under it);
+        while another job runs the choice is kept and the engines load on it
+        later."""
+        if self.is_generating() and device != self.settings.get("device", "auto"):
+            for device_id, action in self.device_actions.items():
+                action.setChecked(device_id == self.settings.get("device", "auto"))
+            self.set_status("A generate is running. Change the device once it finishes, or cancel it.", "warning")
+            QMessageBox.warning(self, "Busy", "A generate is running. Change the device once it finishes, "
+                                              "or cancel it.")
+            return
         self.settings["device"] = device
         for device_id, action in self.device_actions.items():
             action.setChecked(device_id == device)
@@ -2680,6 +2778,12 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     # -- open -----------------------------------------------------------------
 
     def open_project(self, path: str) -> None:
+        if self.is_generating():
+            # The queue works in this project's dir (plan 30 covers running it
+            # across projects).
+            QMessageBox.warning(self, "Busy", "A generate is running in this project. Wait for it to finish, "
+                                              "or cancel it, before opening another project.")
+            return
         if self.is_busy():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before opening a project.")
             return
@@ -2905,14 +3009,31 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if not self.project_path:
             self.save_project_as_dialog()
             return
-        if self.is_busy():
+        # Save runs beside a generate: the plan only bundles files that clips
+        # already point at, and a result is applied after its file is
+        # written. Anything that lands while the zip is written marks the
+        # project dirty again afterwards (`_recheck_dirty`).
+        if self.is_io_busy():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before saving.")
             return
-        self._save_bundle(self.project_path)
+        self._save_bundle(self.project_path, then=self._recheck_dirty)
+
+    def _recheck_dirty(self) -> None:
+        """After a Save: a result or an edit that landed while the zip was
+        being written isn't in it. The autosave check compares each open
+        project with the digest the Save recorded and marks it dirty again."""
+        for project in self.open_projects():
+            self._autosave_one(project)
+        self._update_window_title()
 
     def save_project_as(self, path: str) -> None:
         """Save As keeps the project dir (it's keyed by `project_id`), so no
-        `audio_path` changes; only `source_path` moves."""
+        `audio_path` changes; only `source_path` moves. Refused while a
+        generate runs, like Open."""
+        if self.is_generating():
+            QMessageBox.warning(self, "Busy", "A generate is running. Wait for it to finish, or cancel it, "
+                                              "before Save As.")
+            return
         if self.is_busy():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before saving.")
             return
@@ -3093,8 +3214,15 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def _run_project_io(self, work, done) -> None:
         """`work()` on a plain thread (independent of the engine's worker
         loop, so an engine switch mid-save can't strand it); `done(result,
-        error)` back on the GUI thread."""
+        error)` back on the GUI thread. One runs at a time: asked for while
+        another runs (a Save, or entering a subproject, beside the queue's
+        own open or mixdown), it waits its turn."""
+        if self._io_thread is not None:
+            self._io_waiting.append((work, done))
+            return
+        self._start_project_io(work, done)
 
+    def _start_project_io(self, work, done) -> None:
         def _target():
             try:
                 result = work()
@@ -3110,13 +3238,18 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._io_thread = None
         # Open, Save and a subproject render wrote or replaced files.
         revision.bump_files()
-        done(result, error)
+        try:
+            done(result, error)
+        finally:
+            if self._io_waiting and self._io_thread is None:
+                self._start_project_io(*self._io_waiting.pop(0))
+            self._sync_generate_button()
 
     def wait_for_project_io(self, timeout_s: float = 60.0) -> None:
         """Blocks until the background Open/Save (if any) has finished and
         its completion has run on this thread. For tests and scripts."""
         deadline = time.time() + timeout_s
-        while self._io_thread is not None and time.time() < deadline:
+        while (self._io_thread is not None or self._io_waiting) and time.time() < deadline:
             thread = self._io_thread
             if thread is not None:
                 thread.join(0.02)
@@ -3197,7 +3330,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             except RuntimeError:  # the window was closed while the file was being read
                 pass
 
-        self.transport_dock.set_busy(True)
+        self.begin_side_job()
         self.set_status(label, "busy")
         self._text_read_thread = threading.Thread(target=_work, name="import-text", daemon=True)
         self._text_read_thread.start()
@@ -3206,7 +3339,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def _on_text_read(self, payload) -> None:
         then, result, error = payload
         self._text_read_thread = None
-        self.transport_dock.set_busy(False)
+        self.end_side_job()
         if isinstance(error, text_extraction.ExtractionCancelled):
             self.set_status("Import cancelled.", "warning")
             return
@@ -3368,7 +3501,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         from kokoro_gui.daw import imported
         from kokoro_gui.qt import asr_prompt
 
-        if self.is_busy() or self._recording_thread is not None:
+        # A recording imports beside a generate: its own thread, its own clips.
+        if self.is_io_busy() or self._recording_thread is not None:
             self.set_status("Wait for the current job to finish before importing a recording.", "warning")
             return False
         if not self.project_dir:
@@ -3439,7 +3573,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
                 error = str(e) or type(e).__name__
             self._recordingTranscribed.emit((job, error))
 
-        self.transport_dock.set_busy(True)
+        self.begin_side_job()
         self.set_status("Downloading Whisper model..." if downloading
                         else f"Transcribing {job.name} with Whisper...", "busy")
         self._recording_thread = threading.Thread(target=_work, name="import-recording", daemon=True)
@@ -3461,7 +3595,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def _on_recording_transcribed(self, payload) -> None:
         job, error = payload
         self._recording_thread = None
-        self.transport_dock.set_busy(False)
+        self.end_side_job()
         if error:
             self.set_status(f"Transcription failed: {error}", "error")
             QMessageBox.critical(self, "Import failed", f"Transcription failed: {error}")
@@ -3630,7 +3764,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         run_measure_loudness(self, parent=self)
 
     def _on_loudness_measured(self, report, note: str) -> None:
-        self.transport_dock.set_busy(False)
+        self.end_side_job()
         self.transport_dock.set_progress_value(100 if report is not None else 0)
         if report is None:
             self.set_status(note, "error")
@@ -3651,7 +3785,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._export_report_dialog.show()
 
     def _on_export_finished(self, success: bool, message: str) -> None:
-        self.transport_dock.set_busy(False)
+        self.end_side_job()
         self.transport_dock.set_progress_value(100 if success else 0)
         self.set_status(message, "success" if success else "error")
         self._notify_if_long_job()
@@ -3697,6 +3831,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.transport_dock.set_progress(percent, detail, elapsed=elapsed, eta=eta)
 
     def on_engine_finish(self) -> None:
+        self._converting = False
         self.set_ui_state(False)
         self.trim_segment_cache_async()
         self._rebuild_transport_schedule()
@@ -3706,6 +3841,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if not is_running and self.queue_active:
             # A step inside a queue run (a project IO, a batch) ended; the
             # queue holds the busy state until it goes idle.
+            self._sync_generate_button()
             return
         self._generating = is_running
         self._arm_generate_keys(is_running)
@@ -3717,7 +3853,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             # Queued work waited for this job: the next item, once its
             # handler is done.
             QTimer.singleShot(0, self.pump_queue)
-        self.transport_dock.set_busy(is_running)
+        # An export or a project IO that started beside a generate keeps the
+        # window busy after it.
+        self.transport_dock.set_busy(is_running or bool(self._side_jobs) or self._io_thread is not None
+                                     or bool(self._io_waiting))
+        self._sync_generate_button()
         if self.transcript_dock is not None:
             self.transcript_dock.find_bar.on_busy_changed()
         self.settings_dock.volume_spin.setEnabled(not is_running)
@@ -3878,6 +4018,10 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         with clips dispatches the dirty-scoped batch path."""
         level = self.level
         if not level.document.clips:
+            if self.is_generating():
+                # The whole-document path doesn't queue.
+                self.set_status("A generate is running. Generate the whole text once it finishes.", "warning")
+                return
             self.start_conversion()
             return
 
@@ -3984,8 +4128,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         `[Speaker:FX]:`-tagged span (and, with "Split by paragraph" on,
         each span's paragraphs) into clips, then batch-generates them. A
         tag's FX name becomes the clip's `overrides["fx_preset"]` when that
-        preset exists (grill TE12)."""
-        if self.is_busy():
+        preset exists (grill TE12). While a generate runs the new clips join
+        its queue."""
+        if self.generate_blocked():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job before auto-splitting.")
             return
 
@@ -4046,6 +4191,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
         config = self._assemble_config()
 
+        self._converting = True
         self.set_ui_state(True)
         self.transport_dock.set_progress(0, "")
 
@@ -4135,8 +4281,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         return True
 
     def generate_stale_key(self) -> None:
-        """Ctrl+G: the Generate button's action, unless a job is running."""
-        if self.is_busy():
+        """Ctrl+G: the Generate button's action. While a generate runs it
+        queues; another job refuses it."""
+        if self.generate_blocked():
             return
         self.on_generate_clicked()
 
