@@ -376,6 +376,12 @@
         <h3>Timeline and view</h3>
         <ul class="change-list">
           <li>
+            <h4>Select several clips and edit them together</h4>
+            <p>On the timeline, Ctrl+click adds a clip to the selection or takes it out, and Shift+click selects every clip from the selected one to the one you clicked, in text order. Dragging from empty lane space draws a rubber band that selects every block it touches; hold Ctrl to add them to what is already selected. Selecting text in the transcript across several clips selects those clips too. A plain click goes back to one clip, and dragging still moves only the block you grabbed.</p>
+            <p>Right-click one of the selected blocks for a menu that works on all of them: Generate stale clips, Status, FX, Remove gap override and Align words. Each edit is one undo step for every clip.</p>
+            <p>The Settings and Audio FX tabs show each field's value when the selected clips agree and a blank "mixed" field when they don't: an empty number box, a "(mixed)" entry in a list, a half-ticked box. Changing a field sets it on every selected clip, again as one undo step. In the Audio FX tab only the fields you change are written, so each clip keeps the rest of its own FX. Take, source text and the original range still need one clip selected. When the clips belong to different characters the Engine row is greyed out, and when their engines differ the voice is too. The selection is not saved with the project.</p>
+          </li>
+          <li>
             <h4>A keyboard map for the transport and the timeline</h4>
             <p>The arrow keys, Home, End and the letters would all type or move the caret in the transcript, so a plain key only works while the timeline has the focus (click it first). The arrows, Home and End have a Ctrl+Alt version that works in any panel, including the transcript. The letters and brackets don't, because on a layout where AltGr counts as Ctrl+Alt the twin would swallow a typed character. Space and Ctrl+Space still play and pause, and the Help &gt; Keyboard Shortcuts sheet lists every row under Transport, Timeline and Generate.</p>
             <div class="table-wrap">

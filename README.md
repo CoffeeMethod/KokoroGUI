@@ -64,6 +64,8 @@ Unreleased:
 -   Generate stale clips in the selection only, a taskbar alert when a long job finishes, and a
     prompt before closing mid-generate
 -   Split a clip in two at the playhead and join two clips back, from Edit, the block menu or `S`
+-   Select several clips with Ctrl+click, Shift+click, a rubber band on the timeline or a text range, then set their
+    status, FX, gap or any Settings field at once, in one undo step
 -   Keys for the transport and timeline (arrows, Home, End, J/K/L, Delete, Ctrl+G, Esc) that work only with the timeline
     focused, with Ctrl+Alt versions of the arrows, Home and End for any panel, and a Snap to grid button that also snaps to markers
 -   Edit > Remove Filler Words finds um, uh and the like in a recording, lets you check each one and play it, and cuts them in one undo step
