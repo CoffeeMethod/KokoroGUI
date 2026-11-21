@@ -469,6 +469,18 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Dubbing</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Record a guide take</h4>
+            <p>Right-click a clip on the timeline and choose Record guide take..., press <code>R</code> with the timeline focused, or press Rec in the Transport dock. A small window opens beside the main one with an input device, a level meter, a pre-roll of 0 to 3 seconds (2 by default), Record and Stop. Record plays three beeps, a second apart, and the transport starts the pre-roll before the clip so that the clip's start falls on the beat after the last beep. The Dub / Original / Both switch decides what you hear under it. Stop pauses the transport and keeps the take.</p>
+            <p>The take becomes the clip's active take, as one undo step, and the one before it is parked in the block's Take menu, where the new one reads "recorded". The beeps stay in the file, but the take starts after them, so playback and export never play them. While it is the active take the clip is never stale: changing the text or the voice doesn't ask you to regenerate it. Pick a generated take in the Take menu to go back to TTS. Generate on the block still works, and parks the recording rather than writing over it.</p>
+            <p>The recording is a WAV in the project's <code>audio/imported/</code> folder, bundled with the rest of the imported audio and kept on save and reopen. Nothing new is written to the <code>.tbaw</code>: the take is stored like any other take. An older version of KokoroGUI sees it as a stale take. Recording waits while a project opens or saves; a take stopped during a save is stored when the save ends. The input stream asks for the same block size as playback (a fixed block on macOS, <code>KOKOROGUI_BLOCKSIZE</code> overrides it).</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Chapters</h3>
         <ul class="change-list">
           <li>
