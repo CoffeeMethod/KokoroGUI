@@ -8,8 +8,10 @@ On Linux, `sounddevice` needs the system PortAudio shared library
 `sounddevice` raises OSError - we catch that and degrade to a no-op instead
 of crashing import of kokoro_engine/gui on machines without it.
 
-`stream_blocksize(rate)` is the `blocksize` every output stream asks for,
-here and in the arrangement transport (`kokoro_gui/audio/transport.py`).
+`stream_blocksize(rate)` is the `blocksize` every stream asks for: the
+output streams here and in the arrangement transport
+(`kokoro_gui/audio/transport.py`), and the guide take's input stream
+(`kokoro_gui/audio/recorder.py`).
 On macOS it's a fixed block: CoreAudio rate-converts a stream opened below
 the device's rate (24000 Hz against 44100 or 48000), and left to PortAudio
 the callback then gets about 14 frames, some 1700 calls a second, and
@@ -40,7 +42,7 @@ _warned_env_values: set = set()
 
 
 def choose_blocksize(platform: str, stream_rate: int, env=None) -> int:
-    """Frames per callback for an output stream at `stream_rate`; 0 lets
+    """Frames per callback for a stream at `stream_rate`; 0 lets
     PortAudio choose. `env[KOKOROGUI_BLOCKSIZE]`, a whole number from 0 to
     65536, wins on any platform; anything else there is logged once and
     ignored. Otherwise macOS (`"darwin"`) gets the smallest power of two
@@ -99,6 +101,13 @@ def play_range(path: str, start_s: float, end_s: float) -> None:
         f.seek(start)
         data = f.read(max(0, int(round(end_s * rate)) - start), dtype='float32')
     sd.play(data, rate, blocksize=stream_blocksize(rate))
+
+
+def play_array(data, samplerate: int) -> None:
+    """Play a float32 array without waiting (the guide take's count-in)."""
+    if not AVAILABLE:
+        return
+    sd.play(data, samplerate, blocksize=stream_blocksize(samplerate))
 
 
 def stop() -> None:
