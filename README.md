@@ -129,6 +129,8 @@ In 4.0.0-beta.2:
     Settings tab keeps only the voice
 -   An FX change in a long project renders in the background instead of freezing the window, and
     undoing a character change or a text replace copies only what the edit touched
+-   Opening a `.tbaw` whose project id is a path is refused before it touches any folder, and an edit made while Save runs
+    stays Unsaved instead of being marked saved
 
 The [changes page](docs/changes.html) has the full detail for every version, including what the
 update does to existing projects.

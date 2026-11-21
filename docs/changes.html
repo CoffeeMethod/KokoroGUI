@@ -641,6 +641,14 @@
             <p>Generate on the whole document, and JIT streaming, looked up a bundled voice in the global voice library only. A project that carried its own voice for a name could fail to generate on a machine without it, or use a different global voice of the same name. Both paths now look in the project's folder first, as clips and Preview already did.</p>
           </li>
           <li>
+            <h4>A project file can't pick a working folder outside the project cache</h4>
+            <p>Open unpacks a <code>.tbaw</code> into <code>cache/projects/&lt;project id&gt;/</code>, taking the id from the file's manifest. A crafted file could set the id to a path such as <code>../../Documents</code>, and Open would then lock that folder and clear it before unpacking. Open now refuses an id that isn't a plain name (letters, digits, <code>_</code> and <code>-</code>), and separately checks that the folder, with links followed, is inside <code>cache/projects/</code> before it locks, unpacks or clears anything. The names of the folder's own files, such as <code>session.json</code> and <code>lock</code>, are now compared without case, so a bundle entry named <code>SESSION.JSON</code> can't overwrite them on Windows or macOS. Every id KokoroGUI has written passes the check, and the file format is unchanged.</p>
+          </li>
+          <li>
+            <h4>An edit made while Save runs stays Unsaved</h4>
+            <p>Save writes the file on a background thread from a copy of the project taken when you pressed it, and the editor stays open meanwhile. When the write finished, Save marked the project saved even if you had edited it since, so the title lost its star, a restart offered no recovery, and Save before New or Open closed the project with the edit missing from the file. Save now compares the project as it is with the copy it wrote. If they differ, the project stays Unsaved, its working folder keeps the edit for recovery, and Save before New or Open asks Save / Discard / Cancel again. This covers subprojects too.</p>
+          </li>
+          <li>
             <h4>Save As keeps an uninstalled engine's voices after the original file is gone</h4>
             <p>A project can hold voice files for an engine this machine doesn't have, under <code>engines/&lt;id&gt;/</code>. Save copied them from the <code>.tbaw</code> the project was opened from, so once that file was deleted or moved, Save As wrote a bundle without them. Save now takes them from the project's working folder, where Open put them, byte for byte. Files a newer version of KokoroGUI added at the top of the bundle are still lost in that case, because the working folder can't tell them apart from its own files.</p>
           </li>
