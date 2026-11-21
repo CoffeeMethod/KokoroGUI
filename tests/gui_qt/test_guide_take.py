@@ -186,7 +186,8 @@ def test_the_panel_records_with_a_count_in_and_pre_roll_into_a_take(qt_app, qtbo
     _place_clip_at(qt_app, clip, 5.0)
     panel = qt_app.record_guide_take(clip.id)
     assert panel is not None and panel.isVisible()
-    assert panel.device_combo.currentData() == 2
+    assert panel.device_combo.currentData() is None  # the default input first
+    panel.device_combo.setCurrentIndex(panel.device_combo.findData(2))
     panel.preroll_spin.setValue(2.0)
 
     panel.record_btn.click()
@@ -235,6 +236,7 @@ def test_a_stop_during_a_save_keeps_the_take_until_the_save_ends(qt_app, qtbot, 
     streams, _beeps, _transport = fake_audio
     clip = _generated_clip(qt_app)
     panel = qt_app.record_guide_take(clip.id)
+    panel.device_combo.setCurrentIndex(panel.device_combo.findData(2))
     panel.record_btn.click()
     streams[0].feed(_recording(1.0))
     busy = [True]
@@ -259,3 +261,23 @@ def test_the_r_key_and_the_block_menu_open_the_panel_on_the_clip(qt_app, qtbot, 
     qt_app.guide_take_panel.close()
     qt_app.timeline_dock.timeline_view.recordTakeRequested.emit(clip.id)
     assert qt_app.guide_take_panel.isVisible() and qt_app.guide_take_panel.clip_id == clip.id
+
+
+def test_the_transport_docks_rec_button_opens_the_panel(qt_app, fake_audio):
+    clip = _generated_clip(qt_app)
+    qt_app.selection.select_clip(clip.id)
+    qt_app.transport_dock.record_btn.click()
+    assert qt_app.guide_take_panel.isVisible() and qt_app.guide_take_panel.clip_id == clip.id
+
+
+def test_the_take_menu_marks_a_recorded_take(qt_app, fake_audio):
+    from PySide6.QtWidgets import QMenu
+
+    clip = _generated_clip(qt_app)
+    guide_take.store_guide_take(qt_app, clip.id, _recording(), RATE)
+    menu = QMenu()
+    qt_app.timeline_dock.timeline_view._document = qt_app.document
+    qt_app.timeline_dock.timeline_view._add_take_menu(menu, clip)
+    take_menu = menu.actions()[0].menu()
+    labels = [a.text() for a in take_menu.actions()]
+    assert labels[0].startswith("Take 1 (") and labels[1].startswith("Take 2 (recorded, ")

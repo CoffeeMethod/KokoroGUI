@@ -13,6 +13,9 @@ moved into a dock and reshaped into three rows:
    After the loop button sits the playback speed combo (0.5x to 2x, pitch
    unchanged, plan 27): it emits `rateRequested` and the app sets the
    transport's rate; `set_rate_choice` shows a rate set from elsewhere.
+   Last is Rec, which opens the Record guide take panel on the selected
+   clip (`QtTTSApp.record_guide_take`, plan 31); the input meter is in
+   that panel.
 2. Preview, Generate (the row's one `primary` button: a `QToolButton`
    whose menu holds "Generate stale clips", "Generate stale clips in
    selection", "Auto-split then generate" and
@@ -213,6 +216,12 @@ class TransportDock(QDockWidget):
                                    "[ and ] step it, L steps 1x, 1.5x, 2x.")
         self.rate_combo.activated.connect(lambda _index: self.rateRequested.emit(self.rate_choice()))
         row1.addWidget(self.rate_combo)
+        self.record_btn = QToolButton()
+        self.record_btn.setText("Rec")
+        self.record_btn.setObjectName("record_take")
+        self.record_btn.setToolTip("Record a guide take on the selected clip (R on the timeline)")
+        self.record_btn.clicked.connect(lambda _checked=False: self.app.record_guide_take())
+        row1.addWidget(self.record_btn)
         layout.addLayout(row1)
 
         self.level_meter = LevelMeter()

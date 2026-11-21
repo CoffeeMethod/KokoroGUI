@@ -378,6 +378,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         # its playhead to transport.positionChanged at construction.
         self.transport = Transport(self)
         self.transport.positionChanged.connect(self._on_transport_position)
+        # Record guide take's panel (plan 31), made on first use.
+        self.guide_take_panel = None
         self.transport.stateChanged.connect(self._on_transport_state)
 
         self._build_menu_bar()
@@ -4647,6 +4649,37 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.set_status("Split the clip in two.", "success")
         return True
 
+    def record_guide_take(self, clip_id: str | None = None):
+        """Opens the Record guide take panel (plan 31) on `clip_id`, else the
+        selected clip, else the one under the playhead. Only a speech clip
+        takes one: not a subproject, a music bed or an imported recording.
+        Returns the panel, or None with a status line."""
+        from kokoro_gui.qt.guide_take import GuideTakePanel
+
+        if not clip_id:
+            clip_id = self.selection.selected_clip_id
+        if not clip_id:
+            playhead = self._playhead_clip()
+            clip_id = playhead.id if playhead is not None else None
+        project = self.project_of_clip_id(clip_id) if clip_id else None
+        clip = project.document.get_clip(clip_id) if project is not None else None
+        if clip is None or clip.source != "generated":
+            self.set_status("Select a speech clip to record a guide take on.", "warning")
+            return None
+        panel = self.guide_take_panel
+        if panel is None:
+            panel = self.guide_take_panel = GuideTakePanel(self, clip.id)
+        else:
+            panel.set_clip(clip.id)
+        panel.show()
+        panel.raise_()
+        panel.activateWindow()
+        return panel
+
+    def record_guide_take_key(self) -> None:
+        """The timeline's R key."""
+        self.record_guide_take()
+
     def split_clip_at_playhead(self) -> bool:
         """Edit > Split Clip at Playhead and the timeline's S key."""
         clip = self._playhead_clip()
@@ -4893,6 +4926,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             # Before the transport stops and rewinds.
             self._remember_view(keep_playhead=self._view_saved_on_close)
             self._view_saved_on_close = True
+        if self.guide_take_panel is not None:
+            self.guide_take_panel.stop()  # closes the input stream; keeps the take
         try:
             self.transport.stop()
         except Exception:

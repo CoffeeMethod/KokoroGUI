@@ -118,6 +118,7 @@ class TimelineDock(QDockWidget):
         self.timeline_view.fadeChanged.connect(self.on_fade_changed)
         self.timeline_view.takeSelected.connect(self.on_take_selected)
         self.timeline_view.takeDeleteRequested.connect(self.on_take_delete_requested)
+        self.timeline_view.recordTakeRequested.connect(self.app.record_guide_take)
         self.timeline_view.statusChangeRequested.connect(self.on_status_change_requested)
         self.timeline_view.alignWordsRequested.connect(self.on_align_words_requested)
         self.timeline_view.batchActionRequested.connect(self.on_batch_action_requested)
