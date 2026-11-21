@@ -70,6 +70,8 @@ Unreleased:
 -   Keys for the transport and timeline (arrows, Home, End, J/K/L, Delete, Ctrl+G, Esc) that work only with the timeline
     focused, with Ctrl+Alt versions of the arrows, Home and End for any panel, and a Snap to grid button that also snaps to markers
 -   Edit > Remove Filler Words finds um, uh and the like in a recording, lets you check each one and play it, and cuts them in one undo step
+-   Fix a flub in a recording with the speaker's own voice: right-click 5 to 30 s of their words to clone them with Audio8,
+    after you tick that you have their permission
 -   Playback on macOS no longer clicks: the output stream asks for a fixed block there (`KOKOROGUI_BLOCKSIZE` overrides it)
 -   Edit > Find (Ctrl+F) and Find and Replace (Ctrl+H) search the transcript and every open subproject, with Match case and
     Whole word, and say how many clips Replace all will turn stale before it runs

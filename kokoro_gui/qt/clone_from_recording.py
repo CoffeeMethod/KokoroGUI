@@ -1,11 +1,11 @@
 """Clone a speaker from their own recording, to fix a flub (plan 33 part A).
 
-Right-click a selection inside an imported recording and pick "Clone This
-Speaker from the Selection...". `clone_span` finds the selection's timed
+Right-click a selection inside an imported recording and pick "Clone this
+speaker from the selection...". `clone_span` finds the selection's timed
 words (one recording file, `imported` words) and their first and last word
 times. `CloneDialog` shows the selected text as an editable transcript, the
 length (5 to 30 s), a Play button, a name and the consent checkbox (grill
-PG9). On OK `save_clone` slices that stretch into a wav, saves it with the
+PG9). On Clone `save_clone` slices that stretch into a wav, saves it with the
 transcript as an Audio8 reference in the global store
 (`ReferenceStore.save_reference`), and gives it a speaker: a variant named
 after the reference on the recording's own character when that character
@@ -46,7 +46,7 @@ MAX_S = 30.0
 # The program setting (config_qt.json) that asks for consent each time.
 CONSENT_SETTING = "clone_consent_confirm"
 CONSENT_TEXT = "I have this speaker's permission to clone their voice."
-MENU_TEXT = "Clone This Speaker from the Selection..."
+MENU_TEXT = "Clone this speaker from the selection..."
 
 
 @dataclass
