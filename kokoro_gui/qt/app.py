@@ -2738,6 +2738,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self.project_path = path
 
         def _after_save():
+            if self.is_project_dirty():
+                # An edit landed while the zip was written (plan 46 F2): the
+                # file doesn't hold it, so ask again instead of putting it away.
+                self._close_current_project(then)
+                return
             self._teardown_project(discard=False)
             then()
 
@@ -2855,7 +2860,12 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         project dir and its lock, the recover prompt, the free-space check,
         the small entries on this thread, the audio on a background thread
         behind `is_busy` with the editor read-only."""
-        project_dir = project_io.choose_project_dir(info.project_id, info.path)
+        try:
+            project_dir = project_io.choose_project_dir(info.project_id, info.path)
+        except project_io.ProjectError as e:
+            QMessageBox.warning(self, "Open failed", str(e))
+            self._start_untitled_after_failed_open()
+            return
         try:
             lock = project_io.ProjectLock(project_dir).acquire()
         except project_io.ProjectLockedError as e:
@@ -3112,14 +3122,17 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
                 return
             child_results, result = result
             self._record_child_saves(child_plans, child_results)
+            root.manifest = dict(plan.manifest)
             try:
-                project_io.record_save(root.project_dir, path, result)
+                self._record_saved(root, path, result)
             except OSError as e:
                 self.set_status(f"Saved, but couldn't record the session: {e}", "warning")
-            root.manifest = dict(plan.manifest)
-            root.dirty = False
             self._update_window_title()
-            self.set_status(f"Saved {project_io.project_title(path)}.", "success")
+            if self.any_project_dirty():
+                self.set_status(f"Saved {project_io.project_title(path)}. Edits made while saving are still unsaved.",
+                                "info")
+            else:
+                self.set_status(f"Saved {project_io.project_title(path)}.", "success")
             if then is not None:
                 then()
 

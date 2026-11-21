@@ -37,6 +37,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import sys
@@ -191,6 +192,56 @@ def new_project_id() -> str:
     return secrets.token_hex(8)
 
 
+# A project id names a dir under `projects_root()`, so it has to be a plain
+# name: letters, digits, `_` and `-` (every id `new_project_id` makes), never a
+# path, a drive, `.`/`..` or a Windows device name.
+_PROJECT_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_WINDOWS_DEVICES = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(10)), *(f"lpt{i}" for i in range(10))}
+
+
+def safe_project_id(value) -> str | None:
+    """`value` when it is a plain project id, else None."""
+    if not isinstance(value, str) or not _PROJECT_ID_RE.fullmatch(value):
+        return None
+    if value.lower() in _WINDOWS_DEVICES:
+        return None
+    return value
+
+
+def project_dir_in_cache(project_dir: str) -> bool:
+    """True when `project_dir`, links resolved, sits inside
+    `projects_root()`. Checked on its own, after the id: a link or junction
+    inside the root can still point out."""
+    try:
+        root = os.path.realpath(projects_root())
+        real = os.path.realpath(project_dir)
+    except (OSError, ValueError):
+        return False
+    return os.path.normcase(os.path.dirname(real)) == os.path.normcase(root)
+
+
+def _check_project_dir(project_dir: str) -> str:
+    if not project_dir_in_cache(project_dir):
+        raise ProjectError("Refusing to open: the project's working folder would be outside the project cache.")
+    return project_dir
+
+
+def _name_key(name: str) -> str:
+    """`name` as a file system that folds case (Windows, macOS) compares
+    it; Windows also drops trailing dots and spaces."""
+    return name.rstrip(" .").casefold()
+
+
+_PRIVATE_KEYS = frozenset(_name_key(n) for n in _DIR_PRIVATE)
+_PRIVATE_OR_OWNED_KEYS = frozenset(_name_key(n) for n in _DIR_PRIVATE | _OWNED_FILES)
+
+
+def is_private_name(name: str) -> bool:
+    """True for a top-level name that is, or on some file system aliases,
+    one of the project dir's own files (`session.json`, `lock`, ...)."""
+    return _name_key(name) in _PRIVATE_KEYS
+
+
 def project_title(path: str | None) -> str:
     if not path:
         return "Untitled"
@@ -334,6 +385,8 @@ def read_manifest_from(zf: zipfile.ZipFile) -> dict:
         raise ProjectError("This project needs a feature this KokoroGUI doesn't have: " + ", ".join(unknown))
     if not manifest.get("project_id"):
         manifest["project_id"] = new_project_id()
+    elif safe_project_id(manifest["project_id"]) is None:
+        raise ProjectError("Refusing to open: the bundle's project id isn't a plain name.")
     return manifest
 
 
@@ -409,7 +462,7 @@ def inspect_bundle(path: str) -> BundleInfo:
     with zf:
         manifest = read_manifest_from(zf)
         project_id = manifest["project_id"]
-        entries = validate_entries(zf, os.path.join(projects_root(), project_id))
+        entries = validate_entries(zf, _check_project_dir(os.path.join(projects_root(), project_id)))
         if DOCUMENT not in zf.namelist():
             raise ProjectError("The bundle has no document.json.")
         if any(e.filename.endswith(".pt") for e in entries) and not torch_weights_only_available():
@@ -450,11 +503,15 @@ def choose_project_dir(project_id: str, source_path: str | None) -> str:
     """`cache/projects/<project_id>/`, or `<project_id>-2`, `-3`, ... when
     that dir's session names a different `source_path` and is clean (a Save
     As left two files sharing one id). A dirty dir with another path is
-    still this project's: the id matched, that's what recovery keys on."""
+    still this project's: the id matched, that's what recovery keys on.
+    `ProjectError` for an id that isn't a plain name or a dir that resolves
+    outside `projects_root()`, before anything is locked or written."""
+    if safe_project_id(project_id) is None:
+        raise ProjectError("Refusing to open: the project id isn't a plain name.")
     root = projects_root()
     suffix = 1
     while True:
-        candidate = os.path.join(root, project_id if suffix == 1 else f"{project_id}-{suffix}")
+        candidate = _check_project_dir(os.path.join(root, project_id if suffix == 1 else f"{project_id}-{suffix}"))
         session = read_session(candidate)
         if session is None:
             return candidate
@@ -533,8 +590,9 @@ def is_locked(project_dir: str) -> bool:
 
 def wipe_project_dir(project_dir: str) -> None:
     """Everything except `lock`, which the holder has open (on Windows
-    `rmtree` over an open locked handle raises)."""
-    if not os.path.isdir(project_dir):
+    `rmtree` over an open locked handle raises). A dir outside
+    `projects_root()` is left alone."""
+    if not os.path.isdir(project_dir) or not project_dir_in_cache(project_dir):
         return
     for entry in os.listdir(project_dir):
         if entry == LOCK:
@@ -550,6 +608,8 @@ def wipe_project_dir(project_dir: str) -> None:
 
 
 def delete_project_dir(project_dir: str) -> None:
+    if not project_dir_in_cache(project_dir):
+        return
     wipe_project_dir(project_dir)
     try:
         os.remove(os.path.join(project_dir, LOCK))
@@ -749,7 +809,7 @@ def extract_small(info: BundleInfo, project_dir: str) -> None:
     with zipfile.ZipFile(info.path) as zf:
         for entry in info.entries:
             name = entry.filename.replace("\\", "/")
-            if name.startswith(_HEAVY_PREFIXES) or name in _DIR_PRIVATE:
+            if name.startswith(_HEAVY_PREFIXES) or is_private_name(name):
                 continue
             _extract_entry(zf, entry, project_dir)
 
@@ -801,7 +861,7 @@ def audio_file_under(project_dir: str | None, path, folder: str = AUDIO_DIR) -> 
         else:
             candidate = os.path.join(root, *path.replace("\\", "/").split("/"))
         real = os.path.realpath(candidate)
-        if real.startswith(base + os.sep) and os.path.isfile(real) and os.path.basename(real) not in _DIR_PRIVATE:
+        if real.startswith(base + os.sep) and os.path.isfile(real) and not is_private_name(os.path.basename(real)):
             return real
     except (OSError, ValueError):
         pass
@@ -1589,7 +1649,7 @@ def _refused_entry(bundle_path: str, source: str, project_dir: str | None) -> bo
     `lock`, `document.json` or `project.json`. `plan_save` never lists
     one (`audio_file_under`); this is the second check."""
     name = bundle_path.replace("\\", "/")
-    if name in _DIR_PRIVATE or name in _OWNED_FILES:
+    if _name_key(name) in _PRIVATE_OR_OWNED_KEYS:
         return True
     if not project_dir:
         return False
@@ -1598,7 +1658,8 @@ def _refused_entry(bundle_path: str, source: str, project_dir: str | None) -> bo
     except (OSError, ValueError):
         return True
     root = os.path.realpath(project_dir)
-    return os.path.dirname(real) == root and os.path.basename(real) in _DIR_PRIVATE | _OWNED_FILES
+    return (os.path.normcase(os.path.dirname(real)) == os.path.normcase(root)
+            and _name_key(os.path.basename(real)) in _PRIVATE_OR_OWNED_KEYS)
 
 
 def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
@@ -1737,15 +1798,18 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
                       saved_digest=plan.dir_digest)
 
 
-def record_save(project_dir: str, path: str, result: SaveResult, source_path: str | None = None) -> None:
+def record_save(project_dir: str, path: str, result: SaveResult, source_path: str | None = None,
+                dirty: bool = False) -> None:
     """Step 5, on the GUI thread: `session.json` after a Save. An embedded
     child passes its `<parent>#<id>` `source_path`; `path` is then the
-    bundle inside the parent's project dir."""
+    bundle inside the parent's project dir. `dirty` is True when the
+    document moved on while the zip was written (the app compares it with
+    `result.saved_digest`), so the dir stays ahead of the file."""
     session = read_session(project_dir) or {}
     session.update({
         "source_path": source_path or os.path.abspath(path), "zip_size": result.zip_size,
         "zip_mtime": result.zip_mtime,
-        "saved_digest": result.saved_digest, "dirty": False, "asset_index": result.asset_index,
+        "saved_digest": result.saved_digest, "dirty": bool(dirty), "asset_index": result.asset_index,
     })
     write_session(project_dir, session)
 

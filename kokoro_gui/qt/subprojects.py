@@ -144,10 +144,10 @@ class SubprojectsMixin:
         kind = (clip.child or {}).get("kind", "embedded")
         bundle = self.child_bundle_path(parent, clip)
         source = bundle if kind == "linked" else project_io.child_source_path(self.source_of(parent), child_id)
-        project_dir = project_io.choose_project_dir(child_id, source)
         try:
+            project_dir = project_io.choose_project_dir(child_id, source)
             lock = project_io.ProjectLock(project_dir).acquire()
-        except project_io.ProjectLockedError as e:
+        except project_io.ProjectError as e:
             return self._child_failed(clip, str(e), then)
 
         session = project_io.read_session(project_dir)
@@ -293,7 +293,10 @@ class SubprojectsMixin:
         kind = (clip.child or {}).get("kind", "embedded")
         source = self.child_bundle_path(parent, clip) if kind == "linked" else \
             project_io.child_source_path(self.source_of(parent), child_id)
-        project_dir = project_io.choose_project_dir(child_id, source)
+        try:
+            project_dir = project_io.choose_project_dir(child_id, source)
+        except project_io.ProjectError:
+            return None
         return project_dir if os.path.isfile(os.path.join(project_dir, project_io.DOCUMENT)) else None
 
     def child_state(self, child) -> str:
@@ -1313,14 +1316,31 @@ class SubprojectsMixin:
             warnings.extend(f"{child.title()}: {w}" for w in child_warnings)
         return plans, warnings
 
+    def _record_saved(self, project, path: str, result, source_path: str | None = None) -> None:
+        """Records a finished background Save in `project`'s session,
+        reconciled with the document as it is now (plan 46 F2): the editor
+        stays writable while the zip is written, and an edit or a result
+        that landed meanwhile isn't in it, so the project stays dirty. The
+        current document is written to the dir first, so a recover finds
+        it. Raises `OSError` when the session can't be written."""
+        try:
+            current = project_io.autosave_to_dir(project.document, project.project_settings, project.project_dir)
+        except Exception as e:  # noqa: BLE001 - autosave must never crash the UI
+            self.set_status(f"Autosave failed: {e}", "error")
+            current = None
+        if current is not None and current != project.digest:
+            project.digest = current
+            project.state_cache = None
+        project.dirty = current != result.saved_digest
+        project_io.record_save(project.project_dir, path, result, source_path=source_path, dirty=project.dirty)
+
     def _record_child_saves(self, plans, results) -> None:
         for (child, plan, source), result in zip(plans, results):
+            child.manifest = dict(plan.manifest)
             try:
-                project_io.record_save(child.project_dir, plan.path, result, source_path=source)
+                self._record_saved(child, plan.path, result, source_path=source)
             except OSError as e:
                 self.set_status(f"Saved, but couldn't record {child.title()}'s session: {e}", "warning")
-            child.manifest = dict(plan.manifest)
-            child.dirty = False
 
     # -- teardown --------------------------------------------------------------------
 
