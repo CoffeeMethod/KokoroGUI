@@ -14,6 +14,9 @@ and the Audio FX dock share one path. The format, its checks and the writes are
 
 Imported characters land in the character library, not in the open project;
 Add > From library... in Edit > Characters brings them in.
+
+`SaveToLibraryDialog` and `save_to_library` (plan 41) are the same table over
+`daw/library_copy.py`'s items: what a project carries that the library lacks.
 """
 from __future__ import annotations
 
@@ -23,10 +26,10 @@ import re
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QLabel, QListWidget,
-    QListWidgetItem, QMessageBox, QPlainTextEdit, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
-from kokoro_gui.daw import revision, share
+from kokoro_gui.daw import library_copy, revision, share
 from kokoro_gui.engines import registry
 
 FILE_FILTER = f"KokoroGUI share files (*{share.EXTENSION});;All files (*)"
@@ -115,15 +118,17 @@ class ImportShareDialog(QDialog):
     only). `choices()` maps each ticked row's key to Keep both, Replace or
     Skip."""
 
-    def __init__(self, parent, info, items, kinds=None, title: str = "Import"):
+    COLUMNS = ["Import", "Kind", "Name", "If the name is taken"]
+
+    def __init__(self, parent, info, items, kinds=None, title: str = "Import", header: str | None = None):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.resize(560, 380)
         self.items = [item for item in items if kinds is None or item.kind in kinds]
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(f"{os.path.basename(info.path)} holds:"))
+        layout.addWidget(QLabel(header or f"{os.path.basename(info.path)} holds:"))
         self.table = QTableWidget(len(self.items), 4)
-        self.table.setHorizontalHeaderLabels(["Import", "Kind", "Name", "If the name is taken"])
+        self.table.setHorizontalHeaderLabels(self.COLUMNS)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
@@ -166,7 +171,7 @@ class ImportShareDialog(QDialog):
         if item.unavailable:
             self.table.setItem(row, 3, self._note(f"Can't import: {item.unavailable}"))
         elif item.same:
-            self.table.setItem(row, 3, self._note("Already here"))
+            self.table.setItem(row, 3, self._note(self.SAME_NOTE))
         elif item.clash:
             combo = QComboBox()
             for label, value in _CHOICES:
@@ -175,6 +180,8 @@ class ImportShareDialog(QDialog):
             self._combos[item.key] = combo
         else:
             self.table.setItem(row, 3, self._note(""))
+
+    SAME_NOTE = "Already here"
 
     @staticmethod
     def _note(text: str) -> QTableWidgetItem:
@@ -193,6 +200,78 @@ class ImportShareDialog(QDialog):
 
     def _sync(self) -> None:
         self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(bool(self.choices()))
+
+
+class _NoInfo:
+    path = ""
+    warnings: tuple = ()
+    ignored = 0
+
+
+class SaveToLibraryDialog(ImportShareDialog):
+    """`SaveToLibraryDialog(parent, items, title)` over `library_copy.LibraryItem`s:
+    a ticked row per thing the project carries, and for one the library holds in
+    a different form a choice: Keep both, Replace, Skip. `choices()` is the
+    same map."""
+
+    COLUMNS = ["Save", "Kind", "Name", "If the library has one"]
+    SAME_NOTE = "The library has it"
+
+    def __init__(self, parent, items, title: str = "Save to library"):
+        super().__init__(parent, _NoInfo(), items, None, title, header="This project carries:")
+
+
+def save_items_to_library(app, parent, items, *, title: str = "Save to library"):
+    """Copies project-local `items` into the library. Asks only when one of them
+    differs from the library's copy of the same name. Returns the
+    `CopyResult`, or None when there was nothing to save or the user
+    cancelled. Says what happened in a message."""
+    items = [item for item in items if item.status != library_copy.NOT_LOCAL]
+    if not items:
+        QMessageBox.information(parent, title, "Everything here is already stored outside this project.")
+        return None
+    if all(item.same for item in items):
+        QMessageBox.information(parent, title, "The library already has "
+                                + ("this" if len(items) == 1 else "all of these") + ".")
+        return None
+    choices: dict = {}
+    if any(item.clash for item in items):
+        dialog = SaveToLibraryDialog(parent, items, title)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        choices = dialog.choices()
+        items = [item for item in items if item.key in choices or item.status == library_copy.IDENTICAL]
+    result = library_copy.save_to_library(items, choices, fx_dir=_fx_dir())
+    revision.bump_files()
+    if any(item.kind == share.KIND_VOICE for item in items):
+        app.refresh_voice_choices()
+    if app.fx_dock is not None and any(item.kind != share.KIND_VOICE for item in items):
+        app.fx_dock.refresh_presets()
+    lines = [f"Saved {len(result.saved)} item{'s' if len(result.saved) != 1 else ''} to the library."
+             if result.saved else "Nothing was saved."]
+    lines.extend(result.saved)
+    lines.extend(result.skipped)
+    lines.extend(result.warnings)
+    QMessageBox.information(parent, title, "\n".join(lines))
+    return result
+
+
+def library_menu(parent, items, on_save) -> QMenu:
+    """The right-click menu of a voice or FX row: one "Save to library" action,
+    live only while `items` (`library_copy.LibraryItem`s) holds something the
+    library lacks or holds differently. `on_save()` runs when it is chosen."""
+    menu = QMenu(parent)
+    local = [item for item in items if item.status != library_copy.NOT_LOCAL]
+    action = menu.addAction("Save to library")
+    if not local:
+        action.setText("Save to library (not stored in this project)")
+        action.setEnabled(False)
+    elif all(item.same for item in local):
+        action.setText("Save to library (the library has it)")
+        action.setEnabled(False)
+    else:
+        action.triggered.connect(lambda _checked=False: on_save())
+    return menu
 
 
 def _fx_dir() -> str:
