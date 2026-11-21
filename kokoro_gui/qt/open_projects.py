@@ -11,6 +11,10 @@ document, project dir, lock and session. `QtTTSApp` keeps them in
   nested block enters its child; the breadcrumb goes back up).
 - `root`: what Save, Save As, Close and the title bar act on.
 
+A tree the queue still works in when another project opens is parked
+(`ParkedTree`) instead of closed, and comes back as it was when its root
+is opened again (plan 30).
+
 Qt-free on purpose, like `project.py`'s helpers.
 """
 from __future__ import annotations
@@ -60,3 +64,25 @@ class OpenProject:
         from kokoro_gui.qt.project import display_title
 
         return display_title(self.project_settings, self.path, "Untitled" if self.is_root else "Subproject")
+
+
+@dataclass
+class ParkedTree:
+    """A root and its open subprojects that the window moved away from while
+    the generation queue still had work for them (plan 30). Nothing is torn
+    down: the documents, dirs, locks and sessions stay as they were, results
+    land in them and autosave writes them. `QtTTSApp.parked_projects` holds
+    one per root project id until the last item for the tree ends, or the
+    root is opened again."""
+
+    root: OpenProject
+    children: dict = field(default_factory=dict)
+
+    def projects(self) -> list:
+        return [self.root, *self.children.values()]
+
+    def ids(self) -> set:
+        return {project.project_id for project in self.projects()}
+
+    def holds(self, project) -> bool:
+        return any(candidate is project for candidate in self.projects())

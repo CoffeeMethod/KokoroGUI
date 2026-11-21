@@ -260,14 +260,15 @@ def test_save_runs_beside_a_generate_and_a_result_that_lands_meanwhile_keeps_it_
     assert qt_app.root.dirty  # the bundle doesn't hold that result
 
 
-def test_open_and_save_as_are_refused_while_generating(qt_app, tmp_path):
+def test_save_as_is_refused_while_generating(qt_app, tmp_path):
+    # Open and New park the project instead (plan 30,
+    # tests/gui_qt/test_cross_project_generation.py).
     _many_clips(qt_app, 2)
     Jobs(qt_app, tmp_path)
     qt_app.on_generate_clicked()
     path = qt_app.project_path
 
     qt_app.save_project_as(str(tmp_path / "elsewhere.tbaw"))
-    qt_app.open_project(str(tmp_path / "elsewhere.tbaw"))
 
     assert qt_app.project_path == path
     assert not os.path.exists(tmp_path / "elsewhere.tbaw")

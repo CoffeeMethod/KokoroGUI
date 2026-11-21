@@ -28,6 +28,13 @@ every change (runtime state, never in `document.json` or a bundle) and read
 back on Open, paused, with the clips that are still stale. Task items are
 left out: they are code, not data.
 
+Open and New run beside the queue (plan 30): the project they replace is
+parked (`app.parked_projects`) while the queue has work for it, its items
+run as before, and each parked root's items go to its own `session.json`.
+The Queue dock greys them ("in another project") and the progress line
+reads "A: 40/300 in background" while one runs (grill PG13). A parked tree
+is released when it has no queued or running item left.
+
 Mixed into `QtTTSApp`; expects its docks, `root`, `children`, `set_ui_state`.
 """
 from __future__ import annotations
@@ -70,8 +77,16 @@ class GenerationQueueMixin:
         self._queue_child_total = 0
         self._queue_child_done = 0
         self._queue_rates: dict = {}
-        self._queue_written: str | None = None
+        # project dir -> the queue text last written to its `session.json`.
+        self._queue_written: dict = {}
         self._queue_restored = 0
+        # `(project dir, [item dicts])`: the open project's saved queue, held
+        # back while another project's run goes on (restored when it ends).
+        self._queue_deferred: tuple | None = None
+        # root project id -> [clips, finished] of subproject children this run.
+        self._queue_extra_by_root: dict = {}
+        # The progress line shows a parked project's run.
+        self._background_progress_shown = False
         # item id -> `start(done)` of a task item (`enqueue_task`).
         self._queue_tasks: dict = {}
         # `(project_id, clip ids)` of the batch a subproject item is running.
@@ -81,11 +96,27 @@ class GenerationQueueMixin:
     # -- looking things up ------------------------------------------------------
 
     def project_by_id(self, project_id):
-        """The open project with this id, or None."""
-        for project in self.open_projects():
+        """The open or parked project with this id, or None."""
+        for project in (*self.open_projects(), *self.parked_project_list()):
             if project.project_id == project_id:
                 return project
         return None
+
+    def queue_root_id(self, project_id, strict: bool = False):
+        """The root project id of the tree `project_id` is in: the open one
+        or a parked one. An id in neither is the open root's, or None with
+        `strict`."""
+        if project_id in self.projects:
+            return self.root.project_id
+        for root_id, tree in self.parked_projects.items():
+            if project_id in tree.ids():
+                return root_id
+        return None if strict else self.root.project_id
+
+    def item_in_open_project(self, item) -> bool:
+        """`item` is for the open root or one of its open subprojects, not
+        for a parked project (or one already released)."""
+        return item.project_id in self.projects
 
     def _clip_entries(self, project, clips) -> list:
         """`[(clip_id, chars, engine_id), ...]` in text order, for `plan_items`."""
@@ -237,6 +268,7 @@ class GenerationQueueMixin:
         self._queue_cancelled = False
         self._queue_ok = self._queue_failed = 0
         self._queue_extra_total = self._queue_extra_done = 0
+        self._queue_extra_by_root = {}
         self._queue_inflight = 0
         self._queue_fraction = 0.0
         self.set_ui_state(True)
@@ -330,6 +362,7 @@ class GenerationQueueMixin:
                     item.engine_chars[engine_id] = item.engine_chars.get(engine_id, 0) + chars
                 item.chars = sum(item.engine_chars.values())
                 self._queue_extra_total += len(entries)
+                self._extra_for(item)[0] += len(entries)
                 self._queue_child_total, self._queue_child_done = len(entries), 0
                 batches = [i.clip_ids for i in genqueue.plan_items(child.project_id, entries, child.title())]
                 self._run_child_batches(item, child, batches, _finished)
@@ -370,6 +403,7 @@ class GenerationQueueMixin:
                 self._queue_ok += len(ok_ids)
                 self._queue_failed += len(bad_ids)
                 self._queue_extra_done += len(ok_ids) + len(bad_ids)
+                self._extra_for(item)[1] += len(ok_ids) + len(bad_ids)
                 self._queue_child_done += len(ok_ids) + len(bad_ids)
                 self._queue_inflight = 0
                 self._queue_fraction = self._queue_child_done / max(1, self._queue_child_total)
@@ -389,6 +423,11 @@ class GenerationQueueMixin:
                 finished(False)
 
         _step(0)
+
+    def _extra_for(self, item: QueueItem) -> list:
+        """`[clips, finished]` of subproject children counted for the tree
+        `item` is in."""
+        return self._queue_extra_by_root.setdefault(self.queue_root_id(item.project_id), [0, 0])
 
     def _item_finished(self, item: QueueItem, ok_ids: list, bad_ids: list, ok: bool = True,
                        run_then: bool = True) -> None:
@@ -427,6 +466,9 @@ class GenerationQueueMixin:
         ok, failed = self._queue_ok, self._queue_failed
         waiting = queue.pending_clip_count()
         self._queue_changed()
+        if self._background_progress_shown:
+            self._background_progress_shown = False
+            self.transport_dock.set_progress(self.transport_dock.progress_bar.value(), "")
         self.set_ui_state(False)
         if cancelled:
             self.set_status("Cancelled." if not ok else f"Cancelled after {ok} clip(s).", "warning")
@@ -439,6 +481,7 @@ class GenerationQueueMixin:
         elif ok:
             self.set_status(f"Generated {ok} of {ok + failed} clips ({failed} failed)", "warning")
         self._notify_if_long_job()
+        self._restore_deferred_queue()
 
     def wait_for_queue(self, timeout_s: float = 60.0) -> None:
         """Runs the event loop until the queue is not between two items (the
@@ -536,9 +579,29 @@ class GenerationQueueMixin:
             return ""
         return f"{'about' if complete else 'at least'} {genqueue.format_eta(seconds)} left"
 
+    def _background_tree(self):
+        """The parked tree the running item is for, or None."""
+        item = self._queue_item
+        if item is None or not self.parked_projects:
+            return None
+        root_id = self.queue_root_id(item.project_id, strict=True)
+        return self.parked_projects.get(root_id) if root_id is not None else None
+
     def queue_progress_text(self) -> tuple:
-        """`(percent, "12 of 340 clips, about 2 h 10 min left")`."""
+        """`(percent, "12 of 340 clips, about 2 h 10 min left")`, or `(percent,
+        "Book A: 40/300 in background")` while the running item is a parked
+        project's (grill PG13), counting that project's clips only."""
         queue = self.generation_queue
+        tree = self._background_tree()
+        if tree is not None:
+            ids = tree.ids()
+            mine = [i for i in queue.items if i.project_id in ids and i.kind in genqueue.CLIP_KINDS]
+            extra_total, extra_done = self._queue_extra_by_root.get(tree.root.project_id, (0, 0))
+            total = sum(i.clip_count for i in mine if i.state != genqueue.CANCELLED) + extra_total
+            done = sum(i.clip_count for i in mine if i.state in (genqueue.DONE, genqueue.FAILED)) \
+                + extra_done + self._queue_inflight
+            percent = int(done / total * 100) if total else 0
+            return percent, f"{tree.root.title()}: {done}/{total} in background"
         total = queue.clip_total() + self._queue_extra_total
         done = queue.clips_finished() + self._queue_extra_done + self._queue_inflight
         percent = int(done / total * 100) if total else 0
@@ -555,6 +618,7 @@ class GenerationQueueMixin:
         elif item is not None and self._queue_child_total:
             self._queue_fraction = (self._queue_child_done + completed) / self._queue_child_total
         percent, text = self.queue_progress_text()
+        self._background_progress_shown = self._background_tree() is not None
         self.transport_dock.set_progress(percent, text)
 
     def queue_pending_clip_count(self) -> int:
@@ -566,6 +630,7 @@ class GenerationQueueMixin:
 
     def _queue_changed(self) -> None:
         self._persist_queue()
+        self.release_finished_parked()
         self.refresh_queue_ui()
 
     def refresh_queue_ui(self) -> None:
@@ -585,56 +650,91 @@ class GenerationQueueMixin:
             self.editor.update_gutter()
 
     def _persist_queue(self) -> None:
-        """Writes the queued and running items to the root project's
-        `session.json` when they changed; drops the key when none are left."""
+        """Writes the queued and running items to their root project's
+        `session.json` when they changed: the open root's, and each parked
+        root's its own (plan 30). Drops the key when none are left."""
+        roots = {self.root.project_id: (self.root, [])}
+        for root_id, tree in self.parked_projects.items():
+            roots[root_id] = (tree.root, [])
+        for item in self.generation_queue.pending():
+            if item.kind in genqueue.KINDS:
+                roots[self.queue_root_id(item.project_id)][1].append(item.to_dict())
+        deferred = self._queue_deferred
+        for root, pending in roots.values():
+            if not root.project_dir:
+                continue
+            if deferred is not None and deferred[0] == root.project_dir:
+                ids = {entry["id"] for entry in pending}
+                pending = pending + [entry for entry in deferred[1] if entry.get("id") not in ids]
+            self._write_queue(root.project_dir, pending)
+
+    def _write_queue(self, project_dir: str, pending: list) -> None:
         import json
 
-        root = self.root
-        if not root.project_dir:
-            return
-        pending = [i.to_dict() for i in self.generation_queue.pending() if i.kind in genqueue.KINDS]
         text = json.dumps(pending)
-        if text == self._queue_written:
+        if text == self._queue_written.get(project_dir):
             return
-        session = project_io.read_session(root.project_dir) or {}
+        session = project_io.read_session(project_dir) or {}
         if pending:
             session[QUEUE_KEY] = {"items": pending}
         elif QUEUE_KEY in session:
             del session[QUEUE_KEY]
         else:
-            self._queue_written = text
+            self._queue_written[project_dir] = text
             return
         try:
-            project_io.write_session(root.project_dir, session)
+            project_io.write_session(project_dir, session)
         except OSError:
             return
-        self._queue_written = text
+        self._queue_written[project_dir] = text
 
     def restore_queue(self, session) -> None:
         """Open: the queue of the project that was left with work to do comes
         back paused, with the clips that are still stale. Nothing starts until
-        the user resumes it."""
-        if self.queue_active:
-            return
-        self.generation_queue = GenerationQueue()
-        self.queue_paused = False
-        self._queue_written = None
-        self._queue_restored = 0
+        the user resumes it. A parked project's items stay (plan 30), and so
+        do the items of a parked project opened again, which are its saved
+        ones already. While another project's run goes on, the saved queue
+        waits for it to end (`_restore_deferred_queue`)."""
         saved = GenerationQueue.from_dict((session or {}).get(QUEUE_KEY))
-        for item in saved.items:
-            if item.state == genqueue.QUEUED and self._replan_item(item):
-                self.generation_queue.add(item)
-        if self.generation_queue.items:
+        present = {item.id for item in self.generation_queue.items}
+        fresh = [item for item in saved.items if item.state == genqueue.QUEUED and item.id not in present]
+        self._queue_written = {}
+        self._queue_restored = 0
+        self._queue_deferred = None
+        if self.queue_active:
+            if fresh and self.root.project_dir:
+                self._queue_deferred = (self.root.project_dir, [item.to_dict() for item in fresh])
+            self._queue_changed()
+            return
+        kept = [item for item in self.generation_queue.items
+                if not item.finished and self.queue_root_id(item.project_id, strict=True) is not None]
+        self.generation_queue = GenerationQueue(kept)
+        if not kept:
+            self.queue_paused = False
+        restored = [item for item in fresh if self._replan_item(item)]
+        for item in restored:
+            self.generation_queue.add(item)
+        if restored:
             self.queue_paused = True
-            self._queue_restored = self.queue_pending_clip_count()
+            self._queue_restored = sum(max(1, i.clip_count) if i.kind in genqueue.CLIP_KINDS else 1
+                                       for i in restored)
         self._queue_changed()
+
+    def _restore_deferred_queue(self) -> None:
+        """The run that held back the open project's saved queue ended: that
+        queue comes back paused, as on Open."""
+        deferred, self._queue_deferred = self._queue_deferred, None
+        if deferred is None or deferred[0] != self.root.project_dir:
+            return
+        self.restore_queue({QUEUE_KEY: {"items": deferred[1]}})
+        self.announce_restored_queue()
 
     def announce_restored_queue(self) -> None:
         """The status line and the Queue dock offer to resume what the last
         session left queued. Not a dialog."""
         if not self._queue_restored or not self.generation_queue.pending():
             return
-        count = self.queue_pending_clip_count()
+        count = self._queue_restored
         self.set_status(f"{count} clip(s) were still queued when this project closed. "
                         "Resume them in the Queue dock.", "info")
         if self.queue_dock is not None:

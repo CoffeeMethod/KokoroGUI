@@ -58,9 +58,46 @@ class SubprojectsMixin:
     def parent_of(self, project):
         if project is None or project.parent_id is None:
             return None
+        tree = self.parked_tree_of(project)
+        if tree is not None:
+            if tree.root.project_id == project.parent_id:
+                return tree.root
+            return tree.children.get(project.parent_id)
         if self.root.project_id == project.parent_id:
             return self.root
         return self.children.get(project.parent_id)
+
+    # -- parked trees (plan 30) ----------------------------------------------------
+
+    def parked_project_list(self) -> list:
+        """Every project of every parked tree."""
+        return [project for tree in self.parked_projects.values() for project in tree.projects()]
+
+    def parked_tree_of(self, project):
+        """The parked tree `project` belongs to, or None (it is open)."""
+        for tree in self.parked_projects.values():
+            if tree.holds(project):
+                return tree
+        return None
+
+    def _parked_tree_holding(self, clip):
+        """The parked tree whose documents hold `clip` itself, or None."""
+        if clip is None:
+            return None
+        for tree in self.parked_projects.values():
+            for project in tree.projects():
+                if project.document.get_clip(clip.id) is clip:
+                    return tree
+        return None
+
+    def _children_of_tree(self, project) -> dict:
+        """The `children` dict of the tree `project` is in."""
+        tree = self.parked_tree_of(project)
+        return tree.children if tree is not None else self.children
+
+    def _root_of_tree(self, project):
+        tree = self.parked_tree_of(project)
+        return tree.root if tree is not None else self.root
 
     def depth_of(self, project) -> int:
         depth = 0
@@ -94,7 +131,10 @@ class SubprojectsMixin:
 
     def child_project(self, clip):
         child_id = self.child_id_of(clip)
-        return self.children.get(child_id) if child_id else None
+        if not child_id:
+            return None
+        tree = self._parked_tree_holding(clip) if self.parked_projects else None
+        return (tree.children if tree is not None else self.children).get(child_id)
 
     def is_child_missing(self, clip) -> bool:
         return self.child_id_of(clip) in self._missing_children
@@ -254,7 +294,7 @@ class SubprojectsMixin:
             clip_id=clip.id, manifest=dict(loaded.manifest or {}), dirty=dirty,
             kind=(clip.child or {}).get("kind", "embedded"),
         )
-        self.children[child.project_id] = child
+        self._children_of_tree(parent)[child.project_id] = child
         self._missing_children.discard(child.project_id)
         self._closed_child_states.pop(child.project_id, None)
         self._install_segment_key_fn(child)
@@ -274,7 +314,7 @@ class SubprojectsMixin:
         """NP3: a child's linked characters look in the root's characters
         first (project scope), then the global library."""
         report = character_library.resolve_characters(
-            child.document, [ParentStore(self.root.document), self.character_library])
+            child.document, [ParentStore(self._root_of_tree(child).document), self.character_library])
         self.library_missing |= set(report.missing)
 
     def _install_nested_state_fn(self, project) -> None:
@@ -1119,7 +1159,8 @@ class SubprojectsMixin:
         """File > New from Template... and the welcome dialog's button."""
         from kokoro_gui.qt.template_dialogs import NewFromTemplateDialog
 
-        if self.is_busy():
+        # A running queue goes on in the background, as for New (plan 30).
+        if self.is_busy() and not (self.is_generating() and self.can_park_generation()):
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job first.")
             return []
         dialog = NewFromTemplateDialog(self)
