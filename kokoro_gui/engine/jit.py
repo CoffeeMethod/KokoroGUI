@@ -16,7 +16,7 @@ from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys, 
 class JITMixin:
     def start_jit_conversion(self, text, config):
         """Starts real-time generation and playback."""
-        config['voice'] = self.resolve_voice_path(config['voice'])
+        config['voice'] = self.resolve_voice_path(config['voice'], config.get("project_dir"))
         self.cancel_event.clear()
         self.worker.run_coro(self._process_jit_async(text, config))
 
@@ -48,7 +48,7 @@ class JITMixin:
                         if 'trim' in preset:
                             seg_config['trim_silence'] = preset['trim']
                         seg_config['format'] = 'wav' # Ensure preset doesn't override format to non-wav
-                        seg_config['voice'] = self.resolve_voice_path(seg_config['voice'])
+                        seg_config['voice'] = self.resolve_voice_path(seg_config['voice'], config.get("project_dir"))
 
                 if fx_name:
                     fx_preset = self.load_fx_preset(fx_name, config.get("project_dir"))

@@ -633,6 +633,14 @@
         <h3>Fixes</h3>
         <ul class="change-list">
           <li>
+            <h4>New no longer puts a project away while a job uses it</h4>
+            <p>File &gt; New, Ctrl+N, New from Template and Import Text into a new project closed the open project at once, even while a generate was writing into its folder or a save was running. They are now refused with a message while a generate runs or a save, export or other project job is busy, the same way Open is. Nothing about the open project changes.</p>
+          </li>
+          <li>
+            <h4>A project's own voice is used by the whole-document and JIT generate</h4>
+            <p>Generate on the whole document, and JIT streaming, looked up a bundled voice in the global voice library only. A project that carried its own voice for a name could fail to generate on a machine without it, or use a different global voice of the same name. Both paths now look in the project's folder first, as clips and Preview already did.</p>
+          </li>
+          <li>
             <h4>Save As keeps an uninstalled engine's voices after the original file is gone</h4>
             <p>A project can hold voice files for an engine this machine doesn't have, under <code>engines/&lt;id&gt;/</code>. Save copied them from the <code>.tbaw</code> the project was opened from, so once that file was deleted or moved, Save As wrote a bundle without them. Save now takes them from the project's working folder, where Open put them, byte for byte. Files a newer version of KokoroGUI added at the top of the bundle are still lost in that case, because the working folder can't tell them apart from its own files.</p>
           </li>

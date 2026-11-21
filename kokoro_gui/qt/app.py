@@ -2775,8 +2775,26 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
     # -- new ------------------------------------------------------------------
 
+    def _replace_blocked(self, what: str) -> bool:
+        """True (with a message) when a job holds the project: a generate
+        works in its dir and an IO job writes it, so nothing may replace or
+        close it now. Open, New, New from Template and an Import Text that
+        starts a new project all ask this first."""
+        if self.is_generating():
+            QMessageBox.warning(self, "Busy", "A generate is running in this project. Wait for it to finish, "
+                                              f"or cancel it, before {what}.")
+            return True
+        if self.is_busy():
+            QMessageBox.warning(self, "Busy", f"Finish or cancel the current job before {what}.")
+            return True
+        return False
+
     def new_project(self, then=None) -> None:
-        """File > New. `then()` runs once the new project is in place."""
+        """File > New. `then()` runs once the new project is in place.
+        Refused while a job runs, like Open."""
+        if self._replace_blocked("starting a new project"):
+            return
+
         def _start():
             document = project_io.new_document_from(self.character_library, self.settings)
             self.project_settings = {}
@@ -2792,14 +2810,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     # -- open -----------------------------------------------------------------
 
     def open_project(self, path: str) -> None:
-        if self.is_generating():
-            # The queue works in this project's dir (plan 30 covers running it
-            # across projects).
-            QMessageBox.warning(self, "Busy", "A generate is running in this project. Wait for it to finish, "
-                                              "or cancel it, before opening another project.")
-            return
-        if self.is_busy():
-            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before opening a project.")
+        # The queue works in this project's dir (plan 30 covers running it
+        # across projects).
+        if self._replace_blocked("opening another project"):
             return
         if not os.path.isfile(path):
             QMessageBox.warning(self, "Open failed", f"Couldn't read {path}.")
@@ -3380,6 +3393,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             QMessageBox.warning(self, "Empty", "No text found in that file.")
             return
         if target == "new":
+            if self._replace_blocked("starting a new project"):
+                return
             self.new_project()
         editor = self.editor
         cursor = editor.textCursor()
@@ -4232,6 +4247,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             return
 
         config = self._assemble_config()
+        # The whole-document and JIT paths resolve a bundled voice from this
+        # project's dir first, like a clip does.
+        config["project_dir"] = self.project_dir
 
         self._converting = True
         self.set_ui_state(True)
