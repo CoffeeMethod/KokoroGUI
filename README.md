@@ -99,6 +99,8 @@ Unreleased:
     episode from it; File > Add Credits makes opening and closing credit subprojects from the title, author and narrator
 -   Edit > Characters and the Audio FX tab export characters and FX, with their impulse responses and voice files, to one
     `.kgshare` file, and import one from another machine, asking what to do where a name is taken
+-   Save to library: a Mix, Reference, FX or impulse response that came with a project can be copied into your own library from
+    a right-click on the Audio FX, Mixing and Voice Reference lists, or from a character in Edit > Characters
 -   Playback runs at 0.5x to 2x with the voices keeping their pitch (a speed box in the transport, `[` and `]`, and `L`
     steps 1x, 1.5x, 2x), `M` drops a flag at the playhead with an optional note, and `N` jumps to the next flag
 -   Save As keeps an uninstalled engine's voice files after the original `.tbaw` was deleted or moved

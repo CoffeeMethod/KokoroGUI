@@ -37,16 +37,17 @@ import asyncio
 import os
 import tempfile
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox, QDockWidget, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
+from kokoro_gui.daw import library_copy
 from kokoro_gui.engine.asr import (
     ASR_ENGINES, get_vosk_model_path, reload_vosk_model_path, set_vosk_model_path, transcribe_wav,
 )
-from kokoro_gui.qt import asr_prompt
+from kokoro_gui.qt import asr_prompt, share_dialogs
 from kokoro_gui.qt.docks.scrolling import scrollable
 from kokoro_gui.qt.docks.voice_header import engine_header
 
@@ -359,6 +360,10 @@ class VoiceCloneDock(QDockWidget):
             character = self.app.active_character()
             if character is not None and character.backend_id == self.backend_id:
                 self._use_reference(payload)
+            if self._library_item(payload).status != library_copy.NOT_LOCAL:
+                # The project's own copy is read first (grill TB3); this save went to the library.
+                self.status_label.setText(self.status_label.text()
+                                          + " This project's own copy of it is still the one used here.")
         else:
             self.status_label.setText(f"Save failed: {payload}")
 
@@ -388,6 +393,23 @@ class VoiceCloneDock(QDockWidget):
         self.wav_path_edit.setText(wav)
         self.transcript_edit.setPlainText(self.store.get_transcript(name, project_dir))
 
+    def _library_item(self, name: str):
+        """What the open project carries under `name` (`library_copy.LibraryItem`)."""
+        return library_copy.voice_item(self.store, self.backend_id, name, getattr(self.app, "project_dir", None))
+
+    def save_to_library(self, name: str):
+        """Copies the project's own copy of Reference `name` into the library
+        (plan 41). Returns the `CopyResult` or None."""
+        return share_dialogs.save_items_to_library(self.app, self, [self._library_item(name)],
+                                                   title="Save Reference to library")
+
+    def reference_menu(self, name: str):
+        """The right-click menu of a Reference row."""
+        return share_dialogs.library_menu(self, [self._library_item(name)], lambda: self.save_to_library(name))
+
+    def _show_reference_menu(self, row, name: str, pos) -> None:
+        self.reference_menu(name).exec(row.mapToGlobal(pos))
+
     def refresh_list(self) -> None:
         self.app.refresh_voice_choices()
 
@@ -411,6 +433,12 @@ class VoiceCloneDock(QDockWidget):
             load_btn.setFlat(True)
             load_btn.clicked.connect(lambda _c=False, n=name: self._load_reference(n))
             row_layout.addWidget(load_btn, 1)
+            if self._library_item(name).status != library_copy.NOT_LOCAL:
+                tag = QLabel("in this project")
+                tag.setToolTip("This Reference came with the project. Right-click to save it to the library.")
+                row_layout.addWidget(tag)
+            row.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            row.customContextMenuRequested.connect(lambda pos, r=row, n=name: self._show_reference_menu(r, n, pos))
             use_btn = QPushButton("Use")
             use_btn.setToolTip("Assign this saved Reference to the active character.")
             use_btn.clicked.connect(lambda _c=False, n=name: self._use_reference(n))

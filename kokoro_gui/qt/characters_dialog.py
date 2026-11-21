@@ -32,7 +32,9 @@ library entry stays.
 
 Export... and Import... (plan 40) move characters between machines as a share
 file (`qt/share_dialogs.py`, `daw/share.py`). Import adds to the library; Add >
-From library... brings an imported character into the project.
+From library... brings an imported character into the project. Save Voices and
+FX to Library (plan 41) copies what the selected character uses and only the
+project holds into the library (`daw/library_copy.py`).
 
 Every button calls a public method (`add_character`, `add_from_library`,
 `promote_current`, `rename_in_library`, ...), so tests drive the dialog
@@ -51,6 +53,7 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.daw import library as library_ops
+from kokoro_gui.daw import library_copy
 from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character
 from kokoro_gui.engines.missing import MissingBackend
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
@@ -174,6 +177,12 @@ class CharactersDialog(QDialog):
         share_row.addWidget(self.export_btn)
         share_row.addWidget(self.import_btn)
         left.addLayout(share_row)
+        # Plan 41: keep what the project carried in (its voices, FX, impulse response).
+        self.save_assets_btn = QPushButton("Save Voices and FX to Library")
+        self.save_assets_btn.setToolTip("Copy this character's voice files, FX and impulse response that only this "
+                                        "project holds into your library, so other projects can use them.")
+        self.save_assets_btn.clicked.connect(self.save_assets_to_library)
+        left.addWidget(self.save_assets_btn)
         # In a subproject (NP3): share a character with the whole book.
         self.promote_project_btn = QPushButton("Promote to Project")
         self.promote_project_btn.setToolTip("Make this character the top-level project's, shared by every "
@@ -683,6 +692,17 @@ class CharactersDialog(QDialog):
         if result is not None:
             self.reload()
         return result
+
+    def save_assets_to_library(self):
+        """Copies what the selected character uses and only the project holds
+        (voice, variants' voices, FX, impulse response) into the library (plan
+        41). Returns the `CopyResult` or None."""
+        character = self._current
+        if character is None:
+            return None
+        items = library_copy.character_items(character, getattr(self.app, "project_dir", None),
+                                             share_dialogs._fx_dir())
+        return share_dialogs.save_items_to_library(self.app, self, items, title="Save to library")
 
     def promote_current(self) -> str | None:
         """WF7: saves a local character as a new library entry and links this

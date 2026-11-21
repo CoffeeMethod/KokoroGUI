@@ -4,8 +4,10 @@ and previews/saves the result. Shown only when that engine has
 `capabilities.supports_voice_mixing` - see app.py's `_sync_mixing_dock`. An
 Engine row on top picks another engine's editor (grill EN3).
 
-The saved mixes are the engine's `voice_store` (an `EmbeddingStore`, global
-store only here: a project's own copies aren't deleted from this list).
+The saved mixes are the engine's `voice_store` (an `EmbeddingStore`). The list
+shows the global store's, then the open project's own that the library lacks,
+tagged "in this project" with no delete button; right-click a row for Save to
+library (plan 41).
 
 Preview blends the two voices in memory (`mix_tensor`) and speaks the
 tensor, so it writes no `.pt` into the voice store; only Create && Save does.
@@ -29,6 +31,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from kokoro_gui.daw import library_copy
+from kokoro_gui.qt import share_dialogs
 from kokoro_gui.qt.docks.scrolling import scrollable
 from kokoro_gui.qt.docks.voice_header import engine_header
 
@@ -208,19 +212,48 @@ class MixingDock(QDockWidget):
             if w:
                 w.deleteLater()
 
-        custom = sorted(self.backend.voice_store.list_voices())
-        if not custom:
+        store = self.backend.voice_store
+        saved = sorted(store.list_voices())
+        project_only = [n for n in sorted(store.list_voices(self._project_dir())) if n not in saved]
+        if not saved and not project_only:
             self._list_layout.addWidget(QLabel("No Mixes yet."))
         else:
-            for cv in custom:
+            for cv in saved + project_only:
                 row = QFrame()
                 row_layout = QHBoxLayout(row)
                 row_layout.addWidget(QLabel(cv))
                 row_layout.addStretch(1)
-                del_btn = QPushButton("X")
-                del_btn.clicked.connect(lambda _c=False, v=cv: self.delete_custom_voice(v))
-                row_layout.addWidget(del_btn)
+                if self._library_item(cv).status != library_copy.NOT_LOCAL:
+                    tag = QLabel("in this project")
+                    tag.setToolTip("This Mix came with the project. Right-click to save it to the library.")
+                    row_layout.addWidget(tag)
+                if cv in saved:
+                    del_btn = QPushButton("X")
+                    del_btn.clicked.connect(lambda _c=False, v=cv: self.delete_custom_voice(v))
+                    row_layout.addWidget(del_btn)
+                row.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                row.customContextMenuRequested.connect(lambda pos, r=row, v=cv: self._show_mix_menu(r, v, pos))
                 self._list_layout.addWidget(row)
+
+    def _project_dir(self):
+        return getattr(self.app, "project_dir", None)
+
+    def _library_item(self, name: str):
+        """What the open project carries under `name` (`library_copy.LibraryItem`)."""
+        return library_copy.voice_item(self.backend.voice_store, self.backend.id, name, self._project_dir())
+
+    def save_to_library(self, name: str):
+        """Copies the project's own copy of Mix `name` into the library (plan 41).
+        Returns the `CopyResult` or None."""
+        return share_dialogs.save_items_to_library(self.app, self, [self._library_item(name)],
+                                                   title="Save Mix to library")
+
+    def mix_menu(self, name: str):
+        """The right-click menu of a Mix row."""
+        return share_dialogs.library_menu(self, [self._library_item(name)], lambda: self.save_to_library(name))
+
+    def _show_mix_menu(self, row, name: str, pos) -> None:
+        self.mix_menu(name).exec(row.mapToGlobal(pos))
 
     def delete_custom_voice(self, name: str) -> None:
         if QMessageBox.question(self, "Confirm", f"Delete Mix '{name}'?") != QMessageBox.StandardButton.Yes:

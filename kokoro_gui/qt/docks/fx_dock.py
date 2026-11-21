@@ -41,7 +41,7 @@ import json
 import os
 import re
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
     QGroupBox, QHBoxLayout, QInputDialog, QLabel, QMenu, QMessageBox, QPushButton,
@@ -49,7 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 import kokoro_gui.qt.app as qt_app_module
-from kokoro_gui.daw import revision, share
+from kokoro_gui.daw import library_copy, revision, share
 from kokoro_gui.daw.undo import SetClipFxCommand
 from kokoro_gui.engine.presets import filter_fx_preset_values
 from kokoro_gui.qt import fx_resolve, share_dialogs, spec
@@ -98,6 +98,17 @@ class FXDock(QDockWidget):
         preset_row = QHBoxLayout()
         self.preset_combo = QComboBox()
         self.preset_combo.activated.connect(self._on_preset_activated)
+        # Right-click: Save to library (plan 41), on the shown FX and, in the
+        # open list, the FX under the pointer.
+        self.preset_combo.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.preset_combo.customContextMenuRequested.connect(
+            lambda pos: self._show_preset_menu(self.preset_combo.currentData(), self.preset_combo.mapToGlobal(pos)))
+        combo_view = self.preset_combo.view()
+        combo_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        combo_view.customContextMenuRequested.connect(
+            lambda pos: self._show_preset_menu(
+                self.preset_combo.itemData(combo_view.indexAt(pos).row()) if combo_view.indexAt(pos).isValid() else None,
+                combo_view.viewport().mapToGlobal(pos)))
         save_btn = QPushButton("Save FX...")
         save_btn.clicked.connect(self._save_preset_dialog)
         refresh_btn = QPushButton("Refresh")
@@ -421,6 +432,8 @@ class FXDock(QDockWidget):
         for name in presets:
             # The placeholder shows as "No FX" but stays the stored value.
             self.preset_combo.addItem(_PLACEHOLDER_LABEL if name == _PLACEHOLDER else name, name)
+            if any(i.kind == share.KIND_FX for i in self.library_items(name)):
+                self.preset_combo.setItemData(self.preset_combo.count() - 1, "In this project", Qt.ItemDataRole.ToolTipRole)
         self.preset_combo.setCurrentIndex(max(0, self.preset_combo.findData(current if current in presets else _PLACEHOLDER)))
         self.preset_combo.blockSignals(False)
         if getattr(self.app, "settings_dock", None) is not None:
@@ -454,6 +467,28 @@ class FXDock(QDockWidget):
             QMessageBox.information(self, "Saved", f"FX '{name}' saved.")
             self.refresh_presets()
             self._set_combo_text(name)
+
+    def library_items(self, name) -> list:
+        """What the open project carries behind FX `name` that the library may
+        lack: the FX and its impulse response (`library_copy.fx_items`)."""
+        return library_copy.fx_items(name, self.app.project_dir, qt_app_module.FX_PRESETS_DIR)
+
+    def save_fx_to_library(self, name):
+        """Copies the project's own FX `name`, and its impulse response, into the
+        library (plan 41). Returns the `CopyResult` or None."""
+        return share_dialogs.save_items_to_library(self.app, self, self.library_items(name),
+                                                   title="Save FX to library")
+
+    def preset_menu(self, name):
+        """The right-click menu of an FX in the list, or None for the "no FX" row."""
+        if not name or name == _PLACEHOLDER or name == "(custom)":
+            return None
+        return share_dialogs.library_menu(self, self.library_items(name), lambda: self.save_fx_to_library(name))
+
+    def _show_preset_menu(self, name, global_pos) -> None:
+        menu = self.preset_menu(name)
+        if menu is not None:
+            menu.exec(global_pos)
 
     def export_fx(self, names=None, path: str | None = None):
         """Asks which FX to put in a share file (the one the combo shows is
