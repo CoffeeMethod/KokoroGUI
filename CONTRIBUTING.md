@@ -31,8 +31,9 @@ pytest
 That's the fast suite: the Kokoro pipeline is mocked, playback is mocked, no model download, runs
 in well under a minute. The Qt tests run headless (`tests/gui_qt/conftest.py` sets
 `QT_QPA_PLATFORM=offscreen`), so no display is needed. CI runs the suite on `windows-latest`,
-`ubuntu-latest` and `macos-latest` without `tests/gui_qt/` (`pytest --ignore=tests/gui_qt -p no:pytest-qt`), so the
-GUI tests only run on your machine. Run plain `pytest` before you push.
+`ubuntu-latest` and `macos-latest` without `tests/gui_qt/` (`pytest --ignore=tests/gui_qt -p no:pytest-qt`). The GUI
+tests run in a separate `gui` job on Ubuntu, which is not a required check, so a red `gui` job doesn't block a merge.
+Run plain `pytest` before you push, `tests/gui_qt/` included (about 4 minutes).
 
 Three conventions the suite enforces, all from `tests/conftest.py`:
 
@@ -61,7 +62,7 @@ opt-in. It isn't run in CI.
 ## Pull requests
 
 - Branch from `main`, one change per PR.
-- `pytest` green locally before you push (that includes `tests/gui_qt/`, which CI skips). CI has
+- `pytest` green locally before you push (that includes `tests/gui_qt/`; CI runs it in a non-required job). CI has
   to pass on both OSes to merge.
 - A new setting is threaded through `QtTTSApp._assemble_config` and covered in
   `tests/gui_qt/test_qt_config_assembly.py`.

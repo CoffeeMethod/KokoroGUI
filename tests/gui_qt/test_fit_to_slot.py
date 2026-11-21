@@ -271,10 +271,15 @@ def test_fit_all_of_many_stretch_fits_does_not_recurse(qt_app, monkeypatch):
 
     from kokoro_gui.daw.models import Clip, Run
 
+    # Verify mode rebuilds the index from scratch on every read, so a fit
+    # run costs about n^3: 300 clips took 46 s. The check is the stack depth
+    # staying flat from the first fit to the last; 100 nested fits would
+    # still add hundreds of frames.
+    count = 100
     document = qt_app.document
     character = document.characters[0]
     runs = []
-    for i in range(300):
+    for i in range(count):
         clip = Clip(character_id=character.id, overrides={"target_duration_s": 1.9},
                     timeline_timestamp=float(i * 3), pinned=True)
         document.clips.append(clip)
@@ -299,9 +304,9 @@ def test_fit_all_of_many_stretch_fits_does_not_recurse(qt_app, monkeypatch):
 
     monkeypatch.setattr(dock, "_finish_fit", _finish)
 
-    assert dock.fit_all_over_slot() == 300
+    assert dock.fit_all_over_slot() == count
 
-    assert len(depths) == 300
+    assert len(depths) == count
     assert max(depths) - min(depths) < 5
     assert {c.overrides.get("time_stretch") for c in document.clips} == {round(2.0 / 1.9, 4)}
-    assert "Fitted 300 clips" in qt_app.transport_dock.status_text()
+    assert f"Fitted {count} clips" in qt_app.transport_dock.status_text()

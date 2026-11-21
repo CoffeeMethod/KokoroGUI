@@ -42,6 +42,14 @@ def _flush_deferred_deletes(qapp):
     yield
     from PySide6.QtCore import QCoreApplication, QEvent
 
+    # A test that builds its own `QtTTSApp()` (a reopen, a second window)
+    # and doesn't hand it to `qtbot.addWidget` leaves a live top-level
+    # window. Every later `theme.apply()` re-polishes it, so each such test
+    # added about 0.3 s to every test after it: `test_proof.py`'s six
+    # `junk` cases turned 0.2 s setups into 2 s ones, and 4 s by the end of
+    # a full run. Any top-level still here is that kind of leak.
+    for widget in qapp.topLevelWidgets():
+        widget.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
