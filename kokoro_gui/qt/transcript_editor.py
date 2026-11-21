@@ -98,6 +98,7 @@ from kokoro_gui.daw.auto_split import plan_auto_split_clips
 from kokoro_gui.daw.undo import ApplyWordsCommand, AssignCharacterCommand, TextEditCommand
 from kokoro_gui.engine.segmenting import PAUSE, WORD
 from kokoro_gui.engine.text_extraction import parse_tag_content, tag_overrides
+from kokoro_gui.qt import clone_from_recording
 from kokoro_gui.qt import project as project_io
 from kokoro_gui.qt import theme
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
@@ -1931,7 +1932,19 @@ class TranscriptEditor(QTextEdit):
         explain.setEnabled(self.textCursor().hasSelection() and getattr(self.app, "lexicon_dock", None) is not None)
         explain.triggered.connect(self._explain_selection)
 
+        # Plan 33: a selection inside a recording can become its speaker's clone.
+        cursor = self.textCursor()
+        clone = menu.addAction(clone_from_recording.MENU_TEXT)
+        clone.setEnabled(cursor.hasSelection() and clone_from_recording.clone_span(
+            self.app.document, cursor.selectionStart(), cursor.selectionEnd()) is not None)
+        clone.triggered.connect(self._clone_from_selection)
+
         return menu
+
+    def _clone_from_selection(self) -> None:
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            clone_from_recording.clone_from_selection(self.app, cursor.selectionStart(), cursor.selectionEnd())
 
     def _explain_selection(self) -> None:
         """Puts the selected text in the Lexicon tab's Test field."""

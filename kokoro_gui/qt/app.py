@@ -1139,6 +1139,13 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.notify_sound_action.toggled.connect(lambda v: self._set_setting("notify_sound", v))
         self.options_menu.addAction(self.notify_sound_action)
 
+        # Grill PG9: a program setting, never part of a project.
+        self.clone_consent_action = QAction("Confirm consent before cloning", self)
+        self.clone_consent_action.setCheckable(True)
+        self.clone_consent_action.setChecked(bool(self.settings.get("clone_consent_confirm", True)))
+        self.clone_consent_action.toggled.connect(lambda v: self._set_setting("clone_consent_confirm", v))
+        self.options_menu.addAction(self.clone_consent_action)
+
         self.details_menu = self.options_menu.addMenu("Transcript details")
         self.details_action = QAction("Show details", self)
         self.details_action.setCheckable(True)
