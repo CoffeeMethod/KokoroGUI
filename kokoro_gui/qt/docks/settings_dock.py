@@ -56,6 +56,14 @@ Below Audio Control, `ScopeFields` (kokoro_gui/qt/docks/scope_fields.py)
 shows the clip's gap, take, status, note and source text in "clip" mode;
 it's hidden in the other two.
 
+Several clips selected (plan 35, grill PG11 (a)) is still "clip" mode, with
+`self._target` the primary clip and `self._targets` all of them. Each field
+shows the value the clips share, or mixed (a blank spin, a "(mixed)" combo
+entry, a partly checked box), and an edit writes that one override on every
+selected clip as one `CompositeCommand`. When the clips' characters use
+different engines, the per-engine fields (the voice) are disabled; when
+the characters differ, so is the Engine row.
+
 `get_state()` deliberately does NOT reflect whatever mode is currently
 rendered: `app.py`'s `_assemble_config`/`_assemble_clip_config` need the
 project-wide ("none") defaults unconditionally, no matter what's selected in
@@ -71,16 +79,19 @@ import os
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFormLayout,
+    QComboBox, QDockWidget, QFormLayout,
     QGroupBox, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget,
 )
 
 import kokoro_gui.qt.app as qt_app_module
+from kokoro_gui.daw.undo import CompositeCommand, SetFieldCommand
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS
 from kokoro_gui.engines.base import SHARED_CONFIG_KEYS
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
 from kokoro_gui.qt import fx_resolve, spec
-from kokoro_gui.qt.docks.scope_fields import ScopeFields
+from kokoro_gui.qt.docks.scope_fields import (
+    MIXED, MIXED_LABEL, MixedCheckBox, MixedSpinBox, ScopeFields, common_value, mark_mixed,
+)
 from kokoro_gui.qt.schema_form import SchemaFormWidget
 
 # Keys tracked in the internal "none"-state cache/live-widget snapshot that
@@ -103,6 +114,8 @@ class SettingsDock(QDockWidget):
         self.schema_form: SchemaFormWidget | None = None
         self._mode = "none"
         self._target = None
+        # Every selected clip in "clip" mode, the primary (`_target`) last.
+        self._targets: list = []
         # Seeded from app.settings up front (not left as {}) - the
         # TranscriptEditor built by GenerationDock (constructed just before
         # this dock) can already have selected a clip by the time this dock
@@ -155,12 +168,12 @@ class SettingsDock(QDockWidget):
         # from GenerationDock) ---
         audio_group = QGroupBox("Audio Control")
         audio_form = QFormLayout(audio_group)
-        self.volume_spin = QDoubleSpinBox()
+        self.volume_spin = MixedSpinBox()
         self.volume_spin.setRange(0.1, 2.0)
         self.volume_spin.setSingleStep(0.1)
         audio_form.addRow("Volume:", self.volume_spin)
 
-        self.pitch_spin = QDoubleSpinBox()
+        self.pitch_spin = MixedSpinBox()
         self.pitch_spin.setRange(-12, 12)
         self.pitch_spin.setSingleStep(1)
         audio_form.addRow("Pitch (st):", self.pitch_spin)
@@ -169,13 +182,13 @@ class SettingsDock(QDockWidget):
         fx_row_layout = QHBoxLayout(fx_row)
         fx_row_layout.setContentsMargins(0, 0, 0, 0)
         self.fx_preset_combo = QComboBox()
-        self.apply_fx_check = QCheckBox("Apply")
+        self.apply_fx_check = MixedCheckBox("Apply")
         fx_row_layout.addWidget(self.fx_preset_combo, 1)
         fx_row_layout.addWidget(self.apply_fx_check)
         audio_form.addRow("FX:", fx_row)
 
-        self.normalize_check = QCheckBox("Normalize")
-        self.trim_check = QCheckBox("Trim Silence")
+        self.normalize_check = MixedCheckBox("Normalize")
+        self.trim_check = MixedCheckBox("Trim Silence")
         toggles_row = QWidget()
         toggles_layout = QHBoxLayout(toggles_row)
         toggles_layout.setContentsMargins(0, 0, 0, 0)
@@ -239,6 +252,7 @@ class SettingsDock(QDockWidget):
             self._none_values = self._snapshot_none_values()
 
         self._mode, self._target = self._resolve_mode()
+        self._targets = self._selected_clips() if self._mode == "clip" else []
         scope = self.app.scope_text() if hasattr(self.app, "scope_text") else None
         self.subproject_label.setVisible(bool(scope))
         self.subproject_label.setText(scope or "")
@@ -247,14 +261,37 @@ class SettingsDock(QDockWidget):
         self.refresh_scope_fields()
         self.refresh_engine_row()
 
+    def _selected_clips(self) -> list:
+        """The selected clips that still exist, the primary (`_target`) last."""
+        document = self.app.document
+        clips = [c for c in (document.get_clip(cid) for cid in self.app.selection.selected_clip_ids)
+                 if c is not None and c is not self._target]
+        return clips + [self._target]
+
+    @property
+    def several(self) -> bool:
+        """Several clips selected (plan 35)."""
+        return self._mode == "clip" and len(self._targets) > 1
+
+    def _clip_engine_id(self, clip) -> str:
+        character = self.app.document.get_character(clip.character_id)
+        return (character.backend_id if character is not None else None) or DEFAULT_ENGINE_ID
+
+    def _engines_differ(self) -> bool:
+        return self.several and common_value(self._targets, self._clip_engine_id) is MIXED
+
     # --- the Engine row (grill EN1, UI16) -------------------------------------
 
     def _scope_character(self):
         """The character the Engine row switches: the selected one, or the
-        selected clip's; None in "none" mode or for a clip without one."""
+        selected clip's (the clips' one character with several selected); None
+        in "none" mode, for a clip without one, or for clips of different
+        characters."""
         if self._mode == "character":
             return self._target
         if self._mode == "clip":
+            if self.several and common_value(self._targets, lambda c: c.character_id) is MIXED:
+                return None
             return self.app.document.get_character(self._target.character_id)
         return None
 
@@ -276,6 +313,11 @@ class SettingsDock(QDockWidget):
             label, enabled = "Engine:", character is not None
             tip = ("The engine this character speaks with." if self._mode == "character"
                    else "The engine this clip's character speaks with. Every clip of the character follows.")
+            if self.several and character is None:
+                shared = common_value(self._targets, self._clip_engine_id)
+                engine_id = None if shared is MIXED else shared
+                tip = ("The selected clips have different characters. "
+                       "Select one character's clips to change its engine.")
         else:
             engine_id, label, enabled, tip = (self.app.default_engine_id, "Engine for new characters:", True,
                                               "The engine a new character gets. The fields below are its defaults.")
@@ -284,8 +326,8 @@ class SettingsDock(QDockWidget):
         self.engine_combo.setToolTip(tip)
         self.engine_combo.blockSignals(True)
         try:
-            index = self.engine_combo.findData(engine_id)
-            if index < 0:
+            index = self.engine_combo.findData(engine_id) if engine_id is not None else -1
+            if index < 0 and engine_id is not None:
                 self.engine_combo.addItem(engine_id, engine_id)
                 index = self.engine_combo.count() - 1
             self.engine_combo.setCurrentIndex(index)
@@ -318,7 +360,7 @@ class SettingsDock(QDockWidget):
         """Rebuilds the clip fields in clip scope. Also called after an undo
         or a generate, which change what they show."""
         if self._mode == "clip":
-            self.scope_fields.build_clip(self._target)
+            self.scope_fields.build_clips(self._targets or [self._target])
             self.scope_group.show()
         else:
             self.scope_fields.clear()
@@ -414,6 +456,32 @@ class SettingsDock(QDockWidget):
                 widget = self.schema_form.widget_for(f.key)
                 if widget is not None:
                     widget.setEnabled(False)
+        if self.several:
+            self._mark_mixed_schema_fields(schema)
+
+    def _mixed_keys(self, keys) -> set:
+        """The keys whose effective value differs across the selected clips."""
+        configs = [self.app.document.effective_config_for_clip(clip) for clip in self._targets]
+        return {key for key in keys if common_value(configs, lambda cfg, k=key: cfg.get(k)) is MIXED}
+
+    def _mark_mixed_schema_fields(self, schema) -> None:
+        """Several clips: a field they disagree on shows mixed, and a
+        per-engine field (the voice) is disabled when their engines differ."""
+        engines_differ = self._engines_differ()
+        self._constructing_schema_form = True
+        try:
+            for key in self._mixed_keys(f.key for f in schema if f.key in ALLOWED_PRESET_KEYS):
+                widget = self.schema_form.widget_for(key)
+                if widget is not None:
+                    mark_mixed(widget, on_pick=lambda checked, k=key: self._write_scoped(k, checked))
+            if engines_differ:
+                for f in schema:
+                    widget = self.schema_form.widget_for(f.key)
+                    if widget is not None and f.key not in SHARED_CONFIG_KEYS:
+                        widget.setEnabled(False)
+                        widget.setToolTip("The selected clips use different engines.")
+        finally:
+            self._constructing_schema_form = False
 
     def rebuild_schema_form(self) -> None:
         """Called by app.py's `set_character_engine` - re-renders this
@@ -456,7 +524,19 @@ class SettingsDock(QDockWidget):
         library write-through)."""
         if self._target is None:
             return
-        if self._mode == "clip":
+        if self.several:
+            if value is None:
+                return  # the "(mixed)" entry picked: nothing chosen yet
+            commands = [SetFieldCommand("clip", clip.id, "overrides", value, key=key)
+                        for clip in self._targets if clip.overrides.get(key) != value]
+            if commands:
+                self.app.document.undo_stack.push(
+                    commands[0] if len(commands) == 1 else CompositeCommand(commands))
+                if self.app.editor is not None:
+                    self.app.editor.rehighlight()
+                self.app.schedule_save()
+                self.app.refresh_timeline()
+        elif self._mode == "clip":
             self._target.overrides[key] = value
             self.app.schedule_save()
             self.app.refresh_timeline()
@@ -483,21 +563,33 @@ class SettingsDock(QDockWidget):
         }
         base.update(cfg)
 
-        widgets = (self.volume_spin, self.pitch_spin, self.normalize_check,
-                   self.trim_check, self.apply_fx_check, self.fx_preset_combo)
-        for w in widgets:
+        widgets = {"volume": self.volume_spin, "pitch": self.pitch_spin, "normalize": self.normalize_check,
+                   "trim": self.trim_check, "apply_fx": self.apply_fx_check, "fx_preset": self.fx_preset_combo}
+        mixed = self._mixed_keys(widgets) if self.several else set()
+        for w in widgets.values():
             w.blockSignals(True)
         try:
+            mixed_entry = self.fx_preset_combo.findText(MIXED_LABEL)
+            if mixed_entry >= 0:
+                self.fx_preset_combo.removeItem(mixed_entry)
             self.volume_spin.setValue(base["volume"])
             self.pitch_spin.setValue(base["pitch"])
+            self.normalize_check.set_mixed(False)
+            self.trim_check.set_mixed(False)
+            self.apply_fx_check.set_mixed(False)
             self.normalize_check.setChecked(bool(base["normalize"]))
             self.trim_check.setChecked(bool(base["trim"]))
             self.apply_fx_check.setChecked(bool(base["apply_fx"]))
             fx_name = base["fx_preset"] or fx_resolve.PLACEHOLDER
             idx = self.fx_preset_combo.findData(fx_name)
             self.fx_preset_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            for key, widget in widgets.items():
+                if isinstance(widget, MixedSpinBox):
+                    widget.set_mixed(key in mixed)
+                elif key in mixed:
+                    mark_mixed(widget)
         finally:
-            for w in widgets:
+            for w in widgets.values():
                 w.blockSignals(False)
 
     def _on_hand_built_changed(self, key: str, value) -> None:

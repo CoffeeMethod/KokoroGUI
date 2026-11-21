@@ -13,21 +13,30 @@ seconds, blank for none), and the duration target fit to slot aims at
 
 Every edit is one `SetFieldCommand` (or `SetActiveTakeCommand`) on the
 document's undo stack, then autosave and a timeline refresh.
+
+Several clips selected (plan 35, grill PG11 (a)): `build_clips` shows gap,
+overlap, status, note and target, each with the value the clips share or
+blank "mixed", and an edit sets that field on every selected clip as one
+`CompositeCommand`. Take, source text and the original range belong to one
+line each, so they need one clip selected. The mixed helpers here
+(`MIXED`, `common_value`, `MixedSpinBox`, `MixedCheckBox`, `mark_mixed`)
+serve the Settings and Audio FX docks too.
 """
 from __future__ import annotations
 
 import re
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
-    QWidget,
+    QAbstractSpinBox, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+    QPlainTextEdit, QPushButton, QWidget,
 )
 
 from kokoro_gui.daw import fit as fit_ops
 from kokoro_gui.daw.arrangement import OVERLAP_KEY, OVERLAP_MAX_S, overlap_s
 from kokoro_gui.daw.models import CLIP_STATUSES
 from kokoro_gui.daw.reference import REFERENCE_RANGE_KEY, reference_range
-from kokoro_gui.daw.undo import SetActiveTakeCommand, SetFieldCommand
+from kokoro_gui.daw.undo import CompositeCommand, SetActiveTakeCommand, SetFieldCommand
 from kokoro_gui.engine.text_extraction import strip_markup
 
 STATUS_LABELS = {"todo": "To do", "generated": "Generated", "approved": "Approved",
@@ -41,6 +50,100 @@ TARGET_NONE = 0.0
 TARGET_MAX_S = 3600.0
 _VOWEL_GROUPS = re.compile(r"[aeiouy]+", re.IGNORECASE)
 _RANGE = re.compile(r"^\s*(\d+(?:\.\d*)?|\.\d+)\s*-\s*(\d+(?:\.\d*)?|\.\d+)\s*$")
+
+
+# What `common_value` returns when the selected clips disagree.
+MIXED = object()
+MIXED_LABEL = "(mixed)"
+
+
+def common_value(items, getter):
+    """`getter(item)` when every item gives the same value, else `MIXED`
+    (also for no items)."""
+    values = [getter(item) for item in items]
+    if not values or any(v != values[0] for v in values[1:]):
+        return MIXED
+    return values[0]
+
+
+class MixedSpinBox(QDoubleSpinBox):
+    """A spin box that can show blank for a mixed value. The first step or
+    typed value ends the mixed state; `is_mixed()` tells a commit handler
+    that the user hasn't picked a value yet."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._mixed = False
+        self.valueChanged.connect(self._on_value_changed)
+
+    def set_mixed(self, mixed: bool) -> None:
+        self._mixed = bool(mixed)
+        self.lineEdit().setText(self.textFromValue(self.value()))
+
+    def is_mixed(self) -> bool:
+        return self._mixed
+
+    def _on_value_changed(self, _value) -> None:
+        self._mixed = False
+
+    def stepBy(self, steps: int) -> None:  # noqa: N802 (Qt override)
+        if self._mixed:
+            # Blank text doesn't parse, and Qt won't step from it.
+            self._mixed = False
+            self.lineEdit().setText(self.textFromValue(self.value()))
+        super().stepBy(steps)
+
+    def textFromValue(self, value: float) -> str:  # noqa: N802 (Qt override)
+        return "" if self._mixed else super().textFromValue(value)
+
+
+class MixedCheckBox(QCheckBox):
+    """A check box that shows a mixed value partly checked. A click on it
+    checks it and emits `toggled(True)`, so the owner's usual handler runs."""
+
+    def set_mixed(self, mixed: bool) -> None:
+        self.setTristate(bool(mixed))
+        if mixed:
+            self.setCheckState(Qt.CheckState.PartiallyChecked)
+
+    def is_mixed(self) -> bool:
+        return self.checkState() == Qt.CheckState.PartiallyChecked
+
+    def nextCheckState(self) -> None:  # noqa: N802 (Qt override)
+        if self.is_mixed():
+            blocked = self.blockSignals(True)
+            self.setTristate(False)
+            self.setCheckState(Qt.CheckState.Unchecked)
+            self.blockSignals(blocked)
+            self.setChecked(True)
+            return
+        super().nextCheckState()
+
+
+def mark_mixed(widget, on_pick=None) -> None:
+    """Shows `widget` as mixed: a blank spin, a "(mixed)" combo entry (data
+    None) or line edit placeholder, a partly checked box. A stock check box
+    calls `on_pick(checked)` on the click that leaves the mixed state."""
+    if isinstance(widget, (MixedSpinBox, MixedCheckBox)):
+        widget.set_mixed(True)
+    elif isinstance(widget, QComboBox):
+        if widget.findText(MIXED_LABEL) < 0:
+            widget.insertItem(0, MIXED_LABEL, None)
+        widget.setCurrentIndex(widget.findText(MIXED_LABEL))
+    elif isinstance(widget, QAbstractSpinBox):
+        widget.lineEdit().clear()
+    elif isinstance(widget, QCheckBox):
+        widget.setTristate(True)
+        widget.setCheckState(Qt.CheckState.PartiallyChecked)
+        if on_pick is not None:
+            def picked(_checked, box=widget):
+                if box.isTristate():
+                    box.setTristate(False)
+                    on_pick(box.isChecked())
+            widget.clicked.connect(picked)
+    elif isinstance(widget, QLineEdit):
+        widget.clear()
+        widget.setPlaceholderText(MIXED_LABEL)
 
 
 def parse_range(text: str):
@@ -87,6 +190,8 @@ class ScopeFields(QWidget):
         self.form.setContentsMargins(0, 0, 0, 0)
         self.widgets: dict = {}
         self.clip_id = None
+        # Several clips selected (`build_clips`); empty otherwise.
+        self.clip_ids: list = []
 
     # -- building -------------------------------------------------------------
 
@@ -95,6 +200,91 @@ class ScopeFields(QWidget):
             self.form.removeRow(0)
         self.widgets = {}
         self.clip_id = None
+        self.clip_ids = []
+
+    def build_clips(self, clips) -> None:
+        """The fields with several clips selected; see the module docstring."""
+        if len(clips) == 1:
+            self.build_clip(clips[0])
+            return
+        self.clear()
+        self.clip_ids = [clip.id for clip in clips]
+
+        def mixed_spin(lo, hi, step, value, none_value, decimals=2):
+            spin = MixedSpinBox()
+            spin.setRange(lo, hi)
+            spin.setSingleStep(step)
+            spin.setDecimals(decimals)
+            spin.setSpecialValueText(" ")
+            spin.setValue(none_value if value is MIXED or value is None else float(value))
+            spin.set_mixed(value is MIXED)
+            return spin
+
+        gap = mixed_spin(GAP_INHERIT, 10.0, 0.05, common_value(clips, lambda c: c.gap_before_s), GAP_INHERIT)
+        gap.setToolTip("Silence before each selected clip. Blank uses the project's gap.")
+        gap.editingFinished.connect(lambda: gap.is_mixed() or self._set_all(
+            "gap_before_s", None if gap.value() <= GAP_INHERIT else gap.value()))
+        self.form.addRow("Gap before (s):", gap)
+
+        overlap = mixed_spin(OVERLAP_NONE, OVERLAP_MAX_S, 0.05, common_value(clips, overlap_s), OVERLAP_NONE)
+        overlap.editingFinished.connect(lambda: overlap.is_mixed() or self._set_all_override(
+            OVERLAP_KEY, None if overlap.value() <= OVERLAP_NONE else round(overlap.value(), 3)))
+        self.form.addRow("Overlap (s):", overlap)
+
+        status = QComboBox()
+        for key in CLIP_STATUSES:
+            status.addItem(STATUS_LABELS[key], key)
+        shared_status = common_value(clips, lambda c: c.status)
+        if shared_status is MIXED:
+            mark_mixed(status)
+        else:
+            status.setCurrentIndex(max(0, status.findData(shared_status)))
+        status.activated.connect(lambda _i: status.currentData() is None or self._set_all(
+            "status", status.currentData()))
+        self.form.addRow("Status:", status)
+
+        shared_note = common_value(clips, lambda c: c.note)
+        note = QLineEdit("" if shared_note is MIXED else shared_note)
+        note.setPlaceholderText("Review note")
+        if shared_note is MIXED:
+            mark_mixed(note)
+        note.editingFinished.connect(lambda: (shared_note is MIXED and not note.text()) or self._set_all(
+            "note", note.text()))
+        self.form.addRow("Note:", note)
+
+        target = mixed_spin(TARGET_NONE, TARGET_MAX_S, 0.1, common_value(clips, fit_ops.target_duration_s),
+                            TARGET_NONE, decimals=3)
+        target.editingFinished.connect(lambda: target.is_mixed() or self._set_all_override(
+            fit_ops.TARGET_KEY, None if target.value() <= TARGET_NONE else round(target.value(), 3)))
+        self.form.addRow("Target (s):", target)
+
+        one_only = QLabel(f"{len(clips)} clips selected. Select one for its take, source text and "
+                          "original range.")
+        one_only.setWordWrap(True)
+        self.form.addRow("", one_only)
+        self.widgets = {"gap_before_s": gap, "overlap_s": overlap, "status": status, "note": note,
+                        "target_duration_s": target, "one_only": one_only}
+
+    def _clips(self) -> list:
+        document = self.app.document
+        return [c for c in (document.get_clip(cid) for cid in self.clip_ids) if c is not None]
+
+    def _push_all(self, commands) -> None:
+        """One undo step for an edit to every selected clip."""
+        if not commands:
+            return
+        self.app.document.undo_stack.push(commands[0] if len(commands) == 1 else CompositeCommand(commands))
+        if self.app.editor is not None:
+            self.app.editor.rehighlight()
+        self._after_edit()
+
+    def _set_all(self, field: str, value) -> None:
+        self._push_all([SetFieldCommand("clip", c.id, field, value) for c in self._clips()
+                        if getattr(c, field) != value])
+
+    def _set_all_override(self, key: str, value) -> None:
+        self._push_all([SetFieldCommand("clip", c.id, "overrides", value, key=key) for c in self._clips()
+                        if c.overrides.get(key) != value])
 
     def build_clip(self, clip) -> None:
         self.clear()
