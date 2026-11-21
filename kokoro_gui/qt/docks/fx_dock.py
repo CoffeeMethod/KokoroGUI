@@ -12,6 +12,12 @@ selection the way the Settings tab does, with the same three modes:
   character's preset, then `clip.fx_override` on top). Edits are collected
   and pushed as one `SetClipFxCommand` per 300ms of quiet, so a slider drag
   is one undo step and the override is a full resolved-values dict.
+  With several clips selected (plan 35, grill PG11 (a)) each field shows the
+  value they share or mixed (a blank spin, a partly checked box, a
+  "(mixed)" entry), and an edit sets only the fields touched on each clip's
+  own resolved values: one `SetClipFxCommand` per clip in one
+  `CompositeCommand`. A preset picked in the combo goes to every clip the
+  same way.
 - "character": the character's attached FX preset file. The first edit per
   session asks "This changes the FX for every clip using X. Continue?";
   a character with no preset yet gets one named after it.
@@ -43,16 +49,18 @@ import re
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
+    QComboBox, QDockWidget, QFileDialog, QFormLayout,
     QGroupBox, QHBoxLayout, QInputDialog, QLabel, QMenu, QMessageBox, QPushButton,
     QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 
 import kokoro_gui.qt.app as qt_app_module
 from kokoro_gui.daw import library_copy, revision, share
-from kokoro_gui.daw.undo import SetClipFxCommand
+from kokoro_gui.daw.undo import CompositeCommand, SetClipFxCommand
+from kokoro_gui.engine import presets
 from kokoro_gui.engine.presets import filter_fx_preset_values
 from kokoro_gui.qt import fx_resolve, share_dialogs, spec
+from kokoro_gui.qt.docks.scope_fields import MIXED, MIXED_LABEL, MixedCheckBox, MixedSpinBox, common_value, mark_mixed
 from kokoro_gui.qt.fx_presets import import_ir_file, list_fx_preset_names, list_ir_names
 from kokoro_gui.qt.fx_resolve import PLACEHOLDER as _PLACEHOLDER
 from kokoro_gui.qt.fx_resolve import PLACEHOLDER_LABEL as _PLACEHOLDER_LABEL
@@ -68,11 +76,15 @@ class FXDock(QDockWidget):
         self.setObjectName("dock_fx")
         self.app = app
 
-        self._value_widgets: dict[str, QDoubleSpinBox] = {}
-        self._enabled_checks: dict[str, QCheckBox] = {}
+        self._value_widgets: dict[str, MixedSpinBox] = {}
+        self._enabled_checks: dict[str, MixedCheckBox] = {}
         self._file_combos: dict[str, QComboBox] = {}
         self._mode = "none"
         self._target = None
+        # Several clips selected: all of them (the primary, `_target`, last),
+        # and the keys edited since the last flush.
+        self._targets: list = []
+        self._pending_keys: set = set()
         self._none_values: dict = {k: self.app.settings.get(k, spec.SETTINGS_DEFAULTS[k]) for k in spec.FX_PRESET_KEYS}
         self._loading = False
         self._character_confirmed: set = set()
@@ -149,7 +161,7 @@ class FXDock(QDockWidget):
             self._build_group(box_layout, specs_by_group[group])
             for key, label, toggle_group in spec.FX_STANDALONE_TOGGLES:
                 if toggle_group == group:
-                    check = QCheckBox(label)
+                    check = MixedCheckBox(label)
                     check.setChecked(self.app.settings.get(key, False))
                     check.toggled.connect(self._on_widget_changed)
                     self._enabled_checks[key] = check
@@ -179,7 +191,7 @@ class FXDock(QDockWidget):
             section_specs = sections[section]
             enabled_key = section_specs[0].enabled_key
             if enabled_key:
-                header = QCheckBox(section)
+                header = MixedCheckBox(section)
                 header.setChecked(self.app.settings.get(enabled_key, False))
                 header.toggled.connect(self._on_widget_changed)
                 self._enabled_checks[enabled_key] = header
@@ -192,7 +204,7 @@ class FXDock(QDockWidget):
                 if isinstance(s, spec.FXFileSpec):
                     form.addRow(s.label + ":", self._build_file_field(s))
                     continue
-                spin = QDoubleSpinBox()
+                spin = MixedSpinBox()
                 spin.setRange(s.minimum, s.maximum)
                 span = s.maximum - s.minimum
                 spin.setSingleStep(span / s.steps if s.steps else 0.1)
@@ -285,14 +297,24 @@ class FXDock(QDockWidget):
         if self._clip_timer.isActive():
             self._flush_clip_edit()
         self._mode, self._target = self._resolve_mode()
+        self._targets = self._selected_clips() if self._mode == "clip" else []
         self._loading = True
         try:
+            mixed_entry = self.preset_combo.findData(MIXED_LABEL)
+            if mixed_entry >= 0:
+                self.preset_combo.removeItem(mixed_entry)
             values, preset_name = self._resolved_values()
             self.set_values(values)
             self._set_combo_text(preset_name)
+            for widget in (*self._value_widgets.values(), *self._enabled_checks.values()):
+                widget.set_mixed(False)
+            if self.several:
+                self._show_mixed()
         finally:
             self._loading = False
-        if self._mode == "clip":
+        if self.several:
+            text = f"Clip FX (override for {len(self._targets)} selected clips)"
+        elif self._mode == "clip":
             text = "Clip FX (override for the selected clip)"
         elif self._mode == "character":
             text = f"Character FX: {self._target.name}"
@@ -300,6 +322,29 @@ class FXDock(QDockWidget):
             text = "Project FX"
         scope = self.app.scope_text() if hasattr(self.app, "scope_text") else None
         self.scope_label.setText(f"{scope}: {text}" if scope else text)
+
+    def _selected_clips(self) -> list:
+        """The selected clips that still exist, the primary (`_target`) last."""
+        document = self.app.document
+        clips = [c for c in (document.get_clip(cid) for cid in self.app.selection.selected_clip_ids)
+                 if c is not None and c is not self._target]
+        return clips + [self._target]
+
+    @property
+    def several(self) -> bool:
+        """Several clips selected (plan 35)."""
+        return self._mode == "clip" and len(self._targets) > 1
+
+    def _show_mixed(self) -> None:
+        """Marks every field the selected clips' resolved FX disagree on, and
+        the preset combo when their presets differ."""
+        resolutions = [fx_resolve.resolve_fx(self.app, clip=clip) for clip in self._targets]
+        widgets = {**self._value_widgets, **self._enabled_checks, **self._file_combos}
+        for key, widget in widgets.items():
+            if common_value(resolutions, lambda r, k=key: r.values.get(k)) is MIXED:
+                mark_mixed(widget)
+        if common_value(resolutions, lambda r: r.preset_name) is MIXED:
+            self._set_combo_text(MIXED_LABEL)
 
     def _character_preset_name(self, character):
         return fx_resolve.real_preset_name(character.preset_data.get("fx_preset")) if character is not None else None
@@ -339,13 +384,29 @@ class FXDock(QDockWidget):
             self._project_timer.start()
             return
         if self._mode == "clip":
+            sender = self.sender()
+            key = self._key_of(sender)
+            # The "(mixed)" entry of a file combo picks nothing.
+            if key is not None and not (isinstance(sender, QComboBox) and sender.currentData() is None):
+                self._pending_keys.add(key)
             self._clip_timer.start()
             return
         self._apply_character_edit()
 
+    def _key_of(self, widget):
+        for widgets in (self._value_widgets, self._enabled_checks, self._file_combos):
+            for key, candidate in widgets.items():
+                if candidate is widget:
+                    return key
+        return None
+
     def _flush_clip_edit(self) -> None:
         self._clip_timer.stop()
+        pending, self._pending_keys = self._pending_keys, set()
         if self._mode != "clip" or self._target is None:
+            return
+        if self.several:
+            self._flush_several(pending)
             return
         values = {k: self.get_state()[k] for k in spec.FX_PRESET_KEYS}
         self.app.document.undo_stack.push(SetClipFxCommand(self._target.id, values, preset_name=None))
@@ -353,6 +414,33 @@ class FXDock(QDockWidget):
         self.app.editor.rehighlight()
         self.app.schedule_save()
         self.app.refresh_timeline()
+
+    def _flush_several(self, keys) -> None:
+        """Several clips: the edited keys go onto each clip's own resolved
+        values, one `SetClipFxCommand` per clip in one undo step."""
+        state = self.get_state()
+        edited = {k: state[k] for k in keys if k in spec.FX_PRESET_KEYS and state.get(k) is not None}
+        if not edited:
+            return
+        commands = []
+        for clip in self._targets:
+            values = {k: v for k, v in fx_resolve.resolve_fx(self.app, clip=clip).values.items()
+                      if k in spec.FX_PRESET_KEYS}
+            values.update(edited)
+            commands.append(SetClipFxCommand(clip.id, values, preset_name=None))
+        self._push_several(commands)
+        self._set_combo_text("custom")
+
+    def _push_several(self, commands) -> None:
+        self.app.document.undo_stack.push(commands[0] if len(commands) == 1 else CompositeCommand(commands))
+        self.app.editor.rehighlight()
+        self.app.schedule_save()
+        self.app.refresh_timeline()
+
+    def _apply_preset_to_several(self, name: str) -> None:
+        preset = presets.load_fx_preset(name, self.app.project_dir)
+        fx_values = filter_fx_preset_values(preset) if preset else None
+        self._push_several([SetClipFxCommand(clip.id, fx_values, preset_name=name) for clip in self._targets])
 
     def _confirm_character_edit(self, character) -> bool:
         if character.id in self._character_confirmed:
@@ -537,7 +625,11 @@ class FXDock(QDockWidget):
 
     def _on_preset_activated(self, index: int) -> None:
         name = self.preset_combo.itemData(index)
-        if not name or name == _PLACEHOLDER or name == "(custom)":
+        if not name or name in (_PLACEHOLDER, "(custom)", MIXED_LABEL):
+            return
+        if self.several:
+            self._apply_preset_to_several(name)
+            self.refresh_for_selection()
             return
         if self._mode == "clip" and self._target is not None:
             self.app.transcript_dock.apply_fx_preset_to_clip(self._target.id, name)

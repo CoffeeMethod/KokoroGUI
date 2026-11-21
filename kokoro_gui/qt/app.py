@@ -4111,10 +4111,14 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def selected_clip_ids(self, project=None) -> set:
         """The ids of the clips the user has selected in `project` (the
         level on show by default): the clips the transcript's selected text
-        overlaps, else the clip selected on the timeline, else none. The one
-        place that answers "what's selected" for Generate."""
+        overlaps, else the clip selected on the timeline, else none. Several
+        clips selected (Ctrl/Shift+click, a rubber band) win over the text
+        selection. The one place that answers "what's selected" for Generate."""
         project = project or self.level
         document = project.document
+        several = [cid for cid in self.selection.selected_clip_ids if document.get_clip(cid) is not None]
+        if len(several) > 1:
+            return set(several)
         editor = self.editor
         if editor is not None and project is self.focus:
             cursor = editor.textCursor()

@@ -18,6 +18,10 @@ composes the two.
 Mouse gestures on the main view (all resolved in `mouseReleaseEvent`):
 
 - click a block: select it (`SelectionModel`); click its FX chip: FX menu.
+  Ctrl+click adds or drops a block, Shift+click selects every clip from the
+  selected one to it in text order, and a drag from empty lane space draws a
+  rubber band that selects the blocks it touches (Ctrl keeps the selection).
+  Right-click with several selected: the batch menu (`batchActionRequested`).
 - click the ruler: `seekRequested(seconds)`.
 - drag a block horizontally: `clipMoved(clip_id, new_start_s)` - the dock
   pins the timestamp, and reorders the text if the drop lands before the
@@ -959,6 +963,10 @@ class TimelineView(QGraphicsView):
     # its edge drags.
     bedActionRequested = Signal(str, str)  # (clip_id, action)
     bedEdgeDragged = Signal(str, str, float)  # (clip_id, "left" | "right", delta_s)
+    # The batch menu with several clips selected (plan 35): (clip_ids, action,
+    # value). Actions: "generate", "status" (value: a status), "fx" (value: a
+    # preset name, "" clears), "clear_gap", "align".
+    batchActionRequested = Signal(object, str, object)
 
     def __init__(self, parent=None, selection_model: Optional[SelectionModel] = None):
         super().__init__(parent)
@@ -968,7 +976,13 @@ class TimelineView(QGraphicsView):
 
         self._selection_model = selection_model
         self._blocks_by_clip_id: dict = {}
-        self._selected_block: Optional[ClipBlockItem] = None
+        self._selected_blocks: list = []
+        # The rubber band (plan 35): the scene point a press on empty lane
+        # space started from, the rectangle drawn while it's dragged, and
+        # whether Ctrl was held (the band adds to the selection).
+        self._band_origin: Optional[QPointF] = None
+        self._band_item: Optional[QGraphicsRectItem] = None
+        self._band_add = False
         self._document = None
         self._arrangement: Optional[Arrangement] = None
         # Optional `(clip) -> (samples, rate) | None` the owner passes so the
@@ -1076,6 +1090,9 @@ class TimelineView(QGraphicsView):
             return None
 
         menu = QMenu(self)
+        selected = self._selection_model.selected_clip_ids if self._selection_model is not None else ()
+        if len(selected) > 1 and block.clip_id in selected and self._document is not None:
+            return self._build_batch_menu(menu, list(selected))
         clip = self._document.get_clip(block.clip_id) if self._document is not None else None
         if clip is not None and clip.is_nested:
             return self._build_subproject_menu(menu, clip)
@@ -1123,6 +1140,38 @@ class TimelineView(QGraphicsView):
                 fit.setToolTip("Regenerate faster or slower, or time-stretch, until the clip fills its target.")
                 fit.triggered.connect(lambda checked=False, cid=clip.id: self.fitToSlotRequested.emit(cid))
 
+        return menu
+
+    def _build_batch_menu(self, menu: QMenu, clip_ids: list) -> QMenu:
+        """The block menu with several clips selected: each entry applies to
+        every selected clip as one undo step (or one queue request)."""
+        clips = [c for c in (self._document.get_clip(cid) for cid in clip_ids) if c is not None]
+        speech = [c for c in clips if not c.is_nested and not c.is_bed]
+        title = menu.addAction(f"{len(clip_ids)} clips selected")
+        title.setEnabled(False)
+        menu.addSeparator()
+
+        def emit(action, value=None):
+            return lambda checked=False: self.batchActionRequested.emit(list(clip_ids), action, value)
+
+        menu.addAction("Generate stale clips").triggered.connect(emit("generate"))
+        status_menu = menu.addMenu("Status")
+        for status in CLIP_STATUSES:
+            action = status_menu.addAction(STATUS_LABELS[status])
+            action.setCheckable(True)
+            action.setChecked(bool(speech) and all(c.status == status for c in speech))
+            action.triggered.connect(emit("status", status))
+        fx_menu = menu.addMenu("FX")
+        for name in list_fx_preset_names():
+            fx_menu.addAction(name).triggered.connect(emit("fx", name))
+        fx_menu.addSeparator()
+        fx_menu.addAction("Clear FX").triggered.connect(emit("fx", ""))
+        clear_gap = menu.addAction("Remove gap override")
+        clear_gap.setEnabled(any(c.gap_before_s is not None for c in speech))
+        clear_gap.triggered.connect(emit("clear_gap"))
+        align = menu.addAction("Align words")
+        align.setEnabled(any(s.audio_path for c in speech for s in c.segments))
+        align.triggered.connect(emit("align"))
         return menu
 
     def _add_split_join(self, menu: QMenu, clip, seconds: float) -> None:
@@ -1405,7 +1454,79 @@ class TimelineView(QGraphicsView):
 
         if self._selection_model is None:
             return
+        ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        if block is not None and block.clip_id is not None:
+            if ctrl:
+                self._selection_model.toggle_clip(block.clip_id)
+            elif not shift or self._drag_mode is not None:
+                self._selection_model.select_clip(block.clip_id)
+            # Shift on a block body resolves on release: a click extends the
+            # selection, a drag is a sub-range TTS.
+            return
+        if block is None and getattr(self.itemAt(pos), "character_id", None) is None:
+            self._start_band(scene_pos, add=ctrl)
+            if ctrl:
+                return
         self._select_clip_block_at(pos)
+
+    # -- rubber band (plan 35) ---------------------------------------------------
+
+    def _start_band(self, scene_pos: QPointF, add: bool) -> None:
+        self._drag_mode = "band"
+        self._band_origin = QPointF(scene_pos)
+        self._band_add = add
+        self._band_item = None
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().mouseMoveEvent(event)
+        if self._drag_mode != "band" or self._band_origin is None:
+            return
+        rect = QRectF(self._band_origin, self.mapToScene(event.position().toPoint())).normalized()
+        if self._band_item is None:
+            pal = theme.current()
+            self._band_item = QGraphicsRectItem()
+            self._band_item.setPen(QPen(QColor(pal.accent), 1, Qt.PenStyle.DashLine))
+            band_fill = QColor(pal.accent)
+            band_fill.setAlpha(40)
+            self._band_item.setBrush(QBrush(band_fill))
+            self._band_item.setZValue(1000)
+            self._scene.addItem(self._band_item)
+        self._band_item.setRect(rect)
+
+    def _finish_band(self, scene_pos: QPointF, moved: bool) -> None:
+        origin, add = self._band_origin, self._band_add
+        self._band_origin = None
+        if self._band_item is not None:
+            if self._band_item.scene() is self._scene:
+                self._scene.removeItem(self._band_item)
+            self._band_item = None
+        if not moved or origin is None or self._selection_model is None:
+            return
+        # Padded so a purely sideways drag (zero height) still touches.
+        self.select_blocks_in(QRectF(origin, scene_pos).normalized().adjusted(-0.5, -0.5, 0.5, 0.5), add=add)
+
+    def select_blocks_in(self, rect: QRectF, add: bool = False) -> None:
+        """Selects every block `rect` (scene coordinates) touches, in text
+        order, the last one primary; `add` keeps what was selected."""
+        order = self._clip_order()
+        touched = [cid for cid, block in self._blocks_by_clip_id.items()
+                   if block.sceneBoundingRect().intersects(rect)]
+        touched.sort(key=lambda cid: order.index(cid) if cid in order else len(order))
+        current = list(self._selection_model.selected_clip_ids) if add else []
+        if not touched:
+            if not add:
+                self._selection_model.clear()
+            return
+        primary = current[-1] if current else touched[-1]
+        self._selection_model.select_clips(current + touched, primary=primary)
+
+    def _clip_order(self) -> list:
+        """Clip ids in text order, which Shift+click extends along."""
+        if self._arrangement is not None:
+            return [placed.clip.id for placed in self._arrangement.placed]
+        if self._document is not None:
+            return [clip.id for clip in self._document.clips]
+        return []
 
     def _track_at_y(self, document, y: float):
         tracks = document.used_tracks()
@@ -1491,6 +1612,8 @@ class TimelineView(QGraphicsView):
         delta = pos - start_pos
         distance = (delta.x() ** 2 + delta.y() ** 2) ** 0.5
         if distance <= self._drag_threshold_px:
+            if shift and self._selection_model is not None:
+                self._selection_model.extend_to(clip_id, self._clip_order())
             return  # a plain click, already handled on press
 
         document = self._document
@@ -1515,6 +1638,8 @@ class TimelineView(QGraphicsView):
                 press_offset = max(clip_start, min(clip_end, press_offset))
                 release_offset = max(clip_start, min(clip_end, release_offset))
                 sub_start, sub_end = sorted((press_offset, release_offset))
+                if self._selection_model is not None:
+                    self._selection_model.select_clip(clip.id)
                 if sub_start != sub_end:
                     self.subRangeTtsRequested.emit(clip.id, sub_start, sub_end)
             return
@@ -1558,7 +1683,9 @@ class TimelineView(QGraphicsView):
         moved = abs(pos.x() - start_pos.x()) > self._drag_threshold_px \
             or abs(pos.y() - start_pos.y()) > self._drag_threshold_px
         seconds = x_to_seconds(scene_pos.x(), self._zoom)
-        if mode == "marker":
+        if mode == "band":
+            self._finish_band(scene_pos, moved)
+        elif mode == "marker":
             if moved:
                 self.markerMoved.emit(payload, round(max(0.0, self.grid_snap(seconds)), 3))
             else:
@@ -1616,16 +1743,21 @@ class TimelineView(QGraphicsView):
             self._selection_model.clear()
 
     def _on_selection_changed(self) -> None:
-        if self._selected_block is not None:
-            self._selected_block.set_selected(False)
-            self._selected_block = None
+        for block in self._selected_blocks:
+            block.set_selected(False)
+        self._selected_blocks = []
 
-        clip_id = self._selection_model.selected_clip_id
-        block = self._blocks_by_clip_id.get(clip_id) if clip_id is not None else None
-        if block is not None:
-            block.set_selected(True)
-            self.ensureVisible(block)
-            self._selected_block = block
+        clip_ids = self._selection_model.selected_clip_ids
+        for clip_id in clip_ids:
+            block = self._blocks_by_clip_id.get(clip_id)
+            if block is not None:
+                block.set_selected(True)
+                self._selected_blocks.append(block)
+        # Scroll to a lone selection only: a band or a Ctrl+click picked
+        # blocks already on screen.
+        primary = self._blocks_by_clip_id.get(self._selection_model.selected_clip_id)
+        if primary is not None and len(clip_ids) == 1:
+            self.ensureVisible(primary)
 
     # -- playhead --------------------------------------------------------------------
 
@@ -1706,7 +1838,8 @@ class TimelineView(QGraphicsView):
         self._blocks_by_clip_id = {}
         self._block_states = {}
         self._peaks_memo = {}
-        self._selected_block = None
+        self._selected_blocks = []
+        self._band_item = None
         self._playhead_item = None
         self._ruler = None
         self._automation_items = {}
@@ -1903,8 +2036,8 @@ class TimelineView(QGraphicsView):
         for clip_id in [cid for cid in self._blocks_by_clip_id if cid not in seen]:
             block = self._blocks_by_clip_id.pop(clip_id)
             self._block_states.pop(clip_id, None)
-            if block is self._selected_block:
-                self._selected_block = None
+            if block in self._selected_blocks:
+                self._selected_blocks.remove(block)
             self._scene.removeItem(block)
 
         for lane in self._automation_items.values():
