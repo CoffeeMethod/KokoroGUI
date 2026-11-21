@@ -985,12 +985,15 @@ class SubprojectsMixin:
             self.editor.load_text(document.text)
         self.on_characters_changed()
         self.set_status(f"New subproject: {title}.")
+        # Queued work for the moved clips follows them into the child.
+        self.requeue_moved_clips(parent, child, [c.id for c in moved])
         return child
 
     def new_subproject_from_selection(self):
         """The File menu's New Subproject: the transcript's selection (or an
-        empty child at the caret's paragraph end when nothing is selected)."""
-        if self.is_busy():
+        empty child at the caret's paragraph end when nothing is selected).
+        Works while a generate runs; a project IO or an export refuses it."""
+        if self.is_io_busy():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job first.")
             return None
         editor = self.editor
@@ -1075,7 +1078,8 @@ class SubprojectsMixin:
         None."""
         from kokoro_gui.qt.template_dialogs import SaveTemplateDialog
 
-        if self.is_busy():
+        # Reads the project and writes a JSON file: fine beside a generate.
+        if self.is_io_busy():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job first.")
             return None
         title = self.root.title()
@@ -1159,7 +1163,8 @@ class SubprojectsMixin:
 
         from kokoro_gui.qt.template_dialogs import CreditsDialog
 
-        if self.is_busy():
+        # New subprojects at the ends, like New Subproject: fine beside a generate.
+        if self.is_io_busy():
             QMessageBox.warning(self, "Busy", "Finish or cancel the current job first.")
             return []
         fields = template_store.clean_credit_fields(self.project_settings.get("credits"))

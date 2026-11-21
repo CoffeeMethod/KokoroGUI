@@ -840,7 +840,10 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
         QMessageBox.information(parent, "Nothing to export",
                                 "This project has no clips yet. Assign characters to text and generate first.")
         return False
-    if app.transport_dock.is_busy():
+    # An export reads the files clips already point at, so it runs beside a
+    # generate (a clip that hasn't landed yet is stale and silent, as the
+    # prompt below says). Another export, a Save or an Open refuses it.
+    if app.is_io_busy():
         QMessageBox.warning(parent, "Busy", "Finish or cancel the current job before exporting.")
         return False
 
@@ -901,7 +904,7 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
     # The checks read the loudness measurement, which needs pyloudnorm.
     checks = preset.checks if preset is not None and loudness_mod.available() else ()
 
-    app.transport_dock.set_busy(True)
+    app.begin_side_job()
     app.transport_dock.set_status("Exporting...", "busy")
     app.transport_dock.set_progress(0, "")
 
@@ -1084,7 +1087,7 @@ def run_measure_loudness(app, parent=None) -> bool:
         QMessageBox.information(parent, "Nothing to measure",
                                 "This project has no clips yet. Assign characters to text and generate first.")
         return False
-    if app.transport_dock.is_busy():
+    if app.is_io_busy():
         QMessageBox.warning(parent, "Busy", "Finish or cancel the current job before measuring.")
         return False
     if not loudness_mod.available():
@@ -1097,7 +1100,7 @@ def run_measure_loudness(app, parent=None) -> bool:
     sample_rate = inputs["sample_rate"]
     stale = len(document.dirty_clips())
 
-    app.transport_dock.set_busy(True)
+    app.begin_side_job()
     app.transport_dock.set_status("Measuring loudness...", "busy")
     app.transport_dock.set_progress(0, "")
 

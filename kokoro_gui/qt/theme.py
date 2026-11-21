@@ -84,6 +84,10 @@ class Palette:
     # Find and replace: every match in the transcript, and the current one.
     find_match: str
     find_current: str
+    # The generation queue: a clip waiting in it and one generating now, in
+    # the gutter's mark and the timeline block's hatch.
+    queue_waiting: str
+    queue_running: str
     # Transport level meter: the bar's zones (below -6 dBFS, up to -1, over).
     meter_ok: str
     meter_warn: str
@@ -129,6 +133,8 @@ LIGHT = Palette(
     proof_flag="#9333ea",
     find_match="#bfdbfe",
     find_current="#60a5fa",
+    queue_waiting="#64748b",
+    queue_running="#0d9488",
     meter_ok="#16a34a",
     meter_warn="#f59e0b",
     meter_clip="#dc2626",
@@ -169,6 +175,8 @@ DARK = Palette(
     proof_flag="#c084fc",
     find_match="#1e3a5f",
     find_current="#2f6fb5",
+    queue_waiting="#94a3b8",
+    queue_running="#2dd4bf",
     meter_ok="#4ade80",
     meter_warn="#fbbf24",
     meter_clip="#ef4444",

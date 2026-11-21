@@ -53,6 +53,8 @@ Unreleased:
 -   Generate fills a book in as it goes: the stale clips run eight at a time, a Queue tab lists the batches with the time
     left, and Pause, reorder and Resume work on them, even after a restart
 -   An Exports tab lists every export, newest first, with Play, Show in Folder and Delete
+-   Keep editing while the queue runs: Generate, a clip's play button and Fit to slot join the queue, and Save, New
+    Subproject and Export run beside it
 -   Added the optional [LuxTTS engine](docs/settings.html#luxtts).
 -   A Help menu with Documentation, Keyboard Shortcuts and About, and File > Show in Folder
 -   A log file, and a dialog with the traceback when something crashes

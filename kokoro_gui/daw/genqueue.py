@@ -22,7 +22,13 @@ from typing import Callable, Iterable, Optional
 
 CLIPS = "clips"
 SUBPROJECT = "subproject"
+# A single clip or a fit to slot asked for while a generate runs (plan 29).
+# The app holds the code that runs it, so a task is never written to
+# `session.json` and `from_dict` never makes one.
+TASK = "task"
 KINDS = (CLIPS, SUBPROJECT)
+# Kinds whose `clip_ids` are clips to generate, counted in the progress.
+CLIP_KINDS = (CLIPS, TASK)
 
 QUEUED = "queued"
 RUNNING = "running"
@@ -204,6 +210,31 @@ class GenerationQueue:
     def drop_finished(self) -> None:
         self.items = [i for i in self.items if not i.finished]
 
+    def take_clips(self, project_id: str, clip_ids) -> int:
+        """Takes `clip_ids` out of the queued "clips" items of `project_id`
+        (a New Subproject moved those clips into another document). An item
+        left with no clip goes, and one that loses some keeps a share of its
+        characters. Returns the index of the first item that held one, or -1."""
+        wanted = set(clip_ids)
+        first = -1
+        kept = []
+        for item in self.items:
+            if item.state != QUEUED or item.kind != CLIPS or item.project_id != project_id                     or wanted.isdisjoint(item.clip_ids):
+                kept.append(item)
+                continue
+            if first < 0:
+                first = len(kept)
+            left = [c for c in item.clip_ids if c not in wanted]
+            if not left:
+                continue
+            share = len(left) / len(item.clip_ids)
+            item.clip_ids = left
+            item.engine_chars = {e: int(n * share) for e, n in item.engine_chars.items()}
+            item.chars = sum(item.engine_chars.values())
+            kept.append(item)
+        self.items = kept
+        return first
+
     # -- reading -----------------------------------------------------------------
 
     def first_queued_index(self) -> int:
@@ -233,13 +264,13 @@ class GenerationQueue:
         return {c for i in self.pending() if project_id is None or i.project_id == project_id for c in i.clip_ids}
 
     def clip_total(self) -> int:
-        return sum(i.clip_count for i in self.items if i.kind == CLIPS and i.state != CANCELLED)
+        return sum(i.clip_count for i in self.items if i.kind in CLIP_KINDS and i.state != CANCELLED)
 
     def clips_finished(self) -> int:
-        return sum(i.clip_count for i in self.items if i.kind == CLIPS and i.state in (DONE, FAILED))
+        return sum(i.clip_count for i in self.items if i.kind in CLIP_KINDS and i.state in (DONE, FAILED))
 
     def pending_clip_count(self) -> int:
-        return sum(i.clip_count for i in self.items if i.kind == CLIPS and i.state in (QUEUED, RUNNING))
+        return sum(i.clip_count for i in self.items if i.kind in CLIP_KINDS and i.state in (QUEUED, RUNNING))
 
     def remaining_chars(self) -> int:
         return sum(i.chars for i in self.pending())
@@ -251,7 +282,7 @@ class GenerationQueue:
         second or None; an engine with no rate is left out and `complete` is
         False. An item with no characters known yet is not complete either."""
         if not item.engine_chars:
-            return 0.0, item.kind == CLIPS
+            return 0.0, item.kind in CLIP_KINDS
         left = max(0.0, 1.0 - max(0.0, min(1.0, fraction_done)))
         seconds, complete = 0.0, True
         for engine_id, chars in item.engine_chars.items():
@@ -276,7 +307,7 @@ class GenerationQueue:
     # -- saving ------------------------------------------------------------------
 
     def to_dict(self) -> dict:
-        return {"items": [i.to_dict() for i in self.items]}
+        return {"items": [i.to_dict() for i in self.items if i.kind in KINDS]}
 
     @classmethod
     def from_dict(cls, raw) -> "GenerationQueue":

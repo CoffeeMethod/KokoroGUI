@@ -15,9 +15,18 @@ step inside it (a project IO, a batch) is ignored until the queue goes idle.
 Pause stops after the running item; Cancel cancels the running item and every
 queued one.
 
+While the queue runs the user keeps editing (plan 29): Generate, a gutter
+generate and Fit to slot add to it instead of being refused (a single clip
+or a fit is a "task" item, put ahead of the queued ones), an item re-reads
+which of its clips are still stale when it starts, and New Subproject hands
+the queued clips it moves to the child (`requeue_moved_clips`).
+`queued_clip_ids` tells the gutter and the timeline what is queued or
+generating.
+
 The queue of the root project is written to `session.json["queue"]` after
 every change (runtime state, never in `document.json` or a bundle) and read
-back on Open, paused, with the clips that are still stale.
+back on Open, paused, with the clips that are still stale. Task items are
+left out: they are code, not data.
 
 Mixed into `QtTTSApp`; expects its docks, `root`, `children`, `set_ui_state`.
 """
@@ -63,6 +72,10 @@ class GenerationQueueMixin:
         self._queue_rates: dict = {}
         self._queue_written: str | None = None
         self._queue_restored = 0
+        # item id -> `start(done)` of a task item (`enqueue_task`).
+        self._queue_tasks: dict = {}
+        # `(project_id, clip ids)` of the batch a subproject item is running.
+        self._queue_batch: tuple | None = None
         self.queue_dock = None
 
     # -- looking things up ------------------------------------------------------
@@ -85,16 +98,21 @@ class GenerationQueueMixin:
 
     # -- enqueueing --------------------------------------------------------------
 
-    def enqueue_clips(self, project, clips, title: str | None = None, front: bool = False) -> int:
+    def enqueue_clips(self, project, clips, title: str | None = None, front: bool = False,
+                      at: int | None = None) -> int:
         """Queues `clips` (stale, generatable clips of `project`) as items of
-        at most eight, in text order, after the items already queued (or ahead
-        of them with `front`). A clip already in a queued or running item is
-        not added twice. Starts the queue. Returns how many clips were added."""
+        at most eight, in text order, after the items already queued (ahead
+        of them with `front`, or at index `at`). A clip already in a queued or
+        running item is not added twice. Starts the queue. Returns how many
+        clips were added."""
         queue = self.generation_queue
         waiting = queue.pending_clip_ids(project.project_id)
         fresh = [clip for clip in clips if clip.id not in waiting]
         items = genqueue.plan_items(project.project_id, self._clip_entries(project, fresh), title or project.title())
-        index = queue.first_queued_index() if front else len(queue.items)
+        if at is not None:
+            index = max(queue.first_queued_index(), min(len(queue.items), at))
+        else:
+            index = queue.first_queued_index() if front else len(queue.items)
         for offset, item in enumerate(items):
             queue.add(item, index + offset)
         self._kick_queue()
@@ -116,6 +134,71 @@ class GenerationQueueMixin:
             self._queue_then[item.id] = then
         self._kick_queue()
         return item
+
+    def enqueue_task(self, project, clip_ids, title: str, start, front: bool = True) -> QueueItem:
+        """Queues work the app runs itself: a single clip's generate or a fit
+        to slot asked for while a generate runs. `start(done)` begins it when
+        its turn comes and returns True (it calls `done(succeeded_ids,
+        failed_ids)` when it ends), False (it couldn't start) or None (there
+        was nothing left to do). Goes ahead of the queued items unless
+        `front` is False. Never written to `session.json`."""
+        clips = [project.document.get_clip(clip_id) for clip_id in clip_ids]
+        entries = self._clip_entries(project, [clip for clip in clips if clip is not None])
+        engine_chars: dict = {}
+        for _clip_id, chars, engine_id in entries:
+            engine_chars[engine_id] = engine_chars.get(engine_id, 0) + chars
+        item = QueueItem(kind=genqueue.TASK, project_id=project.project_id, clip_ids=list(clip_ids), title=title,
+                         chars=sum(engine_chars.values()), engine_chars=engine_chars)
+        queue = self.generation_queue
+        queue.add(item, queue.first_queued_index() if front else None)
+        self._queue_tasks[item.id] = start
+        self._kick_queue()
+        return item
+
+    def requeue_moved_clips(self, parent, child, clip_ids) -> int:
+        """New Subproject moved `clip_ids` from `parent` into `child`. Their
+        queued work leaves `parent`'s items; the ones still stale in `child`
+        are queued there, where those items were. A running batch's result
+        for a moved clip finds no clip in `parent` and is skipped. Returns how
+        many clips were queued under `child`."""
+        queue = self.generation_queue
+        moved = set(clip_ids) & queue.pending_clip_ids(parent.project_id)
+        if not moved:
+            return 0
+        at = queue.take_clips(parent.project_id, moved)
+        stale = [clip for clip in child.document.dirty_clips() if clip.id in moved and not clip.is_nested
+                 and not self.cannot_generate(clip, child)]
+        if not stale:
+            self._queue_changed()
+            return 0
+        return self.enqueue_clips(child, stale, at=at if at >= 0 else None, front=at < 0)
+
+    def queued_clip_ids(self, project=None) -> dict:
+        """`{clip_id: "queued" | "running"}` for the clips of `project` (the
+        focus by default) that queued or running work will generate: the
+        gutter reads it once per paint, the timeline once per refresh. A
+        queued subproject is its nested clip in the parent."""
+        project = project or self.focus
+        project_id = project.project_id
+        states: dict = {}
+        for item in self.generation_queue.items:
+            if item.project_id != project_id:
+                continue
+            if item.state == genqueue.QUEUED:
+                for clip_id in item.clip_ids:
+                    states.setdefault(clip_id, "queued")
+            elif item.state == genqueue.RUNNING:
+                for clip_id in item.clip_ids:
+                    states[clip_id] = "running"
+        batch = self._queue_batch
+        if batch is not None and batch[0] == project_id:
+            for clip_id in batch[1]:
+                states[clip_id] = "running"
+        dock = getattr(self, "timeline_dock", None)
+        if dock is not None:
+            for clip_id in dock.clips_generating(project):
+                states[clip_id] = "running"
+        return states
 
     def _kick_queue(self) -> None:
         """Something was queued by an action of the user's: it runs, even
@@ -148,6 +231,8 @@ class GenerationQueueMixin:
 
     def _queue_begin_run(self) -> None:
         self.generation_queue.drop_finished()
+        waiting = {item.id for item in self.generation_queue.items}
+        self._queue_tasks = {k: v for k, v in self._queue_tasks.items() if k in waiting}
         self.queue_active = True
         self._queue_cancelled = False
         self._queue_ok = self._queue_failed = 0
@@ -166,12 +251,24 @@ class GenerationQueueMixin:
         self._queue_rates.clear()
         self._queue_changed()
         project = self.project_by_id(item.project_id)
-        if project is None:
+        if item.kind == genqueue.TASK:
+            self._run_task_item(item, project)
+        elif project is None:
             self._finish_later(item, ok=False)
         elif item.kind == genqueue.CLIPS:
             self._run_clips_item(item, project)
         else:
             self._run_subproject_item(item, project)
+
+    def _run_task_item(self, item: QueueItem, project) -> None:
+        start = self._queue_tasks.pop(item.id, None)
+        started = False
+        if start is not None and project is not None:
+            started = start(lambda ok_ids, bad_ids: self._item_finished(item, ok_ids, bad_ids))
+        if started is None:
+            self._finish_later(item)
+        elif not started:
+            self._finish_later(item, bad_ids=item.clip_ids)
 
     def _finish_later(self, item, ok_ids=(), bad_ids=(), ok=True) -> None:
         """Ends an item that did no work, on the next event loop pass, so a
@@ -284,6 +381,8 @@ class GenerationQueueMixin:
                 else:
                     QTimer.singleShot(0, lambda: _step(index + 1))
 
+            self._queue_batch = (child.project_id, set(batches[index]))
+            self.refresh_queue_marks()
             started = self.timeline_dock.start_batch(child, batches[index], _after)
             if not started:
                 self._pending_render_after_generate.pop(child.project_id, None)
@@ -296,7 +395,8 @@ class GenerationQueueMixin:
         """The running item ended (its results are applied): marks it, then
         runs the next one or goes idle."""
         queue = self.generation_queue
-        if item.kind == genqueue.CLIPS:
+        self._queue_batch = None
+        if item.kind in genqueue.CLIP_KINDS:
             self._queue_ok += len(ok_ids)
             self._queue_failed += len(bad_ids)
             ok = not bad_ids
@@ -400,6 +500,7 @@ class GenerationQueueMixin:
 
     def remove_queue_item(self, item: QueueItem) -> bool:
         if self.generation_queue.remove(item):
+            self._queue_tasks.pop(item.id, None)
             self._queue_changed()
             return True
         return False
@@ -449,7 +550,7 @@ class GenerationQueueMixin:
         """One clip of the running batch finished."""
         self._queue_inflight = completed
         item = self._queue_item
-        if item is not None and item.kind == genqueue.CLIPS and total:
+        if item is not None and item.kind in genqueue.CLIP_KINDS and total:
             self._queue_fraction = completed / total
         elif item is not None and self._queue_child_total:
             self._queue_fraction = (self._queue_child_done + completed) / self._queue_child_total
@@ -459,7 +560,7 @@ class GenerationQueueMixin:
     def queue_pending_clip_count(self) -> int:
         """Clips waiting or running, counting each queued subproject as one."""
         queue = self.generation_queue
-        return sum(max(1, i.clip_count) if i.kind == genqueue.CLIPS else 1 for i in queue.pending())
+        return sum(max(1, i.clip_count) if i.kind in genqueue.CLIP_KINDS else 1 for i in queue.pending())
 
     # -- session.json["queue"] -----------------------------------------------------
 
@@ -472,6 +573,16 @@ class GenerationQueueMixin:
             self.transport_dock.set_queue_state(bool(self.generation_queue.pending()), self.queue_paused)
         if self.queue_dock is not None:
             self.queue_dock.refresh()
+        self.refresh_queue_marks()
+
+    def refresh_queue_marks(self) -> None:
+        """The queued and generating marks in the gutter and on the timeline
+        follow the queue."""
+        dock = getattr(self, "timeline_dock", None)
+        if dock is not None:
+            dock.refresh_queue_marks()
+        if getattr(self, "transcript_dock", None) is not None and self.editor is not None:
+            self.editor.update_gutter()
 
     def _persist_queue(self) -> None:
         """Writes the queued and running items to the root project's
@@ -481,7 +592,7 @@ class GenerationQueueMixin:
         root = self.root
         if not root.project_dir:
             return
-        pending = [i.to_dict() for i in self.generation_queue.pending()]
+        pending = [i.to_dict() for i in self.generation_queue.pending() if i.kind in genqueue.KINDS]
         text = json.dumps(pending)
         if text == self._queue_written:
             return
