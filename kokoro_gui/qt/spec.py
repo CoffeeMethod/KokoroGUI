@@ -265,6 +265,12 @@ SETTINGS_DEFAULTS = {
     # (kokoro_gui/qt/workspace.py). The old flat dock_state/geometry keys
     # migrate into workspaces.Advanced on first load.
     "workspaces": {},
+    # Named snapshots {name: {"state", "geometry"}}, written only by Save
+    # workspace as and Update workspace (grill UI17), and the active custom
+    # workspace's live arrangement {"workspace", "state", "geometry",
+    # "modified"} that a restart brings back (PG31).
+    "custom_workspaces": {},
+    "workspace_live": {},
     "active_workspace": "Advanced",
 }
 
