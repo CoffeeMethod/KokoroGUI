@@ -385,6 +385,25 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Workspaces</h3>
+        <ul class="change-list">
+          <li>
+            <h4>Your own named workspaces</h4>
+            <p>Workspace &gt; Save workspace as&hellip; keeps the current layout under a name, and the name joins Advanced and Simple in the menu. A saved workspace changes only when you choose Update workspace. Moving, closing or floating panels changes the window, and the menu shows the workspace as "Name (modified)" until you update or choose Revert to saved layout. Switching workspaces, quitting and settings changes never write over a saved one. Quit with changes and the next launch opens the layout as you left it, still marked modified; choosing the workspace in the menu loads the saved version. Rename workspace&hellip; and Delete workspace&hellip; work on the active one, or ask which. A name can't be blank, can't match Advanced, Simple or one you already have (ignoring case), and can hold any characters, an ampersand included. Revert, Delete, Restore default layout and replacing a saved workspace ask first.</p>
+            <p>Advanced and Simple keep remembering your changes by themselves, as before. Reset layout is now Restore default layout&hellip;. On a saved workspace it rearranges the window and leaves the saved layout alone until you update.</p>
+          </li>
+          <li>
+            <h4>Workspace &gt; Panels</h4>
+            <p>Panels lists every panel with a check mark, so a panel you closed is one click away; the right-click menu on a panel title still works too. A closed panel was only hidden, and comes back where it was without moving the others. The Voices entry follows the voice editor of the engine in use. When the engine changes, the new editor takes the old one's place, including closed or floating, and an engine without an editor shows a greyed Voices entry that says so.</p>
+          </li>
+          <li>
+            <h4>Safer layout restore</h4>
+            <p>Layouts are checked when the app starts. A damaged workspace entry is dropped, and a layout that can't be restored falls back to the default with a message that names it, so a bad settings file can't leave you with an empty window. A floating panel that was on a monitor you've since unplugged moves back onto the screen. Layout changes are saved to <code>config_qt.json</code> about a second after you make them, and they never mark the project unsaved.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Timeline and view</h3>
         <ul class="change-list">
           <li>

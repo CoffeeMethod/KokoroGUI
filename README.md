@@ -50,6 +50,8 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 Unreleased:
 
+-   Save your own named workspaces, which change only when you choose Update workspace, and reopen any closed panel
+    from Workspace > Panels
 -   Open another project, or start a new one, while Generate runs: the first one keeps generating in the background into
     its own files, and the Queue tab and the progress bar show it
 -   The Qt widget tests run in CI on Linux in their own job, and the full GUI suite takes 4 minutes locally instead of 38
