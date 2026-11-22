@@ -76,7 +76,7 @@ from kokoro_gui.daw.undo import (
     SetFieldCommand, SplitClipCommand,
 )
 from kokoro_gui import logging_setup
-from kokoro_gui.core import engines as core_engines
+from kokoro_gui.core import config as core_config, engines as core_engines
 from kokoro_gui.engine import cache_admin, caching, runtime, text_extraction
 from kokoro_gui.engine.lexicon import normalize_rules
 from kokoro_gui.engines import registry as engine_registry
@@ -1752,124 +1752,57 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def _segmentation_config(gen_state: dict) -> dict:
         """The segmentation keys (`spec.SEGMENTATION_KEYS`) from the
         Settings tab, defaulted: where every path cuts text into pieces."""
-        return {key: gen_state.get(key, spec.SETTINGS_DEFAULTS[key]) for key in spec.SEGMENTATION_KEYS}
+        return core_config.segmentation_config(gen_state)
 
-    def _assemble_generation_config(self, clip, project=None) -> dict:
-        """Exactly the inputs that decide what a clip's audio *is*: the
-        segment key hashes these and nothing else, and `_assemble_clip_config`
-        is built on top. The project defaults from the Settings tab, the clip's own
-        engine's `lang_code` and "Model" schema group (Audio8's sampling
-        knobs) from `engine_settings`, the Lexicon (the
-        key is over the text after substitution), the segmentation settings
-        (they decide the pieces), then the clip's
-        `effective_config_for_clip` (character preset, then overrides) on
-        top, then `project_dir` and the clip's take. The take is read off
-        `clip.overrides` directly, not through the `ALLOWED_PRESET_KEYS`
-        whitelist, which is for untrusted preset files and shouldn't widen
-        for a runtime counter. One method decides what both the dirty check
-        and a Generate hash, so they can't drift."""
-        project = project or self.project_for(clip)
-        gen_state = self.settings_dock.get_state()
-        backend = self.backend_for(clip, project)
-        engine = self.engine_settings(backend.id)
-        config = {
-            "engine_id": backend.id,
-            "lang_code": engine.get("lang_code"),
-            "voice": engine.get("voice"),
-            "speed": gen_state["speed"],
-            "pitch": gen_state["pitch"],
-            "lexicon": normalize_rules(self.settings.get("lexicon")),
-            **self._segmentation_config(gen_state),
-        }
-        for key, default in self._model_fields(backend):
-            config[key] = engine.get(key, default)
-        clip_config = dict(project.document.effective_config_for_clip(clip))
-        for key in ("voice", "speed", "pitch", "lang_code"):
-            if key in clip_config:
-                config[key] = clip_config[key]
-        variant_voice = self._variant_voice(clip, project)
-        if variant_voice:
-            config["voice"] = variant_voice
-        factor = heading_speed(project.document)
-        if factor != 1.0 and heading_clip_id(project.document) == clip.id:
-            # A chapter title reads at its own pace (the project's `heading_speed`).
-            config["speed"] = round(float(config.get("speed", 1.0) or 1.0) * factor, 4)
-        config["project_dir"] = project.project_dir
-        config["take"] = int(clip.overrides.get("take", 0) or 0)
-        return config
+    def _generation_inputs(self) -> core_config.GenerationInputs:
+        """The Settings tab's project values and the Lexicon, as
+        `core.config` takes them."""
+        return core_config.GenerationInputs.from_state(self.settings_dock.get_state(), self.settings.get("lexicon"))
 
-    def _variant_voice(self, clip, project=None):
-        """The reference name `clip.overrides["variant"]` picks from its
-        character's `variants`, or None. Only a cloning backend has
-        variants; on any other the override is ignored."""
-        project = project or self.project_for(clip)
-        variant = (clip.overrides or {}).get("variant")
-        if not variant or not getattr(self.backend_for(clip, project).capabilities, "supports_voice_cloning", False):
-            return None
-        character = project.document.get_character(clip.character_id)
-        if character is None:
-            return None
-        return (character.variants or {}).get(variant) or None
-
-    def _assemble_clip_config(self, clip, project=None) -> dict:
-        """The config dict for a per-clip Generate action and, through
-        `post_config_for_clip`, for read-time post-processing:
-        `_assemble_generation_config` plus everything that doesn't change
-        the audio (output location and naming, threads, caching, the post
-        keys) with `clip`'s character/override settings merged on top, so
-        the clip's own values win. Defaults must come first:
-        `process_chunk_task` reads `config['voice']` by direct indexing, so a clip with no character must still end up
-        with usable defaults. FX come from `fx_resolve.resolve_fx`, the same
-        resolver the Audio FX tab renders."""
-        project = project or self.project_for(clip)
-        gen_state = self.settings_dock.get_state()
+    def _output_inputs(self) -> core_config.OutputInputs:
+        """The export settings' format, folder and expanded filename, and
+        the `time_id` stamp, as `core.config` takes them."""
         from kokoro_gui.qt.docks.export_dialog import output_name
 
         export = self._export_values()
-        config = {
-            # The clip's engine's own settings (threads, Audio8's
-            # cache_reference_codes, ...); the generation keys among them
-            # are set again below by _assemble_generation_config.
-            "num_threads": 1,
-            **self.engine_settings(self.backend_for(clip, project).id),
-            "format": export["format"],
-            "out_dir": export["out_dir"],
-            "caching": gen_state["caching"],
-            "time_id": time.strftime(self.timecode_format),
-            "volume": gen_state["volume"],
-            "normalize": gen_state["normalize"],
-            "trim_silence": gen_state["trim_silence"],
-            "filename": output_name(self, export["filename"]),
-        }
+        return core_config.OutputInputs(format=export["format"], out_dir=export["out_dir"],
+                                        filename=output_name(self, export["filename"]),
+                                        time_id=time.strftime(self.timecode_format))
 
-        clip_config = dict(project.document.effective_config_for_clip(clip))
-        # ALLOWED_PRESET_KEYS whitelists "trim", but process_audio reads
-        # "trim_silence" - same inline rename every other caller does.
-        if "trim" in clip_config:
-            clip_config["trim_silence"] = clip_config.pop("trim")
-        config.update(clip_config)
-        config.update(self._assemble_generation_config(clip, project))
-        if project.project_dir:
-            # Clips generate straight into the project dir, once, named by
-            # their segment key (Claude/old/PLAN_tbaw_bundle.md section 3). The
-            # bundle's audio format decides the extension of new segments,
-            # over a preset's `format` (that one is for the export path).
-            config["out_dir"] = os.path.join(project.project_dir, *project_io.AUDIO_GENERATED.split("/"))
-            config["segment_naming"] = "cache_key"
-            config["format"] = project_io.bundle_options(project.project_settings)["audio_format"]
+    def _assemble_generation_config(self, clip, project=None) -> dict:
+        """Exactly the inputs that decide what a clip's audio *is*
+        (`core.config.generation_config`): the segment key hashes these and
+        nothing else, and `_assemble_clip_config` is built on top. Reads
+        the Settings tab, the Lexicon and the clip's engine's settings. One
+        method decides what both the dirty check and a Generate hash, so
+        they can't drift."""
+        project = project or self.project_for(clip)
+        backend = self.backend_for(clip, project)
+        return core_config.generation_config(
+            self._generation_inputs(), self.engine_settings(backend.id), project.document, clip, backend,
+            project.project_dir, self._schema_memo)
 
-        # effective_config_for_clip only ever carries the FX preset's *name*;
-        # the resolver turns project values + character preset + clip preset
-        # + clip.fx_override into the actual FX keys and the ANDed apply_fx.
+    def _variant_voice(self, clip, project=None):
+        """The reference name `clip.overrides["variant"]` picks from its
+        character's `variants`, or None (`core.config.variant_voice`)."""
+        project = project or self.project_for(clip)
+        return core_config.variant_voice(project.document, clip, self.backend_for(clip, project))
+
+    def _assemble_clip_config(self, clip, project=None) -> dict:
+        """The config dict for a per-clip Generate action and, through
+        `post_config_for_clip`, for read-time post-processing
+        (`core.config.clip_config`): `_assemble_generation_config` plus
+        everything that doesn't change the audio. FX come from
+        `fx_resolve.resolve_fx`, the same resolver the Audio FX tab
+        renders."""
+        project = project or self.project_for(clip)
+        backend = self.backend_for(clip, project)
+        inputs = self._generation_inputs()
+        output = self._output_inputs()
         resolution = fx_resolve.resolve_fx(self, clip=clip, project=project)
-        config.update(resolution.values)
-        config["apply_fx"] = resolution.apply_fx
-        # Fit to slot's stretch factor (a post key). Read off the overrides
-        # directly, like the take: it is per clip, never a preset value.
-        stretch = (clip.overrides or {}).get("time_stretch")
-        if stretch is not None:
-            config["time_stretch"] = stretch
-        return config
+        return core_config.clip_config(
+            inputs, output, self.engine_settings(backend.id), project.document, clip, backend,
+            project.project_dir, project.project_settings, resolution, self._schema_memo)
 
     def _install_segment_key_fn(self, project=None) -> None:
         """Sets `Document.segment_key_fn` to a closure that keys each clip
@@ -2010,18 +1943,18 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         Verify mode recomputes and compares."""
         project = project or self.project_for(clip)
         if self.settings_dock is None or self.fx_dock is None:
-            config = post.extract_post_config(self._assemble_clip_config(clip, project))
+            config = core_config.post_config(self._assemble_clip_config(clip, project))
             return (None, config, post.post_key(config))
         token = (self._clip_token(clip, project), self._post_inputs_fingerprint(project))
         memo_key = (id(project), clip.id)
         hit = self._post_config_memo.get(memo_key)
         if hit is not None and hit[0] == token:
             if revision.VERIFY:
-                fresh = post.extract_post_config(self._assemble_clip_config(clip, project))
+                fresh = core_config.post_config(self._assemble_clip_config(clip, project))
                 if fresh != hit[1]:
                     raise StaleCacheError(f"post config of clip {clip.id} is stale: {hit[1]} != {fresh}")
             return hit
-        config = post.extract_post_config(self._assemble_clip_config(clip, project))
+        config = core_config.post_config(self._assemble_clip_config(clip, project))
         entry = (token, config, post.post_key(config))
         self._post_config_memo[memo_key] = entry
         return entry
