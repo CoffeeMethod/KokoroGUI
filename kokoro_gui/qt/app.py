@@ -76,10 +76,10 @@ from kokoro_gui.daw.undo import (
     SetFieldCommand, SplitClipCommand,
 )
 from kokoro_gui import logging_setup
+from kokoro_gui.core import config as core_config, engines as core_engines
 from kokoro_gui.engine import cache_admin, caching, runtime, text_extraction
 from kokoro_gui.engine.lexicon import normalize_rules
 from kokoro_gui.engines import registry as engine_registry
-from kokoro_gui.engines.base import per_engine_fields
 from kokoro_gui.engines.missing import MissingBackend
 from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
 from kokoro_gui.qt import settings as qt_settings
@@ -255,9 +255,13 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._closed = False
         # Every engine a character uses stays resident (grill V3, "engine
         # follows the character"): engine id -> adapter, and its signal
-        # bridge. Built on first use by `_backend_for`; the pipeline loads
-        # once per backend (`_ensure_backend_ready`).
-        self._backends: dict = {}
+        # bridge. Built on first use by `_backend_for` (`core.engines.EngineSet`,
+        # which calls `_on_new_backend`); the pipeline loads once per
+        # backend (`_ensure_backend_ready`).
+        self._primary_engine_id = engine_registry.DEFAULT_ENGINE_ID
+        self.engine_set = core_engines.EngineSet(
+            lambda: self.default_engine_id, self._primary_engine_id,
+            lambda backend: self._on_new_backend(backend))
         self._bridges: dict = {}
         # Schema-derived field lists per engine (`engine_settings`,
         # `_model_fields`); Options > Force refresh clears it.
@@ -272,9 +276,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._arrangement_memo: dict = {}
         self._schedule_memo: dict = {}
         self._fingerprint_scope = None
-        self._missing_backends: dict = {}
         self._ready_backends: set = set()
-        self._primary_engine_id = engine_registry.DEFAULT_ENGINE_ID
         self._last_active_engine_id = None
         # The engine whose voice editor the Voices tab shows (grill EN3):
         # runtime only. A selection change moves it to the active
@@ -649,23 +651,24 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         its callbacks wired to the app (building one starts its worker
         thread but loads no model), or None for an engine that isn't
         registered."""
-        engine_id = engine_id or self._primary_engine_id
-        backend = self._backends.get(engine_id)
-        if backend is not None:
-            return backend
-        try:
-            backend = engine_registry.get_engine(engine_id)
-        except Exception:  # noqa: BLE001 - an unregistered id is a warning, not a crash
-            return None
+        return self.engine_set.get(engine_id)
+
+    @property
+    def _backends(self) -> dict:
+        """The engine set's resident adapters, engine id -> adapter (the
+        dict itself, not a copy)."""
+        return self.engine_set.resident
+
+    def _on_new_backend(self, backend) -> None:
+        """`EngineSet`'s callback for an adapter it just built: wire its
+        signals to the app and tell it which project is open."""
         self._add_backend(backend)
         backend.on_project_opened(self.project_dir, self._engine_meta(backend.id))
-        return backend
 
     def _add_backend(self, backend) -> None:
         bridge = EngineSignalBridge()
         wire_engine(backend, bridge)
         self._connect_bridge(bridge)
-        self._backends[backend.id] = backend
         self._bridges[backend.id] = bridge
 
     def _ensure_backend_ready(self, backend) -> None:
@@ -683,23 +686,13 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         `num_threads`, the "Model" group, ...), overlaid with
         `settings["engines"][engine_id]`. A stored value for a key the
         schema no longer has is dropped."""
-        fields = self._schema_memo.get(("per_engine", engine_id))
-        if fields is None:
-            fields = tuple(per_engine_fields(engine_registry.get_config_schema(engine_id)))
-            self._schema_memo[("per_engine", engine_id)] = fields
-        stored = (self.settings.get("engines") or {}).get(engine_id) or {}
-        return {f.key: stored.get(f.key, f.default) for f in fields}
+        return core_engines.engine_settings(self.settings, engine_id, self._schema_memo)
 
     def _model_fields(self, backend) -> tuple:
         """`(key, default)` for each field in the backend's "Model" schema
         group, memoized per adapter class (every schema is a static list;
         Options > Force refresh drops the memo)."""
-        memo_key = ("model", type(backend), backend.id)
-        fields = self._schema_memo.get(memo_key)
-        if fields is None:
-            fields = tuple((f.key, f.default) for f in backend.get_config_schema() if f.group == "Model")
-            self._schema_memo[memo_key] = fields
-        return fields
+        return core_engines.model_fields(backend, self._schema_memo)
 
     def set_engine_setting(self, engine_id: str, key: str, value) -> None:
         """Stores one per-engine value and schedules the config save."""
@@ -729,19 +722,12 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         a `MissingBackend` (grill EN6): the character keeps its engine, its
         clips play and don't generate. With no character at all, the default
         engine."""
-        if character is None:
-            return self._backend_for(self.default_engine_id) or next(iter(self._backends.values()))
-        engine_id = character.backend_id or self._primary_engine_id
-        return self._backend_for(engine_id) or self._missing_backend(engine_id)
+        return self.engine_set.for_character(character)
 
     def _missing_backend(self, engine_id: str) -> MissingBackend:
         """One `MissingBackend` per engine id, kept (not in `_backends`: Save's
         asset collection and the job/cancel loops only see real engines)."""
-        backend = self._missing_backends.get(engine_id)
-        if backend is None:
-            backend = MissingBackend(engine_id, engine_registry.unavailable_reason(engine_id))
-            self._missing_backends[engine_id] = backend
-        return backend
+        return self.engine_set.missing(engine_id)
 
     def cannot_generate(self, clip, project=None) -> str | None:
         """Why `clip` can't generate here, or None: its engine isn't
@@ -754,7 +740,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if clip is None:
             return self.backend_for_character(None)
         document = (project or self.project_for(clip)).document
-        return self.backend_for_character(document.get_character(clip.character_id))
+        return self.engine_set.for_clip(document, clip)
 
     def active_character(self):
         """The character the selection points at (a clip's, or a lane's),
@@ -954,9 +940,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         from subtitle import. The engine is made resident and loads."""
         backend = self._backend_for(self.default_engine_id) or self._backends[self._primary_engine_id]
         self._ensure_backend_ready(backend)
-        voice = self.default_voice(backend)
-        return Character.from_preset_dict(name, {"voice": voice} if voice else {},
-                                          highlight_color=highlight_color, backend_id=backend.id)
+        return core_engines.new_character(name, highlight_color, backend, self.engine_settings(backend.id))
 
     def _on_active_backend_maybe_changed(self, force: bool = False) -> None:
         """The selection moved: when the active engine changed, the
@@ -1538,25 +1522,14 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         backend = backend or self.backend
         if lang_code is None:
             lang_code = self.engine_settings(backend.id).get("lang_code")
-        names = []
-        for voice in backend.get_voices(lang_code):
-            if voice.id not in names:
-                names.append(voice.id)
-        return names
+        return core_engines.voice_names(backend, lang_code)
 
     def default_voice(self, backend=None) -> str | None:
         """The default voice of `backend`'s engine: its stored per-engine
         `voice` when the engine lists it, else the schema default, else its
         first voice."""
         backend = backend or self.backend
-        voices = self.get_all_voices(backend=backend)
-        stored = self.engine_settings(backend.id).get("voice")
-        if stored and stored in voices:
-            return stored
-        field = next((f for f in backend.get_config_schema() if f.key == "voice"), None)
-        if field is not None and field.default:
-            return field.default
-        return voices[0] if voices else stored
+        return core_engines.default_voice(backend, self.engine_settings(backend.id))
 
     # --- settings persistence -
 
@@ -1779,124 +1752,57 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def _segmentation_config(gen_state: dict) -> dict:
         """The segmentation keys (`spec.SEGMENTATION_KEYS`) from the
         Settings tab, defaulted: where every path cuts text into pieces."""
-        return {key: gen_state.get(key, spec.SETTINGS_DEFAULTS[key]) for key in spec.SEGMENTATION_KEYS}
+        return core_config.segmentation_config(gen_state)
 
-    def _assemble_generation_config(self, clip, project=None) -> dict:
-        """Exactly the inputs that decide what a clip's audio *is*: the
-        segment key hashes these and nothing else, and `_assemble_clip_config`
-        is built on top. The project defaults from the Settings tab, the clip's own
-        engine's `lang_code` and "Model" schema group (Audio8's sampling
-        knobs) from `engine_settings`, the Lexicon (the
-        key is over the text after substitution), the segmentation settings
-        (they decide the pieces), then the clip's
-        `effective_config_for_clip` (character preset, then overrides) on
-        top, then `project_dir` and the clip's take. The take is read off
-        `clip.overrides` directly, not through the `ALLOWED_PRESET_KEYS`
-        whitelist, which is for untrusted preset files and shouldn't widen
-        for a runtime counter. One method decides what both the dirty check
-        and a Generate hash, so they can't drift."""
-        project = project or self.project_for(clip)
-        gen_state = self.settings_dock.get_state()
-        backend = self.backend_for(clip, project)
-        engine = self.engine_settings(backend.id)
-        config = {
-            "engine_id": backend.id,
-            "lang_code": engine.get("lang_code"),
-            "voice": engine.get("voice"),
-            "speed": gen_state["speed"],
-            "pitch": gen_state["pitch"],
-            "lexicon": normalize_rules(self.settings.get("lexicon")),
-            **self._segmentation_config(gen_state),
-        }
-        for key, default in self._model_fields(backend):
-            config[key] = engine.get(key, default)
-        clip_config = dict(project.document.effective_config_for_clip(clip))
-        for key in ("voice", "speed", "pitch", "lang_code"):
-            if key in clip_config:
-                config[key] = clip_config[key]
-        variant_voice = self._variant_voice(clip, project)
-        if variant_voice:
-            config["voice"] = variant_voice
-        factor = heading_speed(project.document)
-        if factor != 1.0 and heading_clip_id(project.document) == clip.id:
-            # A chapter title reads at its own pace (the project's `heading_speed`).
-            config["speed"] = round(float(config.get("speed", 1.0) or 1.0) * factor, 4)
-        config["project_dir"] = project.project_dir
-        config["take"] = int(clip.overrides.get("take", 0) or 0)
-        return config
+    def _generation_inputs(self) -> core_config.GenerationInputs:
+        """The Settings tab's project values and the Lexicon, as
+        `core.config` takes them."""
+        return core_config.GenerationInputs.from_state(self.settings_dock.get_state(), self.settings.get("lexicon"))
 
-    def _variant_voice(self, clip, project=None):
-        """The reference name `clip.overrides["variant"]` picks from its
-        character's `variants`, or None. Only a cloning backend has
-        variants; on any other the override is ignored."""
-        project = project or self.project_for(clip)
-        variant = (clip.overrides or {}).get("variant")
-        if not variant or not getattr(self.backend_for(clip, project).capabilities, "supports_voice_cloning", False):
-            return None
-        character = project.document.get_character(clip.character_id)
-        if character is None:
-            return None
-        return (character.variants or {}).get(variant) or None
-
-    def _assemble_clip_config(self, clip, project=None) -> dict:
-        """The config dict for a per-clip Generate action and, through
-        `post_config_for_clip`, for read-time post-processing:
-        `_assemble_generation_config` plus everything that doesn't change
-        the audio (output location and naming, threads, caching, the post
-        keys) with `clip`'s character/override settings merged on top, so
-        the clip's own values win. Defaults must come first:
-        `process_chunk_task` reads `config['voice']` by direct indexing, so a clip with no character must still end up
-        with usable defaults. FX come from `fx_resolve.resolve_fx`, the same
-        resolver the Audio FX tab renders."""
-        project = project or self.project_for(clip)
-        gen_state = self.settings_dock.get_state()
+    def _output_inputs(self) -> core_config.OutputInputs:
+        """The export settings' format, folder and expanded filename, and
+        the `time_id` stamp, as `core.config` takes them."""
         from kokoro_gui.qt.docks.export_dialog import output_name
 
         export = self._export_values()
-        config = {
-            # The clip's engine's own settings (threads, Audio8's
-            # cache_reference_codes, ...); the generation keys among them
-            # are set again below by _assemble_generation_config.
-            "num_threads": 1,
-            **self.engine_settings(self.backend_for(clip, project).id),
-            "format": export["format"],
-            "out_dir": export["out_dir"],
-            "caching": gen_state["caching"],
-            "time_id": time.strftime(self.timecode_format),
-            "volume": gen_state["volume"],
-            "normalize": gen_state["normalize"],
-            "trim_silence": gen_state["trim_silence"],
-            "filename": output_name(self, export["filename"]),
-        }
+        return core_config.OutputInputs(format=export["format"], out_dir=export["out_dir"],
+                                        filename=output_name(self, export["filename"]),
+                                        time_id=time.strftime(self.timecode_format))
 
-        clip_config = dict(project.document.effective_config_for_clip(clip))
-        # ALLOWED_PRESET_KEYS whitelists "trim", but process_audio reads
-        # "trim_silence" - same inline rename every other caller does.
-        if "trim" in clip_config:
-            clip_config["trim_silence"] = clip_config.pop("trim")
-        config.update(clip_config)
-        config.update(self._assemble_generation_config(clip, project))
-        if project.project_dir:
-            # Clips generate straight into the project dir, once, named by
-            # their segment key (Claude/old/PLAN_tbaw_bundle.md section 3). The
-            # bundle's audio format decides the extension of new segments,
-            # over a preset's `format` (that one is for the export path).
-            config["out_dir"] = os.path.join(project.project_dir, *project_io.AUDIO_GENERATED.split("/"))
-            config["segment_naming"] = "cache_key"
-            config["format"] = project_io.bundle_options(project.project_settings)["audio_format"]
+    def _assemble_generation_config(self, clip, project=None) -> dict:
+        """Exactly the inputs that decide what a clip's audio *is*
+        (`core.config.generation_config`): the segment key hashes these and
+        nothing else, and `_assemble_clip_config` is built on top. Reads
+        the Settings tab, the Lexicon and the clip's engine's settings. One
+        method decides what both the dirty check and a Generate hash, so
+        they can't drift."""
+        project = project or self.project_for(clip)
+        backend = self.backend_for(clip, project)
+        return core_config.generation_config(
+            self._generation_inputs(), self.engine_settings(backend.id), project.document, clip, backend,
+            project.project_dir, self._schema_memo)
 
-        # effective_config_for_clip only ever carries the FX preset's *name*;
-        # the resolver turns project values + character preset + clip preset
-        # + clip.fx_override into the actual FX keys and the ANDed apply_fx.
+    def _variant_voice(self, clip, project=None):
+        """The reference name `clip.overrides["variant"]` picks from its
+        character's `variants`, or None (`core.config.variant_voice`)."""
+        project = project or self.project_for(clip)
+        return core_config.variant_voice(project.document, clip, self.backend_for(clip, project))
+
+    def _assemble_clip_config(self, clip, project=None) -> dict:
+        """The config dict for a per-clip Generate action and, through
+        `post_config_for_clip`, for read-time post-processing
+        (`core.config.clip_config`): `_assemble_generation_config` plus
+        everything that doesn't change the audio. FX come from
+        `fx_resolve.resolve_fx`, the same resolver the Audio FX tab
+        renders."""
+        project = project or self.project_for(clip)
+        backend = self.backend_for(clip, project)
+        inputs = self._generation_inputs()
+        output = self._output_inputs()
         resolution = fx_resolve.resolve_fx(self, clip=clip, project=project)
-        config.update(resolution.values)
-        config["apply_fx"] = resolution.apply_fx
-        # Fit to slot's stretch factor (a post key). Read off the overrides
-        # directly, like the take: it is per clip, never a preset value.
-        stretch = (clip.overrides or {}).get("time_stretch")
-        if stretch is not None:
-            config["time_stretch"] = stretch
-        return config
+        return core_config.clip_config(
+            inputs, output, self.engine_settings(backend.id), project.document, clip, backend,
+            project.project_dir, project.project_settings, resolution, self._schema_memo)
 
     def _install_segment_key_fn(self, project=None) -> None:
         """Sets `Document.segment_key_fn` to a closure that keys each clip
@@ -2037,18 +1943,18 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         Verify mode recomputes and compares."""
         project = project or self.project_for(clip)
         if self.settings_dock is None or self.fx_dock is None:
-            config = post.extract_post_config(self._assemble_clip_config(clip, project))
+            config = core_config.post_config(self._assemble_clip_config(clip, project))
             return (None, config, post.post_key(config))
         token = (self._clip_token(clip, project), self._post_inputs_fingerprint(project))
         memo_key = (id(project), clip.id)
         hit = self._post_config_memo.get(memo_key)
         if hit is not None and hit[0] == token:
             if revision.VERIFY:
-                fresh = post.extract_post_config(self._assemble_clip_config(clip, project))
+                fresh = core_config.post_config(self._assemble_clip_config(clip, project))
                 if fresh != hit[1]:
                     raise StaleCacheError(f"post config of clip {clip.id} is stale: {hit[1]} != {fresh}")
             return hit
-        config = post.extract_post_config(self._assemble_clip_config(clip, project))
+        config = core_config.post_config(self._assemble_clip_config(clip, project))
         entry = (token, config, post.post_key(config))
         self._post_config_memo[memo_key] = entry
         return entry
