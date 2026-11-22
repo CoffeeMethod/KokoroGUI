@@ -33,7 +33,6 @@ def rig(request, tmp_path, isolated_dirs, monkeypatch):
     os.makedirs(project_dir)
     if request.param == "kokoro":
         from kokoro_engine import KokoroEngine
-        from kokoro_gui.engine import runtime
 
         engine = KokoroEngine()
         project_path = os.path.join(project_dir, "engines", "kokoro", "voices", "Eve.pt")

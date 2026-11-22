@@ -11,7 +11,6 @@ import pytest
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QMessageBox
 
-from kokoro_gui.qt import project as project_io
 from tests.gui_qt.test_edit_while_generating import Jobs, _many_clips
 
 
