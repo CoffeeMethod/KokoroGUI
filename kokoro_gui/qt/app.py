@@ -76,10 +76,10 @@ from kokoro_gui.daw.undo import (
     SetFieldCommand, SplitClipCommand,
 )
 from kokoro_gui import logging_setup
+from kokoro_gui.core import engines as core_engines
 from kokoro_gui.engine import cache_admin, caching, runtime, text_extraction
 from kokoro_gui.engine.lexicon import normalize_rules
 from kokoro_gui.engines import registry as engine_registry
-from kokoro_gui.engines.base import per_engine_fields
 from kokoro_gui.engines.missing import MissingBackend
 from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
 from kokoro_gui.qt import settings as qt_settings
@@ -255,9 +255,13 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._closed = False
         # Every engine a character uses stays resident (grill V3, "engine
         # follows the character"): engine id -> adapter, and its signal
-        # bridge. Built on first use by `_backend_for`; the pipeline loads
-        # once per backend (`_ensure_backend_ready`).
-        self._backends: dict = {}
+        # bridge. Built on first use by `_backend_for` (`core.engines.EngineSet`,
+        # which calls `_on_new_backend`); the pipeline loads once per
+        # backend (`_ensure_backend_ready`).
+        self._primary_engine_id = engine_registry.DEFAULT_ENGINE_ID
+        self.engine_set = core_engines.EngineSet(
+            lambda: self.default_engine_id, self._primary_engine_id,
+            lambda backend: self._on_new_backend(backend))
         self._bridges: dict = {}
         # Schema-derived field lists per engine (`engine_settings`,
         # `_model_fields`); Options > Force refresh clears it.
@@ -272,9 +276,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._arrangement_memo: dict = {}
         self._schedule_memo: dict = {}
         self._fingerprint_scope = None
-        self._missing_backends: dict = {}
         self._ready_backends: set = set()
-        self._primary_engine_id = engine_registry.DEFAULT_ENGINE_ID
         self._last_active_engine_id = None
         # The engine whose voice editor the Voices tab shows (grill EN3):
         # runtime only. A selection change moves it to the active
@@ -649,23 +651,24 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         its callbacks wired to the app (building one starts its worker
         thread but loads no model), or None for an engine that isn't
         registered."""
-        engine_id = engine_id or self._primary_engine_id
-        backend = self._backends.get(engine_id)
-        if backend is not None:
-            return backend
-        try:
-            backend = engine_registry.get_engine(engine_id)
-        except Exception:  # noqa: BLE001 - an unregistered id is a warning, not a crash
-            return None
+        return self.engine_set.get(engine_id)
+
+    @property
+    def _backends(self) -> dict:
+        """The engine set's resident adapters, engine id -> adapter (the
+        dict itself, not a copy)."""
+        return self.engine_set.resident
+
+    def _on_new_backend(self, backend) -> None:
+        """`EngineSet`'s callback for an adapter it just built: wire its
+        signals to the app and tell it which project is open."""
         self._add_backend(backend)
         backend.on_project_opened(self.project_dir, self._engine_meta(backend.id))
-        return backend
 
     def _add_backend(self, backend) -> None:
         bridge = EngineSignalBridge()
         wire_engine(backend, bridge)
         self._connect_bridge(bridge)
-        self._backends[backend.id] = backend
         self._bridges[backend.id] = bridge
 
     def _ensure_backend_ready(self, backend) -> None:
@@ -683,23 +686,13 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         `num_threads`, the "Model" group, ...), overlaid with
         `settings["engines"][engine_id]`. A stored value for a key the
         schema no longer has is dropped."""
-        fields = self._schema_memo.get(("per_engine", engine_id))
-        if fields is None:
-            fields = tuple(per_engine_fields(engine_registry.get_config_schema(engine_id)))
-            self._schema_memo[("per_engine", engine_id)] = fields
-        stored = (self.settings.get("engines") or {}).get(engine_id) or {}
-        return {f.key: stored.get(f.key, f.default) for f in fields}
+        return core_engines.engine_settings(self.settings, engine_id, self._schema_memo)
 
     def _model_fields(self, backend) -> tuple:
         """`(key, default)` for each field in the backend's "Model" schema
         group, memoized per adapter class (every schema is a static list;
         Options > Force refresh drops the memo)."""
-        memo_key = ("model", type(backend), backend.id)
-        fields = self._schema_memo.get(memo_key)
-        if fields is None:
-            fields = tuple((f.key, f.default) for f in backend.get_config_schema() if f.group == "Model")
-            self._schema_memo[memo_key] = fields
-        return fields
+        return core_engines.model_fields(backend, self._schema_memo)
 
     def set_engine_setting(self, engine_id: str, key: str, value) -> None:
         """Stores one per-engine value and schedules the config save."""
@@ -729,19 +722,12 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         a `MissingBackend` (grill EN6): the character keeps its engine, its
         clips play and don't generate. With no character at all, the default
         engine."""
-        if character is None:
-            return self._backend_for(self.default_engine_id) or next(iter(self._backends.values()))
-        engine_id = character.backend_id or self._primary_engine_id
-        return self._backend_for(engine_id) or self._missing_backend(engine_id)
+        return self.engine_set.for_character(character)
 
     def _missing_backend(self, engine_id: str) -> MissingBackend:
         """One `MissingBackend` per engine id, kept (not in `_backends`: Save's
         asset collection and the job/cancel loops only see real engines)."""
-        backend = self._missing_backends.get(engine_id)
-        if backend is None:
-            backend = MissingBackend(engine_id, engine_registry.unavailable_reason(engine_id))
-            self._missing_backends[engine_id] = backend
-        return backend
+        return self.engine_set.missing(engine_id)
 
     def cannot_generate(self, clip, project=None) -> str | None:
         """Why `clip` can't generate here, or None: its engine isn't
@@ -754,7 +740,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if clip is None:
             return self.backend_for_character(None)
         document = (project or self.project_for(clip)).document
-        return self.backend_for_character(document.get_character(clip.character_id))
+        return self.engine_set.for_clip(document, clip)
 
     def active_character(self):
         """The character the selection points at (a clip's, or a lane's),
@@ -954,9 +940,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         from subtitle import. The engine is made resident and loads."""
         backend = self._backend_for(self.default_engine_id) or self._backends[self._primary_engine_id]
         self._ensure_backend_ready(backend)
-        voice = self.default_voice(backend)
-        return Character.from_preset_dict(name, {"voice": voice} if voice else {},
-                                          highlight_color=highlight_color, backend_id=backend.id)
+        return core_engines.new_character(name, highlight_color, backend, self.engine_settings(backend.id))
 
     def _on_active_backend_maybe_changed(self, force: bool = False) -> None:
         """The selection moved: when the active engine changed, the
@@ -1538,25 +1522,14 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         backend = backend or self.backend
         if lang_code is None:
             lang_code = self.engine_settings(backend.id).get("lang_code")
-        names = []
-        for voice in backend.get_voices(lang_code):
-            if voice.id not in names:
-                names.append(voice.id)
-        return names
+        return core_engines.voice_names(backend, lang_code)
 
     def default_voice(self, backend=None) -> str | None:
         """The default voice of `backend`'s engine: its stored per-engine
         `voice` when the engine lists it, else the schema default, else its
         first voice."""
         backend = backend or self.backend
-        voices = self.get_all_voices(backend=backend)
-        stored = self.engine_settings(backend.id).get("voice")
-        if stored and stored in voices:
-            return stored
-        field = next((f for f in backend.get_config_schema() if f.key == "voice"), None)
-        if field is not None and field.default:
-            return field.default
-        return voices[0] if voices else stored
+        return core_engines.default_voice(backend, self.engine_settings(backend.id))
 
     # --- settings persistence -
 
