@@ -309,7 +309,7 @@ def test_a_whisper_result_for_a_project_no_longer_open_is_dropped(qt_app, tmp_pa
     qt_app.new_project()
     assert qt_app.document is started_in
     # ...so force the switch to check that a late result is still dropped.
-    monkeypatch.setattr(qt_app, "_replace_blocked", lambda what: False)
+    monkeypatch.setattr(qt_app, "_replace_blocked", lambda what, park=False: False)
     qt_app.new_project()
     assert qt_app.document is not started_in
     gate.set()

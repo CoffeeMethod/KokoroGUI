@@ -7,12 +7,17 @@ the whole queue, the same way the Transport dock's buttons do. A queue the
 last session left behind (`session.json["queue"]`) comes back paused, and the
 button then reads "Resume generating N clips".
 
+An item for a project that is no longer the open one (it keeps generating
+in the background, plan 30) is greyed and its Item reads "(in another
+project)", with that project's name in the tooltip (grill PG13).
+
 Everything shown is the app's queue; the dock keeps no state of its own. It
 rebuilds while visible and notes that it is out of date otherwise.
 """
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView, QDockWidget, QHBoxLayout, QHeaderView, QLabel, QMenu, QPushButton, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget,
@@ -26,6 +31,7 @@ STATE_LABELS = {
     genqueue.FAILED: "Failed", genqueue.CANCELLED: "Cancelled",
 }
 _ITEM_ID = Qt.ItemDataRole.UserRole
+ELSEWHERE = "(in another project)"
 
 
 class _ItemTree(QTreeWidget):
@@ -128,7 +134,23 @@ class QueueDock(QDockWidget):
 
     def item_row_text(self, item) -> tuple:
         clips = "subproject" if item.kind == genqueue.SUBPROJECT else str(item.clip_count)
-        return item.title, clips, STATE_LABELS.get(item.state, item.state), self._eta_text(item)
+        title = item.title if self.app.item_in_open_project(item) else f"{item.title} {ELSEWHERE}"
+        return title, clips, STATE_LABELS.get(item.state, item.state), self._eta_text(item)
+
+    def _grey(self, row, item) -> None:
+        """Greys a row whose item is another project's and names that
+        project in the tooltip."""
+        if self.app.item_in_open_project(item):
+            return
+        color = self.tree.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text)
+        project = self.app.project_by_id(item.project_id)
+        root_id = self.app.queue_root_id(item.project_id, strict=True)
+        tree = self.app.parked_projects.get(root_id) if root_id is not None else None
+        name = tree.root.title() if tree is not None else (project.title() if project is not None else "")
+        tip = f"Generating in the background for {name}." if name else "For a project that is no longer open."
+        for column in range(len(COLUMNS)):
+            row.setForeground(column, color)
+            row.setToolTip(column, tip)
 
     def rebuild(self) -> None:
         self._stale = False
@@ -141,6 +163,7 @@ class QueueDock(QDockWidget):
                 row = QTreeWidgetItem(list(self.item_row_text(item)))
                 row.setData(0, _ITEM_ID, item.id)
                 row.setTextAlignment(1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self._grey(row, item)
                 flags = row.flags()
                 # Only a queued item is dragged; any row can be a drop target.
                 row.setFlags(flags | Qt.ItemFlag.ItemIsDragEnabled if item.state == genqueue.QUEUED

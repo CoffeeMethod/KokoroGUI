@@ -50,14 +50,16 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 Unreleased:
 
+-   Open another project, or start a new one, while Generate runs: the first one keeps generating in the background into
+    its own files, and the Queue tab and the progress bar show it
 -   The Qt widget tests run in CI on Linux in their own job, and the full GUI suite takes 4 minutes locally instead of 38
 -   Generate fills a book in as it goes: the stale clips run eight at a time, a Queue tab lists the batches with the time
     left, and Pause, reorder and Resume work on them, even after a restart
 -   An Exports tab lists every export, newest first, with Play, Show in Folder and Delete
 -   Keep editing while the queue runs: Generate, a clip's play button and Fit to slot join the queue, and Save, New
     Subproject and Export run beside it
--   New, New from Template and Import Text into a new project wait for a running job, and the whole-document and JIT
-    generate use a project's own voice first
+-   New, New from Template and Import Text into a new project wait for a save or an export, Import Text also for a
+    generate, and the whole-document and JIT generate use a project's own voice first
 -   Added the optional [LuxTTS engine](docs/settings.html#luxtts).
 -   A Help menu with Documentation, Keyboard Shortcuts and About, and File > Show in Folder
 -   A log file, and a dialog with the traceback when something crashes

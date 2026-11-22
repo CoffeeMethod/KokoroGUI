@@ -27,9 +27,11 @@ a single clip, a fit or the whole-document path started outside it) and
 transcription, or any other job while nothing generates); `is_busy()` is
 either. While a generate runs, Generate, a gutter generate, Fit to slot and
 Auto-split queue instead of refusing (`generate_blocked`), and Save, New
-Subproject, an export and a recording import run beside it. Open, Save As,
-a device change and an engine change for an engine the queue uses still
-wait.
+Subproject, an export and a recording import run beside it. Open and New
+park the project the queue still works in (plan 30, `parked_projects`): it
+keeps its dir and lock, its results land there, and it is released when its
+last item ends. Save As, a device change and an engine change for an engine
+the queue uses still wait.
 
 `CONFIG_FILE`/`PRESETS_DIR`/`FX_PRESETS_DIR`/`DOCUMENT_FILE` are defined
 here, at module level, before the `kokoro_gui.qt.docks` import below - the
@@ -81,7 +83,7 @@ from kokoro_gui.engines.base import per_engine_fields
 from kokoro_gui.engines.missing import MissingBackend
 from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
 from kokoro_gui.qt import settings as qt_settings
-from kokoro_gui.qt.open_projects import OpenProject
+from kokoro_gui.qt.open_projects import OpenProject, ParkedTree
 from kokoro_gui.qt.reveal import reveal
 from kokoro_gui.qt.storage_dialog import StorageDialog, trim_in_background
 from kokoro_gui.qt.about_dialog import (
@@ -139,6 +141,18 @@ NOTIFY_AFTER_S = 10.0
 # A keystroke's timeline refresh waits this long for the next keystroke.
 TIMELINE_TYPING_DEBOUNCE_MS = 60
 LIBRARY_WATCH_DEBOUNCE_MS = 150
+
+
+def _depth_in(tree):
+    """A sort key: how deep a project sits in the parked `tree`."""
+    def _depth(project):
+        depth = 0
+        while project is not None and project.parent_id is not None:
+            parent_id = project.parent_id
+            project = tree.root if tree.root.project_id == parent_id else tree.children.get(parent_id)
+            depth += 1
+        return depth
+    return _depth
 
 
 class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThroughMixin, QMainWindow):
@@ -211,6 +225,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.children: dict = {}
         self.focus = self.root
         self.level = self.root
+        # Root project id -> `ParkedTree`: a project and its open subprojects
+        # the window moved away from while the queue still had work for them
+        # (plan 30). Results land there and autosave writes them; the tree is
+        # torn down when its last item ends.
+        self.parked_projects: dict = {}
         # Child project ids whose bundle couldn't be opened (painted as
         # missing, with Relink).
         self._missing_children: set = set()
@@ -485,9 +504,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
     def project_of_clip_id(self, clip_id):
         """The open project whose document has a clip with `clip_id`, or
-        None. Focus, level and root first."""
+        None. Focus, level and root first; a parked project last."""
         seen = []
-        for project in (self.focus, self.level, self.root, *self.children.values()):
+        for project in (self.focus, self.level, self.root, *self.children.values(), *self.parked_project_list()):
             if project in seen:
                 continue
             seen.append(project)
@@ -497,11 +516,12 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
     def project_for(self, clip):
         """The open project whose document holds `clip`: focus, level and
-        root first (almost always one of them), then the other children."""
+        root first (almost always one of them), then the other children,
+        then a parked project's (plan 30)."""
         if clip is None:
             return self.focus
         seen = []
-        for project in (self.focus, self.level, self.root, *self.children.values()):
+        for project in (self.focus, self.level, self.root, *self.children.values(), *self.parked_project_list()):
             if project in seen:
                 continue
             seen.append(project)
@@ -1690,8 +1710,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         last Save or Open recorded. A content comparison, not an mtime:
         `_switch_document`'s trailing `schedule_save` would otherwise dirty
         every project a second after Open. Never touches the `.tbaw`. Runs
-        for the root and every open subproject."""
-        for project in self.open_projects():
+        for the root, every open subproject and every parked project, whose
+        results keep landing (plan 30)."""
+        for project in (*self.open_projects(), *self.parked_project_list()):
             self._autosave_one(project)
 
     def is_project_dirty(self) -> bool:
@@ -2164,7 +2185,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             key = (revision.TEXT, revision.MODEL, revision.FILES, self.backend.id, docks_ready,
                    self._post_inputs_fingerprint(project) if docks_ready else None,
                    post.RENDERS, tuple(sorted(self._closed_child_states.items())),
-                   tuple(child.state_cache for child in self.children.values()))
+                   tuple(child.state_cache for child in self.children.values()),
+                   tuple(p.state_cache for p in self.parked_project_list()))
             hit = self._arrangement_memo.get(id(project))
             if hit is not None and hit[0] == key:
                 if revision.VERIFY:
@@ -2723,19 +2745,34 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def _close_current_project(self, then) -> None:
         """Runs `then()` once the open project is put away: a clean project
         is GC'd and released; a dirty one asks Save / Discard / Cancel, and
-        Save continues after the background Save succeeds."""
+        Save continues after the background Save succeeds. A project the
+        running queue still has work for is parked instead of released
+        (plan 30): it keeps its dir and lock and goes on generating. Discard
+        is refused for it, since its results would land in a dir being
+        deleted. An Untitled one is asked about even when clean, so its
+        results get a file to be saved to."""
         if not self.root.project_dir:
             then()
             return
         self._remember_view()
-        if not self.is_project_dirty():
-            self._teardown_project(discard=False)
+        park = self._open_tree_has_work()
+        if not self.is_project_dirty() and not (park and not self.project_path):
+            if park:
+                self._park_open_tree()
+            else:
+                self._teardown_project(discard=False)
             then()
             return
         choice = self._ask_close_choice()
         if choice == "cancel":
             return
         if choice == "discard":
+            if self._open_tree_has_work():
+                QMessageBox.warning(
+                    self, "Still generating",
+                    f"{project_io.project_title(self.project_path)} is still generating. Cancel its queued work "
+                    "in the Queue dock before you discard its changes.")
+                return
             self._teardown_project(discard=True)
             then()
             return
@@ -2747,6 +2784,12 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self.project_path = path
 
         def _after_save():
+            if self._open_tree_has_work():
+                # Results that land from now on stay in the dir, as they
+                # would after any Save made while generating.
+                self._park_open_tree()
+                then()
+                return
             if self.is_project_dirty():
                 # An edit landed while the zip was written (plan 46 F2): the
                 # file doesn't hold it, so ask again instead of putting it away.
@@ -2781,19 +2824,108 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
     def _evict_other_project_dirs(self) -> None:
         """TB13: only the open project's dir stays; every other clean,
-        unlocked dir under `cache/projects/` goes."""
+        unlocked dir under `cache/projects/` goes. A parked project's dir is
+        locked, so it stays too."""
         try:
             project_io.evict_project_dirs(self.root.project_dir)
         except OSError:
             pass
 
+    # -- parking: a project that keeps generating after another opens (plan 30)
+
+    def can_park_generation(self) -> bool:
+        """Open and New may run while a generate does: the generate is the
+        queue's (every result names its project), and no project IO, export
+        or other job holds the window."""
+        return self.queue_active and not self._converting and not self.is_io_busy()
+
+    def _open_tree_has_work(self) -> bool:
+        """The running queue has queued or running items for the open root
+        or one of its open subprojects."""
+        if not self.queue_active:
+            return False
+        ids = set(self.projects)
+        return any(item.project_id in ids for item in self.generation_queue.pending())
+
+    def _park_open_tree(self) -> None:
+        """Moves the open root and its subprojects to `parked_projects` as
+        they are (document, dir, lock, session), and puts a placeholder root
+        in their place for New or Open to fill. The placeholder shows the
+        same document until the next project is in, like a closed one."""
+        root = self.root
+        tree = ParkedTree(root=root, children=dict(self.children))
+        for project in tree.projects():
+            self._autosave_one(project)
+        self.parked_projects[root.project_id] = tree
+        self.children = {}
+        self._missing_children.clear()
+        self._closed_child_states.clear()
+        self.root = OpenProject(document=root.document)
+        self.focus = self.level = self.root
+        self._queue_changed()
+
+    def _unpark(self, tree) -> None:
+        """Open on a parked project: its tree becomes the open one again,
+        as it is now, results and all. Nothing is read from disk."""
+        self.parked_projects.pop(tree.root.project_id, None)
+        self.root = tree.root
+        self.children = dict(tree.children)
+        self._missing_children.clear()
+        self._closed_child_states.clear()
+        self._switch_document(tree.root.document, tree.root.path, tree.root.project_settings)
+        self._evict_other_project_dirs()
+        self.set_status(f"Opened {tree.root.title()}.")
+
+    def _release_parked(self, tree, evict: bool = True) -> None:
+        """A parked tree's last item ended: autosave, GC and unlock each
+        project, deepest first, then evict the clean dirs (unless `evict` is
+        False: quit evicts once, keeping the dir launch resumes). A dirty dir
+        stays for the recover prompt, the way a crash leaves one."""
+        self.parked_projects.pop(tree.root.project_id, None)
+        for project in sorted(tree.projects(), key=_depth_in(tree), reverse=True):
+            self._autosave_one(project)
+            if project.lock is not None:
+                try:
+                    project_io.gc_project_dir(project.project_dir, project.document)
+                except OSError:
+                    pass
+                project.lock.release()
+                project.lock = None
+            self._arrangement_memo.pop(id(project), None)
+            self._pending_render_after_generate.pop(project.project_id, None)
+        if evict:
+            self._evict_other_project_dirs()
+
+    def release_finished_parked(self) -> None:
+        """Releases every parked tree the queue has no queued or running item
+        for any more."""
+        if not self.parked_projects:
+            return
+        pending = {item.project_id for item in self.generation_queue.pending()}
+        for tree in list(self.parked_projects.values()):
+            if pending.isdisjoint(tree.ids()):
+                self._release_parked(tree)
+
+    def _release_all_parked(self) -> None:
+        """Quit: every parked tree is released. A paused queue's items for
+        one were written to its own `session.json` and come back when it is
+        opened again."""
+        for tree in list(self.parked_projects.values()):
+            ids = tree.ids()
+            self.generation_queue.items = [i for i in self.generation_queue.items if i.project_id not in ids]
+            self._release_parked(tree, evict=False)
+
     # -- new ------------------------------------------------------------------
 
-    def _replace_blocked(self, what: str) -> bool:
+    def _replace_blocked(self, what: str, park: bool = False) -> bool:
         """True (with a message) when a job holds the project: a generate
         works in its dir and an IO job writes it, so nothing may replace or
         close it now. Open, New, New from Template and an Import Text that
-        starts a new project all ask this first."""
+        starts a new project all ask this first. With `park` (Open and New),
+        a running queue doesn't block: its project is parked and goes on
+        generating (plan 30)."""
+        if park and self.is_generating() and self.can_park_generation():
+            return False
         if self.is_generating():
             QMessageBox.warning(self, "Busy", "A generate is running in this project. Wait for it to finish, "
                                               f"or cancel it, before {what}.")
@@ -2805,8 +2937,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
     def new_project(self, then=None) -> None:
         """File > New. `then()` runs once the new project is in place.
-        Refused while a job runs, like Open."""
-        if self._replace_blocked("starting a new project"):
+        Refused while a job runs, like Open, except a running queue: it goes
+        on in the background (plan 30)."""
+        if self._replace_blocked("starting a new project", park=True):
             return
 
         def _start():
@@ -2824,9 +2957,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     # -- open -----------------------------------------------------------------
 
     def open_project(self, path: str) -> None:
-        # The queue works in this project's dir (plan 30 covers running it
-        # across projects).
-        if self._replace_blocked("opening another project"):
+        # A running queue goes on in the background: the open project is
+        # parked when it still has work (plan 30).
+        if self._replace_blocked("opening another project", park=True):
             return
         if not os.path.isfile(path):
             QMessageBox.warning(self, "Open failed", f"Couldn't read {path}.")
@@ -2843,6 +2976,18 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             return
         if self.project_path and os.path.abspath(path) == self.project_path and self.project_id == info.project_id:
             return  # already open: the welcome dialog's Resume
+        tree = self.parked_projects.get(info.project_id)
+        if tree is not None:
+            if tree.root.path and os.path.abspath(path) == os.path.abspath(tree.root.path):
+                # Still generating in the background: it comes back as it is,
+                # unless its work ended while the open project was saved.
+                self._close_current_project(lambda: self._unpark(tree) if self.parked_projects.get(
+                    info.project_id) is tree else self._open_bundle(info))
+            else:
+                QMessageBox.warning(self, "Busy", f"{tree.root.title()} is still generating in the background and "
+                                                  "has the same project id. Wait for it to finish, or cancel it, "
+                                                  "before opening this copy.")
+            return
         self._close_current_project(lambda: self._open_bundle(info))
 
     def _ask_recover_choice(self, session: dict, info: project_io.BundleInfo, project_dir: str) -> str:
@@ -4987,6 +5132,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             keep = self.root.project_dir
         if self.root.project_dir:
             self._teardown_project(discard=False)
+        self._release_all_parked()
         try:
             project_io.evict_project_dirs(keep)
         except OSError:

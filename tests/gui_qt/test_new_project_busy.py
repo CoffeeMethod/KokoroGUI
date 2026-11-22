@@ -1,7 +1,10 @@
 """File > New, Ctrl+N, New from Template and an Import Text "new" replace the
-open project, so they are refused while a generate runs or project IO is busy,
-the way Open and Save As are (plan 46, F4). Nothing about the open project
-moves: not its lock, directory, document or id."""
+open project, so they are refused while project IO is busy, the way Open and
+Save As are (plan 46, F4). Nothing about the open project moves: not its
+lock, directory, document or id. While the queue generates, New and New from
+Template park the project instead (plan 30,
+tests/gui_qt/test_cross_project_generation.py); an Import Text "new" is still
+refused."""
 import os
 
 import pytest
@@ -40,8 +43,10 @@ def _watch_close(qt_app, monkeypatch):
     return calls
 
 
-@pytest.mark.parametrize("arm", [_arm_generate, _arm_io])
-@pytest.mark.parametrize("how", ["new", "shortcut", "template", "import_new"])
+@pytest.mark.parametrize("arm, how", [
+    *((_arm_io, how) for how in ("new", "shortcut", "template", "import_new")),
+    (_arm_generate, "import_new"),
+])
 def test_replacing_the_project_is_refused_while_busy(qt_app, tmp_path, monkeypatch, arm, how):
     arm(qt_app, tmp_path)
     before = _snapshot(qt_app)
