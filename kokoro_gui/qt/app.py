@@ -100,7 +100,8 @@ from kokoro_gui.qt.speaker_mapping_dialog import (
     NARRATOR, NO_SPEAKER, SpeakerMappingDialog, resolve_mapping, speaker_rows,
 )
 from kokoro_gui.qt.signals import EngineSignalBridge, wire_engine
-from kokoro_gui.qt.workspace import ADVANCED, SIMPLE, WorkspaceManager
+from kokoro_gui.qt.workspace import SIMPLE
+from kokoro_gui.qt.workspace_menu import WorkspaceMenuMixin
 
 CONFIG_FILE = "config_qt.json"
 # The whole-document path's last status line, `engine/conversion.py`: `Done! Saved: <combined file>`.
@@ -155,7 +156,8 @@ def _depth_in(tree):
     return _depth
 
 
-class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThroughMixin, QMainWindow):
+class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThroughMixin, WorkspaceMenuMixin,
+               QMainWindow):
     previewFinished = Signal(bool, str)
     themeChanged = Signal()
     exportProgress = Signal(float, str)
@@ -407,15 +409,15 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._build_docks()
         self._build_shortcuts()
 
-        self.workspaces = WorkspaceManager(self, self.settings)
-        self.workspaces.restore_on_launch()
-        self._sync_workspace_actions()
+        self._start_workspaces()
 
         self._arrangement = None
         self._rebuild_transport_schedule()
         self._update_window_title()
 
         self.set_status(self._first_launch_device_notice() or "Initializing engine...")
+        if self._launch_workspace_notice:
+            self.set_status(self._launch_workspace_notice, "warning")
         # Focus first: a nested block's child becomes the docks' document
         # before the active engine is read.
         self.selection.changed.connect(self._on_selection_for_focus)
@@ -1196,21 +1198,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.force_refresh_action.triggered.connect(self.force_refresh)
         self.options_menu.addAction(self.force_refresh_action)
 
-        # Workspace
-        self.workspace_menu = bar.addMenu("&Workspace")
-        self.workspace_group = QActionGroup(self)
-        self.workspace_group.setExclusive(True)
-        self.workspace_actions: dict = {}
-        for name in (ADVANCED, SIMPLE):
-            action = QAction(name, self)
-            action.setCheckable(True)
-            action.triggered.connect(lambda checked=False, n=name: self.activate_workspace(n))
-            self.workspace_group.addAction(action)
-            self.workspace_menu.addAction(action)
-            self.workspace_actions[name] = action
-        self.workspace_menu.addSeparator()
-        self.reset_layout_action = self._action("Reset layout", self.reset_workspace)
-        self.workspace_menu.addAction(self.reset_layout_action)
+        # Workspace (WorkspaceMenuMixin)
+        self._build_workspace_menu(bar)
 
         # Help
         self.help_menu = bar.addMenu("&Help")
@@ -1335,6 +1324,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         (timeline | transport) in the Left area next to the hidden central
         widget. Two areas, one separator between the rows, both rows
         resizable - the arrangement the maintainer settled on by dragging."""
+        self._voices_placement = None
+        self._arranging = True
         for dock in self._all_docks():
             self.removeDockWidget(dock)
 
@@ -1352,6 +1343,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         for voices_dock in (self.mixing_dock, self.voice_clone_dock):
             if voices_dock is not None:
                 self._place_voices_dock(voices_dock)
+        self._arranging = False
         # The reference video (TB16) is the last tab of the right-hand group;
         # Load Video raises it.
         self.addDockWidget(top, self.video_dock)
@@ -1392,6 +1384,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self._shown_once = True
             if hasattr(self, "workspaces") and self.workspaces.saved(self.workspaces.active) is None:
                 QTimer.singleShot(0, lambda: self.workspaces.apply_default(self.workspaces.active))
+            if hasattr(self, "workspaces"):
+                # The dock sizes are real only now; "modified" starts
+                # counting them once they settle.
+                self.workspaces.settle_later()
+                QTimer.singleShot(0, self._show_launch_workspace_notice)
 
     def _all_docks(self) -> list:
         docks = [self.transcript_dock, self.settings_dock, self.fx_dock, self.lexicon_dock,
@@ -1673,9 +1670,13 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             if hasattr(self, "workspaces"):
                 self.workspaces.capture()
 
-        qt_settings.save_settings(CONFIG_FILE, self.settings)
+        self._write_settings_file()
         self._autosave_project_dir()
         self._update_window_title(pending=False)
+
+    def _write_settings_file(self) -> None:
+        """`config_qt.json` as `self.settings` holds it, through the atomic writer."""
+        qt_settings.save_settings(CONFIG_FILE, self.settings)
 
     def _autosave_project_dir(self) -> None:
         """Writes `document.json`/`project.json` into the project dir and
@@ -2364,7 +2365,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self.mixing_dock = None
         if wants and self.mixing_dock is None:
             self.mixing_dock = MixingDock(self)
-            self._place_voices_dock(self.mixing_dock)
+            self._place_voices_dock(self.mixing_dock, self._take_voices_placement())
         elif not wants and self.mixing_dock is not None:
             self._drop_voices_dock(self.mixing_dock)
             self.mixing_dock = None
@@ -2379,7 +2380,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self.voice_clone_dock = None
         if wants and self.voice_clone_dock is None:
             self.voice_clone_dock = VoiceCloneDock(self)
-            self._place_voices_dock(self.voice_clone_dock)
+            self._place_voices_dock(self.voice_clone_dock, self._take_voices_placement())
         elif not wants and self.voice_clone_dock is not None:
             self._drop_voices_dock(self.voice_clone_dock)
             self.voice_clone_dock = None
@@ -2390,38 +2391,66 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         """Removes a voice editor and unparents it: until the deferred
         delete runs it would still be a child answering to "dock_voices",
         and a layout restore could place it instead of the editor now
-        shown."""
+        shown. Where it was is kept for the editor that replaces it."""
+        if not getattr(self, "_arranging", False):
+            self._voices_placement = self._voices_placement_of(dock)
         dock.retire()
         self.removeDockWidget(dock)
         dock.setParent(None)
         dock.deleteLater()
+        self._rebuild_panels_menu()
 
-    def _place_voices_dock(self, dock) -> None:
+    def _voices_placement_of(self, dock) -> dict | None:
+        """Where a voice editor sits: closed, floating (with its geometry),
+        or its dock area and a tab neighbour. None when it isn't placed."""
+        if dock.isFloating():
+            return {"hidden": dock.isHidden(), "floating": True, "geometry": dock.geometry()}
+        area = self.dockWidgetArea(dock)
+        if area == Qt.DockWidgetArea.NoDockWidgetArea:
+            return None
+        neighbours = [other for other in self.tabifiedDockWidgets(dock) if other.objectName() != "dock_voices"]
+        return {"hidden": dock.isHidden(), "floating": False, "area": area,
+                "tab_with": neighbours[0] if neighbours else None,
+                "front": not dock.isHidden() and not dock.visibleRegion().isEmpty()}
+
+    def _take_voices_placement(self) -> dict | None:
+        placement, self._voices_placement = getattr(self, "_voices_placement", None), None
+        return placement
+
+    def _place_voices_dock(self, dock, placement: dict | None = None) -> None:
         """Both capability-gated voice docks share the "Voices" tab title and
         objectName, so the tab strip doesn't jump when the engine changes
-        and a saved layout places either one in the same slot."""
+        and a saved layout places either one in the same slot. `placement`
+        (`_voices_placement_of` the editor this one replaces) puts it where
+        that one was, closed if it was closed; without it, the tab after
+        Lexicon."""
         dock.setWindowTitle("Voices")
         dock.setObjectName("dock_voices")
-        self.addDockWidget(self.dockWidgetArea(self.settings_dock), dock)
-        self.tabifyDockWidget(self.lexicon_dock, dock)
-        if self.settings_dock is not None:
+        neighbour = placement.get("tab_with") if placement else None
+        if neighbour is not None and (neighbour not in self._all_docks() or neighbour.isHidden()
+                                      or neighbour.isFloating()):
+            neighbour = None
+        if placement and placement["floating"]:
+            self.addDockWidget(self.dockWidgetArea(self.settings_dock), dock)
+            dock.setFloating(True)
+            dock.setGeometry(placement["geometry"])
+        elif neighbour is not None:
+            self.addDockWidget(self.dockWidgetArea(neighbour), dock)
+            self.tabifyDockWidget(neighbour, dock)
+        elif placement:
+            self.addDockWidget(placement["area"], dock)
+        else:
+            self.addDockWidget(self.dockWidgetArea(self.settings_dock), dock)
+            self.tabifyDockWidget(self.lexicon_dock, dock)
+        if placement and placement["hidden"]:
+            dock.hide()
+        if placement and placement.get("front"):
+            dock.raise_()
+        elif self.settings_dock is not None:
             self.settings_dock.raise_()
-
-    # --- Workspace ----------------------------------------------------------
-
-    def activate_workspace(self, name: str) -> None:
-        self.workspaces.activate(name)
-        self._sync_workspace_actions()
-        self.schedule_save()
-
-    def reset_workspace(self) -> None:
-        self.workspaces.reset()
-        self._sync_workspace_actions()
-        self.schedule_save()
-
-    def _sync_workspace_actions(self) -> None:
-        for name, action in self.workspace_actions.items():
-            action.setChecked(name == self.workspaces.active)
+        if hasattr(self, "workspaces"):
+            self._watch_dock_layout(dock)
+        self._rebuild_panels_menu()
 
     # --- File menu ----------------------------------------------------------
 
@@ -5008,7 +5037,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if self._io_thread is not None and not self._closing_after_save:
             event.ignore()
             return
-        self.save_settings()
+        self._layout_timer.stop()
+        self.save_settings()  # captures the layout too
         if self.root.project_dir and not self._closing_after_save and self.any_project_dirty():
             choice = self._ask_close_choice()
             if choice == "cancel":

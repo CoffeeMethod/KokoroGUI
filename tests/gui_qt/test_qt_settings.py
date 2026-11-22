@@ -182,6 +182,30 @@ def test_load_settings_rejects_a_bool_for_a_number_and_a_non_finite_float(tmp_pa
     assert settings["last_project"] is None
 
 
+def test_load_settings_resets_workspace_keys_of_the_wrong_type(tmp_path):
+    cfg = _write_config(tmp_path, {"workspaces": [], "custom_workspaces": "Narration", "workspace_live": 3,
+                                   "active_workspace": 7})
+    settings = qt_settings.load_settings(cfg)
+    assert settings["workspaces"] == {}
+    assert settings["custom_workspaces"] == {}
+    assert settings["workspace_live"] == {}
+    assert settings["active_workspace"] == "Advanced"
+
+
+def test_a_layout_save_writes_the_file_without_a_project_autosave(qt_app, monkeypatch):
+    import kokoro_gui.qt.app as qt_app_module
+
+    autosaves = []
+    monkeypatch.setattr(qt_app, "_autosave_project_dir", lambda: autosaves.append(1))
+    qt_app.timeline_dock.hide()
+    qt_app.save_layout()
+
+    with open(qt_app_module.CONFIG_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert data["workspaces"][data["active_workspace"]]["state"]
+    assert autosaves == []
+
+
 def test_load_settings_keeps_a_last_project_path(tmp_path):
     cfg = _write_config(tmp_path, {"last_project": "C:/books/novel.tbaw"})
     assert qt_settings.load_settings(cfg)["last_project"] == "C:/books/novel.tbaw"
