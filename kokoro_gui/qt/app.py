@@ -76,8 +76,8 @@ from kokoro_gui.daw.undo import (
     SetFieldCommand, SplitClipCommand,
 )
 from kokoro_gui import logging_setup
-from kokoro_gui.core import config as core_config, engines as core_engines
-from kokoro_gui.engine import cache_admin, caching, runtime, text_extraction
+from kokoro_gui.core import config as core_config, engines as core_engines, keys as core_keys
+from kokoro_gui.engine import cache_admin, runtime, text_extraction
 from kokoro_gui.engine.lexicon import normalize_rules
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.engines.missing import MissingBackend
@@ -1805,51 +1805,21 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             project.project_dir, project.project_settings, resolution, self._schema_memo)
 
     def _install_segment_key_fn(self, project=None) -> None:
-        """Sets `Document.segment_key_fn` to a closure that keys each clip
-        with its own character's backend (`backend_for`) and the project dir (Claude/old/PLAN_tbaw_bundle.md section 2.3):
-        `key_fn(text, clip, engine_version=None) -> caching.segment_key`
-        over `_assemble_generation_config(clip)`. Memoized on the text, the
-        config and the version; a hit re-checks the voice file's mtime and
-        the backend's `cache_key_extra` (Audio8's transcript, itself cached
-        by mtime), which is the only way a key changes without its inputs
-        changing (a re-saved mix, a re-recorded reference). So a rehighlight
-        of a book costs about two stats per clip and no hashing or reads.
-        Also sets `Document.generation_config_fn`, so the dirty check reads
-        the lexicon and segmentation settings the generation will use."""
+        """Sets `project`'s `Document.segment_key_fn`,
+        `generation_config_fn` and `inputs_fn` (`core.keys.install_key_fn`):
+        each clip is keyed with its own character's backend (`backend_for`)
+        over `_assemble_generation_config(clip)`, the dirty check reads
+        `_dirty_check_config`, and `DirtyTracker` rechecks when
+        `_generation_inputs_fingerprint` moves. The callbacks look up this
+        app's methods per call."""
         project = project or self.focus
-        memo: dict = {}
-
-        def key_fn(text, clip, engine_version=None):
-            backend = self.backend_for(clip, project)
-            if isinstance(backend, MissingBackend):
-                # No engine to compute a key with (grill EN6): the stored one
-                # stands while the files are there. A clip with no segments
-                # or a missing file is stale anyway (`is_clip_dirty`).
-                return clip.segments[0].cache_key if clip.segments else None
-            config = self._assemble_generation_config(clip, project)
-            memo_key = (text, json.dumps(config, sort_keys=True, default=str), engine_version)
-            name, _fp = caching.normalize_voice(config.get("voice"), backend, config.get("project_dir"))
-            voice_file = backend.resolve_voice_file(name, config.get("project_dir")) if name else None
-            # Remembered until `revision.FILES` moves (a voice save, window
-            # activation, Force refresh).
-            stamp = revision.file_mtime(voice_file) if voice_file else None
-            extra = backend.cache_key_extra(config)
-            hit = memo.get(memo_key)
-            if hit is not None and hit[0] == stamp and hit[1] == extra:
-                return hit[2]
-            key = caching.segment_key(text, config, backend, engine_version)
-            memo[memo_key] = (stamp, extra, key)
-            return key
-
-        def config_fn(clip):
-            return self._dirty_check_config(clip, project)
-
-        def inputs_fn():
-            return self._generation_inputs_fingerprint(project)
-
-        project.document.segment_key_fn = key_fn
-        project.document.generation_config_fn = config_fn
-        project.document.inputs_fn = inputs_fn
+        core_keys.install_key_fn(
+            project.document,
+            lambda clip: self.backend_for(clip, project),
+            lambda clip: self._assemble_generation_config(clip, project),
+            lambda clip: self._dirty_check_config(clip, project),
+            lambda: self._generation_inputs_fingerprint(project),
+        )
 
     def _generation_inputs_fingerprint(self, project):
         """What `_assemble_generation_config` reads outside the document,
