@@ -768,8 +768,8 @@ class SubprojectsMixin:
         return bool(path) and self.relink_subproject(clip, path)
 
     def _write_child_bundle(self, child, target: str) -> None:
-        """Writes `child`'s bundle to `target` now (on this thread) and
-        records it in the child's session."""
+        """Writes `child`'s bundle to `target` now (on this thread); the
+        caller records it in the child's session."""
         plan, _warnings = project_io.plan_save(
             child.document, child.project_settings, target, child.project_dir, child.project_id,
             self._backend_for, self._fx_presets_dir(), project_io.read_session(child.project_dir), child.manifest,
@@ -789,6 +789,7 @@ class SubprojectsMixin:
         """Detach to file...: the embedded child is written to `path` and the
         clip links to it from now on (an undoable parent edit). The child's
         project dir stays where it is (it's keyed by id)."""
+        import kokoro_gui.engines.registry as engine_registry
         from kokoro_gui.daw.undo import SetFieldCommand
 
         child = self.child_project(clip) or self.open_child(clip)
@@ -798,9 +799,12 @@ class SubprojectsMixin:
             return False
         path = os.path.abspath(project_io.bundle_path_for(path))
         self._autosave_one(child)
-        plan, result = self._write_child_bundle(child, path)
-        project_io.record_save(child.project_dir, path, result)
-        child.kind, child.path, child.dirty, child.manifest = "linked", path, False, dict(plan.manifest)
+        saved = project_io.save_project(
+            child.document, path, child.project_settings, child.project_dir, child.project_id,
+            self._backend_for, self._fx_presets_dir(), list(engine_registry.list_engines()),
+            previous_manifest=child.manifest,
+        )
+        child.kind, child.path, child.dirty, child.manifest = "linked", path, False, dict(saved.plan.manifest)
         parent = self.project_for(clip)
         new_child = {"kind": "linked", "id": child.project_id, "path": self._linked_path_for(parent, path)}
         parent.document.undo_stack.push(SetFieldCommand("clip", clip.id, "child", new_child))
