@@ -26,10 +26,7 @@ def _core_modules() -> list:
     return ["kokoro_gui.core"] + [f"kokoro_gui.core.{m.name}" for m in pkgutil.iter_modules(kokoro_gui.core.__path__)]
 
 
-def test_core_imports_no_qt():
-    modules = _core_modules()
-    assert {"kokoro_gui.core.engines", "kokoro_gui.core.fx", "kokoro_gui.core.config", "kokoro_gui.core.keys",
-            "kokoro_gui.core.generation", "kokoro_gui.core.render"} <= set(modules)
+def _forbidden_after_importing(modules) -> list:
     script = (
         "import importlib, json, sys\n"
         f"for name in {modules!r}:\n"
@@ -39,5 +36,17 @@ def test_core_imports_no_qt():
     result = subprocess.run([sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr
     loaded = json.loads(result.stdout.strip().splitlines()[-1])
-    bad = [name for name in loaded if any(name == f or name.startswith(f + ".") for f in FORBIDDEN)]
-    assert bad == []
+    return [name for name in loaded if any(name == f or name.startswith(f + ".") for f in FORBIDDEN)]
+
+
+def test_core_imports_no_qt():
+    modules = _core_modules()
+    assert {"kokoro_gui.core.engines", "kokoro_gui.core.fx", "kokoro_gui.core.config", "kokoro_gui.core.keys",
+            "kokoro_gui.core.generation", "kokoro_gui.core.render"} <= set(modules)
+    assert _forbidden_after_importing(modules) == []
+
+
+def test_project_and_spec_import_no_qt():
+    """The two modules under `qt/` that `core/` and a headless front end may
+    import."""
+    assert _forbidden_after_importing(["kokoro_gui.qt.project", "kokoro_gui.qt.spec"]) == []

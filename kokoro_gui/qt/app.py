@@ -635,17 +635,15 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         """New: a fresh dir with an empty `document.json` and the lock, so an
         Untitled project has somewhere to generate into before its first
         Save (Claude/old/PLAN_tbaw_bundle.md section 3)."""
-        project_dir, project_id = project_io.create_project_dir()
         root = self.root
-        root.lock = project_io.ProjectLock(project_dir).acquire()
-        root.project_dir = project_dir
-        root.project_id = project_id
-        root.manifest = {}
-        digest = project_io.autosave_to_dir(document, root.project_settings, project_dir)
-        project_io.write_session(project_dir, {
-            "source_path": None, "zip_size": None, "zip_mtime": None,
-            "saved_digest": digest, "dirty": False, "asset_index": {},
-        })
+
+        def _locked(project_dir, project_id, lock):
+            root.lock = lock
+            root.project_dir = project_dir
+            root.project_id = project_id
+            root.manifest = {}
+
+        project_io.begin_project_dir(document, root.project_settings, on_locked=_locked)
         self._project_dirty = False
 
     def _backend_for(self, engine_id: str):
@@ -2930,8 +2928,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         # recover prompt covers them, and taking the file drops them too.
         child_dirs = [d for d in project_io.child_dirs_of(info.path) if not project_io.is_locked(d)]
         dirty_children = [d for d in child_dirs if (project_io.read_session(d) or {}).get("dirty")]
-        has_document = os.path.isfile(os.path.join(project_dir, project_io.DOCUMENT))
-        if session and has_document and (session.get("dirty") or dirty_children):
+        action = project_io.open_action(session, info, project_dir, dirty_children)
+        if action == "recover":
             choice = self._ask_recover_choice(session, info, project_dir)
             if choice == "cancel":
                 lock.release()
@@ -2944,8 +2942,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
                 project_io.wipe_project_dir(project_dir)
                 for child_dir in child_dirs:
                     project_io.delete_project_dir(child_dir)
-        elif session and project_io.session_matches_file(session, info) and has_document \
-                and not project_io.video_extract_pending(info, project_dir):
+        elif action == "reuse":
             extract = False  # a clean extraction of this very file: Resume is fast
         else:
             project_io.wipe_project_dir(project_dir)

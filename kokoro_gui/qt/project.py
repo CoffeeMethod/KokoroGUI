@@ -29,7 +29,9 @@ a crash keys on `project_id`, not on the path.
 welcome dialog offers it as Resume); `settings["recent_projects"]` is the
 File > Recent list and the welcome dialog's rows, most recent first, at
 most `MAX_RECENT` entries. The app (kokoro_gui/qt/app.py) owns the
-sequencing and the threads: the functions here are the steps.
+threads, the prompts and the subproject order: the functions here are the
+steps, plus three that run or pick a sequence of them without an app
+(`begin_project_dir`, `open_action`, `save_project`).
 """
 from __future__ import annotations
 
@@ -168,6 +170,9 @@ class SaveResult:
     zip_mtime: float
     asset_index: dict
     saved_digest: str
+    # Set by `save_project` only: the plan it wrote and `plan_save`'s warnings.
+    plan: SavePlan | None = field(default=None, repr=False, compare=False)
+    warnings: list = field(default_factory=list, repr=False, compare=False)
 
 
 # --- paths and ids ---------------------------------------------------------------
@@ -788,6 +793,29 @@ def autosave_to_dir(document: Document, project_settings: dict, project_dir: str
     return document_digest(document_bytes, project_bytes)
 
 
+def begin_project_dir(document: Document, project_settings: dict, on_locked=None) -> tuple:
+    """New: a fresh project dir, its lock, the first autosave and a fresh
+    clean `session.json`. Returns `(project_dir, project_id, lock)`, the lock
+    held. `on_locked(project_dir, project_id, lock)` runs before the first
+    write, for an owner (the app) that keeps the dir when that write fails;
+    with none, a failure releases the lock before it propagates."""
+    project_dir, project_id = create_project_dir()
+    lock = ProjectLock(project_dir).acquire()
+    if on_locked is not None:
+        on_locked(project_dir, project_id, lock)
+    try:
+        digest = autosave_to_dir(document, project_settings, project_dir)
+        write_session(project_dir, {
+            "source_path": None, "zip_size": None, "zip_mtime": None,
+            "saved_digest": digest, "dirty": False, "asset_index": {},
+        })
+    except BaseException:
+        if on_locked is None:
+            lock.release()
+        raise
+    return project_dir, project_id, lock
+
+
 # --- open --------------------------------------------------------------------------
 
 
@@ -992,6 +1020,24 @@ def session_matches_file(session: dict | None, info: BundleInfo) -> bool:
                 and abs(float(session.get("zip_mtime", -1)) - info.zip_mtime) < 1e-6)
     except (TypeError, ValueError):
         return False
+
+
+def open_action(session: dict | None, info: BundleInfo, project_dir: str, dirty_children) -> str:
+    """What Open does with the dir it just locked:
+
+    - "recover": the dir (or one of `dirty_children`, its subprojects' dirs
+      with unsaved edits) is ahead of the file, so the caller asks.
+    - "reuse": a clean extraction of this very file, opened as it is.
+    - "extract": anything else; the caller wipes the dir and extracts.
+
+    Reads only, nothing is written or wiped here."""
+    has_document = os.path.isfile(os.path.join(project_dir, DOCUMENT))
+    if session and has_document and (session.get("dirty") or dirty_children):
+        return "recover"
+    if session and session_matches_file(session, info) and has_document \
+            and not video_extract_pending(info, project_dir):
+        return "reuse"
+    return "extract"
 
 
 # --- save --------------------------------------------------------------------------
@@ -1817,9 +1863,14 @@ def record_save(project_dir: str, path: str, result: SaveResult, source_path: st
 def save_project(document: Document, path: str, project_settings: dict | None = None,
                  project_dir: str | None = None, project_id: str | None = None,
                  backend_for=None, fx_presets_dir: str = os.path.join("presets", "fx"),
-                 known_engine_ids=(), project_fx: dict | None = None) -> SaveResult:
-    """Synchronous Save for callers without an app (tests, tooling): plans
-    and writes in one go. A `.json` path is written in the legacy shape."""
+                 known_engine_ids=(), project_fx: dict | None = None,
+                 previous_manifest: dict | None = None) -> SaveResult:
+    """Synchronous Save of one project: `plan_save`, `write_bundle` and
+    `record_save` in one go, on the calling thread, for a caller with nothing
+    to run in between (tests, tooling, a headless save). The result carries
+    `plan` and `warnings`. `previous_manifest` is the manifest the project
+    was opened with (its `created` date, its bundled video). A `.json` path
+    is written in the legacy shape, with no plan."""
     if format_for_path(path) != "tbaw":
         save_json_project(document, path, project_settings)
         return SaveResult(zip_size=os.path.getsize(path), zip_mtime=os.path.getmtime(path), asset_index={},
@@ -1827,11 +1878,13 @@ def save_project(document: Document, path: str, project_settings: dict | None = 
     project_settings = dict(project_settings or {})
     if project_dir is None:
         project_dir, project_id = create_project_dir(project_id)
-    plan, _warnings = plan_save(document, project_settings, path, project_dir, project_id or new_project_id(),
-                                backend_for or (lambda _id: None), fx_presets_dir, read_session(project_dir),
-                                project_fx=project_fx)
+    plan, warnings = plan_save(document, project_settings, path, project_dir, project_id or new_project_id(),
+                               backend_for or (lambda _id: None), fx_presets_dir, read_session(project_dir),
+                               previous_manifest, project_fx=project_fx)
     result = write_bundle(plan, known_engine_ids)
     record_save(project_dir, path, result)
+    result.plan = plan
+    result.warnings = warnings
     return result
 
 
