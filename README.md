@@ -52,6 +52,7 @@ Unreleased:
 
 -   The Settings tab is now Voice & Clip. It and Audio FX name what an edit changes, their groups fold, the Transport says
     what Preview will speak, and a greyed-out control says why
+-   The right-hand panel tabs sit on top with every name in full, and scroll when they don't fit
 -   Save your own named workspaces, which change only when you choose Update workspace, and reopen any closed panel
     from Workspace > Panels
 -   Open another project, or start a new one, while Generate runs: the first one keeps generating in the background into
