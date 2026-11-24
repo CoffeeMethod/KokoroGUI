@@ -76,8 +76,8 @@ from kokoro_gui.daw.undo import (
     SetFieldCommand, SplitClipCommand,
 )
 from kokoro_gui import logging_setup
-from kokoro_gui.core import config as core_config, engines as core_engines
-from kokoro_gui.engine import cache_admin, caching, runtime, text_extraction
+from kokoro_gui.core import config as core_config, engines as core_engines, keys as core_keys, render as core_render
+from kokoro_gui.engine import cache_admin, runtime, text_extraction
 from kokoro_gui.engine.lexicon import normalize_rules
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.engines.missing import MissingBackend
@@ -1806,51 +1806,21 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             project.project_dir, project.project_settings, resolution, self._schema_memo)
 
     def _install_segment_key_fn(self, project=None) -> None:
-        """Sets `Document.segment_key_fn` to a closure that keys each clip
-        with its own character's backend (`backend_for`) and the project dir (Claude/old/PLAN_tbaw_bundle.md section 2.3):
-        `key_fn(text, clip, engine_version=None) -> caching.segment_key`
-        over `_assemble_generation_config(clip)`. Memoized on the text, the
-        config and the version; a hit re-checks the voice file's mtime and
-        the backend's `cache_key_extra` (Audio8's transcript, itself cached
-        by mtime), which is the only way a key changes without its inputs
-        changing (a re-saved mix, a re-recorded reference). So a rehighlight
-        of a book costs about two stats per clip and no hashing or reads.
-        Also sets `Document.generation_config_fn`, so the dirty check reads
-        the lexicon and segmentation settings the generation will use."""
+        """Sets `project`'s `Document.segment_key_fn`,
+        `generation_config_fn` and `inputs_fn` (`core.keys.install_key_fn`):
+        each clip is keyed with its own character's backend (`backend_for`)
+        over `_assemble_generation_config(clip)`, the dirty check reads
+        `_dirty_check_config`, and `DirtyTracker` rechecks when
+        `_generation_inputs_fingerprint` moves. The callbacks look up this
+        app's methods per call."""
         project = project or self.focus
-        memo: dict = {}
-
-        def key_fn(text, clip, engine_version=None):
-            backend = self.backend_for(clip, project)
-            if isinstance(backend, MissingBackend):
-                # No engine to compute a key with (grill EN6): the stored one
-                # stands while the files are there. A clip with no segments
-                # or a missing file is stale anyway (`is_clip_dirty`).
-                return clip.segments[0].cache_key if clip.segments else None
-            config = self._assemble_generation_config(clip, project)
-            memo_key = (text, json.dumps(config, sort_keys=True, default=str), engine_version)
-            name, _fp = caching.normalize_voice(config.get("voice"), backend, config.get("project_dir"))
-            voice_file = backend.resolve_voice_file(name, config.get("project_dir")) if name else None
-            # Remembered until `revision.FILES` moves (a voice save, window
-            # activation, Force refresh).
-            stamp = revision.file_mtime(voice_file) if voice_file else None
-            extra = backend.cache_key_extra(config)
-            hit = memo.get(memo_key)
-            if hit is not None and hit[0] == stamp and hit[1] == extra:
-                return hit[2]
-            key = caching.segment_key(text, config, backend, engine_version)
-            memo[memo_key] = (stamp, extra, key)
-            return key
-
-        def config_fn(clip):
-            return self._dirty_check_config(clip, project)
-
-        def inputs_fn():
-            return self._generation_inputs_fingerprint(project)
-
-        project.document.segment_key_fn = key_fn
-        project.document.generation_config_fn = config_fn
-        project.document.inputs_fn = inputs_fn
+        core_keys.install_key_fn(
+            project.document,
+            lambda clip: self.backend_for(clip, project),
+            lambda clip: self._assemble_generation_config(clip, project),
+            lambda clip: self._dirty_check_config(clip, project),
+            lambda: self._generation_inputs_fingerprint(project),
+        )
 
     def _generation_inputs_fingerprint(self, project):
         """What `_assemble_generation_config` reads outside the document,
@@ -1993,17 +1963,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         return self._measure_clip_duration_s(clip, project, segments)
 
     def _measure_clip_duration_s(self, clip, project, segments):
-        post_config = self.post_config_for_clip(clip, project)
-        rate = self.project_sample_rate()
-        total = 0.0
-        for segment in segments:
-            try:
-                total += post.rendered_duration_s(segment.audio_path, post_config, rate,
-                                                  hint=post.duration_hint(segment, post_config),
-                                                  range_s=post.segment_range(segment))
-            except Exception:
-                total += segment.duration or 0.0
-        return total
+        return core_render.clip_duration_s(clip, self.post_config_for_clip(clip, project),
+                                           self.project_sample_rate(), segments)
 
     def _clip_render_requests(self, clip, project=None):
         """`([(path, post_config, range_s), ...], rate)`: the renders whose
@@ -2015,11 +1976,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             if not path:
                 return None
             return [(path, self.post_config_for_clip(clip, project), None)], rate
-        segments = playable_segments(clip)
-        if not segments:
-            return None
-        post_config = self.post_config_for_clip(clip, project)
-        return [(s.audio_path, post_config, post.segment_range(s)) for s in segments], rate
+        requests = core_render.clip_render_requests(clip, lambda c: self.post_config_for_clip(c, project))
+        return None if requests is None else (requests, rate)
 
     def rendered_clip_samples(self, clip, project=None):
         """`(samples, rate)` for the clip's segments concatenated and
@@ -2029,13 +1987,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if plan is None:
             return None
         requests, rate = plan
-        parts = []
-        for path, post_config, range_s in requests:
-            try:
-                parts.append(post.render(path, post_config, rate, range_s))
-            except Exception:
-                continue
-        return self._concat_renders(parts, rate)
+        return core_render.render_requests(requests, rate)
 
     def rendered_clip_samples_async(self, clip, project, on_ready) -> None:
         """`rendered_clip_samples` without rendering on this thread:
@@ -2050,7 +2002,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         parts = [post.cached_render(path, config, rate, range_s) for path, config, range_s in requests]
         missing = [i for i, part in enumerate(parts) if part is None]
         if not missing:
-            on_ready(self._concat_renders(parts, rate))
+            on_ready(core_render.concat_renders(parts, rate))
             return
         waiting = [len(missing)]
 
@@ -2058,19 +2010,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             parts[index] = rendered
             waiting[0] -= 1
             if waiting[0] == 0:
-                on_ready(self._concat_renders([p for p in parts if p is not None], rate))
+                on_ready(core_render.concat_renders([p for p in parts if p is not None], rate))
 
         for index in missing:
             path, config, range_s = requests[index]
             post.render_async(path, config, rate, range_s, lambda rendered, index=index: landed(index, rendered))
-
-    @staticmethod
-    def _concat_renders(parts, rate):
-        if not parts:
-            return None
-        import numpy as np
-
-        return np.concatenate(parts), rate
 
     def _on_renders_ready(self) -> None:
         post.drain()

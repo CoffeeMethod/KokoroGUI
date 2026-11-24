@@ -28,7 +28,8 @@ def _core_modules() -> list:
 
 def test_core_imports_no_qt():
     modules = _core_modules()
-    assert {"kokoro_gui.core.engines", "kokoro_gui.core.fx", "kokoro_gui.core.config"} <= set(modules)
+    assert {"kokoro_gui.core.engines", "kokoro_gui.core.fx", "kokoro_gui.core.config", "kokoro_gui.core.keys",
+            "kokoro_gui.core.generation", "kokoro_gui.core.render"} <= set(modules)
     script = (
         "import importlib, json, sys\n"
         f"for name in {modules!r}:\n"

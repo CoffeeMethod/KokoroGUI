@@ -67,10 +67,14 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.audio import loudness as loudness_mod
+from kokoro_gui.core import render as core_render
+from kokoro_gui.core.render import (
+    DEFAULT_CEILING_DBTP, DEFAULT_LIMITER_DBFS, DEFAULT_RMS_DBFS, DEFAULT_TARGET_LUFS,
+)
 from kokoro_gui.daw import markers as marker_ops
 from kokoro_gui.daw.export_presets import CUSTOM_ID, PRESETS, SPLIT_MODES, get_preset, preset_ids
 from kokoro_gui.daw.mixdown import (
-    STEM_MODES, expand_name, mixdown, mixdown_chapters, name_context, plan_chapters, render_mix, unused_path,
+    STEM_MODES, expand_name, name_context, plan_chapters, render_mix, unused_path,
 )
 from kokoro_gui.daw import m4b, tagging
 from kokoro_gui.daw.transcripts import clean_extras
@@ -84,10 +88,6 @@ BITRATES_KBPS = (128, 192, 256, 320)
 DEFAULT_BITRATE_KBPS = 192
 M4B_BITRATES_KBPS = m4b.BITRATES_KBPS
 OUTPUT_RATES = (22050, 24000, 44100, 48000)
-DEFAULT_TARGET_LUFS = -16.0
-DEFAULT_CEILING_DBTP = -1.0
-DEFAULT_RMS_DBFS = -20.0
-DEFAULT_LIMITER_DBFS = -3.5
 NORMALIZE_MODES = ("lufs", "rms")
 SPLIT_LABELS = {None: "One file", "subprojects": "One file per subproject", "markers": "One file per marker range"}
 STEM_LABELS = {None: "None", "track": "One per track", "character": "One per character"}
@@ -208,19 +208,12 @@ def _mix_inputs(app) -> dict:
     """The keyword arguments `render_mix` and `mixdown` share, resolved on
     the GUI thread: the arrangement, the mix rate, each clip's
     post-processing (it reads dock state) and each subproject's mixdown file
-    (phase 4)."""
+    (`core.render.mix_inputs`)."""
     level = getattr(app, "level", None)
     arrangement = app.build_arrangement()
-    post_configs = {p.clip.id: app.post_config_for_clip(p.clip, level) for p in arrangement.placed}
-    nested = {p.clip.id: app.nested_audio_path(p.clip, level)
-              for p in arrangement.placed if p.clip.is_nested} if hasattr(app, "nested_audio_path") else {}
-    return {
-        "sample_rate": app.project_sample_rate(),
-        "arrangement": arrangement,
-        "engine_id": app.backend.id,
-        "post_config_for_clip": lambda clip: post_configs.get(clip.id),
-        "nested_audio_path": lambda clip: nested.get(clip.id),
-    }
+    nested_path = (lambda clip: app.nested_audio_path(clip, level)) if hasattr(app, "nested_audio_path") else None
+    return core_render.mix_inputs(arrangement, lambda clip: app.post_config_for_clip(clip, level), nested_path,
+                                  app.project_sample_rate(), app.backend.id)
 
 
 def chapter_plan(app, split: str, preset=None, arrangement=None):
@@ -248,18 +241,6 @@ def tag_options(app, values: dict) -> dict | None:
         "description": tags["description"], "genre": PRESET_GENRES.get(preset.id, "") if preset else "",
         "cover": tags["cover"], "chapters": tags["chapters"],
     }
-
-
-def _loudness_options(values: dict):
-    """`mixdown(loudness=...)` for the stored values, or None when
-    "Normalize loudness" is off or pyloudnorm is missing."""
-    if not values.get("normalize_loudness") or not loudness_mod.available():
-        return None
-    if values.get("normalize_mode") == "rms":
-        return {"mode": "rms", "target_rms_dbfs": values.get("target_rms_dbfs", DEFAULT_RMS_DBFS),
-                "limiter_dbfs": values.get("limiter_dbfs", DEFAULT_LIMITER_DBFS)}
-    return {"mode": "lufs", "target_lufs": values.get("target_lufs", DEFAULT_TARGET_LUFS),
-            "ceiling_dbtp": values.get("ceiling_dbtp", DEFAULT_CEILING_DBTP)}
 
 
 class ExportDialog(QDialog):
@@ -900,7 +881,6 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
     project_settings["export"] = dict(values)
     app.schedule_save()
 
-    loudness = _loudness_options(values)
     # The checks read the loudness measurement, which needs pyloudnorm.
     checks = preset.checks if preset is not None and loudness_mod.available() else ()
 
@@ -915,23 +895,12 @@ def run_export(app, values: dict, parent=None, bundle: dict | None = None, range
     log_context = {"title": project_io.display_title(app.root.project_settings, app.project_path),
                    "path": app.project_path or ""}
 
-    options = dict(
-        fmt=values["format"], include_srt=values["srt"], keep_clip_files=values["keep_clip_files"],
-        progress=_progress, channels=values.get("channels", 2),
-        srt_granularity="word" if values.get("srt_words") else "clip",
-        include_cue_sheet=bool(values.get("cue_sheet")), loudness=loudness,
-        bitrate_kbps=values.get("m4b_bitrate_kbps" if values["format"] == "m4b" else "bitrate_kbps"), out_rate=values.get("sample_rate"),
-        head_s=values.get("head_s", 0.0), tail_s=values.get("tail_s", 0.0), checks=checks,
-        stems=values.get("stems"), dialogue_stem=bool(values.get("dialogue_stem")),
-        extras=tuple(clean_extras(values.get("extras"))),
-        transcript_speakers=bool(values.get("transcript_speakers", True)), tags=tag_options(app, values), **inputs,
-    )
+    options = core_render.export_options(values, inputs, progress=_progress, tags=tag_options(app, values),
+                                         checks=checks)
 
     async def _run():
-        if plan is not None:
-            return await asyncio.to_thread(mixdown_chapters, document, values["out_dir"], plan, numbered=numbered,
-                                           **options)
-        return await asyncio.to_thread(mixdown, document, out_path, range_s=range_s, **options)
+        return await asyncio.to_thread(core_render.export_mix, document, out_path, options, range_s=range_s,
+                                       plan=plan, out_dir=values["out_dir"], numbered=numbered)
 
     def _done(future):
         try:
