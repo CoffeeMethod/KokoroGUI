@@ -76,7 +76,7 @@ from kokoro_gui.daw.undo import (
     SetFieldCommand, SplitClipCommand,
 )
 from kokoro_gui import logging_setup
-from kokoro_gui.core import config as core_config, engines as core_engines, keys as core_keys
+from kokoro_gui.core import config as core_config, engines as core_engines, keys as core_keys, render as core_render
 from kokoro_gui.engine import cache_admin, runtime, text_extraction
 from kokoro_gui.engine.lexicon import normalize_rules
 from kokoro_gui.engines import registry as engine_registry
@@ -1962,17 +1962,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         return self._measure_clip_duration_s(clip, project, segments)
 
     def _measure_clip_duration_s(self, clip, project, segments):
-        post_config = self.post_config_for_clip(clip, project)
-        rate = self.project_sample_rate()
-        total = 0.0
-        for segment in segments:
-            try:
-                total += post.rendered_duration_s(segment.audio_path, post_config, rate,
-                                                  hint=post.duration_hint(segment, post_config),
-                                                  range_s=post.segment_range(segment))
-            except Exception:
-                total += segment.duration or 0.0
-        return total
+        return core_render.clip_duration_s(clip, self.post_config_for_clip(clip, project),
+                                           self.project_sample_rate(), segments)
 
     def _clip_render_requests(self, clip, project=None):
         """`([(path, post_config, range_s), ...], rate)`: the renders whose
@@ -1984,11 +1975,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             if not path:
                 return None
             return [(path, self.post_config_for_clip(clip, project), None)], rate
-        segments = playable_segments(clip)
-        if not segments:
-            return None
-        post_config = self.post_config_for_clip(clip, project)
-        return [(s.audio_path, post_config, post.segment_range(s)) for s in segments], rate
+        requests = core_render.clip_render_requests(clip, lambda c: self.post_config_for_clip(c, project))
+        return None if requests is None else (requests, rate)
 
     def rendered_clip_samples(self, clip, project=None):
         """`(samples, rate)` for the clip's segments concatenated and
@@ -1998,13 +1986,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if plan is None:
             return None
         requests, rate = plan
-        parts = []
-        for path, post_config, range_s in requests:
-            try:
-                parts.append(post.render(path, post_config, rate, range_s))
-            except Exception:
-                continue
-        return self._concat_renders(parts, rate)
+        return core_render.render_requests(requests, rate)
 
     def rendered_clip_samples_async(self, clip, project, on_ready) -> None:
         """`rendered_clip_samples` without rendering on this thread:
@@ -2019,7 +2001,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         parts = [post.cached_render(path, config, rate, range_s) for path, config, range_s in requests]
         missing = [i for i, part in enumerate(parts) if part is None]
         if not missing:
-            on_ready(self._concat_renders(parts, rate))
+            on_ready(core_render.concat_renders(parts, rate))
             return
         waiting = [len(missing)]
 
@@ -2027,19 +2009,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             parts[index] = rendered
             waiting[0] -= 1
             if waiting[0] == 0:
-                on_ready(self._concat_renders([p for p in parts if p is not None], rate))
+                on_ready(core_render.concat_renders([p for p in parts if p is not None], rate))
 
         for index in missing:
             path, config, range_s = requests[index]
             post.render_async(path, config, rate, range_s, lambda rendered, index=index: landed(index, rendered))
-
-    @staticmethod
-    def _concat_renders(parts, rate):
-        if not parts:
-            return None
-        import numpy as np
-
-        return np.concatenate(parts), rate
 
     def _on_renders_ready(self) -> None:
         post.drain()
