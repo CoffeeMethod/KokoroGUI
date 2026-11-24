@@ -240,7 +240,7 @@ def test_selecting_the_nested_block_points_the_docks_at_the_child(qt_app):
     assert qt_app.editor.toPlainText() == "Chapter text."
     assert qt_app.scope_text() == "Subproject: Chapter 1"
     assert not qt_app.transcript_dock.scope_bar.isHidden()
-    assert qt_app.fx_dock.scope_label.text().startswith("Subproject: Chapter 1")
+    assert qt_app.fx_dock.scope_header.context_label.text() == "Subproject: Chapter 1"
     assert qt_app.settings_dock.subproject_label.text() == "Subproject: Chapter 1"
     window = qt_app.open_settings_window("Project")
     assert window.widgets["title"].text() == "Chapter 1"

@@ -1598,6 +1598,11 @@ class TranscriptEditor(QTextEdit):
         else:
             self.app.selection.clear()
 
+    def select_at_caret(self) -> None:
+        """Selects what the caret (or the selected text) is in, as moving it
+        there would."""
+        self._on_cursor_position_changed()
+
     def _on_selection_model_changed(self) -> None:
         clip_id = self.app.selection.selected_clip_id
         if clip_id is None:

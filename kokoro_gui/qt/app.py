@@ -89,7 +89,7 @@ from kokoro_gui.qt.storage_dialog import StorageDialog, trim_in_background
 from kokoro_gui.qt.about_dialog import (
     SHORTCUT_DESCRIPTION_PROPERTY, SHORTCUT_GROUP_PROPERTY, AboutDialog, ShortcutsDialog, device_summary,
 )
-from kokoro_gui.qt import keymap
+from kokoro_gui.qt import keymap, preview_target
 from kokoro_gui.qt import recording_import, resume_view
 from kokoro_gui.qt.gen_queue import GenerationQueueMixin
 from kokoro_gui.qt.listen_through import ListenThroughMixin
@@ -154,6 +154,13 @@ def _depth_in(tree):
             depth += 1
         return depth
     return _depth
+
+
+ADD_CREDITS_TIP = "Add opening and closing credit subprojects from the book's title, author and narrator."
+SPLIT_CLIP_TIP = ("Cut the clip under the playhead in two at the word it is on. "
+                  "S does the same with the timeline focused.")
+JOIN_CLIP_TIP = ("Merge the selected clip, or the one under the playhead, with the clip "
+                 "after it. They need the same character and kind.")
 
 
 class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThroughMixin, WorkspaceMenuMixin,
@@ -1023,7 +1030,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.load_video_action = self._action("Load &Video...", self.load_video_dialog)
         self.file_menu.addAction(self.load_video_action)
         self.add_credits_action = self._action("Add &Credits...", self.add_credits_dialog)
-        self.add_credits_action.setToolTip("Add opening and closing credit subprojects from the book's title, author and narrator.")
+        self.add_credits_action.setToolTip(ADD_CREDITS_TIP)
         self.file_menu.addAction(self.add_credits_action)
         self.file_menu.aboutToShow.connect(self._sync_add_credits_action)
         self.export_action = self._action("&Export...", self.export_dialog, "Ctrl+E")
@@ -1061,11 +1068,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self.edit_menu.addAction(a)
         self.edit_menu.addSeparator()
         self.split_clip_action = self._action("&Split Clip at Playhead", self.split_clip_at_playhead)
-        self.split_clip_action.setToolTip("Cut the clip under the playhead in two at the word it is on. "
-                                          "S does the same with the timeline focused.")
+        self.split_clip_action.setToolTip(SPLIT_CLIP_TIP)
         self.join_clip_action = self._action("&Join with Next Clip", self.join_selected_with_next)
-        self.join_clip_action.setToolTip("Merge the selected clip, or the one under the playhead, with the clip "
-                                         "after it. They need the same character and kind.")
+        self.join_clip_action.setToolTip(JOIN_CLIP_TIP)
         self.edit_menu.addAction(self.split_clip_action)
         self.edit_menu.addAction(self.join_clip_action)
         self.edit_menu.aboutToShow.connect(self._sync_split_join_actions)
@@ -1201,6 +1206,10 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
         # Help
         self.help_menu = bar.addMenu("&Help")
+        # A greyed entry says why, where it has a tooltip.
+        for menu in (self.file_menu, self.recent_menu, self.show_in_folder_menu, self.edit_menu, self.options_menu,
+                     self.device_menu, self.details_menu):
+            menu.setToolTipsVisible(True)
         self.documentation_action = self._action("&Documentation", self.open_documentation)
         self.shortcuts_action = self._action("&Keyboard Shortcuts", self.show_shortcuts)
         self.open_log_folder_action = self._action("Open &Log Folder", self.open_log_folder)
@@ -1289,6 +1298,10 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.timeline_dock.timeline_view.seekRequested.connect(self.transport.seek)
         self.timeline_dock.timeline_view.zoomChanged.connect(lambda _zoom: self._view_timer.start())
         self.selection.changed.connect(self._view_timer.start)
+        self.selection.changed.connect(self.transport_dock.refresh_preview_target)
+        self.editor.selectionChanged.connect(self.transport_dock.refresh_preview_target)
+        self.editor.textChanged.connect(self.transport_dock.refresh_preview_target)
+        self.transport_dock.refresh_preview_target()
         self.timeline_dock.timeline_view.splitRequested.connect(self.split_clip_at)
         self.timeline_dock.timeline_view.joinRequested.connect(self.join_clip_with_next)
 
@@ -1492,7 +1505,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         queues."""
         dock = self.transport_dock
         if dock is not None:
-            dock.generate_btn.setEnabled(not self.generate_blocked())
+            dock.set_generate_enabled(not self.generate_blocked())
 
     @property
     def editor(self):
@@ -1611,6 +1624,21 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self.outline_dock.refresh()
         if self.proof_dock is not None:
             self.proof_dock.refresh()
+        self.refresh_targets()
+
+    def refresh_targets(self) -> None:
+        """What the Voice & Clip and Audio FX tabs edit and what Preview
+        speaks, again: an edit can rename, reassign or remove it without a
+        new selection. Assigning a character replaces a clip with a new one,
+        so a selected clip that is gone hands the selection to the caret's."""
+        clip_id = self.selection.selected_clip_id
+        if clip_id is not None and self.editor is not None and self.project_of_clip_id(clip_id) is None:
+            self.editor.select_at_caret()
+        for dock in (self.settings_dock, self.fx_dock):
+            if dock is not None:
+                dock.refresh_target()
+        if self.transport_dock is not None:
+            self.transport_dock.refresh_preview_target()
 
     def _prewarm_renders(self) -> None:
         """When the post inputs (Settings, project FX, the project) moved
@@ -2146,6 +2174,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
                 action.blockSignals(False)
         for action in self.details_layer_actions.values():
             action.setEnabled(on)
+            action.setToolTip("" if on else "Turn on Show details first.")
 
     def _apply_details(self) -> None:
         if self.editor is not None:
@@ -2399,7 +2428,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def _sync_add_credits_action(self) -> None:
         """Add Credits needs something to put them around: text, or a subproject."""
         document = self.focus.document
-        self.add_credits_action.setEnabled(bool(document.text.strip()) or bool(document.nested_clips()))
+        ready = bool(document.text.strip()) or bool(document.nested_clips())
+        self.add_credits_action.setEnabled(ready)
+        self.add_credits_action.setToolTip(ADD_CREDITS_TIP if ready else "Add some text or a subproject first.")
 
     def _rebuild_recent_menu(self) -> None:
         self.recent_menu.clear()
@@ -2422,11 +2453,18 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
     def _sync_show_in_folder_actions(self) -> None:
         """Each entry is enabled only while its target exists on disk."""
-        self.show_project_file_action.setEnabled(bool(self.project_path) and os.path.exists(self.project_path))
         working = self.root.project_dir
-        self.show_working_folder_action.setEnabled(bool(working) and os.path.isdir(working))
         last = self._last_export_path
-        self.show_last_export_action.setEnabled(bool(last) and os.path.exists(last))
+        for action, there, tip in (
+            (self.show_project_file_action, bool(self.project_path) and os.path.exists(self.project_path),
+             "The project has no file yet. Save it first."),
+            (self.show_working_folder_action, bool(working) and os.path.isdir(working),
+             "The project has no working folder."),
+            (self.show_last_export_action, bool(last) and os.path.exists(last),
+             "No export to show. Export first, or the last one was moved."),
+        ):
+            action.setEnabled(there)
+            action.setToolTip("" if there else tip)
 
     def _reveal_path(self, path: str | None) -> None:
         if not reveal(path):
@@ -3960,8 +3998,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._sync_generate_button()
         if self.transcript_dock is not None:
             self.transcript_dock.find_bar.on_busy_changed()
-        self.settings_dock.volume_spin.setEnabled(not is_running)
-        self.settings_dock.pitch_spin.setEnabled(not is_running)
+        self.settings_dock.set_generating(is_running)
         if not is_running:
             cancelled = any(b.was_cancelled() for b in self._backends.values())
             self.transport_dock.set_progress_value(0 if cancelled else 100)
@@ -3971,13 +4008,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def preview_conversion(self) -> None:
         """Speaks the editor's selection (else the whole transcript, else a
         sample line) with the active character."""
-        editor = self.editor
-        cursor = editor.textCursor()
-        text_data = cursor.selectedText().replace(" ", "\n") if cursor.hasSelection() else editor.toPlainText().strip()
-        if not text_data:
-            text_data = ("This is a sample audio preview using the Koh-koh-ro Tea-Tea-S engine. "
-                         "It demonstrates the voice quality and speed settings.")
-        self.preview_text(text_data[:1000])
+        self.preview_text(preview_target.preview_text(self.editor))
 
     def preview_text(self, text: str, character=None, lexicon=None) -> bool:
         """Speaks `text` (up to two segments) as `character` on its own
@@ -4766,9 +4797,15 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         document = self.level.document
         clip = self._playhead_clip()
         offset = self.split_offset_at(clip.id, self.transport.position()) if clip is not None else None
-        self.split_clip_action.setEnabled(offset is not None and document.split_problem(clip, offset) is None)
+        problem = "Put the playhead on a clip." if clip is None else (
+            "Put the playhead between two words of the clip." if offset is None
+            else document.split_problem(clip, offset))
+        self.split_clip_action.setEnabled(problem is None)
+        self.split_clip_action.setToolTip(problem or SPLIT_CLIP_TIP)
         pair = self._join_pair()
-        self.join_clip_action.setEnabled(pair is not None and document.join_problem(*pair) is None)
+        problem = "Select a clip with another clip after it." if pair is None else document.join_problem(*pair)
+        self.join_clip_action.setEnabled(problem is None)
+        self.join_clip_action.setToolTip(problem or JOIN_CLIP_TIP)
 
     # --- filler words (plan 32) ------------------------------------------
 

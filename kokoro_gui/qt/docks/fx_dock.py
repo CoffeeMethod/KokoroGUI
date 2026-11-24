@@ -2,9 +2,10 @@
 and loads/saves FX presets under `presets/fx/`.
 
 UI6 (Claude/PLAN_ui_shell_redesign.md section 3): the tab follows the
-selection the way the Settings tab does, with the same three modes:
+selection the way the Voice & Clip tab does, with the same three modes, and
+names its target in the same `ScopeHeader` (`qt/scope_target.py`):
 
-- "none": the project-wide FX state, persisted in `config_qt.json`, fed
+- "none": the default FX state, persisted in `config_qt.json`, fed
   into whole-document generation and the bottom layer of every clip's
   resolved stack. Edits schedule an autosave and a debounced timeline
   re-render.
@@ -31,6 +32,10 @@ the current scope resolves to. Scope resolution is
 FX are read-time post-processing (kokoro_gui/audio/post.py): every edit here
 is audible on the next transport rebuild and never dirties a clip.
 
+Each group of effects is a `CollapsibleSection` whose title says which of its
+effects are on (`_sync_group_states`). Folding hides the controls and changes
+no value. A group with nothing on starts folded.
+
 A `spec.FXFileSpec` field (the convolution reverb's impulse response) is a
 combo of names from its store, project-local first (`fx_presets.list_ir_names`),
 with a "None" entry that stores "", and an "Add..." button that copies a wav
@@ -50,7 +55,7 @@ import re
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox, QDockWidget, QFileDialog, QFormLayout,
-    QGroupBox, QHBoxLayout, QInputDialog, QLabel, QMenu, QMessageBox, QPushButton,
+    QHBoxLayout, QInputDialog, QLabel, QMenu, QMessageBox, QPushButton,
     QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -59,7 +64,8 @@ from kokoro_gui.daw import library_copy, revision, share
 from kokoro_gui.daw.undo import CompositeCommand, SetClipFxCommand
 from kokoro_gui.engine import presets
 from kokoro_gui.engine.presets import filter_fx_preset_values
-from kokoro_gui.qt import fx_resolve, share_dialogs, spec
+from kokoro_gui.qt import fx_resolve, scope_target, share_dialogs, spec
+from kokoro_gui.qt.collapsible import CollapsibleSection
 from kokoro_gui.qt.docks.scope_fields import MIXED, MIXED_LABEL, MixedCheckBox, MixedSpinBox, common_value, mark_mixed
 from kokoro_gui.qt.fx_presets import import_ir_file, list_fx_preset_names, list_ir_names
 from kokoro_gui.qt.fx_resolve import PLACEHOLDER as _PLACEHOLDER
@@ -104,8 +110,10 @@ class FXDock(QDockWidget):
         content = QWidget()
         outer = QVBoxLayout(content)
 
-        self.scope_label = QLabel("Project FX")
-        outer.addWidget(self.scope_label)
+        # What the tab edits, above the scroll area so it never scrolls away.
+        self.scope_header = scope_target.ScopeHeader()
+        self.scope_label = self.scope_header.title_label
+        outer.addWidget(self.scope_header)
 
         preset_row = QHBoxLayout()
         self.preset_combo = QComboBox()
@@ -150,14 +158,19 @@ class FXDock(QDockWidget):
         inner_layout = QVBoxLayout(inner)
         scroll.setWidget(inner)
         outer.addWidget(scroll)
+        # Where an edit goes and who else it reaches.
+        self.scope_hint = scope_target.muted_label()
+        inner_layout.addWidget(self.scope_hint)
 
+        self.group_sections: dict[str, CollapsibleSection] = {}
         specs_by_group: dict[str, list[spec.FXSliderSpec]] = {g: [] for g in spec.FX_GROUP_ORDER}
         for s in spec.FX_FIELD_SPECS:
             specs_by_group[s.group].append(s)
 
         for group in spec.FX_GROUP_ORDER:
-            box = QGroupBox(group.replace("&", "&&"))
-            box_layout = QVBoxLayout(box)
+            box = self.group_sections[group] = CollapsibleSection(group)
+            box_layout = QVBoxLayout()
+            box.set_body_layout(box_layout)
             self._build_group(box_layout, specs_by_group[group])
             for key, label, toggle_group in spec.FX_STANDALONE_TOGGLES:
                 if toggle_group == group:
@@ -177,6 +190,8 @@ class FXDock(QDockWidget):
         self.refresh_presets()
         self.app.selection.changed.connect(self.refresh_for_selection)
         self.refresh_for_selection()
+        for section in self.group_sections.values():
+            section.set_collapsed(not section.state)
 
     def _build_group(self, box_layout: QVBoxLayout, specs: list) -> None:
         sections: dict[str, list] = {}
@@ -312,16 +327,98 @@ class FXDock(QDockWidget):
                 self._show_mixed()
         finally:
             self._loading = False
+        self._shown_signature = self._target_signature()
+        self._sync_group_states()
+        self._refresh_scope_text()
+
+    # --- what the tab edits, in words ----------------------------------------
+
+    def _target_signature(self) -> tuple:
+        """What the controls were filled for: the target and the characters
+        its FX come from."""
+        document = self.app.document
+        mode, target = self._resolve_mode()
+        if mode != "clip":
+            return (id(document), mode, getattr(target, "id", None))
+        ids = [cid for cid in self.app.selection.selected_clip_ids if document.get_clip(cid) is not None]
+        return (id(document), mode, target.id, tuple((cid, document.get_clip(cid).character_id) for cid in ids))
+
+    def refresh_target(self) -> None:
+        """The header and hint again, after an edit elsewhere (a rename, an
+        undo). When the target is gone or has another character the controls
+        follow too, unless an edit to them is still waiting to be stored."""
+        if self._target_signature() != self._shown_signature:
+            if not self._clip_timer.isActive():
+                self.refresh_for_selection()
+            return
+        self._refresh_scope_text()
+
+    def _refresh_scope_text(self) -> None:
+        self.scope_header.show_target(scope_target.describe(self.app, self._mode, self._target, self._targets))
+        scope_target.set_hint(self.scope_hint, self._scope_hint_text())
+
+    def _scope_hint_text(self) -> str:
+        if self._mode == "character":
+            name = self._character_preset_name(self._target)
+            if name:
+                return f'Edits are saved to the FX "{name}", so everything that uses it changes.'
+            return f"{scope_target.shorten(self._target.name)} has no FX yet. An edit saves one under that name."
         if self.several:
-            text = f"Clip FX (override for {len(self._targets)} selected clips)"
-        elif self._mode == "clip":
-            text = "Clip FX (override for the selected clip)"
-        elif self._mode == "character":
-            text = f"Character FX: {self._target.name}"
-        else:
-            text = "Project FX"
-        scope = self.app.scope_text() if hasattr(self.app, "scope_text") else None
-        self.scope_label.setText(f"{scope}: {text}" if scope else text)
+            return (f"An edit changes the controls you touch on all {len(self._targets)} clips, as one undo step. "
+                    "Each clip keeps its own FX after that.")
+        if self._mode == "clip":
+            if self._target.fx_override:
+                return "This clip has its own FX. Edits change this clip only."
+            source = fx_resolve.real_preset_name(self._target.overrides.get("fx_preset"))
+            if source is None:
+                source = self._character_preset_name(self.app.document.get_character(self._target.character_id))
+            follows = f'the FX "{source}"' if source else "the defaults"
+            return f"This clip follows {follows}. An edit gives it its own FX."
+        return "Shared by every project. A character's or clip's own FX go on top."
+
+    def _sync_group_states(self) -> None:
+        """Which effects of a group are on, in its title."""
+        for group, section in self.group_sections.items():
+            states: dict = {}  # effect -> "on", "mixed" or "missing file"
+            for s in spec.FX_FIELD_SPECS:
+                if s.group == group and s.section not in states:
+                    state = self._section_state(s)
+                    if state:
+                        states[s.section] = state
+            for key, label, toggle_group in spec.FX_STANDALONE_TOGGLES:
+                if toggle_group == group:
+                    state = self._check_state(self._enabled_checks[key])
+                    if state:
+                        states[label] = state
+            parts = []
+            for state in ("on", "mixed", "missing file"):
+                names = [name for name, value in states.items() if value == state]
+                if names:
+                    parts.append(f"{', '.join(names)} {state}")
+            section.set_state("; ".join(parts))
+
+    @staticmethod
+    def _check_state(check) -> str:
+        return "mixed" if check.is_mixed() else ("on" if check.isChecked() else "")
+
+    def _section_state(self, s) -> str:
+        """"on", "mixed", "missing file" or "" for the effect `s` is a control
+        of. EQ has no enable box: it runs while bass or treble isn't 0. The
+        convolution reverb runs while its impulse response is found and its
+        mix is above 0."""
+        if s.enabled_key:
+            return self._check_state(self._enabled_checks[s.enabled_key])
+        if isinstance(s, spec.FXFileSpec):
+            combo = self._file_combos[s.key]
+            if combo.currentText() == MIXED_LABEL:
+                return "mixed"
+            if not combo.currentData() or self._value_widgets["convolution_mix"].value() <= 0:
+                return ""
+            return "on" if combo.currentText() == combo.currentData() else "missing file"
+        if s.key in ("eq_bass", "eq_treble"):
+            spin = self._value_widgets[s.key]
+            return "mixed" if spin.is_mixed() else ("on" if spin.value() else "")
+        return ""
 
     def _selected_clips(self) -> list:
         """The selected clips that still exist, the primary (`_target`) last."""
@@ -379,6 +476,7 @@ class FXDock(QDockWidget):
     def _on_widget_changed(self, *_args) -> None:
         if self._loading:
             return
+        self._sync_group_states()
         if self._mode == "none":
             self.app.schedule_save()
             self._project_timer.start()
@@ -405,6 +503,8 @@ class FXDock(QDockWidget):
         pending, self._pending_keys = self._pending_keys, set()
         if self._mode != "clip" or self._target is None:
             return
+        if self.app.document.get_clip(self._target.id) is None:
+            return  # removed, or replaced by a reassigned one, before the edit was stored
         if self.several:
             self._flush_several(pending)
             return
@@ -508,6 +608,7 @@ class FXDock(QDockWidget):
                     self._fill_file_combo(combo, data[key])
         finally:
             self._loading = was_loading
+        self._sync_group_states()
 
     # --- presets (presets/fx/*.json) --------------------------------------
 

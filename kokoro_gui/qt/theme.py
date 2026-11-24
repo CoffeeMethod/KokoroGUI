@@ -251,6 +251,9 @@ QGroupBox {{
 }}
 QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left; left: 0; padding: 0; }}
 QGroupBox QWidget {{ font-weight: normal; color: {pal.text}; }}
+QGroupBox QLabel[muted="true"] {{ color: {pal.text_muted}; }}
+QGroupBox QToolButton[section="true"] {{ font-weight: 600; color: {pal.text_muted}; }}
+QGroupBox QLabel[overridden="true"], QGroupBox QCheckBox[overridden="true"] {{ font-weight: 600; }}
 
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit,
 QListWidget, QListView, QTreeView, QTableView {{
@@ -301,6 +304,10 @@ QPushButton:checked, QToolButton:checked {{ background: {pal.accent}; color: {on
 QPushButton:disabled, QToolButton:disabled {{ color: {pal.text_muted}; background: {pal.window}; border-color: {pal.border}; }}
 QPushButton:flat, QToolButton[autoRaise="true"] {{ background: transparent; border-color: transparent; }}
 QPushButton:flat:hover, QToolButton[autoRaise="true"]:hover {{ background: {pal.hover}; }}
+QToolButton[section="true"] {{
+    text-align: left; font-weight: 600; color: {pal.text_muted}; padding: 3px 2px;
+}}
+QToolButton[section="true"]:focus {{ border-color: {pal.accent}; }}
 QToolButton::menu-button {{ border: none; border-left: 1px solid {pal.border}; width: 16px; }}
 QToolButton::menu-arrow {{ image: url({down}); width: 10px; height: 10px; }}
 QToolButton[primary="true"]::menu-arrow {{ image: url({asset("chevron_down_on_accent.svg")}); }}
@@ -348,6 +355,7 @@ QSlider::groove:horizontal {{ height: 4px; background: {pal.border}; border-radi
 QSlider::sub-page:horizontal {{ background: {pal.accent}; border-radius: 2px; }}
 QSlider[centered="true"]::sub-page:horizontal {{ background: {pal.border}; }}
 QLabel[muted="true"] {{ color: {pal.text_muted}; }}
+QLabel[scopeTitle="true"] {{ font-weight: 600; }}
 QSlider::handle:horizontal {{
     width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
     background: {pal.text}; border: none;

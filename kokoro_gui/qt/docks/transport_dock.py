@@ -16,7 +16,8 @@ moved into a dock and reshaped into three rows:
    Last is Rec, which opens the Record guide take panel on the selected
    clip (`QtTTSApp.record_guide_take`, plan 31); the input meter is in
    that panel.
-2. Preview, Generate (the row's one `primary` button: a `QToolButton`
+2. Preview (the line under the row says what it would speak and as whom,
+   `qt/preview_target.py`), Generate (the row's one `primary` button: a `QToolButton`
    whose menu holds "Generate stale clips", "Generate stale clips in
    selection", "Auto-split then generate" and
    the checkable "Split by paragraph"), Cancel (flat), and Pause (flat; the
@@ -30,7 +31,8 @@ right, -60 to 0 dBFS) filled to the RMS in `meter_ok` / `meter_warn` /
 from `Transport.levelsChanged`; it clears when playback stops.
 
 `set_status`/`set_progress`/`set_busy` are the app's only entry points for
-feedback; `is_busy()` is the one-job-at-a-time guard every generation
+feedback, with `set_generate_enabled` for the Generate button; a control
+that is off says why in its tooltip. `is_busy()` is the one-job-at-a-time guard every generation
 trigger checks (it used to be `app.cancel_btn.isEnabled()`).
 """
 from __future__ import annotations
@@ -41,14 +43,15 @@ import time
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QPainter
 from PySide6.QtWidgets import (
-    QButtonGroup, QComboBox, QDockWidget, QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QToolButton, QVBoxLayout,
-    QWidget,
+    QButtonGroup, QComboBox, QDockWidget, QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QSizePolicy,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 from kokoro_gui.audio.transport import RATE_STEPS
 from kokoro_gui.daw.timecode import format_position
 from kokoro_gui.engine.time_utils import format_duration
-from kokoro_gui.qt import icons, theme
+from kokoro_gui.qt import icons, preview_target, theme
+from kokoro_gui.qt.scope_target import muted_label
 
 MONITOR_LABELS = {"dub": "Dub", "original": "Original", "both": "Both"}
 MONITOR_TIPS = {
@@ -56,6 +59,18 @@ MONITOR_TIPS = {
     "original": "Play the original dialogue under each clip, from the source track.",
     "both": "Play the dub and the original together, each 6 dB down.",
 }
+NO_SOURCE_TRACK_TIP = "Import a source track (File menu) to hear the original."
+PLAY_TIP = "Play the timeline's audio (Space)"
+PAUSE_TIP = "Pause (Space)"
+GENERATE_TIP = ("Make audio for every stale clip. Text with no clips is generated as one file instead. "
+                "The arrow has Generate stale clips in selection and Auto-split.")
+GENERATE_BUSY_TIP = "Generate is off until the running job ends."
+PREVIEW_BUSY_TIP = "Preview is off until the running job ends."
+CANCEL_TIP = "Stop the running job and drop what is queued. Finished clips keep their audio."
+CANCEL_IDLE_TIP = "Nothing is running."
+PAUSE_QUEUE_TIP = "Stop after the batch that is running. The rest stays queued."
+PAUSE_QUEUE_IDLE_TIP = "Nothing is queued."
+NO_STALE_SELECTED_TIP = "The selection has no stale clip."
 
 
 METER_FLOOR_DB = -60.0
@@ -171,12 +186,15 @@ class TransportDock(QDockWidget):
         # dock is trying to shed, the characters depend on installed fonts
         # (and are blank under the offscreen platform).
         self.play_btn = QToolButton()
-        self.play_btn.setToolTip("Play (Space)")
+        self.play_btn.setToolTip(PLAY_TIP)
+        self.play_btn.setAccessibleName("Play")
         self.pause_btn = QToolButton()
-        self.pause_btn.setToolTip("Pause (Space)")
+        self.pause_btn.setToolTip(f"{PAUSE_TIP}. Nothing is playing.")
+        self.pause_btn.setAccessibleName("Pause")
         self.pause_btn.setEnabled(False)
         self.stop_btn = QToolButton()
         self.stop_btn.setToolTip("Stop")
+        self.stop_btn.setAccessibleName("Stop")
         for btn in (self.play_btn, self.pause_btn, self.stop_btn):
             btn.setProperty("transport", True)
             btn.setAutoRaise(True)
@@ -235,16 +253,19 @@ class TransportDock(QDockWidget):
         # Row 2: generate
         row2 = QHBoxLayout()
         self.preview_btn = QPushButton("Preview")
+        self.preview_btn.setToolTip(preview_target.TOOLTIP)
         self.preview_btn.clicked.connect(self.app.preview_conversion)
         row2.addWidget(self.preview_btn)
 
         self.generate_btn = QToolButton()
         self.generate_btn.setText("Generate")
+        self.generate_btn.setToolTip(GENERATE_TIP)
         self.generate_btn.setProperty("primary", True)
         self.generate_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self.generate_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.generate_btn.clicked.connect(self.app.on_generate_clicked)
         self.generate_menu = QMenu(self.generate_btn)
+        self.generate_menu.setToolTipsVisible(True)
         self.generate_dirty_action = QAction("Generate stale clips", self)
         self.generate_dirty_action.triggered.connect(self.app.on_generate_clicked)
         self.generate_selection_action = QAction("Generate stale clips in selection", self)
@@ -268,17 +289,23 @@ class TransportDock(QDockWidget):
         self.cancel_btn.setFlat(True)
         self.cancel_btn.clicked.connect(self.app.cancel_conversion)
         self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setToolTip(CANCEL_IDLE_TIP)
         row2.addWidget(self.cancel_btn)
         # Pause stops the generation queue after the running item; it turns
         # into Resume while the queue is paused (`set_queue_state`).
         self.queue_pause_btn = QPushButton("Pause")
         self.queue_pause_btn.setFlat(True)
-        self.queue_pause_btn.setToolTip("Stop after the batch that is running. The rest stays queued.")
+        self.queue_pause_btn.setToolTip(PAUSE_QUEUE_IDLE_TIP)
         self.queue_pause_btn.clicked.connect(self.app.toggle_queue_pause)
         self.queue_pause_btn.setEnabled(False)
         row2.addWidget(self.queue_pause_btn)
         row2.addStretch(1)
         layout.addLayout(row2)
+
+        # What Preview would speak now. One line, cut rather than wrapped.
+        self.preview_label = muted_label(wrap=False)
+        self.preview_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        layout.addWidget(self.preview_label)
 
         # Row 3: progress with the status inside it
         self.progress_bar = QProgressBar()
@@ -295,7 +322,22 @@ class TransportDock(QDockWidget):
     def _refresh_generate_menu(self) -> None:
         """"Generate stale clips in selection" is on only while the
         selection holds a stale clip."""
-        self.generate_selection_action.setEnabled(bool(self.app.stale_selected_clips()))
+        stale = bool(self.app.stale_selected_clips())
+        self.generate_selection_action.setEnabled(stale)
+        tip = "" if stale else NO_STALE_SELECTED_TIP
+        self.generate_selection_action.setToolTip(tip)
+        self.generate_selection_action.setStatusTip(tip)
+
+    def refresh_preview_target(self) -> None:
+        """The line under Preview, after the caret, the text or the active
+        character changed."""
+        editor = self.app.editor
+        if editor is None:
+            return
+        text = preview_target.describe(editor, self.app.active_character())
+        self.preview_label.setText(text)
+        self.preview_label.setToolTip(f"{text} {preview_target.TOOLTIP}")
+        self.preview_btn.setAccessibleDescription(text)
 
     def _apply_icons(self) -> None:
         pal = theme.current()
@@ -310,6 +352,8 @@ class TransportDock(QDockWidget):
         if self._detail_text:
             parts.append(self._detail_text)
         text = "  |  ".join(p for p in parts if p)
+        # The bar cuts a long line; the tooltip has it whole.
+        self.progress_bar.setToolTip(text)
         if self._busy:
             text = f"%p%  {text}"
         self.progress_bar.setFormat(text)
@@ -348,12 +392,18 @@ class TransportDock(QDockWidget):
         if busy and not self._busy:
             self.busy_since = time.monotonic()
         self._busy = busy
-        self.generate_btn.setEnabled(not busy)
+        self.set_generate_enabled(not busy)
         self.preview_btn.setEnabled(not busy)
+        self.preview_btn.setToolTip(PREVIEW_BUSY_TIP if busy else preview_target.TOOLTIP)
         self.cancel_btn.setEnabled(busy)
+        self.cancel_btn.setToolTip(CANCEL_TIP if busy else CANCEL_IDLE_TIP)
         if not busy:
             self._detail_text = ""
         self._refresh_format()
+
+    def set_generate_enabled(self, enabled: bool) -> None:
+        self.generate_btn.setEnabled(enabled)
+        self.generate_btn.setToolTip(GENERATE_TIP if enabled else GENERATE_BUSY_TIP)
 
     def is_busy(self) -> bool:
         return self._busy
@@ -363,8 +413,8 @@ class TransportDock(QDockWidget):
         work, and Resume while it is paused."""
         self.queue_pause_btn.setEnabled(pending)
         self.queue_pause_btn.setText("Resume" if paused else "Pause")
-        self.queue_pause_btn.setToolTip("Start the queued batches again." if paused else
-                                        "Stop after the batch that is running. The rest stays queued.")
+        tip = "Start the queued batches again." if paused else PAUSE_QUEUE_TIP
+        self.queue_pause_btn.setToolTip(tip if pending else PAUSE_QUEUE_IDLE_TIP)
 
     # -- transport readout -------------------------------------------------
 
@@ -378,7 +428,9 @@ class TransportDock(QDockWidget):
 
     def set_playing(self, playing: bool) -> None:
         self.play_btn.setEnabled(not playing)
+        self.play_btn.setToolTip(f"{PLAY_TIP}. Already playing." if playing else PLAY_TIP)
         self.pause_btn.setEnabled(playing)
+        self.pause_btn.setToolTip(PAUSE_TIP if playing else f"{PAUSE_TIP}. Nothing is playing.")
         if not playing:
             self.level_meter.clear()
 
@@ -405,12 +457,9 @@ class TransportDock(QDockWidget):
         source track) shows Dub, disabled."""
         mode = mode if available and mode in self.monitor_buttons else "dub"
         self.monitor_buttons[mode].setChecked(True)
-        for btn in self.monitor_buttons.values():
+        for key, btn in self.monitor_buttons.items():
             btn.setEnabled(available)
-        if not available:
-            self.monitor_buttons["dub"].setToolTip("Import a source track (File menu) to hear the original.")
-        else:
-            self.monitor_buttons["dub"].setToolTip(MONITOR_TIPS["dub"])
+            btn.setToolTip(MONITOR_TIPS[key] if available else NO_SOURCE_TRACK_TIP)
 
     def _on_monitor_clicked(self, _button) -> None:
         self.monitorChanged.emit(self.monitor())

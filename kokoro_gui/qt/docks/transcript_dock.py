@@ -20,17 +20,22 @@ What's left is a header row with two combos above the editor:
   (`Character.variants`, a cloning backend's alternate references). Sets
   `clip.overrides["variant"]` through `SetFieldCommand`; "(default)" clears
   it.
+
+"Manage..." beside the Character combo opens the same dialog as its last
+entry. An empty transcript shows a line under the header with a link to
+File > Import Text (`empty_state`).
 """
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QDockWidget, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QComboBox, QDockWidget, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
 from kokoro_gui.daw.undo import SetClipFxCommand, SetFieldCommand
 from kokoro_gui.engine import presets
 from kokoro_gui.engine.presets import filter_fx_preset_values
+from kokoro_gui.qt.empty_state import EmptyState
 from kokoro_gui.qt.find_bar import FindBar
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
 from kokoro_gui.qt.transcript_editor import TranscriptEditor, clip_fx_name
@@ -40,6 +45,9 @@ FX_EDIT_LABEL = "Edit in FX tab..."
 CHARACTER_MANAGE_LABEL = "Manage characters..."
 _MIXED_LABEL = "(mixed)"
 VARIANT_DEFAULT_LABEL = "(default)"
+FX_TIP = "The FX of the caret's clip."
+FX_NO_CLIP_TIP = "Put the caret in a clip to pick its FX."
+EMPTY_TEXT = 'The transcript is empty. Type or paste text here, or <a href="import">import a text file</a>.'
 
 
 class TranscriptDock(QDockWidget):
@@ -72,7 +80,15 @@ class TranscriptDock(QDockWidget):
         header.addWidget(QLabel("Character:"))
         self.character_combo = QComboBox()
         self.character_combo.setMinimumWidth(120)
+        self.character_combo.setToolTip("The character of the selected text, else of the caret's clip, else of its "
+                                        "line. Picking one assigns it.")
         header.addWidget(self.character_combo, 1)
+        self.manage_btn = QToolButton()
+        self.manage_btn.setText("Manage...")
+        self.manage_btn.setToolTip("Add, edit and remove characters (Edit > Characters)")
+        self.manage_btn.setAccessibleName("Manage characters")
+        self.manage_btn.clicked.connect(lambda _checked=False: self.app.open_characters_dialog())
+        header.addWidget(self.manage_btn)
         header.addSpacing(8)
         header.addWidget(QLabel("FX:"))
         self.fx_combo = QComboBox()
@@ -87,8 +103,13 @@ class TranscriptDock(QDockWidget):
         header.addStretch(1)
         layout.addLayout(header)
 
+        self.empty_state = EmptyState({"import": lambda: self.app.import_text_action.trigger()})
+        layout.addWidget(self.empty_state)
+
         self.editor = TranscriptEditor(self.app)
         layout.addWidget(self.editor, 1)
+        self.editor.textChanged.connect(self.refresh_empty_state)
+        self.refresh_empty_state()
 
         # Edit > Find / Find and Replace (plan 34); hidden until asked for.
         self.find_bar = FindBar(self.app, self.editor)
@@ -110,6 +131,9 @@ class TranscriptDock(QDockWidget):
         self.fx_combo.activated.connect(self._on_fx_activated)
         self.variant_combo.activated.connect(self._on_variant_activated)
         self.editor.cursorPositionChanged.connect(self.sync_header)
+
+    def refresh_empty_state(self) -> None:
+        self.empty_state.show_message(EMPTY_TEXT if self.editor.document().isEmpty() else "")
 
     def show_find(self, replace: bool = False) -> None:
         """Edit > Find or Find and Replace: shows the dock and opens the bar."""
@@ -178,6 +202,7 @@ class TranscriptDock(QDockWidget):
 
             fx_name = clip_fx_name(self.app.document, clip) if clip is not None else None
             self.fx_combo.setEnabled(clip is not None)
+            self.fx_combo.setToolTip(FX_TIP if clip is not None else FX_NO_CLIP_TIP)
             if not fx_name or fx_name == "custom":
                 fx_index = 0 if not fx_name else -1
                 if fx_name == "custom":

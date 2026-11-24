@@ -1,4 +1,5 @@
-"""Settings dock: item 2 ("Settings panel rescoping") of the DAW-for-text
+"""The Voice & Clip dock (grill PG30; `dock_settings` stays its object name, so
+saved layouts restore): item 2 ("Settings panel rescoping") of the DAW-for-text
 redesign's remaining-work roadmap. Renders the schema-driven voice fields
 (voice/speed/lang_code, plus a backend's "Model" group) and the hand-built
 Audio Control widgets
@@ -52,7 +53,15 @@ defaults (`shown_backend()`), which is what a new character gets.
 Character-scope edits go through `app.commit_character_edit`, so a linked
 character reaches its library entry the way Edit > Characters' edits do.
 
-Below Audio Control, `ScopeFields` (kokoro_gui/qt/docks/scope_fields.py)
+Above the scroll area a `ScopeHeader` (`qt/scope_target.py`) names what the
+tab edits, and a hint under it says who else an edit reaches. Both follow
+`refresh_target()`, which the app calls from `refresh_timeline`, so a rename
+or a reassigned character shows without a new selection. In clip mode a value
+set on the clip itself is marked "(clip)" in bold at its label
+(`_refresh_override_marks`); an unmarked one is inherited, and its label's
+tooltip says from where.
+
+Below Audio, `ScopeFields` (kokoro_gui/qt/docks/scope_fields.py)
 shows the clip's gap, take, status, note and source text in "clip" mode;
 it's hidden in the other two.
 
@@ -78,6 +87,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox, QDockWidget, QFormLayout,
     QGroupBox, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget,
@@ -88,7 +98,7 @@ from kokoro_gui.daw.undo import CompositeCommand, SetFieldCommand
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS
 from kokoro_gui.engines.base import SHARED_CONFIG_KEYS
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
-from kokoro_gui.qt import fx_resolve, spec
+from kokoro_gui.qt import fx_resolve, scope_target, spec
 from kokoro_gui.qt.docks.scope_fields import (
     MIXED, MIXED_LABEL, MixedCheckBox, MixedSpinBox, ScopeFields, common_value, mark_mixed,
 )
@@ -104,12 +114,29 @@ _INTERNAL_ONLY_KEYS = ("apply_fx", "fx_preset")
 # schema keys.
 _HAND_BUILT_STATE_KEYS = ("volume", "pitch", "normalize", "trim_silence")
 
+TITLE = "Voice & Clip"
+# The schema group that is the Voice box itself, and the ones that fold.
+VOICE_GROUP = "Generation"
+MODEL_GROUP = "Model"
+# What each hand-built field is called in the "Set on this clip" hint.
+HAND_BUILT_LABELS = {"volume": "Volume", "pitch": "Pitch", "fx_preset": "FX", "apply_fx": "Enable FX",
+                     "normalize": "Normalize", "trim": "Trim Silence"}
+ENABLE_FX_TIPS = {
+    "none": "The main switch. Off, no FX run, whatever a character or clip is set to.",
+    "character": "Run the FX on this character's clips. The main switch is Enable FX with nothing selected.",
+    "clip": "Run the FX on this clip. The main switch is Enable FX with nothing selected.",
+}
+BUSY_FIELD_TIP = "Off while a generate runs."
+
 
 class SettingsDock(QDockWidget):
     def __init__(self, app, parent=None):
-        super().__init__("Settings", parent)
+        super().__init__(parent)
         self.setObjectName("dock_settings")
         self.app = app
+        # Not `isFloating()`, which is true of a dock no window has taken yet.
+        self._apply_title(False)
+        self.topLevelChanged.connect(self._apply_title)
 
         self.schema_form: SchemaFormWidget | None = None
         self._mode = "none"
@@ -125,9 +152,18 @@ class SettingsDock(QDockWidget):
         # through a live "none" render to snapshot from.
         self._none_values: dict = self._project_default_snapshot()
         self._constructing_schema_form = False
+        # Which schema groups are folded; the form is rebuilt per selection.
+        self._collapsed_groups: dict = {MODEL_GROUP: True}
 
         content = QWidget()
         outer = QVBoxLayout(content)
+
+        # What the tab edits, above the scroll area so it never scrolls away.
+        # `subproject_label`, phase 4 (NP1): which subproject these settings
+        # edit, when the docks show one the timeline isn't in.
+        self.scope_header = scope_target.ScopeHeader()
+        self.subproject_label = self.scope_header.context_label
+        outer.addWidget(self.scope_header)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -136,11 +172,15 @@ class SettingsDock(QDockWidget):
         scroll.setWidget(inner)
         outer.addWidget(scroll)
 
-        # Phase 4 (NP1): which subproject these settings edit, when the
-        # docks show one the timeline isn't in.
-        self.subproject_label = QLabel()
-        self.subproject_label.hide()
-        layout.addWidget(self.subproject_label)
+        # Who else an edit reaches, and what is set on the clip itself.
+        self.scope_hint = scope_target.muted_label()
+        layout.addWidget(self.scope_hint)
+
+        # --- Voice: the Engine row and the schema fields (moved from
+        # GenerationDock) ---
+        self.schema_group = QGroupBox("Voice")
+        self.schema_layout = QVBoxLayout(self.schema_group)
+        layout.addWidget(self.schema_group)
 
         # --- Engine (grill EN1) ---
         self.engine_row = engine_row = QWidget()
@@ -152,21 +192,20 @@ class SettingsDock(QDockWidget):
             self.engine_combo.addItem(label, engine_id)
         self.engine_combo.activated.connect(lambda _i: self._on_engine_picked())
         engine_form.addRow(self.engine_label, self.engine_combo)
-        layout.addWidget(engine_row)
+        self.schema_layout.addWidget(engine_row)
+        # The Engine row edits the character even in clip scope.
+        self.engine_hint = scope_target.muted_label()
+        self.engine_hint.hide()
+        self.schema_layout.addWidget(self.engine_hint)
 
         self.reference_voice_label = QLabel()
         self.reference_voice_label.setWordWrap(True)
         self.reference_voice_label.hide()
-        layout.addWidget(self.reference_voice_label)
-
-        # --- Schema-driven config (moved from GenerationDock) ---
-        self.schema_group = QGroupBox("Configuration")
-        self.schema_layout = QVBoxLayout(self.schema_group)
-        layout.addWidget(self.schema_group)
+        self.schema_layout.addWidget(self.reference_voice_label)
 
         # --- Audio control (volume/pitch/FX preset - hand-built, moved
         # from GenerationDock) ---
-        audio_group = QGroupBox("Audio Control")
+        self.audio_group = audio_group = QGroupBox("Audio")
         audio_form = QFormLayout(audio_group)
         self.volume_spin = MixedSpinBox()
         self.volume_spin.setRange(0.1, 2.0)
@@ -182,7 +221,7 @@ class SettingsDock(QDockWidget):
         fx_row_layout = QHBoxLayout(fx_row)
         fx_row_layout.setContentsMargins(0, 0, 0, 0)
         self.fx_preset_combo = QComboBox()
-        self.apply_fx_check = MixedCheckBox("Apply")
+        self.apply_fx_check = MixedCheckBox(HAND_BUILT_LABELS["apply_fx"])
         fx_row_layout.addWidget(self.fx_preset_combo, 1)
         fx_row_layout.addWidget(self.apply_fx_check)
         audio_form.addRow("FX:", fx_row)
@@ -196,6 +235,12 @@ class SettingsDock(QDockWidget):
         toggles_layout.addWidget(self.trim_check)
         audio_form.addRow("", toggles_row)
         layout.addWidget(audio_group)
+        # The widget whose text shows a hand-built field's name.
+        self._hand_built_labels = {
+            "volume": audio_form.labelForField(self.volume_spin), "pitch": audio_form.labelForField(self.pitch_spin),
+            "fx_preset": audio_form.labelForField(fx_row), "apply_fx": self.apply_fx_check,
+            "normalize": self.normalize_check, "trim": self.trim_check,
+        }
 
         # The clip's gap, take, status, note and source text (phase 2).
         # Shown in clip scope only.
@@ -253,13 +298,140 @@ class SettingsDock(QDockWidget):
 
         self._mode, self._target = self._resolve_mode()
         self._targets = self._selected_clips() if self._mode == "clip" else []
-        scope = self.app.scope_text() if hasattr(self.app, "scope_text") else None
-        self.subproject_label.setVisible(bool(scope))
-        self.subproject_label.setText(scope or "")
         self._build_schema_form()
         self._refresh_hand_built_display()
         self.refresh_scope_fields()
         self.refresh_engine_row()
+        self._shown_signature = self._target_signature()
+        self._refresh_scope_text()
+
+    # --- what the tab edits, in words --------------------------------------
+
+    def _apply_title(self, floating: bool) -> None:
+        """Docked, the title is drawn with mnemonics (title bar, tab), so the
+        ampersand is doubled; a floating window with the system's own title
+        bar shows it as typed. The Panels entry is a menu item either way."""
+        doubled = TITLE.replace("&", "&&")
+        system_bar = floating and QGuiApplication.platformName() != "xcb"
+        self.setWindowTitle(TITLE if system_bar else doubled)
+        self.toggleViewAction().setText(doubled)
+
+    def _target_signature(self) -> tuple:
+        """What the fields were built for: the target and the characters its
+        inherited values come from."""
+        document = self.app.document
+        mode, target = self._resolve_mode()
+        if mode != "clip":
+            return (id(document), mode, getattr(target, "id", None))
+        ids = [cid for cid in self.app.selection.selected_clip_ids if document.get_clip(cid) is not None]
+        return (id(document), mode, target.id, tuple((cid, document.get_clip(cid).character_id) for cid in ids))
+
+    def refresh_target(self) -> None:
+        """The header and hints again, after an edit elsewhere (a rename, an
+        undo). When the target is gone or has another character the fields
+        follow too."""
+        if self.schema_form is None:
+            return
+        if self._target_signature() != self._shown_signature:
+            self._build_for_selection()
+            return
+        self._refresh_scope_text()
+
+    def _refresh_scope_text(self) -> None:
+        self.scope_header.show_target(scope_target.describe(self.app, self._mode, self._target, self._targets))
+        self._refresh_override_marks()
+        scope_target.set_hint(self.scope_hint, self._scope_hint_text())
+        scope_target.set_hint(self.engine_hint, self._engine_hint_text())
+        self.apply_fx_check.setToolTip(ENABLE_FX_TIPS[self._mode])
+
+    def _scope_hint_text(self) -> str:
+        if self._mode == "character":
+            name = scope_target.shorten(self._target.name)
+            note = scope_target.library_note(self.app, self._target)
+            return f"Edits reach every clip of {name} that doesn't set its own value. {note}".strip()
+        if self.several:
+            return f"An edit sets that value on all {len(self._targets)} clips, as one undo step."
+        if self._mode == "clip":
+            source = self._inherited_from()
+            names = self._override_names()
+            if not names:
+                return f"Nothing is set on this clip, so every value follows {source}. An edit here changes this clip only."
+            return f"Set on this clip: {scope_target.join_names(names)}. The rest follows {source}."
+        shared = "shared by every project"
+        if self.app.selection.kind == "range":
+            return f"The selected text starts outside a clip, so edits change the defaults, {shared}."
+        if self.app.selection.kind == "clip" and self.scope_header.context_label.text():
+            # A subproject's block: the docks show its document.
+            return f"Select a clip inside the subproject to edit it. Edits here change the defaults, {shared}."
+        return "Shared by every project. A character or clip that sets its own value keeps it."
+
+    def _engine_hint_text(self) -> str:
+        character = self._scope_character() if self._mode == "clip" else None
+        if character is None:
+            return ""
+        name = scope_target.shorten(character.name)
+        note = scope_target.library_note(self.app, character)
+        return f"Engine changes the character {name}, so every clip of {name} follows. {note}".strip()
+
+    def _inherited_from(self) -> str:
+        character = self.app.document.get_character(self._target.character_id)
+        return "the defaults" if character is None else f"{scope_target.shorten(character.name)} and the defaults"
+
+    def _schema_labels(self) -> dict:
+        """key -> field label, for the schema fields a clip can set."""
+        return {f.key: f.label for f in self.shown_backend().get_config_schema()
+                if f.key in ALLOWED_PRESET_KEYS and self.schema_form.widget_for(f.key) is not None}
+
+    def _override_names(self) -> list:
+        labels = {**self._schema_labels(), **HAND_BUILT_LABELS}
+        return [label for key, label in labels.items() if key in (self._target.overrides or {})]
+
+    def _refresh_override_marks(self) -> None:
+        """Marks the values set on the selected clip (or on some or all of the
+        selected clips) at their labels, in words and in bold; the others'
+        tooltips say where they come from."""
+        rows = [(key, label, self.schema_form.label_for(key)) for key, label in self._schema_labels().items()]
+        rows += [(key, HAND_BUILT_LABELS[key], widget) for key, widget in self._hand_built_labels.items()]
+        for key, name, widget in rows:
+            if widget is None:
+                continue
+            mark, tip = "", ""
+            if self._mode == "clip":
+                count = sum(key in (clip.overrides or {}) for clip in self._targets)
+                if count and count == len(self._targets):
+                    mark, tip = (" (clips)" if self.several else " (clip)"), "Set on the selected clip"
+                    tip += "s." if self.several else "."
+                elif count:
+                    mark, tip = " (some clips)", f"Set on {count} of the {len(self._targets)} selected clips."
+                else:
+                    character = self._scope_character()
+                    from_character = character is not None and key in character.preset_data
+                    tip = f"From {scope_target.shorten(character.name)}." if from_character else "From the defaults."
+                    if self.several and character is None:
+                        tip = "From each clip's character, or the defaults."
+            elif self._mode == "character":
+                tip = "Set on this character." if key in self._target.preset_data else "From the defaults."
+            unit = " (st)" if key == "pitch" else ""
+            if isinstance(widget, QLabel):
+                # A schema label never had the colon the hand-built rows have.
+                colon = ":" if key in HAND_BUILT_LABELS else ""
+                widget.setText(f"{name}{unit}{mark}{colon}")
+                widget.setToolTip(tip)
+            else:
+                widget.setText(f"{name}{mark}")
+                if key != "apply_fx":
+                    widget.setToolTip(tip)
+            if bool(widget.property("overridden")) != bool(mark):
+                # Bold comes from the stylesheet, which beats `setFont` here.
+                widget.setProperty("overridden", bool(mark))
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+
+    def set_generating(self, generating: bool) -> None:
+        """Volume and pitch are fixed while a generate runs."""
+        for spin in (self.volume_spin, self.pitch_spin):
+            spin.setEnabled(not generating)
+            spin.setToolTip(BUSY_FIELD_TIP if generating else "")
 
     def _selected_clips(self) -> list:
         """The selected clips that still exist, the primary (`_target`) last."""
@@ -318,6 +490,8 @@ class SettingsDock(QDockWidget):
                 engine_id = None if shared is MIXED else shared
                 tip = ("The selected clips have different characters. "
                        "Select one character's clips to change its engine.")
+            elif character is None:
+                tip = "This clip has no character. Assign one to pick its engine."
         else:
             engine_id, label, enabled, tip = (self.app.default_engine_id, "Engine for new characters:", True,
                                               "The engine a new character gets. The fields below are its defaults.")
@@ -340,6 +514,7 @@ class SettingsDock(QDockWidget):
             if engine_id != self.app.default_engine_id:
                 self.app.set_default_engine(engine_id)
                 self._build_schema_form()
+                self._refresh_scope_text()
             return
         character = self._scope_character()
         if character is not None:
@@ -412,6 +587,7 @@ class SettingsDock(QDockWidget):
     def _build_schema_form(self) -> None:
         if self.schema_form is not None:
             self.schema_layout.removeWidget(self.schema_form)
+            self.schema_form.hide()  # it lives until the next event loop pass
             self.schema_form.deleteLater()
 
         backend = self.shown_backend()
@@ -444,6 +620,10 @@ class SettingsDock(QDockWidget):
                 skip_keys={"lexicon", "pitch", *(('voice',) if is_reference else ()),
                            *(f.key for f in schema if spec.is_program_field(f))},
                 on_change=self._on_schema_field_changed,
+                # The Voice box is the engine's "Generation" group.
+                flat_groups={VOICE_GROUP},
+                collapsible=self._collapsed_groups,
+                on_collapsed=self._collapsed_groups.__setitem__,
             )
         finally:
             self._constructing_schema_form = False
@@ -456,6 +636,8 @@ class SettingsDock(QDockWidget):
                 widget = self.schema_form.widget_for(f.key)
                 if widget is not None:
                     widget.setEnabled(False)
+                    widget.setToolTip(f"{backend.display_name}'s own setting, for every character and project. "
+                                      "Edit it with nothing selected.")
         if self.several:
             self._mark_mixed_schema_fields(schema)
 
@@ -490,6 +672,8 @@ class SettingsDock(QDockWidget):
         clip/character/none mode is currently selected."""
         self._build_schema_form()
         self.refresh_engine_row()
+        self._shown_signature = self._target_signature()
+        self._refresh_scope_text()
 
     def refresh_voice_choices(self) -> None:
         if getattr(self.shown_backend(), "voice_kind", None) == "reference":

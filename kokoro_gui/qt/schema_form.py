@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.engines.base import ConfigField, ConfigFieldType
+from kokoro_gui.qt.collapsible import CollapsibleSection
 
 
 _TRUE_STRINGS = {"true", "1"}
@@ -101,6 +102,12 @@ class SchemaFormWidget(QWidget):
 
     `on_change(key, value)`: called whenever a rendered field's value changes,
     so the owning dock can drive autosave the same way Tk's ctk var traces do.
+
+    `flat_groups`: groups rendered without a box or title, for an owner whose
+    own box already names them. `collapsible`: {group: collapsed} for groups
+    rendered as a `CollapsibleSection`; `on_collapsed(group, collapsed)` is
+    called when the user folds one, so an owner that rebuilds the form keeps
+    it.
     """
 
     def __init__(
@@ -111,6 +118,9 @@ class SchemaFormWidget(QWidget):
         skip_keys: Optional[set[str]] = None,
         on_change: Optional[Callable[[str, Any], None]] = None,
         parent: Optional[QWidget] = None,
+        flat_groups: Optional[set[str]] = None,
+        collapsible: Optional[dict[str, bool]] = None,
+        on_collapsed: Optional[Callable[[str, bool], None]] = None,
     ):
         super().__init__(parent)
         self._schema = schema
@@ -118,6 +128,8 @@ class SchemaFormWidget(QWidget):
         self._skip_keys = skip_keys or set()
         self._on_change = on_change
         self._widgets: dict[str, QWidget] = {}
+        self._labels: dict[str, QWidget] = {}
+        self.sections: dict[str, CollapsibleSection] = {}
         self._fields: dict[str, ConfigField] = {}
         self._getters: dict[str, Callable[[], Any]] = {}
         self._setters: dict[str, Callable[[Any], None]] = {}
@@ -131,13 +143,26 @@ class SchemaFormWidget(QWidget):
             if f.key in self._skip_keys:
                 continue
             if f.group not in groups:
-                box = QGroupBox(f.group)
                 form = QFormLayout()
-                box.setLayout(form)
+                if f.group in (flat_groups or ()):
+                    box = QWidget()
+                    form.setContentsMargins(0, 0, 0, 0)
+                    box.setLayout(form)
+                elif f.group in (collapsible or {}):
+                    box = self.sections[f.group] = CollapsibleSection(f.group, collapsed=collapsible[f.group])
+                    box.set_body_layout(form)
+                    if on_collapsed is not None:
+                        box.collapsedChanged.connect(lambda folded, g=f.group: on_collapsed(g, folded))
+                else:
+                    box = QGroupBox(f.group)
+                    box.setLayout(form)
                 groups[f.group] = form
                 group_order.append(f.group)
                 outer.addWidget(box)
             self._add_field(groups[f.group], f)
+            label = groups[f.group].labelForField(self._widgets[f.key])
+            if label is not None:
+                self._labels[f.key] = label
 
         outer.addStretch(1)
         self.set_values(values)
@@ -228,6 +253,10 @@ class SchemaFormWidget(QWidget):
 
     def widget_for(self, key: str) -> Optional[QWidget]:
         return self._widgets.get(key)
+
+    def label_for(self, key: str) -> Optional[QWidget]:
+        """The row label of a rendered field."""
+        return self._labels.get(key)
 
     def values(self) -> dict[str, Any]:
         return {k: getter() for k, getter in self._getters.items()}
