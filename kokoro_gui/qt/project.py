@@ -1867,7 +1867,7 @@ def save_project(document: Document, path: str, project_settings: dict | None = 
                  previous_manifest: dict | None = None) -> SaveResult:
     """Synchronous Save of one project: `plan_save`, `write_bundle` and
     `record_save` in one go, on the calling thread, for a caller with nothing
-    to run in between (tests, tooling, Detach to file). The result carries
+    to run in between (tests, tooling, a headless save). The result carries
     `plan` and `warnings`. `previous_manifest` is the manifest the project
     was opened with (its `created` date, its bundled video). A `.json` path
     is written in the legacy shape, with no plan."""
