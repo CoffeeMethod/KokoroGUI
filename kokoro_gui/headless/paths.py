@@ -69,14 +69,53 @@ def _is_under(path: str, parent: str) -> bool:
         return False
 
 
+_SEPS = "\\/"
+_DEVICE = re.compile(r"^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|(?:COM|LPT)[1-9¹²³])$", re.IGNORECASE)
+
+
+def _is_network(path: str) -> bool:
+    """Two separators first, in any mix: a UNC or device path on Windows."""
+    return len(path) >= 2 and path[0] in _SEPS and path[1] in _SEPS
+
+
+def _check_components(out: str) -> None:
+    """Refuse names that mean something other than what they say, on every OS:
+    reserved device names (`CON`, `nul.txt`, `COM¹`, with trailing dots or
+    spaces), a colon (an NTFS alternate data stream, or a drive letter that is
+    not the one leading drive), and a trailing dot or space, which Windows
+    drops, so `x.wav.` is `x.wav`. `.` and `..` pass; `..` is the realpath
+    check's job."""
+    drive, rest = os.path.splitdrive(out)
+    if drive:
+        if not rest or rest[0] not in _SEPS:
+            raise HeadlessError("out_not_allowed", "a drive-relative path is not allowed")
+        out = rest
+    for part in re.split(r"[\\/]", out):
+        if part in ("", ".", ".."):
+            continue
+        if part != part.rstrip(" ."):
+            raise HeadlessError("out_not_allowed", f"a name ending in a dot or a space is not allowed: {part!r}")
+        if ":" in part:
+            raise HeadlessError("out_not_allowed", f"a colon in a name is not allowed: {part!r}")
+        if _DEVICE.match(part.split(".")[0].rstrip(" ")):
+            raise HeadlessError("out_not_allowed", f"a reserved device name is not allowed: {part!r}")
+
+
 def check_out_path(out, root: str | None = None, cwd: str | None = None) -> str:
     """Return the real path of `out` or raise `HeadlessError("out_not_allowed")`.
 
     `out` must resolve, symlinks followed, under the renders root or the
-    current directory. Refused before `realpath` touches them: an empty path,
-    a NUL byte, and a UNC or device path (two leading slashes or backslashes).
-    A relative `out` resolves against `cwd`. `-` (stdout) is the caller's to
-    handle; here it is an ordinary relative name.
+    current directory. Everything that can be refused from the text alone is
+    refused before any filesystem call, so a network path never reaches
+    `realpath`: an empty path, a NUL byte, a path whose first two characters
+    are both separators (any mix of backslash and slash), a drive-relative path
+    (`C:x.wav`), a colon in a name, a name with a trailing dot or space, and a
+    reserved device name in any component. The joined path is checked for a
+    network form too. A relative `out` resolves against `cwd`.
+
+    The guard checks where `out` points, not whether it is a file or a folder.
+    `.` and an existing directory pass; the caller decides what it needs. `-`
+    (stdout) is the caller's to handle; here it is an ordinary relative name.
     """
     cwd = cwd or os.getcwd()
     try:
@@ -87,15 +126,19 @@ def check_out_path(out, root: str | None = None, cwd: str | None = None) -> str:
         raise HeadlessError("bad_arguments", "out must be a path")
     if not out.strip() or "\0" in out:
         raise HeadlessError("out_not_allowed", "out is empty or contains a NUL byte")
-    if out.startswith(("\\\\", "//")):
+    if _is_network(out):
         raise HeadlessError("out_not_allowed", "UNC and device paths are not allowed")
+    _check_components(out)
     full = out if os.path.isabs(out) else os.path.join(cwd, out)
-    allowed = [_key(root or renders_root(cwd)), _key(cwd)]
+    base = root or renders_root(cwd)
+    if _is_network(full) or _is_network(cwd) or _is_network(base):
+        raise HeadlessError("out_not_allowed", "UNC and device paths are not allowed")
+    allowed = [_key(base), _key(cwd)]
     try:
         real = os.path.realpath(full)
     except (OSError, ValueError) as exc:
         raise HeadlessError("out_not_allowed", f"out can't be resolved: {exc}") from exc
-    if not any(_is_under(os.path.normcase(real), base) for base in allowed):
+    if not any(_is_under(os.path.normcase(real), b) for b in allowed):
         raise HeadlessError(
             "out_not_allowed",
             "out must be inside audio_output/headless or the current directory",

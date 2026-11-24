@@ -196,6 +196,112 @@ def test_non_path_refused():
         paths.check_out_path(b"a.wav")
 
 
+B = "\\"
+NETWORK_FORMS = [
+    B * 2 + "srv" + B + "s" + B + "x.wav",
+    "//srv/s/x.wav",
+    B + "/srv/s/x.wav",
+    "/" + B + "srv" + B + "s" + B + "x.wav",
+    B * 2 + "?" + B + "C:" + B + "x.wav",
+    B * 2 + "." + B + "pipe" + B + "x",
+    "//?/C:/x.wav",
+    B * 2,
+    "//",
+]
+
+
+@pytest.mark.parametrize("bad", NETWORK_FORMS)
+def test_network_forms_never_reach_realpath(bad, monkeypatch, tmp_path):
+    calls = []
+
+    def spy(p, **kw):
+        calls.append(p)
+        raise AssertionError("realpath was called")
+
+    monkeypatch.setattr(os.path, "realpath", spy)
+    with pytest.raises(HeadlessError) as exc:
+        paths.check_out_path(bad, root=str(tmp_path / "r"), cwd=str(tmp_path))
+    assert exc.value.code == "out_not_allowed"
+    assert calls == []
+
+
+@pytest.mark.parametrize("bad", [" " + B * 2 + "srv" + B + "s", " //srv/s"])
+def test_leading_space_before_a_network_form_refused(bad, monkeypatch, tmp_path):
+    monkeypatch.setattr(os.path, "realpath", lambda *a, **k: pytest.fail("realpath was called"))
+    with pytest.raises(HeadlessError):
+        paths.check_out_path(bad, root=str(tmp_path / "r"), cwd=str(tmp_path))
+
+
+def test_network_cwd_or_root_refused(monkeypatch, tmp_path):
+    monkeypatch.setattr(os.path, "realpath", lambda *a, **k: pytest.fail("realpath was called"))
+    with pytest.raises(HeadlessError):
+        paths.check_out_path("a.wav", root=str(tmp_path / "r"), cwd=B * 2 + "srv" + B + "s")
+    with pytest.raises(HeadlessError):
+        paths.check_out_path("a.wav", root=B * 2 + "srv" + B + "s", cwd=str(tmp_path))
+
+
+@pytest.mark.parametrize("name", [
+    "CON", "con", "PRN", "AUX", "NUL", "COM1", "com9", "LPT1", "lpt9", "CONIN$", "CONOUT$",
+    "COM\u00b9", "LPT\u00b2", "COM\u00b3",
+    "CON.wav", "nul.txt", "Aux.tar.gz", "COM1.", "CON ", "CON . ", "com1 .wav",
+])
+@pytest.mark.parametrize("shape", ["{n}", "sub/{n}", "{n}/a.wav", "sub\\{n}\\a.wav"])
+def test_reserved_device_names_refused_in_any_component(name, shape):
+    with pytest.raises(HeadlessError) as exc:
+        paths.check_out_path(shape.format(n=name))
+    assert exc.value.code == "out_not_allowed"
+
+
+@pytest.mark.parametrize("ok", ["console.wav", "COM10.wav", "COM0.wav", "CONX", "nulled.wav", "com.wav", "a.con"])
+def test_names_that_only_look_reserved_are_allowed(ok, tmp_path):
+    assert paths.check_out_path(ok) == os.path.realpath(tmp_path / ok)
+
+
+def test_guard_checks_location_not_names():
+    """realpath of <cwd>/NUL is lexical, so the path is under the cwd and
+    `_is_under` is right to accept it: location was never the problem. Only
+    the name check keeps NUL out (Windows opens it as the device)."""
+    real = os.path.realpath(os.path.join(os.getcwd(), "NUL"))
+    assert paths._is_under(os.path.normcase(real), paths._key(os.getcwd()))
+
+
+@pytest.mark.parametrize("bad", ["ok.wav:stream", "ok.wav:stream:$DATA", "sub/ok.wav:s", "sub:x/ok.wav", ":x"])
+def test_colon_in_a_name_refused(bad):
+    with pytest.raises(HeadlessError):
+        paths.check_out_path(bad)
+
+
+@pytest.mark.parametrize("bad", ["C:evil.wav", "c:evil.wav", "D:x.wav", "C:", "C:sub/x.wav", "C:..\\x.wav"])
+def test_drive_relative_refused(bad):
+    with pytest.raises(HeadlessError):
+        paths.check_out_path(bad)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="drive letters")
+def test_drive_relative_with_the_cwd_drive_refused(tmp_path):
+    drive = os.path.splitdrive(str(tmp_path))[0]
+    with pytest.raises(HeadlessError):
+        paths.check_out_path(drive + "evil.wav")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="drive letters")
+def test_absolute_path_with_the_drive_is_still_allowed(tmp_path):
+    assert paths.check_out_path(str(tmp_path / "a.wav")) == os.path.realpath(tmp_path / "a.wav")
+
+
+@pytest.mark.parametrize("bad", ["x.wav.", "x.wav ", "x.wav..", "x.wav. .", "sub/x.wav.", "sub./x.wav", "sub /x.wav",
+                                 " ", "a/ /b.wav", "sub\\x.wav "])
+def test_trailing_dot_or_space_refused(bad):
+    with pytest.raises(HeadlessError):
+        paths.check_out_path(bad)
+
+
+@pytest.mark.parametrize("ok", [".", "./a.wav", "sub/../a.wav", "sub/", ".hidden", "a.b.wav"])
+def test_dot_forms_and_a_directory_pass(ok, tmp_path):
+    (tmp_path / "sub").mkdir()
+    assert paths.check_out_path(ok)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="drive letters")
 def test_other_drive_refused(tmp_path):
     drive = os.path.splitdrive(str(tmp_path))[0].upper()
