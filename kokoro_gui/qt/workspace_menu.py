@@ -13,9 +13,9 @@ never touches a project: no autosave, no "*" in the title.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QGuiApplication
-from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox
+from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox, QTabBar, QTabWidget, QToolButton
 
 from kokoro_gui.qt.workspace import (
     ADVANCED,
@@ -68,6 +68,38 @@ class WorkspaceMenuMixin:
         self._layout_timer.setInterval(LAYOUT_SAVE_DEBOUNCE_MS)
         self._layout_timer.timeout.connect(self.save_layout)
         self._layout_ready = False
+        # Plan 47 pass 3, grill PG32: tabs on top for every dock area, native Qt.
+        self.setTabPosition(Qt.DockWidgetArea.AllDockWidgetAreas, QTabWidget.TabPosition.North)
+        self._tab_tune_timer = QTimer(self)
+        self._tab_tune_timer.setSingleShot(True)
+        self._tab_tune_timer.setInterval(0)
+        self._tab_tune_timer.timeout.connect(self.tune_dock_tab_bars)
+
+    def tune_dock_tab_bars(self) -> None:
+        """Makes every dock tab readable: no elision (the bar scrolls with its
+        arrow buttons when the names don't fit), and the full dock title as
+        each tab's tooltip. Qt creates these bars itself and may rebuild them
+        after a restore or a re-dock, so this runs again on `ChildAdded` and
+        `LayoutRequest` and only writes what differs (a write that changes
+        nothing would post another layout request)."""
+        self.setTabPosition(Qt.DockWidgetArea.AllDockWidgetAreas, QTabWidget.TabPosition.North)
+        for bar in self.findChildren(QTabBar, options=Qt.FindChildOption.FindDirectChildrenOnly):
+            if bar.elideMode() != Qt.TextElideMode.ElideNone:
+                bar.setElideMode(Qt.TextElideMode.ElideNone)
+            if not bar.usesScrollButtons():
+                bar.setUsesScrollButtons(True)
+            for button in bar.findChildren(QToolButton):
+                name = {Qt.ArrowType.LeftArrow: "Scroll tabs left",
+                        Qt.ArrowType.RightArrow: "Scroll tabs right"}.get(button.arrowType())
+                if name and button.toolTip() != name:
+                    button.setToolTip(name)
+                    button.setAccessibleName(name)
+            for i in range(bar.count()):
+                # The tab text carries the mnemonic escape ("Voice && Clip");
+                # a tooltip shows the name as it reads.
+                full = bar.tabText(i).replace("&&", "&")
+                if bar.tabToolTip(i) != full:
+                    bar.setTabToolTip(i, full)
 
     def _workspace_action(self, name: str) -> QAction:
         action = QAction(menu_label(name), self)
@@ -84,6 +116,7 @@ class WorkspaceMenuMixin:
         for dock in self._all_docks():
             self._watch_dock_layout(dock)
         self.installEventFilter(self)
+        self.tune_dock_tab_bars()
         app = QGuiApplication.instance()
         if app is not None:
             app.screenRemoved.connect(self._on_screen_removed)
@@ -209,6 +242,9 @@ class WorkspaceMenuMixin:
         # A separator drag is the main window's own mouse release.
         if watched is self and event.type() == QEvent.Type.MouseButtonRelease:
             self._on_layout_edited()
+        elif watched is self and event.type() in (QEvent.Type.ChildAdded, QEvent.Type.LayoutRequest):
+            if getattr(self, "_layout_ready", False):
+                self._tab_tune_timer.start()
         return super().eventFilter(watched, event)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
