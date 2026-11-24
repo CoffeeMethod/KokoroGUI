@@ -298,6 +298,9 @@ QPushButton, QToolButton {{
     padding: 3px 12px; min-height: 20px;
 }}
 QToolButton {{ padding: 3px 8px; }}
+/* QTabBar's own scroller buttons (arrows, shown when the tabs don't fit) are 16 px wide: the
+   8 px side padding above leaves them no room for the arrow. */
+QTabBar QToolButton {{ padding: 0; min-width: 20px; max-width: 20px; min-height: 0; }}
 QPushButton:hover, QToolButton:hover {{ background: {pal.hover}; }}
 QPushButton:pressed, QToolButton:pressed {{ background: {pal.border}; }}
 QPushButton:checked, QToolButton:checked {{ background: {pal.accent}; color: {on_accent}; border-color: {pal.accent}; }}

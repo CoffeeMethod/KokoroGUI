@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QGuiApplication
-from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox, QTabBar, QTabWidget
+from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox, QTabBar, QTabWidget, QToolButton
 
 from kokoro_gui.qt.workspace import (
     ADVANCED,
@@ -88,6 +88,12 @@ class WorkspaceMenuMixin:
                 bar.setElideMode(Qt.TextElideMode.ElideNone)
             if not bar.usesScrollButtons():
                 bar.setUsesScrollButtons(True)
+            for button in bar.findChildren(QToolButton):
+                name = {Qt.ArrowType.LeftArrow: "Scroll tabs left",
+                        Qt.ArrowType.RightArrow: "Scroll tabs right"}.get(button.arrowType())
+                if name and button.toolTip() != name:
+                    button.setToolTip(name)
+                    button.setAccessibleName(name)
             for i in range(bar.count()):
                 # The tab text carries the mnemonic escape ("Voice && Clip");
                 # a tooltip shows the name as it reads.

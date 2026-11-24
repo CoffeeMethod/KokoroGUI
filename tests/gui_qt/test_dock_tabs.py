@@ -2,7 +2,7 @@
 (plan 47 pass 3, grill PG32). Native Qt only: `setTabPosition`, no elision,
 scroll buttons, a tooltip with the full name."""
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QTabBar, QTabWidget
+from PySide6.QtWidgets import QTabBar, QTabWidget, QToolButton
 
 import kokoro_gui.qt.app as qt_app_module
 from kokoro_gui.qt import settings as qt_settings
@@ -136,3 +136,43 @@ def test_a_layout_saved_with_bottom_tabs_still_restores(qt_app, qtbot):
 def _settle_without_tune(app, qtbot):
     app.show()
     qtbot.wait(30)
+
+
+def _scrollers(app):
+    bar = _right_bar(app)
+    return [b for b in bar.findChildren(QToolButton) if b.isVisible()]
+
+
+def _colours_inside_border(button):
+    image = button.grab().toImage()
+    seen = set()
+    for x in range(2, image.width() - 2):
+        for y in range(2, image.height() - 2):
+            seen.add(image.pixel(x, y))
+    return len(seen)
+
+
+def _narrow(app, qtbot):
+    app.resize(900, 700)
+    _settle(app, qtbot)
+    qtbot.wait(30)
+
+
+def test_the_tab_scroll_buttons_show_arrows_in_both_themes(qt_app, qtbot):
+    """A QToolButton rule with 8 px side padding left the 16 px scroller
+    buttons no room for the arrow: they were empty boxes."""
+    for name in ("dark", "light"):
+        qt_app.set_theme(name)
+        _narrow(qt_app, qtbot)
+        buttons = _scrollers(qt_app)
+        assert len(buttons) == 2, name
+        for button in buttons:
+            assert button.width() >= 18
+            assert _colours_inside_border(button) > 1, (name, button.arrowType())
+
+
+def test_the_scroll_buttons_have_names_and_tooltips(qt_app, qtbot):
+    _narrow(qt_app, qtbot)
+    names = sorted(b.accessibleName() for b in _scrollers(qt_app))
+    assert names == ["Scroll tabs left", "Scroll tabs right"]
+    assert all(b.toolTip() == b.accessibleName() for b in _scrollers(qt_app))
