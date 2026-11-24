@@ -295,3 +295,123 @@ def test_with_the_real_dummy_adapter(isolated_dirs):
     assert {c.backend_id for c in document.characters} == {"dummy"}
     assert document.get_character_by_name("Narrator").preset_data == {"voice": "dummy"}
     assert clip_after(document, "Hi.").overrides == {"fx_preset": "Radio"}
+
+
+# -- hostile input -----------------------------------------------------------
+
+def survives_json(document):
+    """The document serialises to strict JSON and encodes as UTF-8."""
+    from kokoro_gui.daw.serialization import document_to_dict
+    import json
+    return json.dumps(document_to_dict(document), allow_nan=False).encode("utf-8")
+
+
+@pytest.mark.parametrize("bad", ["\x00", "\ud800", "\udfff", "￼", "﻿", "\x01", "\x0b", "\x0c", "\x1f",
+                                 "\x7f", "\x85", "\x9f"])
+def test_unsafe_characters_are_dropped_with_a_warning(backend, bad):
+    document, warnings = build(f"a{bad}b {bad}c", backend)
+    assert document.text == "ab c"
+    assert len(warnings) == 1 and "2" in warnings[0] and bad not in warnings[0]
+    survives_json(document)
+
+
+def test_line_and_paragraph_separators_become_newlines(backend):
+    document, warnings = build("a  b c", backend)
+    assert clips_of(document) == [("Narrator", "a"), ("Narrator", "b\nc")]
+    assert warnings == []
+
+
+def test_tab_and_newline_survive(backend):
+    document, warnings = build("a\tb\nc", backend)
+    assert document.text == "a\tb\nc"
+    assert warnings == []
+
+
+def test_a_script_of_only_unsafe_characters_is_empty(backend):
+    document, warnings = build("\x00￼\ud800", backend)
+    assert document.text == "" and document.clips == []
+    assert len(warnings) == 1
+
+
+def test_unsafe_characters_inside_a_tag_do_not_reach_the_name(backend):
+    document, _ = build("[Sa\x00m]: Hi.", backend, {"Sam": "v1"})
+    assert [c.name for c in document.characters] == ["Sam"]
+
+
+def test_a_non_finite_pause_is_ignored_with_a_warning(backend):
+    document, warnings = build("a\n\n[pause:" + "9" * 400 + "]\n\nb", backend)
+    assert clip_after(document, "b").gap_before_s is None
+    assert len(warnings) == 1
+    survives_json(document)
+
+
+# -- cast validation ---------------------------------------------------------
+
+@pytest.mark.parametrize("entry, key", [
+    ({"speed": "fast"}, "speed"),
+    ({"speed": float("nan")}, "speed"),
+    ({"speed": float("inf")}, "speed"),
+    ({"speed": True}, "speed"),
+    ({"speed": 10 ** 400}, "speed"),
+    ({"speed": 0.0}, "speed"),
+    ({"speed": 4.5}, "speed"),
+    ({"pitch": -13}, "pitch"),
+    ({"pitch": 12.5}, "pitch"),
+    ({"pitch": "1"}, "pitch"),
+    ({"pitch": [1]}, "pitch"),
+    ({"voice": ""}, "voice"),
+    ({"voice": 3}, "voice"),
+    ({"voice": "x" * 201}, "voice"),
+    ({"voice": "a\nb"}, "voice"),
+    ({"voice": "a\x00b"}, "voice"),
+    ({"voice": "a\ud800"}, "voice"),
+    ({"fx_preset": ""}, "fx_preset"),
+    ({"fx_preset": "x" * 201}, "fx_preset"),
+    ({"fx_preset": ["Radio"]}, "fx_preset"),
+])
+def test_a_bad_cast_value_raises_naming_speaker_and_key(backend, entry, key):
+    with pytest.raises(ValueError) as caught:
+        build("[Sam]: Hi.", backend, {"Sam": entry})
+    message = str(caught.value)
+    assert "Sam" in message and key in message
+    assert len(message) < 200
+
+
+def test_the_error_does_not_echo_a_long_value(backend):
+    with pytest.raises(ValueError) as caught:
+        build("[Sam]: Hi.", backend, {"Sam": {"voice": "secret" * 100}})
+    assert "secret" * 10 not in str(caught.value)
+
+
+@pytest.mark.parametrize("cast", [["Sam"], "Sam", 3, {"Sam": ["v1"]}, {"Sam": 3}, {"Sam": None}, {3: "v1"},
+                                  {"": "v1"}, {"Sam": ""}])
+def test_a_malformed_cast_raises(backend, cast):
+    with pytest.raises(ValueError):
+        build("[Sam]: Hi.", backend, cast)
+
+
+def test_the_cast_is_checked_even_for_a_speaker_the_script_never_uses(backend):
+    with pytest.raises(ValueError):
+        build("Plain.", backend, {"Nobody": {"speed": "fast"}})
+
+
+@pytest.mark.parametrize("entry", [{"speed": 0.1}, {"speed": 4}, {"speed": 4.0}, {"pitch": -12}, {"pitch": 12},
+                                   {"pitch": 0}, {"voice": "x" * 200}, {"speed": None, "voice": "v1"}])
+def test_values_at_the_limits_are_accepted(backend, entry):
+    document, _ = build("[Sam]: Hi.", backend, {"Sam": entry})
+    survives_json(document)
+
+
+def test_a_voice_that_does_not_exist_is_not_checked_here(backend):
+    document, warnings = build("[Sam]: Hi.", backend, {"Sam": "no_such_voice"})
+    assert document.characters[0].preset_data == {"voice": "no_such_voice"}
+    assert warnings == []
+
+
+@pytest.mark.parametrize("script", [
+    "plain", "[Sam:Radio, overlap:9e9]: Hi [pause:1.5] there.\n\n\x00￼\ud800 x", "[a]:\n[b]: ﻿q",
+    "  [pause:3]", "[pause:" + "9" * 400 + "]x",
+])
+def test_every_document_serialises_to_strict_json(backend, script):
+    document, _ = build(script, backend, {"Sam": {"speed": 1.5, "pitch": 2, "voice": "v1"}})
+    survives_json(document)

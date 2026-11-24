@@ -21,6 +21,15 @@ from collections import deque
 _ESCAPABLE = "\\`*_{}[]()#+-.!|>~<&"
 _ESCAPE_BASE = 0xE000
 
+# What no text we hand on may hold: C0 and C1 controls except newline and tab,
+# a lone surrogate (it can't be encoded as UTF-8), U+FFFC (the editor's
+# object-replacement character) and a BOM. CR, U+2028 and U+2029 become
+# newlines before this runs.
+_UNSAFE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f￼﻿\ud800-\udfff]")
+# The stand-ins for escaped characters. The same characters in the input are dropped.
+_STANDIN = re.compile(f"[{chr(_ESCAPE_BASE)}-{chr(_ESCAPE_BASE + len(_ESCAPABLE) - 1)}]")
+_ENTITY = re.compile(r"&(?:[A-Za-z][A-Za-z0-9]{1,31}|#[0-9]{1,8}|#[xX][0-9A-Fa-f]{1,8});")
+
 _ESCAPE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!|>~<&])")
 _AUTOLINK = re.compile(r"<((?:https?://|mailto:)[^<>\s]{1,2000})>")
 _HTML_TAG = re.compile(r"</?[A-Za-z][^<>\n]{0,2000}>|<![A-Za-z][^<>\n]{0,2000}>")
@@ -43,6 +52,20 @@ _BLANK_RUN = re.compile(r"\n{3,}")
 _TRAILING_URL_PUNCTUATION = ".,;:!?)]}\"'"
 
 
+def normalise_text(text: str) -> tuple:
+    """`(text, dropped)`: `text` with CR, CRLF, U+2028 and U+2029 as `\n` and
+    the characters in `_UNSAFE` removed. `dropped` counts the removed ones."""
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n").replace(" ", "\n").replace(" ", "\n")
+    return _UNSAFE.subn("", text)
+
+
+def _entity(match: re.Match) -> str:
+    """The character an entity names. A bracket becomes a parenthesis, so
+    `&#91;Sam&#93;:` never turns into a speaker tag."""
+    char = _STANDIN.sub("", html.unescape(match.group(0)))
+    return {"[": "(", "]": ")"}.get(char, char)
+
+
 def clean_markdown(text: str, *, code_blocks: str = "drop") -> str:
     """`text` as something a voice can read.
 
@@ -57,7 +80,8 @@ def clean_markdown(text: str, *, code_blocks: str = "drop") -> str:
     """
     if code_blocks not in ("drop", "keep"):
         raise ValueError("code_blocks must be 'drop' or 'keep'")
-    text = (text or "").replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
+    text, _dropped = normalise_text(text)
+    text = _STANDIN.sub("", text)
     text = _strip_comments(text)
     text = _ESCAPE.sub(lambda m: chr(_ESCAPE_BASE + _ESCAPABLE.index(m.group(1))), text)
 
@@ -86,7 +110,7 @@ def clean_markdown(text: str, *, code_blocks: str = "drop") -> str:
     result = "\n".join(out)
     result = _BLANK_RUN.sub("\n\n", result).strip("\n")
     result = "\n".join(line.rstrip() for line in result.split("\n"))
-    result = html.unescape(result)
+    result = _UNSAFE.sub("", _ENTITY.sub(_entity, result))
     return "".join(_unescape(c) for c in result)
 
 

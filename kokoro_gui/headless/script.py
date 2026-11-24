@@ -13,13 +13,16 @@ one, as `auto_split._carve_pauses` does.
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import Collection, Mapping, Optional
 
 from kokoro_gui.core import engines as core_engines
 from kokoro_gui.daw.auto_split import find_pause_markers
+from kokoro_gui.daw.share import _PRESET_RANGES, _PRESET_STRING_CHARS
 from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character, Document
 from kokoro_gui.engine.text_extraction import find_character_fx_spans, tag_overrides
+from kokoro_gui.headless.clean import normalise_text
 
 DEFAULT_SPEAKER = "Narrator"
 # Keys of a cast entry that go into the character's `preset_data`.
@@ -28,24 +31,65 @@ CAST_KEYS = ("voice", "speed", "pitch", "fx_preset")
 _PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
 
 
-def _cast_entry(cast: Mapping, name: str):
-    """The cast entry for `name`, matched like `get_character_by_name`:
-    ignoring case and surrounding whitespace. `None` when absent."""
-    wanted = name.strip().lower()
-    for key, value in cast.items():
-        if str(key).strip().lower() == wanted:
-            return value
-    return None
+def _short(value) -> str:
+    return repr(value)[:40]
 
 
-def _preset_from_entry(entry) -> dict:
-    """`preset_data` values from a cast entry: a voice name, or a mapping
-    with any of `CAST_KEYS`. Other keys and empty values are dropped."""
-    if isinstance(entry, str):
-        return {"voice": entry} if entry.strip() else {}
-    if isinstance(entry, Mapping):
-        return {k: entry[k] for k in CAST_KEYS if entry.get(k) not in (None, "")}
-    return {}
+def _bad(name: str, key: str, value, why: str) -> ValueError:
+    return ValueError(f"cast[{name[:40]!r}]: {key} {why} (got {_short(value)})")
+
+
+def _check_text(name: str, key: str, value) -> str:
+    if not isinstance(value, str) or not value:
+        raise _bad(name, key, value, "must be a non-empty string")
+    if len(value) > _PRESET_STRING_CHARS:
+        raise _bad(name, key, value, f"must be at most {_PRESET_STRING_CHARS} characters")
+    if normalise_text(value)[0] != value or "\n" in value or "\t" in value:
+        raise _bad(name, key, value, "must not hold control characters")
+    return value
+
+
+def _check_number(name: str, key: str, value):
+    low, high = _PRESET_RANGES[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _bad(name, key, value, "must be a number")
+    try:
+        number = float(value)
+    except OverflowError:
+        number = math.inf
+    if not math.isfinite(number):
+        raise _bad(name, key, value, "must be a finite number")
+    if not low <= number <= high:
+        raise _bad(name, key, value, f"must be between {low:g} and {high:g}")
+    return value
+
+
+def _validated_cast(cast) -> dict:
+    """`{lowercase name: preset_data dict}` for `cast`, or ValueError naming
+    the speaker and key. Names match like `get_character_by_name`: ignoring
+    case and surrounding whitespace. It does not check that a voice exists
+    (the caller has the engine's voice list)."""
+    if cast is None:
+        return {}
+    if not isinstance(cast, Mapping):
+        raise ValueError(f"cast must be a mapping of speaker to voice or settings, got {type(cast).__name__}")
+    out: dict = {}
+    for name, entry in cast.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"cast: a speaker name must be a non-empty string (got {_short(name)})")
+        if isinstance(entry, str):
+            preset = {"voice": _check_text(name, "voice", entry)}
+        elif isinstance(entry, Mapping):
+            preset = {}
+            for key in CAST_KEYS:
+                value = entry.get(key)
+                if value is None:
+                    continue
+                preset[key] = _check_number(name, key, value) if key in _PRESET_RANGES else _check_text(name, key, value)
+        else:
+            raise ValueError(f"cast[{name[:40]!r}]: must be a voice name or a mapping, got {type(entry).__name__}")
+        out.setdefault(name.strip().lower(), preset)
+    return out
 
 
 def _paragraphs(body: str) -> list:
@@ -101,7 +145,7 @@ def build_document(script: str, backend, cast: Optional[Mapping] = None, *,
     warning. `Document.settings` has `gap_s` and `paragraph_gap_s` at 0, and
     the document gets one track per character.
     """
-    cast = cast or {}
+    cast = _validated_cast(cast)
     engine_settings = dict(engine_settings or {})
     warnings: list = []
     characters: dict = {}  # lowercase name -> Character, in first-use order
@@ -111,8 +155,8 @@ def build_document(script: str, backend, cast: Optional[Mapping] = None, *,
         found = characters.get(key)
         if found is not None:
             return found
-        entry = _cast_entry(cast, name)
-        preset = _preset_from_entry(entry)
+        entry = cast.get(name.strip().lower())
+        preset = dict(entry or {})
         if "voice" not in preset:
             voice = core_engines.default_voice(backend, engine_settings)
             if voice:
@@ -124,7 +168,10 @@ def build_document(script: str, backend, cast: Optional[Mapping] = None, *,
         characters[key] = found
         return found
 
-    script = (script or "").replace("\r\n", "\n").replace("\r", "\n")
+    script, dropped = normalise_text(script)
+    if dropped:
+        warnings.append(f"Dropped {dropped} unsupported character(s) from the script "
+                        "(control characters, lone surrogates, U+FFFC, BOM).")
 
     # One entry per clip: (text, character, overrides, gap before).
     plan: list = []
@@ -139,7 +186,10 @@ def build_document(script: str, backend, cast: Optional[Mapping] = None, *,
         first_of_block = True
         for kind, value in _pieces(body):
             if kind == "pause":
-                pending = value
+                if math.isfinite(value):
+                    pending = value
+                else:
+                    warnings.append("A [pause:x] too large to use was ignored.")
                 continue
             for paragraph in _paragraphs(value):
                 overrides = {"fx_preset": fx} if fx else {}

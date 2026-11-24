@@ -155,3 +155,35 @@ def test_hostile_input_is_linear(name):
     elapsed = time.perf_counter() - start
     assert isinstance(result, str)
     assert elapsed < 3.0, f"{name} took {elapsed:.1f}s"
+
+
+@pytest.mark.parametrize("bad", ["\x00", "\ud800", "￼", "﻿", "\x01", "\x0b", "\x85"])
+def test_unsafe_characters_are_dropped(bad):
+    assert clean_markdown(f"a{bad}b") == "ab"
+    assert clean_markdown(f"**a{bad}b**") == "ab"
+
+
+def test_separators_become_newlines():
+    assert clean_markdown("a  b") == "a\n\nb"
+
+
+@pytest.mark.parametrize("char", ["", "", "", "", "", ""])
+def test_a_private_use_character_is_kept_or_dropped_never_changed(char):
+    out = clean_markdown(f"x{char}y " + r"\*z\* \# " + char)
+    assert out in (f"x{char}y *z* # {char}", "xy *z* #")
+
+
+def test_a_private_use_character_beside_an_escape_does_not_turn_into_punctuation():
+    # U+E000 stood for a backslash, U+E001 for a backtick.
+    assert clean_markdown("") in ("", "")
+
+
+@pytest.mark.parametrize("entity", ["&#xE000;", "&#57344;", "&#xE001;", "&#0;", "&#xD800;", "&#xFFFC;", "&#1;"])
+def test_an_entity_naming_a_stand_in_or_unsafe_character_becomes_nothing_odd(entity):
+    out = clean_markdown(f"a{entity}b")
+    assert out in ("ab", "a�b")
+
+
+def test_an_entity_cannot_build_a_speaker_tag_or_pause_marker():
+    assert clean_markdown("&#91;Sam&#93;: hi &lbrack;pause:9&rsqb;") == "(Sam): hi (pause:9)"
+    assert "[" not in clean_markdown("&#x5b;Sam&#x5d;: hi")
