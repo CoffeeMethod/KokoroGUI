@@ -788,6 +788,29 @@ def autosave_to_dir(document: Document, project_settings: dict, project_dir: str
     return document_digest(document_bytes, project_bytes)
 
 
+def begin_project_dir(document: Document, project_settings: dict, on_locked=None) -> tuple:
+    """New: a fresh project dir, its lock, the first autosave and a fresh
+    clean `session.json`. Returns `(project_dir, project_id, lock)`, the lock
+    held. `on_locked(project_dir, project_id, lock)` runs before the first
+    write, for an owner (the app) that keeps the dir when that write fails;
+    with none, a failure releases the lock before it propagates."""
+    project_dir, project_id = create_project_dir()
+    lock = ProjectLock(project_dir).acquire()
+    if on_locked is not None:
+        on_locked(project_dir, project_id, lock)
+    try:
+        digest = autosave_to_dir(document, project_settings, project_dir)
+        write_session(project_dir, {
+            "source_path": None, "zip_size": None, "zip_mtime": None,
+            "saved_digest": digest, "dirty": False, "asset_index": {},
+        })
+    except BaseException:
+        if on_locked is None:
+            lock.release()
+        raise
+    return project_dir, project_id, lock
+
+
 # --- open --------------------------------------------------------------------------
 
 
@@ -992,6 +1015,24 @@ def session_matches_file(session: dict | None, info: BundleInfo) -> bool:
                 and abs(float(session.get("zip_mtime", -1)) - info.zip_mtime) < 1e-6)
     except (TypeError, ValueError):
         return False
+
+
+def open_action(session: dict | None, info: BundleInfo, project_dir: str, dirty_children) -> str:
+    """What Open does with the dir it just locked:
+
+    - "recover": the dir (or one of `dirty_children`, its subprojects' dirs
+      with unsaved edits) is ahead of the file, so the caller asks.
+    - "reuse": a clean extraction of this very file, opened as it is.
+    - "extract": anything else; the caller wipes the dir and extracts.
+
+    Reads only, nothing is written or wiped here."""
+    has_document = os.path.isfile(os.path.join(project_dir, DOCUMENT))
+    if session and has_document and (session.get("dirty") or dirty_children):
+        return "recover"
+    if session and session_matches_file(session, info) and has_document \
+            and not video_extract_pending(info, project_dir):
+        return "reuse"
+    return "extract"
 
 
 # --- save --------------------------------------------------------------------------
