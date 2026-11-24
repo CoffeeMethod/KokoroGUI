@@ -180,7 +180,7 @@ def is_clip_dirty(clip, text: str, config: dict, key_fn=None, file_exists=None) 
 def build_segments_from_results(expected_hash, results: list) -> list:
     """Builds the `Segment` list for a clip from a `generate_clip_audio`/
     `process_chunk_task` result list - one implementation shared by the
-    single-clip and batch Generate paths (kokoro_gui/qt/docks/timeline_dock.py).
+    single-clip and batch Generate paths (`apply_results`).
 
     `cache_key` and `engine_version` come from each result dict: the engine
     reports what it generated under, including any take bump (TB8), so
@@ -236,3 +236,36 @@ def take_from_results(results: list, default: int = 0) -> int:
         if "take" in result:
             return int(result["take"] or 0)
     return default
+
+
+def apply_results(clip, results: list, fallback_key=None) -> None:
+    """Stamps `clip.segments`, `clip.takes`, `clip.overrides["take"]` and
+    `clip.status` from what the engine reported for one generate of the
+    clip: the single-clip and batch paths of the timeline dock
+    (`TimelineDock._apply_results`) and a headless render land results
+    through here. `fallback_key` is the key for a result without a
+    `cache_key` (a hand-built one in tests); the caller computes it only
+    when one lacks it.
+
+    A recorded guide take at the landing index moves aside, parked
+    (`undo.keep_recorded_take`). Words and onset/tail timings carry over
+    from an earlier segment for the same file (a cache hit has none of its
+    own). A new take parks the one it replaces; re-rendering a parked take
+    takes it out of the parked list. Doesn't bump `revision.FILES`: the
+    caller does, before it computes `fallback_key`."""
+    from kokoro_gui.daw.undo import keep_recorded_take
+
+    current_take = int(clip.overrides.get("take", 0) or 0)
+    take = take_from_results(results, default=current_take)
+    keep_recorded_take(clip, take)
+    new_segments = build_segments_from_results(fallback_key, results)
+    carry_segment_timing(new_segments, [clip.segments, *clip.takes.values()])
+    if take != current_take and clip.segments:
+        clip.takes[current_take] = clip.segments
+    clip.takes.pop(take, None)
+    clip.segments = new_segments
+    if take:
+        clip.overrides["take"] = take
+    else:
+        clip.overrides.pop("take", None)
+    clip.status = "generated"

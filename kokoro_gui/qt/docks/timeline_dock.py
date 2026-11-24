@@ -41,14 +41,15 @@ from PySide6.QtWidgets import (
     QPushButton, QVBoxLayout, QWidget,
 )
 
+from kokoro_gui.core import generation as core_generation
 from kokoro_gui.daw import beds, markers as marker_ops, revision
 from kokoro_gui.daw import fit as fit_ops
 from kokoro_gui.daw.arrangement import OVERLAP_EPSILON_S, plan_ripple
-from kokoro_gui.daw.dirty import build_segments_from_results, carry_segment_timing, take_from_results
+from kokoro_gui.daw.dirty import apply_results
 from kokoro_gui.daw.undo import (
     AssignCharacterCommand, CompositeCommand, DeleteTakeCommand, MoveClipBeforeCommand, MoveClipCommand,
     ReassignTrackCommand, RippleCommand, SetActiveTakeCommand, SetClipFxCommand, SetClipTimestampCommand,
-    SetFieldCommand, TextEditCommand, keep_recorded_take,
+    SetFieldCommand, TextEditCommand,
 )
 from kokoro_gui.engine import presets
 from kokoro_gui.engine.audio_fx import clamp_time_stretch
@@ -705,9 +706,10 @@ class TimelineDock(QDockWidget):
             self._start_next_fit()
 
     def _apply_results(self, clip, results: list, project=None) -> None:
-        """Stamps `clip.segments` and `clip.overrides["take"]` from what the
-        engine reported. A result without a `cache_key` (a hand-built one
-        in tests) falls back to the key the app would compute now."""
+        """Lands one generate's results on `clip` (`dirty.apply_results`):
+        segments, take and status. A result without a `cache_key` (a
+        hand-built one in tests) falls back to the key the app would compute
+        now."""
         # Generation wrote new segment files (kokoro_gui/daw/revision.py).
         revision.bump_files()
         project = project or self.app.project_for(clip)
@@ -719,23 +721,7 @@ class TimelineDock(QDockWidget):
                 project.document.clip_text(clip), self.app._assemble_clip_config(clip, project),
                 key_fn=project.document.segment_key_fn, clip=clip,
             )
-        current_take = int(clip.overrides.get("take", 0) or 0)
-        take = take_from_results(results, default=current_take)
-        # A recorded guide take at the landing index moves aside, parked.
-        keep_recorded_take(clip, take)
-        new_segments = build_segments_from_results(fallback, results)
-        carry_segment_timing(new_segments, [clip.segments, *clip.takes.values()])
-        # A new take parks the one it replaces; re-rendering a parked take
-        # takes it out of the parked list.
-        if take != current_take and clip.segments:
-            clip.takes[current_take] = clip.segments
-        clip.takes.pop(take, None)
-        clip.segments = new_segments
-        if take:
-            clip.overrides["take"] = take
-        else:
-            clip.overrides.pop("take", None)
-        clip.status = "generated"
+        apply_results(clip, results, fallback)
 
     # -- fit to slot (phase 5, D4) ---------------------------------------------
     # A clip with `overrides["target_duration_s"]` is fitted to it one job at
@@ -1112,20 +1098,15 @@ class TimelineDock(QDockWidget):
             return 0
 
         project = project or self.app.level
-        # Nested clips aren't TTS: a stale subproject generates through its
-        # own document (app.generate_stale_subprojects).
-        dirty = [clip for clip in project.document.dirty_clips() if not clip.is_nested]
+        dirty = project.document.dirty_clips()
         if clip_ids is not None:
             dirty = [clip for clip in dirty if clip.id in clip_ids]
-        # A clip whose engine isn't installed stays stale (grill EN6); the
-        # status line says so once, and the rest generate.
-        blocked: dict = {}
-        for clip in dirty:
-            reason = self.app.cannot_generate(clip, project)
-            if reason:
-                blocked[reason] = blocked.get(reason, 0) + 1
+        # Nested clips aren't TTS: a stale subproject generates through its
+        # own document (app.generate_stale_subprojects). A clip whose engine
+        # isn't installed stays stale (grill EN6); the status line says so
+        # once, and the rest generate.
+        dirty, blocked = core_generation.generatable(dirty, lambda clip: self.app.backend_for(clip, project))
         if blocked:
-            dirty = [clip for clip in dirty if not self.app.cannot_generate(clip, project)]
             self.app.set_status("; ".join(f"{reason}: {n} clip(s) skipped" for reason, n in blocked.items()),
                                 "warning")
         if not dirty:
@@ -1140,19 +1121,15 @@ class TimelineDock(QDockWidget):
         `done(succeeded_ids, failed_ids)` runs. Returns whether it started;
         the queue owns the busy state, so this does not touch it."""
         wanted = set(clip_ids)
-        dirty = [clip for clip in project.document.dirty_clips() if clip.id in wanted and not clip.is_nested
-                 and not self.app.cannot_generate(clip, project)]
-        if not dirty:
-            return False
-
         # One batch per engine: each clip generates with its character's
         # backend, and the backends run side by side on their own workers.
-        groups: dict = {}
-        for clip in dirty:
-            text = project.document.clip_text(clip)
-            config = self.app._assemble_clip_config(clip, project)
-            backend = self.app.backend_for(clip, project)
-            groups.setdefault(backend.id, (backend, []))[1].append((clip.id, text, config))
+        batch = core_generation.plan_batch(
+            project.document, [clip for clip in project.document.dirty_clips() if clip.id in wanted],
+            lambda clip: self.app.backend_for(clip, project),
+            lambda clip: self.app._assemble_clip_config(clip, project))
+        dirty, groups = batch.clips, batch.groups
+        if not dirty:
+            return False
 
         total = len(dirty)
         self._batch_completed = 0
@@ -1206,31 +1183,11 @@ class TimelineDock(QDockWidget):
             return
         project, pending = pending
 
-        succeeded_ids = []
-        failed_ids = []
-        any_segments_updated = False
         before = self.app.build_arrangement(project)
+        succeeded_ids, failed_ids = core_generation.apply_outcomes(
+            project.document, pending, lambda clip, results: self._apply_results(clip, results, project))
 
-        for outcome in pending:
-            clip_id = outcome["clip_id"]
-            clip = project.document.get_clip(clip_id)
-            if clip is None:
-                # Deleted, or moved into a subproject, while it generated:
-                # its file stays a cache entry, and nothing lands or fails.
-                continue
-            if outcome["success"]:
-                # A clip edited meanwhile gets these segments too; their
-                # key is the old text's, so it stays stale (plan 29).
-                self._apply_results(clip, outcome["results"], project)
-                succeeded_ids.append(clip_id)
-                any_segments_updated = True
-            else:
-                # Failed and cancelled clips alike: leave .segments
-                # untouched (still whatever they were before this batch -
-                # possibly empty/dirty, possibly stale-but-present).
-                failed_ids.append(clip_id)
-
-        if any_segments_updated:
+        if succeeded_ids:
             self._ripple(before, succeeded_ids, project)
             self.app.on_project_generated(project)
             self.app.editor.rehighlight()
