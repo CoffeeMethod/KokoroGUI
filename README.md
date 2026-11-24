@@ -50,6 +50,8 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 Unreleased:
 
+-   The Settings tab is now Voice & Clip. It and Audio FX name what an edit changes, their groups fold, the Transport says
+    what Preview will speak, and a greyed-out control says why
 -   Save your own named workspaces, which change only when you choose Update workspace, and reopen any closed panel
     from Workspace > Panels
 -   Open another project, or start a new one, while Generate runs: the first one keeps generating in the background into
@@ -139,7 +141,7 @@ In 4.0.0-beta.2:
     applied to the clip
 -   On Windows, an impulse response name with a colon is refused instead of loading a different file
 -   Options > Settings... holds the program and project settings in an OBS-style window; the
-    Settings tab keeps only the voice
+    Voice & Clip tab keeps only the voice
 -   An FX change in a long project renders in the background instead of freezing the window, and
     undoing a character change or a text replace copies only what the edit touched
 -   Opening a `.tbaw` whose project id is a path is refused before it touches any folder, and an edit made while Save runs

@@ -385,6 +385,34 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Editing scope</h3>
+        <ul class="change-list">
+          <li>
+            <h4>The Settings tab is now Voice &amp; Clip</h4>
+            <p>The tab with a voice's and a clip's fields is called Voice &amp; Clip. Options &gt; Settings&hellip; keeps its name. Saved layouts and workspaces still find the tab.</p>
+          </li>
+          <li>
+            <h4>Voice &amp; Clip and Audio FX name what they edit</h4>
+            <p>A line above the fields, outside the scroll area, says Defaults, Character: Marta, Clip: Marta with the start of its text, or 3 clips: Marta, Tomas. A subproject's name comes first. It follows a rename, an undo or a reassigned character without a new selection. The old "Project FX" label is gone: those values are the app's defaults, shared by every project.</p>
+            <p>A hint under it says where an edit goes. Engine changes the character even while a clip is selected, and the row says so. An edit to a character that's in your library says that every project using it changes. With a clip selected, a value set on the clip is bold and marked "(clip)", and the tooltip of every other label says whether it comes from the character or the defaults.</p>
+            <p>Assigning a character to a whole clip makes a new clip. The tabs used to go on editing the old one, so the edit was lost. The selection now moves to the new clip.</p>
+          </li>
+          <li>
+            <h4>Groups that fold</h4>
+            <p>Voice &amp; Clip has Voice, Audio and Clip groups. A clip's status, note and take stay in view; Timing, Source and an engine's Model fields fold. Each Audio FX group folds too, and its title names the effects that are on ("Spatial &amp; Time: Delay on"). Folding never turns an effect off. "Apply" beside the FX is now "Enable FX", which is what it did.</p>
+          </li>
+          <li>
+            <h4>What Preview will speak</h4>
+            <p>A line in the Transport says what Preview would speak and as whom: the selected text, the transcript, the start of either when it's longer than the 500 characters Preview reads, or a sample line. The tooltips of Play, Preview and Generate say what each one does.</p>
+          </li>
+          <li>
+            <h4>Next steps and greyed-out controls</h4>
+            <p>An empty transcript links to Import Text. A timeline with nothing to play says what's missing and links to Import Text, Auto-split or Generate. Manage&hellip; beside the Character list opens Edit &gt; Characters. A control that's off says why in its tooltip, menu entries included, and the progress bar's tooltip has the whole status line.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Workspaces</h3>
         <ul class="change-list">
           <li>
@@ -410,7 +438,7 @@
             <h4>Select several clips and edit them together</h4>
             <p>On the timeline, Ctrl+click adds a clip to the selection or takes it out, and Shift+click selects every clip from the selected one to the one you clicked, in text order. Dragging from empty lane space draws a rubber band that selects every block it touches; hold Ctrl to add them to what is already selected. Selecting text in the transcript across several clips selects those clips too. A plain click goes back to one clip, and dragging still moves only the block you grabbed.</p>
             <p>Right-click one of the selected blocks for a menu that works on all of them: Generate stale clips, Status, FX, Remove gap override and Align words. Each edit is one undo step for every clip.</p>
-            <p>The Settings and Audio FX tabs show each field's value when the selected clips agree and a blank "mixed" field when they don't: an empty number box, a "(mixed)" entry in a list, a half-ticked box. Changing a field sets it on every selected clip, again as one undo step. In the Audio FX tab only the fields you change are written, so each clip keeps the rest of its own FX. Take, source text and the original range still need one clip selected. When the clips belong to different characters the Engine row is greyed out, and when their engines differ the voice is too. The selection is not saved with the project.</p>
+            <p>The Voice &amp; Clip and Audio FX tabs show each field's value when the selected clips agree and a blank "mixed" field when they don't: an empty number box, a "(mixed)" entry in a list, a half-ticked box. Changing a field sets it on every selected clip, again as one undo step. In the Audio FX tab only the fields you change are written, so each clip keeps the rest of its own FX. Take, source text and the original range still need one clip selected. When the clips belong to different characters the Engine row is greyed out, and when their engines differ the voice is too. The selection is not saved with the project.</p>
           </li>
           <li>
             <h4>A keyboard map for the transport and the timeline</h4>
@@ -472,7 +500,7 @@
           </li>
           <li>
             <h4>Overlap: <code>[Sam, overlap:0.3]:</code></h4>
-            <p>A line can start before the line above it ends. Write the overlap in seconds, 0 to 5, after a comma in the tag: <code>[Sam, overlap:0.3]: right, exactly</code>, or <code>[Sam:Radio, overlap:0.3]:</code> with an FX. Typing the line and pressing Enter, and Auto-split, both put it on the clip, in the same undo step. The Settings tab has an Overlap field for a selected clip, where blank clears it. The clip starts at the end of the clip before it minus the overlap, and the clip after it starts when the longer of the two ends. Overlap 0 starts it with no gap.</p>
+            <p>A line can start before the line above it ends. Write the overlap in seconds, 0 to 5, after a comma in the tag: <code>[Sam, overlap:0.3]: right, exactly</code>, or <code>[Sam:Radio, overlap:0.3]:</code> with an FX. Typing the line and pressing Enter, and Auto-split, both put it on the clip, in the same undo step. The Voice &amp; Clip tab has an Overlap field for a selected clip, where blank clears it. The clip starts at the end of the clip before it minus the overlap, and the clip after it starts when the longer of the two ends. Overlap 0 starts it with no gap.</p>
             <p>Two characters on different tracks overlap without the red overlap border. On one track the border shows and Auto-crossfade applies. A clip you've dragged to a time ignores the overlap, and the second half of a split clip doesn't inherit it. The tag's other half changed too: a bracket is read as <code>name[:FX]</code> followed by <code>, key:value</code> options. A key other than <code>overlap</code>, or an overlap that isn't a number, is ignored with a warning in the status line. A name with a comma in it, such as <code>[Smith, John]:</code>, is still a name. Projects with no clips read the name and drop the overlap, since that path has no timeline. The overlap is stored in the clip's overrides, so a project saved with it opens in an older version with the clips placed one after another.</p>
           </li>
         </ul>
@@ -654,7 +682,7 @@
           </li>
           <li>
             <h4>One word for each idea in the window</h4>
-            <p>The window drops words the docs had already dropped. A saved FX is "FX", not "FX Preset": the Audio FX tab has "Save FX...", the Settings tab and the Characters dialog have an "FX" row, and a clip with no FX shows "No FX". The Generate menu says "Generate stale clips", and the Export dialog calls a clip that needs generating "stale" instead of "out of date". The Voices tab says Reference and Mix. Its Reference editor asks for a "WAV file", and the mixing editor lists "Mixes" and asks for a "Mix name". About shows the "Mixes folder". A subproject's block menu says "Generate", and its status line says "Exporting" for the mixdown it writes. JIT status lines say "segment" where they said "chunk". Kokoro reports "Kokoro ready" and "Kokoro failed to load". Saved projects and <code>config_qt.json</code> load as before. The stored value of a clip's or character's FX did not change, only what the combo shows.</p>
+            <p>The window drops words the docs had already dropped. A saved FX is "FX", not "FX Preset": the Audio FX tab has "Save FX...", the Voice &amp; Clip tab and the Characters dialog have an "FX" row, and a clip with no FX shows "No FX". The Generate menu says "Generate stale clips", and the Export dialog calls a clip that needs generating "stale" instead of "out of date". The Voices tab says Reference and Mix. Its Reference editor asks for a "WAV file", and the mixing editor lists "Mixes" and asks for a "Mix name". About shows the "Mixes folder". A subproject's block menu says "Generate", and its status line says "Exporting" for the mixdown it writes. JIT status lines say "segment" where they said "chunk". Kokoro reports "Kokoro ready" and "Kokoro failed to load". Saved projects and <code>config_qt.json</code> load as before. The stored value of a clip's or character's FX did not change, only what the combo shows.</p>
           </li>
         </ul>
       </div>

@@ -1631,7 +1631,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def refresh_targets(self) -> None:
         """What the Voice & Clip and Audio FX tabs edit and what Preview
         speaks, again: an edit can rename, reassign or remove it without a
-        new selection."""
+        new selection. Assigning a character replaces a clip with a new one,
+        so a selected clip that is gone hands the selection to the caret's."""
+        clip_id = self.selection.selected_clip_id
+        if clip_id is not None and self.editor is not None and self.project_of_clip_id(clip_id) is None:
+            self.editor.select_at_caret()
         for dock in (self.settings_dock, self.fx_dock):
             if dock is not None:
                 dock.refresh_target()

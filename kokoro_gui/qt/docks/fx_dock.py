@@ -503,6 +503,8 @@ class FXDock(QDockWidget):
         pending, self._pending_keys = self._pending_keys, set()
         if self._mode != "clip" or self._target is None:
             return
+        if self.app.document.get_clip(self._target.id) is None:
+            return  # removed, or replaced by a reassigned one, before the edit was stored
         if self.several:
             self._flush_several(pending)
             return

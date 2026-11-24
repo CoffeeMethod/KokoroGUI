@@ -81,15 +81,15 @@
     <div class="wrap">
       <span class="eyebrow c2">Reference</span>
       <h1>What every setting does</h1>
-      <p class="lede">Every field in every panel, grouped the way the app groups them, with the parts the label doesn't tell you called out. Three are worth knowing first: the Settings tab edits whatever is selected, Audio8 ignores two of its own fields, and JIT streaming only exists for a project with no clips yet.</p>
+      <p class="lede">Every field in every panel, grouped the way the app groups them, with the parts the label doesn't tell you called out. Three are worth knowing first: the Voice &amp; Clip tab edits whatever is selected, Audio8 ignores two of its own fields, and JIT streaming only exists for a project with no clips yet.</p>
       <div class="toc">
         <a href="#engine-picker">Options menu</a>
         <a href="#transcript">Transcript</a>
         <a href="#characters">Characters</a>
-        <a href="#settings-dock">Settings tab</a>
+        <a href="#settings-dock">Voice &amp; Clip tab</a>
         <a href="#project-clip">Clip fields</a>
         <a href="#settings-window">Settings window</a>
-        <a href="#audio-control">Audio control</a>
+        <a href="#audio-control">Audio</a>
         <a href="#timeline">Timeline</a>
         <a href="#transport">Playback</a>
         <a href="#video">Video</a>
@@ -113,8 +113,8 @@
     <div class="wrap">
       <div class="prose reveal">
         <h2><span class="idx">Options menu</span>Engines, device, theme</h2>
-        <p><strong>Options &gt; Settings&hellip;</strong> (Ctrl+,) opens the <a class="link" href="#settings-window">Settings window</a>: everything about the program and the project, as opposed to a voice. The Settings tab keeps only what a voice sounds like.</p>
-        <p><strong>Each character picks its engine</strong>, in the Settings tab's Engine row or in Edit &gt; Characters, so one project can mix Kokoro, Audio8 and LuxTTS voices; every engine a character uses stays loaded. The selected clip's character (or the first character, with nothing selected) decides what the Settings tab's fields look like and which editor the Voices tab opens on (Mixing for Kokoro, References for Audio8 and LuxTTS); the Voices tab's own Engine box opens another engine's editor without changing a character. Everything below is written per-engine where they differ.</p>
+        <p><strong>Options &gt; Settings&hellip;</strong> (Ctrl+,) opens the <a class="link" href="#settings-window">Settings window</a>: everything about the program and the project, as opposed to a voice. The Voice &amp; Clip tab keeps only what a voice sounds like.</p>
+        <p><strong>Each character picks its engine</strong>, in the Voice &amp; Clip tab's Engine row or in Edit &gt; Characters, so one project can mix Kokoro, Audio8 and LuxTTS voices; every engine a character uses stays loaded. The selected clip's character (or the first character, with nothing selected) decides what the Voice &amp; Clip tab's fields look like and which editor the Voices tab opens on (Mixing for Kokoro, References for Audio8 and LuxTTS); the Voices tab's own Engine box opens another engine's editor without changing a character. Everything below is written per-engine where they differ.</p>
         <p>Language, the default voice, an engine's own Model fields and its Parallel threads are kept per engine, so characters using different engines each generate with their own. An engine this install doesn't have shows as "(not installed)": its characters keep it, their clips play and don't generate. Without the <code>kokoro</code> package the app runs Audio8, LuxTTS (with its optional dependencies) and Dummy.</p>
         <p><strong>Options &gt; Device</strong> picks CPU / CUDA / Auto for Kokoro and LuxTTS (the first line, &ldquo;Detected&rdquo;, names what torch found: a CUDA card, an Apple GPU or the CPU. The engines use CUDA or the CPU only, so an Apple GPU is listed but not used. The CUDA entry is greyed out when torch reports no device) and re-initializes the engine. <strong>Options &gt; Theme</strong> switches between the dark (default) and light palettes. The checkable entries under them are whether copying text carries its character and FX along, whether a paste splits off its own run, the <a class="link" href="#transcript">Transcript details</a> submenu, <strong>Spellcheck</strong> (a wavy underline under words the dictionary doesn't know, in each clip's character's language, off by default) and <a class="link" href="#jit">JIT streaming</a> for projects with no clips. The welcome dialog's "Show at startup" box is the one launch setting that isn't here; it lives on the dialog itself (File &gt; Welcome…).</p>
       </div>
@@ -127,7 +127,7 @@
         <h2><span class="idx">Transcript tab</span>The transcript</h2>
         <p>The transcript is a highlighting editor over the project's text, not a plain input field. Two combos sit above it: <strong>Character</strong> and <strong>FX</strong>, both reflecting the clip under the caret. Changing Character reassigns the selection (or the caret's whole clip, or its line for untagged text); changing FX sets a named FX override on the caret's clip, undoable like everything else. The left gutter names the speaker once per character/FX change (<code>Narrator</code> on one line, <code>FX: Echo</code> under it) and shows a small play button beside each stale clip that generates just that clip. Stale text is dash-underlined; a stale clip with a target duration whose text reads longer than the target gets a wavy amber or red underline instead (see Target (s) below). Thin rules mark clip boundaries and where Auto-split would cut. <strong>Options &gt; Transcript details &gt; Show details</strong> (off by default) adds more: every other segment of a clip in a lighter tint, a grey bar where a segment ends at a pause and an amber one where it had to end between two words, a dotted line over text the Lexicon rewrites, the gap before each clip on its rule, a status dot and length per clip in the gutter, and a line under the editor describing the clip under the caret. Hover a segment or a rewrite for details. Each of the four overlays (Segment boundaries, Clip info, Lexicon rewrites, Gaps) has its own toggle in the submenu. A music bed's line holds its file name and can't be edited; delete the whole line to remove the bed.</p>
         <p> Every run of text is colored by its assigned character and FX, so the boundaries between speakers and effects are visible at a glance, without reading the inline <a href="scripting.html" class="link"><code>[Speaker:FX]:</code></a> syntax.</p>
-        <p>Selecting a range and opening the Characters menu reassigns that range's character/FX directly. Placing the caret inside an existing run instead shows that run's voice and FX in the Settings tab. Copying a range carries its character/FX metadata with it; pasting into a run belonging to a different character splits the paste into its own run rather than silently overwriting the destination's assignment, unless "character/FX paste splits" is turned off, in which case a paste inherits whatever it lands on.</p>
+        <p>Selecting a range and opening the Characters menu reassigns that range's character/FX directly. Placing the caret inside an existing run instead shows that run's voice and FX in the Voice &amp; Clip tab. Copying a range carries its character/FX metadata with it; pasting into a run belonging to a different character splits the paste into its own run rather than silently overwriting the destination's assignment, unless "character/FX paste splits" is turned off, in which case a paste inherits whatever it lands on.</p>
         <p><strong>Find and replace.</strong> Ctrl+F (Edit &gt; Find) opens a bar under the transcript with Match case and Whole word, a count of the matches and Previous and Next (F3 and Shift+F3 work too). Ctrl+H adds the Replace field. The search covers the transcript on screen and every subproject that is open, and the bar lists the other projects' matches. Replace all is one undo step per project and says first how many clips it will turn stale.</p>
       </div>
     </div>
@@ -136,21 +136,22 @@
   <section class="doc-section" id="settings-dock">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">Settings tab</span>One panel, three scopes</h2>
-        <p>The top of the tab is built from the engine's own list of fields, and it edits whatever is selected:</p>
+        <h2><span class="idx">Voice &amp; Clip tab</span>One panel, three scopes</h2>
+        <p>The line at the top names what the tab edits: Defaults, a character, a clip and its text, or how many clips. A subproject's name comes before it. Audio FX has the same line. The fields below are built from the engine's own list, and they edit whatever is selected:</p>
       </div>
       <div class="table-wrap reveal" style="max-width:760px; margin-top:1rem;">
         <table class="ref">
-          <caption>Settings tab scopes</caption>
+          <caption>Voice &amp; Clip tab scopes</caption>
           <thead><tr><th>Selection</th><th>Values come from</th><th>Edits write to</th></tr></thead>
           <tbody>
-            <tr><td>Nothing selected</td><td>The app's whole-document defaults, the shown engine's own for the per-engine fields</td><td>App settings (<code>config_qt.json</code>; per-engine fields under <code>engines</code>)</td></tr>
+            <tr><td>Nothing selected, or text outside a clip</td><td>The app's defaults, shared by every project, the shown engine's own for the per-engine fields</td><td>App settings (<code>config_qt.json</code>; per-engine fields under <code>engines</code>)</td></tr>
             <tr><td>A clip</td><td>Its character's settings, merged with its own overrides</td><td><code>clip.overrides</code>, never the app defaults</td></tr>
             <tr><td>A character</td><td>That character's settings</td><td>The character directly, so every clip without its own override using it updates live</td></tr>
           </tbody>
         </table>
       </div>
-      <p class="dek" style="margin-top:1rem;">Speed and the Audio control fields can vary per clip or character. Kokoro voices can also be picked here; Reference engines show a read-only Voice label and use Voices to assign a saved Reference to the character. Language and an engine's Model fields (Audio8's and LuxTTS's sampling knobs) are shown disabled, not hidden, while a clip or character is selected, since they only apply to the whole document. Segmentation, output format, threads and the caches aren't here at all: they're program settings, in the <a class="link" href="#settings-window">Settings window</a>.</p>
+      <p class="dek" style="margin-top:1rem;">Speed and the Audio fields can vary per clip or character. Kokoro voices can also be picked here; Reference engines show a read-only Voice label and use Voices to assign a saved Reference to the character. Language and an engine's Model fields (Audio8's and LuxTTS's sampling knobs) are shown disabled, not hidden, while a clip or character is selected, since they only apply to the whole document. Segmentation, output format, threads and the caches aren't here at all: they're program settings, in the <a class="link" href="#settings-window">Settings window</a>.</p>
+      <p class="dek" style="margin-top:1rem;">With a clip selected, a value set on the clip itself is bold and marked "(clip)" at its label, and the line under the header lists them. Everything else comes from the clip's character or the defaults; the label's tooltip says which. An edit to a character that is in your library says so before you make it, since every project that uses the character changes.</p>
       <p class="dek" style="margin-top:1rem;">Above the fields, the <strong>Engine</strong> row: with a character selected it sets that character's engine (refused while a job runs; the voice stays if the new engine has one by that name, else it becomes the new engine's default); with a clip selected it does the same for the clip's character, so every clip of that character follows; with nothing selected it is "Engine for new characters", the engine Add in Edit &gt; Characters and subtitle import give a new character, and the Language and Voice under it switch to that engine's defaults, the voice a new character starts with. Picking an engine and then a voice is one stop.</p>
       <p class="dek" style="margin-top:1rem;">The fields below depend on the selected engine; its Model fields appear only for that engine. Language, Voice (with nothing selected) and Model fields are remembered per engine. <a class="link" href="#luxtts">LuxTTS settings</a> are listed below.</p>
       <div class="table-wrap reveal">
@@ -159,7 +160,7 @@
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td>Language</td><td>For Kokoro, picks which phonemization pipeline runs; each language uses its own <code>KPipeline</code> and voice list. For Audio8 it's one of eleven labels from the model card. See the callout below: it currently isn't sent to the model at all. LuxTTS supports English.</td></tr>
-            <tr><td>Voice</td><td>Kokoro: a named base voice (<code>af_heart</code>, <code>bm_daniel</code>, ...) or a saved Mix from the Voices tab. Audio8 and LuxTTS: a saved Reference from Voices (Audio8 requires a transcript; LuxTTS accepts edited text or internal transcription). Assign it with Save or Use in Voices; Settings shows the assigned name without a second picker.</td></tr>
+            <tr><td>Voice</td><td>Kokoro: a named base voice (<code>af_heart</code>, <code>bm_daniel</code>, ...) or a saved Mix from the Voices tab. Audio8 and LuxTTS: a saved Reference from Voices (Audio8 requires a transcript; LuxTTS accepts edited text or internal transcription). Assign it with Save or Use in Voices; Voice &amp; Clip shows the assigned name without a second picker.</td></tr>
             <tr><td>Speed</td><td>Kokoro and LuxTTS: 0.5x-2.0x, passed to the model as a native generation parameter. Audio8: shown in the same range, but see the callout below, it's currently not forwarded to the model either.</td></tr>
             <tr><td>Max new tokens <span class="engine-note">Audio8 only</span></td><td>Caps how many tokens the model can generate per segment. Default 1024, hard-capped at 2048 to match the model's real <code>max_seq_len</code>; anything higher gets silently clamped by the model anyway.</td></tr>
             <tr><td>Temperature <span class="engine-note">Audio8 only</span></td><td>Sampling temperature, default 0.8. Higher values add more variation between takes of the same text.</td></tr>
@@ -178,8 +179,8 @@
 
   <section class="doc-section" id="project-clip">
     <div class="wrap">
-      <h2><span class="idx">Settings tab</span>Clip fields</h2>
-      <p class="dek">Under Audio control while a clip is selected. Every edit here is one undo step. The project's own fields (gaps, ripple, track layout, timecode, ...) are in the <a class="link" href="#settings-window">Settings window</a>.</p>
+      <h2><span class="idx">Voice &amp; Clip tab</span>Clip fields</h2>
+      <p class="dek">Under Audio while a clip is selected. Every edit here is one undo step. Status, Note and Take are always in view. Timing (gap, overlap, target) and Source (source text, original range) fold, and their titles say what is set on the clip. The project's own fields (gaps, ripple, track layout, timecode, ...) are in the <a class="link" href="#settings-window">Settings window</a>.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Clip fields</caption>
@@ -275,16 +276,16 @@
 
   <section class="doc-section" id="audio-control">
     <div class="wrap">
-      <h2><span class="idx">Settings tab</span>Audio control</h2>
+      <h2><span class="idx">Voice &amp; Clip tab</span>Audio</h2>
       <p class="dek">Hand-coded, not schema-driven, so every engine gets the same fields here, still subject to the same three-scope rules above. These are the post-processing steps from the <a href="index.html#signal-chain" class="link">signal chain</a> on the home page.</p>
       <div class="table-wrap reveal">
         <table class="ref">
-          <caption>Audio control</caption>
+          <caption>Audio</caption>
           <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td>Volume</td><td>0.1x-2.0x. A plain multiply on the waveform, applied second in the chain, after Trim and before Pitch.</td></tr>
             <tr><td>Pitch (st)</td><td>-12 to +12 semitones, shifted by resampling to a new length. This changes duration along with pitch, the classic "chipmunk" effect: raise the pitch and playback gets faster, lower it and playback gets slower. For pitch without a duration change, use the Audio FX tab's separate Pitch Shift effect instead.</td></tr>
-            <tr><td>FX / Apply</td><td>Loads a saved FX into the Audio FX tab's sliders. The Apply checkbox is the master switch for the whole FX chain below; unchecked, none of the Audio FX tab's effects run even if individually enabled.</td></tr>
+            <tr><td>FX / Enable FX</td><td>Loads a saved FX into the Audio FX tab's sliders, or with a clip or character selected, names the FX it uses. Enable FX with nothing selected is the master switch for the whole FX chain below; unchecked, none of the Audio FX tab's effects run even if individually enabled. With a clip or character selected it turns FX on or off for that clip or character.</td></tr>
             <tr><td>Normalize</td><td>Scales the segment so its loudest peak sits at 98% of full scale. A simple peak normalize, not a loudness (LUFS) normalize. Runs last in the chain, after FX.</td></tr>
             <tr><td>Trim silence</td><td>Strips leading and trailing audio below a fixed amplitude threshold. Runs first in the chain, before Volume.</td></tr>
           </tbody>
@@ -314,13 +315,13 @@
             <tr><td>Shift+drag on the ruler</td><td>Loops playback between the two points. Right-click the ruler &gt; Clear loop to stop.</td></tr>
             <tr><td>Drag a clip's top corner</td><td>The small squares on a generated clip's top-left and top-right corners set its fade-in and fade-out. Settings with nothing selected &gt; Auto-crossfade adds a 10 ms fade wherever clips overlap.</td></tr>
             <tr><td>Overlap warning</td><td>Two clips that overlap on the same track get a red border.</td></tr>
-            <tr><td>A clip with a target</td><td>Its slot (Target (s) in the Settings tab) is drawn as a bracket from the clip's start, which may reach past the block, and its label gives the clip's length as a percentage of the target. Over 103% the clip is tinted amber, over 115% red.</td></tr>
+            <tr><td>A clip with a target</td><td>Its slot (Target (s) in the Voice &amp; Clip tab) is drawn as a bracket from the clip's start, which may reach past the block, and its label gives the clip's length as a percentage of the target. Over 103% the clip is tinted amber, over 115% red.</td></tr>
             <tr><td>Right-click a clip &gt; Fit to slot</td><td>Shown for a clip with a target. Changes the clip until it's within 3% of the target, as one undo step. Kokoro and LuxTTS regenerate it at a new speed, from 0.7x to 1.6x, up to three times. Audio8 has no speed control, so its playback is time-stretched instead, between 0.87x and 1.15x, without changing the pitch. A line still too long at 1.6x or 1.15x is set to Needs rewrite. Clips placed after it ripple as they do after a regenerate.</td></tr>
             <tr><td>Snap to grid</td><td>The button above the timeline, or <code>G</code> with the timeline focused. A dragged clip or marker that no edge, marker or playhead catches lands on the nearest dotted grid line. Off by default and kept with your settings, not in the project.</td></tr>
             <tr><td>Timeline keys</td><td>With the timeline focused: Left / Right jump to the previous or next clip start, Shift+Left / Right to the previous or next marker, Home stops and rewinds, End goes to the end, J / K / L jump back 5 s, pause and play (L steps the speed while playing), <code>[</code> / <code>]</code> slow down and speed up, <code>M</code> drops a flag at the playhead, <code>N</code> / Shift+N jump to the next or previous flag, <code>S</code> splits at the playhead, <code>R</code> records a guide take on the selected clip, <code>F</code> zooms to fit, Delete removes the selected music bed. Ctrl+Alt plus the same arrow, Home or End key works in any panel (the letters and brackets have no such twin). Ctrl+G generates stale clips and Esc cancels a running generate. Help &gt; Keyboard Shortcuts lists them all.</td></tr>
             <tr><td>Fit all over slot</td><td>The button above the timeline, shown once any clip has a target. Fits every clip that runs more than 3% past its target.</td></tr>
             <tr><td>A music bed's block</td><td>A file added with File &gt; Import Audio&hellip;, on the Music track. Drag its left or right edge to trim the file; the audio stays where it was on the timeline. Right-click: Play, Loop (repeat the trimmed part; the right edge then sets how long it runs), Reset trim, Unpin from timeline, Lock in time, Remove. A bed has no Generate, Take or Align words.</td></tr>
-            <tr><td>A subproject's block</td><td>A folder glyph and its title. It plays the subproject's exported mix, hatched while that's stale and crossed out when the subproject can't be opened. Click it: the transcript, Settings and Audio FX tabs show the subproject ("Subproject: …" at the top, Back returns). Double-click it (or its line in the transcript) to enter it: the timeline shows it and a breadcrumb above goes back up. Right-click: Enter, Generate, Detach to file… / Embed, Relink…, Remove.</td></tr>
+            <tr><td>A subproject's block</td><td>A folder glyph and its title. It plays the subproject's exported mix, hatched while that's stale and crossed out when the subproject can't be opened. Click it: the transcript, Voice &amp; Clip and Audio FX tabs show the subproject ("Subproject: …" at the top, Back returns). Double-click it (or its line in the transcript) to enter it: the timeline shows it and a breadcrumb above goes back up. Right-click: Enter, Generate, Detach to file… / Embed, Relink…, Remove.</td></tr>
             <tr><td>Right-click a clip &gt; Take</td><td>Every take the clip has, the active one ticked, with its length. Regenerating keeps the old take. A take made from text you've since changed says "old text"; picking it marks the clip stale. Delete take drops one.</td></tr>
             <tr><td>Right-click a clip &gt; Status</td><td>To do, Generated, Approved or Needs rewrite. Generating sets Generated. The Show box above the timeline dims clips that don't match (All, Not approved, Needs rewrite).</td></tr>
             <tr><td>Right-click a clip &gt; Align words</td><td>Runs Whisper over the clip's audio to work out when each word is spoken. This runs by itself after generating with Audio8 or LuxTTS, or with Kokoro outside English.</td></tr>
@@ -351,7 +352,7 @@
             <tr><td>Word highlight</td><td>While playing, the transcript underlines the word being spoken. Ctrl+click a word to jump there.</td></tr>
             <tr><td>Pause / Resume</td><td>Next to Cancel. Pause stops the generation queue after the batch that is running, and the button becomes Resume. Cancel stops the running batch and cancels everything still queued. Both are greyed out when nothing is queued.</td></tr>
             <tr><td>Queue tab</td><td>One row per queued batch or subproject with its clip count, state and time left. Drag a queued row to reorder it, or right-click it for Move to top and Remove. Pause / Resume and Cancel all act on the whole queue. After a restart that left work queued, the button reads "Resume generating N clips". A project you opened another one over keeps generating in the background: its rows are greyed and marked "(in another project)", and the progress bar reads "Book A: 40/300 in background" while one of them runs.</td></tr>
-            <tr><td>Preview</td><td>Speaks the selected text (or the first 1000 characters of the document) with the project-scope settings, through the fire-and-forget preview player.</td></tr>
+            <tr><td>Preview</td><td>Speaks the selected text, else the transcript, else a sample line, as the active character with the default FX, and changes nothing in the project. Plain text is read up to 500 characters; tagged text up to 500 of each of its first two parts. The line under the buttons says what it would speak and as whom. It never plays the timeline's audio; Play does.</td></tr>
           </tbody>
         </table>
       </div>
@@ -386,7 +387,7 @@
           <thead><tr><th>Field or button</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td>Name / Color</td><td>The name <code>[Name]:</code> tags match, and the tint its text and clips get. The color picker's presets are the eight default character colors.</td></tr>
-            <tr><td>Engine</td><td>Kokoro, Audio8 or LuxTTS (and any plugin engine). One project can mix them. The Settings and Voices tabs follow the selected clip's character. A new character gets the Settings tab's "Engine for new characters" (its Engine row with nothing selected). An engine that isn't installed shows as "(not installed)".</td></tr>
+            <tr><td>Engine</td><td>Kokoro, Audio8 or LuxTTS (and any plugin engine). One project can mix them. The Voice &amp; Clip and Voices tabs follow the selected clip's character. A new character gets the Voice &amp; Clip tab's "Engine for new characters" (its Engine row with nothing selected). An engine that isn't installed shows as "(not installed)".</td></tr>
             <tr><td>Voice / FX</td><td>A Kokoro voice or Mix, or an Audio8 or LuxTTS Reference; and the FX every clip of this character plays through unless it has its own.</td></tr>
             <tr><td>Preview</td><td>Plays the character as the dialog has it now, including a voice or engine you just changed. It speaks the start of the character's last clip (up to 200 characters, cut at a sentence end), or the engine's sample sentence when it has no clip. A character with variants gets a box beside the button to hear one variant's Reference instead. Greyed out while it generates.</td></tr>
             <tr><td>Variants <span class="engine-note">Audio8 and LuxTTS</span></td><td>Named alternative References, such as "angry" or "whisper". The transcript's Variant box picks one per clip.</td></tr>
@@ -398,7 +399,7 @@
           </tbody>
         </table>
       </div>
-      <p class="dek" style="margin-top:1.2rem;"><strong>Undo and redo</strong> (Edit menu or the usual shortcuts) cover typing, character and FX assignments, clip moves, FX overrides, track controls, fades, takes, statuses, markers the Settings tab's clip fields and the Settings window's project values. Typing undoes like a text editor; everything else has its own history, and Undo reverts whichever happened last.</p>
+      <p class="dek" style="margin-top:1.2rem;"><strong>Undo and redo</strong> (Edit menu or the usual shortcuts) cover typing, character and FX assignments, clip moves, FX overrides, track controls, fades, takes, statuses, markers the Voice &amp; Clip tab's clip fields and the Settings window's project values. Typing undoes like a text editor; everything else has its own history, and Undo reverts whichever happened last.</p>
     </div>
   </section>
 
@@ -479,7 +480,7 @@
       <h2><span class="idx">Workspace menu</span>Workspaces &amp; theme</h2>
       <div class="prose reveal">
         <p>Every panel is a dock. Drag one by its title to move it, drop it on another to stack them as tabs, or pull it out of the window to float it. Nothing about the layout is fixed.</p>
-        <p><strong>Workspace &gt; Advanced</strong> opens with the transcript and the Settings, Audio FX, Lexicon, Voices and Video tabs above the timeline and transport. <strong>Simple</strong> hides the timeline and the Video tab so the transcript gets the full height; the project and Generate behave the same. Advanced and Simple remember what you do to them and bring it back next time. A project can also name the workspace it opens in.</p>
+        <p><strong>Workspace &gt; Advanced</strong> opens with the transcript and the Voice &amp; Clip, Audio FX, Lexicon, Voices and Video tabs above the timeline and transport. <strong>Simple</strong> hides the timeline and the Video tab so the transcript gets the full height; the project and Generate behave the same. Advanced and Simple remember what you do to them and bring it back next time. A project can also name the workspace it opens in.</p>
         <p><strong>Save workspace as&hellip;</strong> keeps the current layout under a name of your own, which then appears in the menu under Simple. A saved workspace changes only when you choose <strong>Update workspace</strong>. Move or close panels and the menu shows it as "Name (modified)"; switching workspaces, quitting or changing settings never overwrites what you saved. <strong>Revert to saved layout</strong> puts the panels back as saved, after asking. Quit with changes and the next launch opens the layout you left, still marked modified. Choosing the workspace in the menu loads the saved one. <strong>Rename workspace&hellip;</strong> and <strong>Delete workspace&hellip;</strong> work on the active custom workspace, or ask which one when a built-in is active. Advanced and Simple can't be renamed or deleted, and a name can't repeat one you have, ignoring case. Deleting the active workspace switches to Advanced.</p>
         <p><strong>Panels</strong> lists every panel with a check mark. Closing a panel only hides it; tick it here, or right-click any panel title, to get it back where it was. The Voices entry follows whichever voice editor the engine has, and is greyed out with an explanation when the engine has none. <strong>Restore default layout&hellip;</strong> rebuilds the default arrangement. On Advanced or Simple it forgets the changes they remembered. On a saved workspace it changes the window only, and Update workspace makes it stick.</p>
         <p>The layouts live in <code>config_qt.json</code>, never in a project, so moving panels doesn't mark a project unsaved. If a saved layout is damaged or can't be restored, the default layout comes up instead and a message names the workspace. A floating panel left on a monitor you've unplugged moves back onto the screen.</p>
@@ -492,7 +493,7 @@
   <section class="doc-section" id="fx">
     <div class="wrap">
       <h2><span class="idx">Audio FX tab</span>FX</h2>
-      <p class="dek">Five groups, each section gated behind its own enable checkbox except EQ, which is always live (a slider left at 0 dB is simply a no-op), and Convolution Reverb, which is off while its impulse response is None. All of it runs through one Pedalboard chain together as step 5 of the signal chain. The whole chain (and volume, pitch, normalize, trim) is applied on playback and export over the clip's raw generated audio: edit anything here and the timeline plays the change, with no regeneration and no clip marked stale. The tab follows the selection: project defaults, a character's FX, or one clip's override, layered in that order.</p>
+      <p class="dek">Five groups, each section gated behind its own enable checkbox except EQ, which is always live (a slider left at 0 dB is simply a no-op), and Convolution Reverb, which is off while its impulse response is None. All of it runs through one Pedalboard chain together as step 5 of the signal chain. The whole chain (and volume, pitch, normalize, trim) is applied on playback and export over the clip's raw generated audio: edit anything here and the timeline plays the change, with no regeneration and no clip marked stale. Each group folds, and its title names the effects that are on; folding turns nothing off. The tab follows the selection: the defaults, a character's FX, or one clip's override, layered in that order.</p>
       <div class="table-wrap reveal">
         <table class="ref">
           <caption>Dynamics</caption>
@@ -576,7 +577,7 @@
 
   <section class="doc-section" id="mixing">
     <div class="wrap">
-      <p class="dek">The Voices tab's <strong>Engine</strong> box, at the top of either editor, lists the engines that have one. It follows the selected character; pick another to edit that engine's voices without touching a character, and the next selection puts it back. A saved or deleted voice shows up in the Settings tab's and Edit &gt; Characters' voice lists at once.</p>
+      <p class="dek">The Voices tab's <strong>Engine</strong> box, at the top of either editor, lists the engines that have one. It follows the selected character; pick another to edit that engine's voices without touching a character, and the next selection puts it back. A saved or deleted voice shows up in the Voice &amp; Clip tab's and Edit &gt; Characters' voice lists at once.</p>
       <h2><span class="idx">Voices tab · Kokoro</span>Mixing <span class="engine-note">Kokoro characters</span></h2>
       <div class="table-wrap reveal">
         <table class="ref">
@@ -621,10 +622,10 @@
         <p>In the app's Python environment, run this command from the repository folder. It installs the pinned LuxTTS fork and its LinaCodec vocoder:</p>
         <pre><code>python -m pip install -r requirements-luxtts.txt</code></pre>
         <p>Git must be on PATH. The optional requirements include a phonemizer wheel source; wheel availability depends on Python and platform. Keep torch and torchaudio on matching versions for your device. The requirements pin <code>transformers==4.57.6</code> for compatibility. If dependencies are missing, loading LuxTTS reports the install command.</p>
-        <p>Choose <strong>LuxTTS (voice cloning)</strong> in the character's Engine row. In <strong>Voices</strong>, browse to a WAV containing at least three seconds of clear speech, enter a name in <strong>Save as</strong>, and save it. Save assigns the Reference to the active LuxTTS character. Use beside a saved Reference assigns it to the active character, switching that character to LuxTTS if needed; Settings shows the assigned name. Files over 200 MB are refused. Auto-Transcribe fills an editable transcript of the excerpt used by the model (up to Reference Duration, five seconds by default). Review or type the words and save them with the Reference. Click a saved name to reopen its audio and transcript for editing. A bundled Reference takes precedence over a global Reference with the same name; save an edited bundled Reference under a new name and click Use to assign that copy. LuxTTS uses the saved words directly; with an empty transcript it falls back to internal transcription during generation. If you change Reference Duration, transcribe the new excerpt and save its matching words.</p>
+        <p>Choose <strong>LuxTTS (voice cloning)</strong> in the character's Engine row. In <strong>Voices</strong>, browse to a WAV containing at least three seconds of clear speech, enter a name in <strong>Save as</strong>, and save it. Save assigns the Reference to the active LuxTTS character. Use beside a saved Reference assigns it to the active character, switching that character to LuxTTS if needed; Voice &amp; Clip shows the assigned name. Files over 200 MB are refused. Auto-Transcribe fills an editable transcript of the excerpt used by the model (up to Reference Duration, five seconds by default). Review or type the words and save them with the Reference. Click a saved name to reopen its audio and transcript for editing. A bundled Reference takes precedence over a global Reference with the same name; save an edited bundled Reference under a new name and click Use to assign that copy. LuxTTS uses the saved words directly; with an empty transcript it falls back to internal transcription during generation. If you change Reference Duration, transcribe the new excerpt and save its matching words.</p>
         <p>First use downloads <code>YatharthS/LuxTTS</code> and the engine's Whisper transcriber (tiny on CPU, base on CUDA). This transcriber is separate from the app's Whisper used for recordings and word alignment. <strong>Options &gt; Device</strong> selects CPU, CUDA or Auto; Auto uses CUDA when available, otherwise CPU.</p>
         <h3>Settings</h3>
-        <p>These Model fields live in the Settings tab and are kept per engine. Select project scope to edit them. Speed can vary per character or clip: the 0.5x-2x control is passed to LuxTTS directly, and Fit to slot can regenerate at a different speed.</p>
+        <p>These Model fields live in the Voice &amp; Clip tab and are kept per engine. Edit them with nothing selected. Speed can vary per character or clip: the 0.5x-2x control is passed to LuxTTS directly, and Fit to slot can regenerate at a different speed.</p>
       </div>
       <div class="table-wrap reveal">
         <table class="ref">

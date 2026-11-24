@@ -722,7 +722,6 @@ class SettingsDock(QDockWidget):
                 self.app.refresh_timeline()
         elif self._mode == "clip":
             self._target.overrides[key] = value
-            self._refresh_scope_text()
             self.app.schedule_save()
             self.app.refresh_timeline()
         elif self._mode == "character":

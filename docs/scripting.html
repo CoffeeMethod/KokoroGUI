@@ -218,7 +218,7 @@
 <span class="c1">[Alex]:</span> And then we threw half of it away.</pre>
       </div>
       <div class="prose reveal" style="margin-top:1.4rem;">
-        <p>Sam's line starts 0.3 s before Alex's ends. The line after it starts when the longer of the two is over, so Sam's short reply never pulls Alex's next line back in time. The value is in seconds, from 0 to 5, and 0 means no gap at all. The FX half works alongside it: <code>[Sam:Radio, overlap:0.3]:</code>. Typing the line and pressing Enter, and Auto-split, both set the overlap on the clip. It's also the Overlap field in the clip's Settings tab, where you can change it later; blank clears it. A clip you've dragged to a time ignores an overlap, and a split clip's second half doesn't inherit one.</p>
+        <p>Sam's line starts 0.3 s before Alex's ends. The line after it starts when the longer of the two is over, so Sam's short reply never pulls Alex's next line back in time. The value is in seconds, from 0 to 5, and 0 means no gap at all. The FX half works alongside it: <code>[Sam:Radio, overlap:0.3]:</code>. Typing the line and pressing Enter, and Auto-split, both set the overlap on the clip. It's also the Overlap field in the clip's Voice &amp; Clip tab, where you can change it later; blank clears it. A clip you've dragged to a time ignores an overlap, and a split clip's second half doesn't inherit one.</p>
         <p>Characters on different tracks overlap without the red overlap border, which only marks clips on the same track. On the same track the border shows and Auto-crossfade applies as usual. A key other than <code>overlap</code>, or an overlap that isn't a number, is ignored and the status bar says so. A name with a comma in it, like <code>[Smith, John]:</code>, still reads as a name.</p>
       </div>
     </div>
@@ -235,7 +235,7 @@
           <caption>Tags on the whole-document path</caption>
           <thead><tr><th>Tag</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td><code>[Name]:</code></td><td>Loads <code>presets/Name.json</code> over the Settings tab's project values for that block. Blocks don't inherit from each other: each starts from the project values again.</td></tr>
+            <tr><td><code>[Name]:</code></td><td>Loads <code>presets/Name.json</code> over the Voice &amp; Clip tab's defaults for that block. Blocks don't inherit from each other: each starts from the defaults again.</td></tr>
             <tr><td><code>[Name:FX]:</code></td><td>The same, plus the FX named <code>FX</code>, from the project's own <code>fx/</code> first, then <code>presets/fx/</code>.</td></tr>
             <tr><td><code>[:FX]:</code></td><td>No preset file, only the FX: the project's voice with an effect on it.</td></tr>
             <tr><td>A missing character</td><td>That block uses the project values and the status line says <code>Warning: Character 'Name' not found.</code> A missing FX says the same and the block plays dry.</td></tr>
