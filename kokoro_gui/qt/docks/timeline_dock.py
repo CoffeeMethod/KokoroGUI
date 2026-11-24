@@ -53,7 +53,13 @@ from kokoro_gui.daw.undo import (
 from kokoro_gui.engine import presets
 from kokoro_gui.engine.audio_fx import clamp_time_stretch
 from kokoro_gui.engine.presets import filter_fx_preset_values
+from kokoro_gui.qt.empty_state import EmptyState
 from kokoro_gui.qt.timeline_view import TimelineWidget
+
+EMPTY_NO_TEXT = 'No clips yet. Write in the transcript, or <a href="import">import a text file</a>.'
+EMPTY_NO_CLIPS = ('No clips yet. Pick a Character for some text in the transcript, or '
+                  '<a href="split">auto-split the transcript and generate it</a>.')
+EMPTY_NO_AUDIO = 'No audio yet. <a href="generate">Generate</a> makes it for every stale clip.'
 
 
 def _set_override(clip, key: str, value) -> None:
@@ -180,6 +186,14 @@ class TimelineDock(QDockWidget):
         self.fit_all_button.clicked.connect(lambda _checked=False: self.fit_all_over_slot())
         filter_row.addWidget(self.fit_all_button)
         column.addLayout(filter_row)
+        # What to do next while nothing here can play. The links press the
+        # Transport dock's own Generate controls.
+        self.empty_state = EmptyState({
+            "import": lambda: self.app.import_text_action.trigger(),
+            "split": lambda: self.app.transport_dock.auto_split_action.trigger(),
+            "generate": lambda: self.app.transport_dock.generate_btn.click(),
+        })
+        column.addWidget(self.empty_state)
         column.addWidget(self.timeline_widget, 1)
         self.setWidget(content)
         if hasattr(self.app, "themeChanged"):
@@ -260,8 +274,19 @@ class TimelineDock(QDockWidget):
         """The document the timeline shows: the `level` project's."""
         return self.app.level.document
 
+    def refresh_empty_state(self) -> None:
+        document = self._doc
+        if not document.clips:
+            message = EMPTY_NO_CLIPS if document.text.strip() else EMPTY_NO_TEXT
+        elif any(clip.segments or clip.source != "generated" for clip in document.clips):
+            message = ""
+        else:
+            message = EMPTY_NO_AUDIO
+        self.empty_state.show_message(message)
+
     def refresh(self) -> None:
         self.refresh_breadcrumb()
+        self.refresh_empty_state()
         # Shown once the timeline has a clip with a target (a subtitle import).
         self.fit_all_button.setVisible(any(fit_ops.TARGET_KEY in (c.overrides or {}) for c in self._doc.clips))
         level = self.app.level

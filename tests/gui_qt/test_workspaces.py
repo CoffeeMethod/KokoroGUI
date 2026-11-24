@@ -339,7 +339,7 @@ def test_restart_of_an_unmodified_workspace_is_unmodified(qt_app, qtbot, monkeyp
 def test_panels_lists_every_dock_with_its_own_toggle_action(qt_app):
     qt_app._rebuild_panels_menu()
     actions = qt_app.panels_menu.actions()
-    assert [a.text() for a in actions] == ["Transcript", "Settings", "Audio FX", "Lexicon", "Outline", "Proof",
+    assert [a.text() for a in actions] == ["Transcript", "Voice && Clip", "Audio FX", "Lexicon", "Outline", "Proof",
                                            "Queue", "Exports", "Voices", "Video", "Timeline", "Transport"]
     assert qt_app.timeline_dock.toggleViewAction() in actions
     assert qt_app.mixing_dock.toggleViewAction() in actions

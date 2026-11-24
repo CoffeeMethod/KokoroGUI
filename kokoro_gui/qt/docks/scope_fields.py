@@ -1,4 +1,4 @@
-"""The Settings tab's clip fields, shown while a clip is selected. Rebuilt
+"""The Voice & Clip tab's clip fields, shown while a clip is selected. Rebuilt
 by `SettingsDock` on every selection change, like the schema form. The
 project's fields (pacing, crossfade, ripple, onset alignment, ducking,
 track layout, timecode, source track) are in Options > Settings...
@@ -11,6 +11,11 @@ reference range (`overrides["reference_range"]`, typed as "start - end" in
 seconds, blank for none), and the duration target fit to slot aims at
 (`overrides["target_duration_s"]`, kokoro_gui/daw/fit.py; blank clears it).
 
+Status, note and take are always in view. The rest fold: Timing (gap,
+overlap, target) and Source (source text, syllables, the original's range).
+Both start folded, stay as the user left them across selections, and name
+what is set on the clip in their title.
+
 Every edit is one `SetFieldCommand` (or `SetActiveTakeCommand`) on the
 document's undo stack, then autosave and a timeline refresh.
 
@@ -20,7 +25,7 @@ blank "mixed", and an edit sets that field on every selected clip as one
 `CompositeCommand`. Take, source text and the original range belong to one
 line each, so they need one clip selected. The mixed helpers here
 (`MIXED`, `common_value`, `MixedSpinBox`, `MixedCheckBox`, `mark_mixed`)
-serve the Settings and Audio FX docks too.
+serve the Voice & Clip and Audio FX docks too.
 """
 from __future__ import annotations
 
@@ -29,7 +34,7 @@ import re
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractSpinBox, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPlainTextEdit, QPushButton, QWidget,
+    QPlainTextEdit, QPushButton, QVBoxLayout, QWidget,
 )
 
 from kokoro_gui.daw import fit as fit_ops
@@ -38,6 +43,7 @@ from kokoro_gui.daw.models import CLIP_STATUSES
 from kokoro_gui.daw.reference import REFERENCE_RANGE_KEY, reference_range
 from kokoro_gui.daw.undo import CompositeCommand, SetActiveTakeCommand, SetFieldCommand
 from kokoro_gui.engine.text_extraction import strip_markup
+from kokoro_gui.qt.collapsible import CollapsibleSection
 
 STATUS_LABELS = {"todo": "To do", "generated": "Generated", "approved": "Approved",
                  "needs_rewrite": "Needs rewrite"}
@@ -186,8 +192,19 @@ class ScopeFields(QWidget):
     def __init__(self, app, parent=None):
         super().__init__(parent)
         self.app = app
-        self.form = QFormLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.form = QFormLayout()
         self.form.setContentsMargins(0, 0, 0, 0)
+        outer.addLayout(self.form)
+        self.timing_section = CollapsibleSection("Timing", collapsed=True)
+        self.timing_form = QFormLayout()
+        self.timing_section.set_body_layout(self.timing_form)
+        outer.addWidget(self.timing_section)
+        self.source_section = CollapsibleSection("Source", collapsed=True)
+        self.source_form = QFormLayout()
+        self.source_section.set_body_layout(self.source_form)
+        outer.addWidget(self.source_section)
         self.widgets: dict = {}
         self.clip_id = None
         # Several clips selected (`build_clips`); empty otherwise.
@@ -196,8 +213,9 @@ class ScopeFields(QWidget):
     # -- building -------------------------------------------------------------
 
     def clear(self) -> None:
-        while self.form.rowCount():
-            self.form.removeRow(0)
+        for form in (self.form, self.timing_form, self.source_form):
+            while form.rowCount():
+                form.removeRow(0)
         self.widgets = {}
         self.clip_id = None
         self.clip_ids = []
@@ -220,17 +238,6 @@ class ScopeFields(QWidget):
             spin.set_mixed(value is MIXED)
             return spin
 
-        gap = mixed_spin(GAP_INHERIT, 10.0, 0.05, common_value(clips, lambda c: c.gap_before_s), GAP_INHERIT)
-        gap.setToolTip("Silence before each selected clip. Blank uses the project's gap.")
-        gap.editingFinished.connect(lambda: gap.is_mixed() or self._set_all(
-            "gap_before_s", None if gap.value() <= GAP_INHERIT else gap.value()))
-        self.form.addRow("Gap before (s):", gap)
-
-        overlap = mixed_spin(OVERLAP_NONE, OVERLAP_MAX_S, 0.05, common_value(clips, overlap_s), OVERLAP_NONE)
-        overlap.editingFinished.connect(lambda: overlap.is_mixed() or self._set_all_override(
-            OVERLAP_KEY, None if overlap.value() <= OVERLAP_NONE else round(overlap.value(), 3)))
-        self.form.addRow("Overlap (s):", overlap)
-
         status = QComboBox()
         for key in CLIP_STATUSES:
             status.addItem(STATUS_LABELS[key], key)
@@ -252,16 +259,29 @@ class ScopeFields(QWidget):
             "note", note.text()))
         self.form.addRow("Note:", note)
 
+        gap = mixed_spin(GAP_INHERIT, 10.0, 0.05, common_value(clips, lambda c: c.gap_before_s), GAP_INHERIT)
+        gap.setToolTip("Silence before each selected clip. Blank uses the project's gap.")
+        gap.editingFinished.connect(lambda: gap.is_mixed() or self._set_all(
+            "gap_before_s", None if gap.value() <= GAP_INHERIT else gap.value()))
+        self.timing_form.addRow("Gap before (s):", gap)
+
+        overlap = mixed_spin(OVERLAP_NONE, OVERLAP_MAX_S, 0.05, common_value(clips, overlap_s), OVERLAP_NONE)
+        overlap.editingFinished.connect(lambda: overlap.is_mixed() or self._set_all_override(
+            OVERLAP_KEY, None if overlap.value() <= OVERLAP_NONE else round(overlap.value(), 3)))
+        self.timing_form.addRow("Overlap (s):", overlap)
+
         target = mixed_spin(TARGET_NONE, TARGET_MAX_S, 0.1, common_value(clips, fit_ops.target_duration_s),
                             TARGET_NONE, decimals=3)
         target.editingFinished.connect(lambda: target.is_mixed() or self._set_all_override(
             fit_ops.TARGET_KEY, None if target.value() <= TARGET_NONE else round(target.value(), 3)))
-        self.form.addRow("Target (s):", target)
+        self.timing_form.addRow("Target (s):", target)
 
         one_only = QLabel(f"{len(clips)} clips selected. Select one for its take, source text and "
                           "original range.")
         one_only.setWordWrap(True)
         self.form.addRow("", one_only)
+        self.source_section.hide()
+        self.timing_section.set_state("")
         self.widgets = {"gap_before_s": gap, "overlap_s": overlap, "status": status, "note": note,
                         "target_duration_s": target, "one_only": one_only}
 
@@ -289,34 +309,6 @@ class ScopeFields(QWidget):
     def build_clip(self, clip) -> None:
         self.clear()
         self.clip_id = clip.id
-        gap = _spin(GAP_INHERIT, 10.0, 0.05, GAP_INHERIT if clip.gap_before_s is None else float(clip.gap_before_s))
-        gap.setSpecialValueText(" ")
-        gap.setToolTip("Silence before this clip. Blank uses the project's gap.")
-        gap.editingFinished.connect(lambda: self._set_clip("gap_before_s",
-                                                           None if gap.value() <= GAP_INHERIT else gap.value()))
-        self.form.addRow("Gap before (s):", gap)
-
-        current_overlap = overlap_s(clip)
-        overlap = _spin(OVERLAP_NONE, OVERLAP_MAX_S, 0.05, OVERLAP_NONE if current_overlap is None else current_overlap)
-        overlap.setSpecialValueText(" ")
-        overlap.setToolTip("Start this many seconds before the clip before it ends, for a backchannel or an "
-                           "interruption. Blank places it after a gap, as usual. A clip placed by hand ignores it.")
-        overlap.editingFinished.connect(
-            lambda: self._set_override(OVERLAP_KEY, None if overlap.value() <= OVERLAP_NONE
-                                       else round(overlap.value(), 3)))
-        self.form.addRow("Overlap (s):", overlap)
-
-        take = QComboBox()
-        active = int(clip.overrides.get("take", 0) or 0)
-        for index in sorted({active, *clip.takes}):
-            segments = clip.segments if index == active else clip.takes[index]
-            seconds = sum(float(s.duration or 0.0) for s in segments)
-            take.addItem(f"Take {index + 1} ({seconds:.1f}s)", index)
-        take.setCurrentIndex(take.findData(active))
-        take.setEnabled(bool(clip.takes))
-        take.activated.connect(lambda _i: self._pick_take(take.currentData()))
-        self.form.addRow("Take:", take)
-
         status = QComboBox()
         for key in CLIP_STATUSES:
             status.addItem(STATUS_LABELS[key], key)
@@ -328,6 +320,36 @@ class ScopeFields(QWidget):
         note.setPlaceholderText("Review note")
         note.editingFinished.connect(lambda: self._set_clip("note", note.text()))
         self.form.addRow("Note:", note)
+
+        take = QComboBox()
+        active = int(clip.overrides.get("take", 0) or 0)
+        for index in sorted({active, *clip.takes}):
+            segments = clip.segments if index == active else clip.takes[index]
+            seconds = sum(float(s.duration or 0.0) for s in segments)
+            take.addItem(f"Take {index + 1} ({seconds:.1f}s)", index)
+        take.setCurrentIndex(take.findData(active))
+        take.setEnabled(bool(clip.takes))
+        if not clip.takes:
+            take.setToolTip("Takes to switch between appear here when you regenerate the clip.")
+        take.activated.connect(lambda _i: self._pick_take(take.currentData()))
+        self.form.addRow("Take:", take)
+
+        gap = _spin(GAP_INHERIT, 10.0, 0.05, GAP_INHERIT if clip.gap_before_s is None else float(clip.gap_before_s))
+        gap.setSpecialValueText(" ")
+        gap.setToolTip("Silence before this clip. Blank uses the project's gap.")
+        gap.editingFinished.connect(lambda: self._set_clip("gap_before_s",
+                                                           None if gap.value() <= GAP_INHERIT else gap.value()))
+        self.timing_form.addRow("Gap before (s):", gap)
+
+        current_overlap = overlap_s(clip)
+        overlap = _spin(OVERLAP_NONE, OVERLAP_MAX_S, 0.05, OVERLAP_NONE if current_overlap is None else current_overlap)
+        overlap.setSpecialValueText(" ")
+        overlap.setToolTip("Start this many seconds before the clip before it ends, for a backchannel or an "
+                           "interruption. Blank places it after a gap, as usual. A clip placed by hand ignores it.")
+        overlap.editingFinished.connect(
+            lambda: self._set_override(OVERLAP_KEY, None if overlap.value() <= OVERLAP_NONE
+                                       else round(overlap.value(), 3)))
+        self.timing_form.addRow("Overlap (s):", overlap)
 
         source = QPlainTextEdit(clip.source_text or "")
         source.setReadOnly(True)
@@ -341,17 +363,17 @@ class ScopeFields(QWidget):
         source_layout.setContentsMargins(0, 0, 0, 0)
         source_layout.addWidget(source, 1)
         source_layout.addWidget(edit)
-        self.form.addRow("Source text:", source_row)
+        self.source_form.addRow("Source text:", source_row)
         syllables = QLabel(self._syllable_text(clip))
         syllables.setToolTip("Vowel groups per word: a rough lip-sync length check, not a real syllable count.")
-        self.form.addRow("", syllables)
+        self.source_form.addRow("", syllables)
 
         reference = QLineEdit(format_range(reference_range(clip)))
         reference.setPlaceholderText("start - end (s)")
         reference.setToolTip("The part of the source track this clip dubs, in seconds. The transport's "
                              "Original and Both play it under the clip. Blank for none.")
         reference.editingFinished.connect(lambda: self._commit_reference_range(reference))
-        self.form.addRow("Original (s):", reference)
+        self.source_form.addRow("Original (s):", reference)
         current_target = fit_ops.target_duration_s(clip)
         target = QDoubleSpinBox()
         target.setRange(TARGET_NONE, TARGET_MAX_S)
@@ -364,10 +386,23 @@ class ScopeFields(QWidget):
         target.editingFinished.connect(
             lambda: self._set_override(fit_ops.TARGET_KEY,
                                        None if target.value() <= TARGET_NONE else round(target.value(), 3)))
-        self.form.addRow("Target (s):", target)
+        self.timing_form.addRow("Target (s):", target)
         self.widgets = {"gap_before_s": gap, "overlap_s": overlap, "take": take, "status": status, "note": note,
                         "source_text": source, "source_edit": edit, "syllables": syllables,
                         "reference_range": reference, "target_duration_s": target}
+        self.source_section.show()
+        self._sync_section_states(clip)
+
+    def _sync_section_states(self, clip) -> None:
+        """What the folded sections hold, in their titles."""
+        timing = [] if clip.gap_before_s is None else [f"gap {float(clip.gap_before_s):g} s"]
+        overlap, target = overlap_s(clip), fit_ops.target_duration_s(clip)
+        timing += [] if overlap is None else [f"overlap {overlap:g} s"]
+        timing += [] if target is None else [f"target {target:g} s"]
+        self.timing_section.set_state(", ".join(timing))
+        source = ["source text"] if clip.source_text else []
+        source += ["original range"] if reference_range(clip) is not None else []
+        self.source_section.set_state(", ".join(source))
 
     def _syllable_text(self, clip) -> str:
         dub = syllable_count(strip_markup(self.app.document.clip_text(clip)))
@@ -378,6 +413,9 @@ class ScopeFields(QWidget):
     # -- commits ----------------------------------------------------------------
 
     def _after_edit(self) -> None:
+        clip = self._clip()
+        if clip is not None:
+            self._sync_section_states(clip)
         self.app.schedule_save()
         self.app.refresh_timeline()
 
