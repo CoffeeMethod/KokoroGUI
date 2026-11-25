@@ -55,6 +55,9 @@ In 4.0.0-beta.3:
 -   A [command line](docs/cli.html) that speaks text into a WAV and renders a `[Speaker]:` script into a `.tbaw` and a mixdown,
     then regenerates only the paragraphs that changed when you update it
 -   An [MCP server](docs/cli.html#mcp), so an AI agent can speak, render and play on your machine
+-   The window can be translated (Options > Language). English is the only language so far, and
+    [a language is one JSON file](CONTRIBUTING.md#translations)
+-   A tooltip on every menu entry, button and field
 -   The Settings tab is now Voice & Clip. It and Audio FX name what an edit changes, their groups fold, the Transport says
     what Preview will speak, and a greyed-out control says why
 -   The right-hand panel tabs sit on top with every name in full, and scroll when they don't fit

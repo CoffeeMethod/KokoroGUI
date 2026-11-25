@@ -19,6 +19,10 @@ Qt frontend.
 from dataclasses import dataclass
 from typing import Optional
 
+from kokoro_gui.i18n import N_
+
+
+
 # --- Generation config dict (non-FX keys) --------------------------------
 
 GENERATION_BASE_KEYS = [
@@ -41,7 +45,7 @@ SEGMENTATION_KEYS = (
 # backend's "Advanced" group (threads, the segment cache, Audio8's
 # reference-encoding cache) except the lexicon, which has its own tab.
 PROGRAM_SCHEMA_KEYS = (*SEGMENTATION_KEYS, "format")
-PROGRAM_SCHEMA_GROUP = "Advanced"
+PROGRAM_SCHEMA_GROUP = N_("Advanced")
 
 
 def is_program_field(field) -> bool:
@@ -54,11 +58,18 @@ def is_program_field(field) -> bool:
 # Options > Transcript details: the overlay toggles under "Show details"
 # (`transcript_details`), as (settings key, menu label).
 DETAIL_LAYERS = (
-    ("details_segments", "Segment boundaries"),
-    ("details_clip_info", "Clip info"),
-    ("details_lexicon", "Lexicon rewrites"),
-    ("details_gaps", "Gaps"),
+    ("details_segments", N_("Segment boundaries")),
+    ("details_clip_info", N_("Clip info")),
+    ("details_lexicon", N_("Lexicon rewrites")),
+    ("details_gaps", N_("Gaps")),
 )
+
+DETAIL_LAYER_TIPS = {
+    "details_segments": N_("Mark where each clip is cut into the pieces the engine speaks."),
+    "details_clip_info": N_("Show each clip's character, voice, length and status."),
+    "details_lexicon": N_("Show the words the Lexicon reads in another way."),
+    "details_gaps": N_("Show the silence before each clip."),
+}
 
 # --- FX preset / config-merge keys ----------------------------------------
 
@@ -117,50 +128,112 @@ class FXFileSpec:
 
 FX_FIELD_SPECS = [
     # --- Dynamics ---
-    FXSliderSpec("comp_threshold", "Threshold", -60, 0, 60, "Dynamics", "Compressor", "comp_enabled", "dB", 1),
-    FXSliderSpec("comp_ratio", "Ratio", 1, 20, 19, "Dynamics", "Compressor", "comp_enabled", ":1", 1),
-    FXSliderSpec("comp_attack", "Attack", 0.1, 100, 999, "Dynamics", "Compressor", "comp_enabled", "ms", 1),
-    FXSliderSpec("comp_release", "Release", 10, 1000, 99, "Dynamics", "Compressor", "comp_enabled", "ms", 0),
-    FXSliderSpec("limiter_threshold", "Threshold", -12, 0, 24, "Dynamics", "Limiter", "limiter_enabled", "dB", 1),
-    FXSliderSpec("limiter_release", "Release", 10, 1000, 99, "Dynamics", "Limiter", "limiter_enabled", "ms", 0),
-    FXSliderSpec("gain_db", "dB", -20, 20, 80, "Dynamics", "Gain", "gain_enabled", "dB", 1),
+    FXSliderSpec("comp_threshold", N_("Threshold"), -60, 0, 60, "Dynamics", N_("Compressor"), "comp_enabled", "dB", 1),
+    FXSliderSpec("comp_ratio", N_("Ratio"), 1, 20, 19, "Dynamics", N_("Compressor"), "comp_enabled", ":1", 1),
+    FXSliderSpec("comp_attack", N_("Attack"), 0.1, 100, 999, "Dynamics", N_("Compressor"), "comp_enabled", "ms", 1),
+    FXSliderSpec("comp_release", N_("Release"), 10, 1000, 99, "Dynamics", N_("Compressor"), "comp_enabled", "ms", 0),
+    FXSliderSpec("limiter_threshold", N_("Threshold"), -12, 0, 24, "Dynamics", N_("Limiter"), "limiter_enabled", "dB",
+                 1),
+    FXSliderSpec("limiter_release", N_("Release"), 10, 1000, 99, "Dynamics", N_("Limiter"), "limiter_enabled", "ms", 0),
+    FXSliderSpec("gain_db", "dB", -20, 20, 80, "Dynamics", N_("Gain"), "gain_enabled", "dB", 1),
     # --- EQ & Filters ---
-    FXSliderSpec("eq_bass", "Bass (LowShelf)", -20, 20, 40, "EQ & Filters", "EQ", None, "dB", 1),
-    FXSliderSpec("eq_treble", "Treble (HighShelf)", -20, 20, 40, "EQ & Filters", "EQ", None, "dB", 1),
-    FXSliderSpec("highpass_freq", "Freq", 20, 1000, 100, "EQ & Filters", "HighPass Filter", "highpass_enabled", "Hz", 0),
-    FXSliderSpec("lowpass_freq", "Freq", 1000, 20000, 100, "EQ & Filters", "LowPass Filter", "lowpass_enabled", "Hz", 0),
+    FXSliderSpec("eq_bass", N_("Bass (LowShelf)"), -20, 20, 40, "EQ & Filters", N_("EQ"), None, "dB", 1),
+    FXSliderSpec("eq_treble", N_("Treble (HighShelf)"), -20, 20, 40, "EQ & Filters", N_("EQ"), None, "dB", 1),
+    FXSliderSpec("highpass_freq", N_("Freq"), 20, 1000, 100, "EQ & Filters", N_("HighPass Filter"), "highpass_enabled",
+                 "Hz", 0),
+    FXSliderSpec("lowpass_freq", N_("Freq"), 1000, 20000, 100, "EQ & Filters", N_("LowPass Filter"), "lowpass_enabled",
+                 "Hz", 0),
     # --- Spatial & Time ---
-    FXSliderSpec("reverb_room_size", "Room Size", 0, 1, 100, "Spatial & Time", "Reverb", "reverb_enabled", "", 2),
-    FXSliderSpec("reverb_wet_level", "Wet Level", 0, 1, 100, "Spatial & Time", "Reverb", "reverb_enabled", "", 2),
-    FXSliderSpec("reverb_dry_level", "Dry Level", 0, 1, 100, "Spatial & Time", "Reverb", "reverb_enabled", "", 2),
-    FXSliderSpec("reverb_damping", "Damping", 0, 1, 100, "Spatial & Time", "Reverb", "reverb_enabled", "", 2),
-    FXSliderSpec("reverb_width", "Width", 0, 1, 100, "Spatial & Time", "Reverb", "reverb_enabled", "", 2),
-    FXSliderSpec("delay_time", "Time", 0, 2, 100, "Spatial & Time", "Delay", "delay_enabled", "s", 2),
-    FXSliderSpec("delay_feedback", "Feedback", 0, 1, 100, "Spatial & Time", "Delay", "delay_enabled", "", 2),
-    FXSliderSpec("delay_mix", "Mix", 0, 1, 100, "Spatial & Time", "Delay", "delay_enabled", "", 2),
+    FXSliderSpec("reverb_room_size", N_("Room Size"), 0, 1, 100, "Spatial & Time", N_("Reverb"), "reverb_enabled", "",
+                 2),
+    FXSliderSpec("reverb_wet_level", N_("Wet Level"), 0, 1, 100, "Spatial & Time", N_("Reverb"), "reverb_enabled", "",
+                 2),
+    FXSliderSpec("reverb_dry_level", N_("Dry Level"), 0, 1, 100, "Spatial & Time", N_("Reverb"), "reverb_enabled", "",
+                 2),
+    FXSliderSpec("reverb_damping", N_("Damping"), 0, 1, 100, "Spatial & Time", N_("Reverb"), "reverb_enabled", "", 2),
+    FXSliderSpec("reverb_width", N_("Width"), 0, 1, 100, "Spatial & Time", N_("Reverb"), "reverb_enabled", "", 2),
+    FXSliderSpec("delay_time", N_("Time"), 0, 2, 100, "Spatial & Time", N_("Delay"), "delay_enabled", "s", 2),
+    FXSliderSpec("delay_feedback", N_("Feedback"), 0, 1, 100, "Spatial & Time", N_("Delay"), "delay_enabled", "", 2),
+    FXSliderSpec("delay_mix", N_("Mix"), 0, 1, 100, "Spatial & Time", N_("Delay"), "delay_enabled", "", 2),
     # Convolution reverb (grill Q31): an impulse response by name, "" for none.
-    FXFileSpec("convolution_ir", "Impulse response", "Spatial & Time", "Convolution Reverb"),
-    FXSliderSpec("convolution_mix", "Mix", 0, 1, 100, "Spatial & Time", "Convolution Reverb", None, "", 2),
+    FXFileSpec("convolution_ir", N_("Impulse response"), "Spatial & Time", N_("Convolution Reverb")),
+    FXSliderSpec("convolution_mix", N_("Mix"), 0, 1, 100, "Spatial & Time", N_("Convolution Reverb"), None, "", 2),
     # --- Guitar / Modulation ---
-    FXSliderSpec("chorus_rate", "Rate", 0.1, 10, 50, "Guitar / Modulation", "Chorus", "chorus_enabled", "Hz", 1),
-    FXSliderSpec("chorus_depth", "Depth", 0, 1, 50, "Guitar / Modulation", "Chorus", "chorus_enabled", "", 2),
-    FXSliderSpec("chorus_mix", "Mix", 0, 1, 100, "Guitar / Modulation", "Chorus", "chorus_enabled", "", 2),
-    FXSliderSpec("distortion_drive", "Drive", 0, 60, 60, "Guitar / Modulation", "Distortion", "distortion_enabled", "dB", 1),
-    FXSliderSpec("phaser_rate", "Rate", 0.1, 10, 50, "Guitar / Modulation", "Phaser", "phaser_enabled", "Hz", 1),
-    FXSliderSpec("phaser_depth", "Depth", 0, 1, 100, "Guitar / Modulation", "Phaser", "phaser_enabled", "", 2),
-    FXSliderSpec("phaser_mix", "Mix", 0, 1, 100, "Guitar / Modulation", "Phaser", "phaser_enabled", "", 2),
-    FXSliderSpec("clipping_thresh", "Threshold", -20, 0, 40, "Guitar / Modulation", "Clipping", "clipping_enabled", "dB", 1),
+    FXSliderSpec("chorus_rate", N_("Rate"), 0.1, 10, 50, "Guitar / Modulation", N_("Chorus"), "chorus_enabled", "Hz",
+                 1),
+    FXSliderSpec("chorus_depth", N_("Depth"), 0, 1, 50, "Guitar / Modulation", N_("Chorus"), "chorus_enabled", "", 2),
+    FXSliderSpec("chorus_mix", N_("Mix"), 0, 1, 100, "Guitar / Modulation", N_("Chorus"), "chorus_enabled", "", 2),
+    FXSliderSpec("distortion_drive", N_("Drive"), 0, 60, 60, "Guitar / Modulation", N_("Distortion"),
+                 "distortion_enabled", "dB", 1),
+    FXSliderSpec("phaser_rate", N_("Rate"), 0.1, 10, 50, "Guitar / Modulation", N_("Phaser"), "phaser_enabled", "Hz",
+                 1),
+    FXSliderSpec("phaser_depth", N_("Depth"), 0, 1, 100, "Guitar / Modulation", N_("Phaser"), "phaser_enabled", "", 2),
+    FXSliderSpec("phaser_mix", N_("Mix"), 0, 1, 100, "Guitar / Modulation", N_("Phaser"), "phaser_enabled", "", 2),
+    FXSliderSpec("clipping_thresh", N_("Threshold"), -20, 0, 40, "Guitar / Modulation", N_("Clipping"),
+                 "clipping_enabled", "dB", 1),
     # --- Quality / Pitch ---
-    FXSliderSpec("pitch_shift_semitones", "Semitones", -12, 12, 48, "Quality / Pitch", "Pitch Shift (High Quality)", "pitch_shift_enabled", "st", 1),
-    FXSliderSpec("bitcrush_depth", "Bit Depth", 2, 16, 28, "Quality / Pitch", "Bitcrush", "bitcrush_enabled", "", 1),
+    FXSliderSpec("pitch_shift_semitones", N_("Semitones"), -12, 12, 48, "Quality / Pitch",
+                 N_("Pitch Shift (High Quality)"), "pitch_shift_enabled", "st", 1),
+    FXSliderSpec("bitcrush_depth", N_("Bit Depth"), 2, 16, 28, "Quality / Pitch", N_("Bitcrush"), "bitcrush_enabled",
+                 "", 1),
 ]
 
 # Standalone checkbox with no slider at all (Quality / Pitch group).
 FX_STANDALONE_TOGGLES = [
-    ("gsm_enabled", "GSM Compressor (Phone Quality)", "Quality / Pitch"),
+    ("gsm_enabled", N_("GSM Compressor (Phone Quality)"), N_("Quality / Pitch")),
 ]
 
-FX_GROUP_ORDER = ["Dynamics", "EQ & Filters", "Spatial & Time", "Guitar / Modulation", "Quality / Pitch"]
+# Tooltips: what an effect does (by its enable key) and what a control changes.
+FX_TIPS = {
+    "comp_enabled": N_("Evens out loud and quiet parts."),
+    "comp_threshold": N_("Sound louder than this is turned down."),
+    "comp_ratio": N_("How hard sound over the threshold is turned down. 4 lets a quarter of the excess through."),
+    "comp_attack": N_("How fast the compressor reacts when the sound gets loud."),
+    "comp_release": N_("How fast it lets go when the sound gets quiet again."),
+    "limiter_enabled": N_("Keeps peaks from going over a level."),
+    "limiter_threshold": N_("The level that peaks are held at."),
+    "limiter_release": N_("How fast the limiter lets go after a peak."),
+    "gain_enabled": N_("Makes the sound louder or quieter."),
+    "gain_db": N_("How much louder or quieter."),
+    "eq_bass": N_("Raises or lowers the low end."),
+    "eq_treble": N_("Raises or lowers the high end."),
+    "highpass_enabled": N_("Cuts low rumble."),
+    "highpass_freq": N_("Everything below this frequency is cut."),
+    "lowpass_enabled": N_("Cuts hiss and brightness."),
+    "lowpass_freq": N_("Everything above this frequency is cut."),
+    "reverb_enabled": N_("Puts the voice in a room."),
+    "reverb_room_size": N_("How big the room is."),
+    "reverb_wet_level": N_("How loud the room is."),
+    "reverb_dry_level": N_("How loud the voice itself is."),
+    "reverb_damping": N_("How much the walls soak up the high end."),
+    "reverb_width": N_("How wide the room sounds in stereo."),
+    "delay_enabled": N_("Repeats the sound as an echo."),
+    "delay_time": N_("The time between echoes."),
+    "delay_feedback": N_("How much of each echo is repeated."),
+    "delay_mix": N_("How loud the echoes are against the voice."),
+    "convolution_ir": N_("The recording of a room or device that shapes the reverb. None turns it off."),
+    "convolution_mix": N_("How loud the reverb is against the voice."),
+    "chorus_enabled": N_("Thickens the voice with slightly detuned copies."),
+    "chorus_rate": N_("How fast the copies drift."),
+    "chorus_depth": N_("How far the copies drift."),
+    "chorus_mix": N_("How loud the copies are against the voice."),
+    "distortion_enabled": N_("Overdrives the sound."),
+    "distortion_drive": N_("How hard the sound is overdriven."),
+    "phaser_enabled": N_("Adds a sweeping, hollow sound."),
+    "phaser_rate": N_("How fast the sweep goes."),
+    "phaser_depth": N_("How far the sweep goes."),
+    "phaser_mix": N_("How loud the sweep is against the voice."),
+    "clipping_enabled": N_("Chops off the peaks for a harsh sound."),
+    "clipping_thresh": N_("The level the peaks are chopped at."),
+    "pitch_shift_enabled": N_("Raises or lowers the voice without changing its speed."),
+    "pitch_shift_semitones": N_("How far, in semitones. 12 is an octave."),
+    "bitcrush_enabled": N_("Lowers the sample resolution for a lo-fi sound."),
+    "bitcrush_depth": N_("The resolution in bits. Lower is rougher."),
+    "gsm_enabled": N_("Cuts the sound to the quality of a mobile phone call."),
+}
+
+FX_GROUP_ORDER = [N_("Dynamics"), N_("EQ & Filters"), N_("Spatial & Time"), N_("Guitar / Modulation"),
+                  N_("Quality / Pitch")]
 
 # --- App-settings defaults (config_qt.json) --------------------------------
 
@@ -199,6 +272,7 @@ SETTINGS_DEFAULTS = {
     "details_lexicon": True,
     "details_gaps": True,
     "theme": "dark",            # Options > Theme: "light" | "dark"
+    "language": "system",       # Options > Language: "system" or a code in kokoro_gui/locales, read at launch
     "device": "auto",           # Options > Device: "auto" | "cpu" | "cuda"
     "last_project": None,       # File menu: the project launch reopens
     "recent_projects": [],      # File > Recent, most recent first (max 10)

@@ -430,6 +430,22 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Language and tooltips</h3>
+        <ul class="change-list">
+          <li>
+            <h4>The interface can be translated</h4>
+            <p>Options &gt; Language, or Settings&hellip; &gt; General, picks the language of menus, panels, dialogs and messages. System default follows the operating system and falls back to English. A change shows after a restart. English is the only language so far.</p>
+            <p>A language is one JSON file in <code>kokoro_gui/locales/</code> with the English text as the key. <code>python scripts/i18n.py new fr "Fran&ccedil;ais"</code> starts one and <code>check</code> lists what is missing or wrong. A string with no translation, or with a broken placeholder, shows in English. <a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/CONTRIBUTING.md#translations">CONTRIBUTING</a> has the rules.</p>
+            <p>The setting is kept in <code>config_qt.json</code> and never in a project. Names of characters, tracks and subprojects, the text of credits and everything in an exported file stay as they are, so a project reads the same on every machine. The command line, the MCP server, the log and the report in Help &gt; About stay in English.</p>
+          </li>
+          <li>
+            <h4>Tooltips</h4>
+            <p>Every menu entry, button, list and field has a tooltip that says what it does, in the panels, the dialogs and the right-click menus. A greyed-out control still says why. Pointing at the label of a settings field shows the field's tooltip.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Editing scope</h3>
         <ul class="change-list">
           <li>

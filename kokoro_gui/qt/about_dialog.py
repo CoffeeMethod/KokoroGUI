@@ -14,6 +14,7 @@ import kokoro_gui
 from kokoro_gui import logging_setup
 from kokoro_gui.engine import asr, cache_admin, runtime
 from kokoro_gui.engines import registry
+from kokoro_gui.i18n import tr
 
 SHORTCUT_DESCRIPTION_PROPERTY = "description"  # set on a QShortcut to label its row in the sheet
 SHORTCUT_GROUP_PROPERTY = "group"  # set on a QShortcut to file its row under a heading other than "Other"
@@ -136,7 +137,7 @@ def collect_shortcuts(app) -> list[tuple[str, str, str]]:
     for attribute, value in vars(app).items():
         if isinstance(value, QShortcut) and not value.key().isEmpty():
             label = value.property(SHORTCUT_DESCRIPTION_PROPERTY) or _humanize(attribute)
-            group = value.property(SHORTCUT_GROUP_PROPERTY) or "Other"
+            group = value.property(SHORTCUT_GROUP_PROPERTY) or tr("Other")
             rows.append((str(group), str(label), value.key().toString(QKeySequence.SequenceFormat.PortableText)))
     return rows
 
@@ -161,13 +162,14 @@ class _TextDialog(QDialog):
         self.resize(*size)
         layout = QVBoxLayout(self)
         self.text_edit = QPlainTextEdit(text)
+        self.text_edit.setToolTip(tr("Select text here to copy it."))
         self.text_edit.setReadOnly(True)
         layout.addWidget(self.text_edit)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         self.copy_button = None
         if copy_button:
-            self.copy_button = QPushButton("Copy")
+            self.copy_button = QPushButton(tr("Copy"))
             self.copy_button.clicked.connect(self.copy_text)
             buttons.addButton(self.copy_button, QDialogButtonBox.ButtonRole.ActionRole)
         layout.addWidget(buttons)
@@ -181,9 +183,9 @@ class _TextDialog(QDialog):
 
 class AboutDialog(_TextDialog):
     def __init__(self, parent, config_file: str):
-        super().__init__(parent, "About KokoroGUI", about_text(config_file), copy_button=True)
+        super().__init__(parent, tr("About KokoroGUI"), about_text(config_file), copy_button=True)
 
 
 class ShortcutsDialog(_TextDialog):
     def __init__(self, app):
-        super().__init__(app, "Keyboard shortcuts", shortcuts_text(app), copy_button=False, size=(480, 520))
+        super().__init__(app, tr("Keyboard shortcuts"), shortcuts_text(app), copy_button=False, size=(480, 520))

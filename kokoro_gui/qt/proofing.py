@@ -26,6 +26,7 @@ import threading
 from PySide6.QtWidgets import QApplication
 
 from kokoro_gui.daw import proof, segment_view
+from kokoro_gui.i18n import tr
 from kokoro_gui.qt import project as project_io
 
 SCOPE_ALL, SCOPE_SELECTION, SCOPE_SUBPROJECT = "all", "selection", "subproject"
@@ -185,18 +186,18 @@ class ProofMixin:
         if scope == SCOPE_SELECTION:
             ids = self.selected_clip_ids(level)
             if not ids:
-                return [], "Select a clip first."
+                return [], tr("Select a clip first.")
         elif scope == SCOPE_SUBPROJECT:
             selected = level.document.get_clip(self.selection.selected_clip_id) \
                 if self.selection.selected_clip_id else None
             if selected is not None and selected.is_nested:
                 project = self.child_project(selected)
                 if project is None:
-                    return [], "Open the subproject first (double-click its block)."
+                    return [], tr("Open the subproject first (double-click its block).")
             elif level is self.root:
-                return [], "Select a subproject block, or enter one, first."
+                return [], tr("Select a subproject block, or enter one, first.")
         clips = [c for c in project.document.clips if (ids is None or c.id in ids) and self.proofable(c)]
-        return [c.id for c in clips], ("" if clips else "No generated clips to proof.")
+        return [c.id for c in clips], ("" if clips else tr("No generated clips to proof."))
 
     def run_proof(self, clip_ids) -> bool:
         """Transcribes each segment of the listed clips on one worker thread
@@ -206,7 +207,7 @@ class ProofMixin:
         from kokoro_gui.qt import asr_prompt
 
         if self._proof_thread is not None or self._word_align_thread is not None or self.is_busy():
-            self.set_status("Wait for the current job to finish before proofing.", "warning")
+            self.set_status(tr("Wait for the current job to finish before proofing."), "warning")
             return False
         jobs = []
         for clip_id in clip_ids:
@@ -218,12 +219,12 @@ class ProofMixin:
             jobs.append((clip.id, proof.segment_keys(clip), proof.expected_text(clip),
                          [s.audio_path for s in ordered]))
         if not jobs:
-            self.set_status("No generated clips to proof.", "warning")
+            self.set_status(tr("No generated clips to proof."), "warning")
             return False
         if any(self.heard_for(path) is None for _id, _keys, _text, paths in jobs for path in paths):
             choice, _downloading = asr_prompt.confirm_whisper_download(self)
             if choice != asr_prompt.PROCEED:
-                self.set_status("Proof needs the Whisper model.", "warning")
+                self.set_status(tr("Proof needs the Whisper model."), "warning")
                 return False
 
         total = sum(len(paths) for _id, _keys, _text, paths in jobs)
@@ -259,8 +260,8 @@ class ProofMixin:
 
         self._proof_thread = threading.Thread(target=_work, name="proof", daemon=True)
         self._proof_thread.start()
-        self.transport_dock.set_progress(0, f"Proofing 0/{total}")
-        self.set_status(f"Proofing {len(jobs)} clip(s)...", "busy")
+        self.transport_dock.set_progress(0, tr("Proofing 0/{total}", total=total))
+        self.set_status(tr("Proofing {count} clip(s)...", count=len(jobs)), "busy")
         return True
 
     def cancel_proof(self) -> None:
@@ -268,7 +269,7 @@ class ProofMixin:
         keep their results."""
         if self._proof_thread is not None:
             self._proof_cancel.set()
-            self.set_status("Cancelling the proof...", "warning")
+            self.set_status(tr("Cancelling the proof..."), "warning")
 
     def wait_for_proof(self, timeout_s: float = 30.0) -> None:
         """Test hook: blocks until the proof thread finishes and its result
@@ -280,7 +281,7 @@ class ProofMixin:
 
     def _on_proof_progress(self, done: int, total: int) -> None:
         percent = 100 * done / total if total else 0
-        self.transport_dock.set_progress(percent, f"Proofing {done}/{total}")
+        self.transport_dock.set_progress(percent, tr("Proofing {done}/{total}", done=done, total=total))
 
     def _on_proof_finished(self, payload) -> None:
         self._proof_thread = None
@@ -299,9 +300,9 @@ class ProofMixin:
         self._write_proof()
         self.transport_dock.set_progress(0, "")
         self.refresh_timeline()
-        parts = [f"Proofed {stored} clip(s), {flagged} flagged"]
+        parts = [tr("Proofed {stored} clip(s), {flagged} flagged", stored=stored, flagged=flagged)]
         if skipped:
-            parts.append(f"{skipped} skipped (a file couldn't be transcribed)")
+            parts.append(tr("{skipped} skipped (a file couldn't be transcribed)", skipped=skipped))
         if cancelled:
-            parts.append("cancelled")
+            parts.append(tr("cancelled"))
         self.set_status(". ".join(parts) + ".", "warning" if flagged else "success")

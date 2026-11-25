@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.daw import templates
+from kokoro_gui.i18n import N_, ntr, tr
+from kokoro_gui.qt import tips
 
 
 class SaveTemplateDialog(QDialog):
@@ -26,41 +28,44 @@ class SaveTemplateDialog(QDialog):
 
     def __init__(self, parent, name: str, sections: list):
         super().__init__(parent)
-        self.setWindowTitle("Save as Template")
+        self.setWindowTitle(tr("Save as Template"))
         self.sections = [(str(title), text) for title, text in sections]
         layout = QVBoxLayout(self)
         form = QFormLayout()
         self.name_edit = QLineEdit(name)
+        self.name_edit.setToolTip(tr("The template's name."))
         self.name_edit.setMaxLength(templates.MAX_NAME_CHARS)
-        form.addRow("Template name:", self.name_edit)
+        form.addRow(tr("Template name:"), self.name_edit)
         layout.addLayout(form)
         layout.addWidget(QLabel(
-            "A template keeps the project's settings, its library characters and its subprojects.\n"
-            "Tick Keep text for a subproject whose text should come back, such as an intro."))
+            tr("A template keeps the project's settings, its library characters and its subprojects.\n"
+               "Tick Keep text for a subproject whose text should come back, such as an intro.")))
         self.keep_boxes = []
         for title, text in self.sections:
             box = QCheckBox(self._label(title, text))
+            box.setToolTip(tr("Keep this subproject's text in the template. Unticked, only its title is kept."))
             has_text = bool(text and text.strip())
             box.setEnabled(has_text)
             box.setChecked(has_text and len(text) < templates.KEEP_TEXT_LIMIT)
             if text is None:
-                box.setToolTip("This subproject's text can't be read.")
+                box.setToolTip(tr("This subproject's text can't be read."))
             layout.addWidget(box)
             self.keep_boxes.append(box)
         if not self.sections:
-            layout.addWidget(QLabel("This project has no subprojects. The template keeps its settings."))
+            layout.addWidget(QLabel(tr("This project has no subprojects. The template keeps its settings.")))
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
         self.name_edit.textChanged.connect(self._sync_buttons)
         self._sync_buttons()
+        tips.label_rows(self)
 
     @staticmethod
     def _label(title: str, text) -> str:
         if text is None:
-            return f"{title or 'Subproject'} (text not available)"
-        return f"Keep text of {title or 'Subproject'} ({len(text):,} characters)"
+            return tr("{title} (text not available)", title=title or tr("Subproject"))
+        return tr("Keep text of {title} ({count:,} characters)", title=title or tr("Subproject"), count=len(text))
 
     def _sync_buttons(self) -> None:
         usable = templates.safe_name(self.name_edit.text()) is not None
@@ -80,16 +85,18 @@ class NewFromTemplateDialog(QDialog):
 
     def __init__(self, parent):
         super().__init__(parent)
-        self.setWindowTitle("New from Template")
+        self.setWindowTitle(tr("New from Template"))
         self.resize(420, 320)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Start a new project from a saved template."))
+        layout.addWidget(QLabel(tr("Start a new project from a saved template.")))
         self.list = QListWidget()
+        self.list.setToolTip(tr("Your templates."))
         self.list.itemDoubleClicked.connect(lambda _item: self.accept())
         self.list.currentItemChanged.connect(lambda *_: self._sync())
         layout.addWidget(self.list, 1)
         row = QHBoxLayout()
-        self.delete_btn = QPushButton("Delete")
+        self.delete_btn = QPushButton(tr("Delete"))
+        self.delete_btn.setToolTip(tr("Delete the selected template."))
         self.delete_btn.clicked.connect(self.delete_selected)
         row.addWidget(self.delete_btn)
         row.addStretch(1)
@@ -104,13 +111,14 @@ class NewFromTemplateDialog(QDialog):
         self.list.clear()
         for template in templates.list_templates():
             count = len(template.sections)
-            item = QListWidgetItem(f"{template.name}  ({count} subproject{'s' if count != 1 else ''})")
+            item = QListWidgetItem(ntr("{name}  ({n} subproject)", "{name}  ({n} subprojects)", count,
+                                       name=template.name))
             item.setData(Qt.ItemDataRole.UserRole, template.stem)
             self.list.addItem(item)
         if self.list.count():
             self.list.setCurrentRow(0)
         else:
-            self.list.addItem("No templates yet. File > Save as Template... makes one.")
+            self.list.addItem(tr("No templates yet. File > Save as Template... makes one."))
             self.list.item(0).setFlags(Qt.ItemFlag.NoItemFlags)
         self._sync()
 
@@ -131,7 +139,7 @@ class NewFromTemplateDialog(QDialog):
         stem = self._current_stem()
         if not stem:
             return False
-        answer = QMessageBox.question(self, "Delete template", f"Delete the template \"{stem}\"?")
+        answer = QMessageBox.question(self, tr("Delete template"), tr("Delete the template \"{stem}\"?", stem=stem))
         if answer != QMessageBox.StandardButton.Yes:
             return False
         templates.delete_template(stem)
@@ -140,8 +148,8 @@ class NewFromTemplateDialog(QDialog):
 
 
 FIELD_LABELS = {
-    "title": "Title", "subtitle": "Subtitle", "author": "Author", "narrator": "Narrator",
-    "publisher": "Publisher", "year": "Year",
+    "title": N_("Title"), "subtitle": N_("Subtitle"), "author": N_("Author"), "narrator": N_("Narrator"),
+    "publisher": N_("Publisher"), "year": N_("Year"),
 }
 
 
@@ -151,7 +159,7 @@ class CreditsDialog(QDialog):
 
     def __init__(self, parent, fields: dict):
         super().__init__(parent)
-        self.setWindowTitle("Add Credits")
+        self.setWindowTitle(tr("Add Credits"))
         self.resize(520, 360)
         fields = templates.clean_credit_fields(fields)
         layout = QVBoxLayout(self)
@@ -159,9 +167,10 @@ class CreditsDialog(QDialog):
         self.edits = {}
         for name in templates.CREDIT_FIELDS:
             edit = QLineEdit(fields[name])
+            edit.setToolTip(tr("Used in the opening and closing credits. Leave blank to skip it."))
             edit.textChanged.connect(self._refresh)
             self.edits[name] = edit
-            form.addRow(FIELD_LABELS[name] + ":", edit)
+            form.addRow(tr(FIELD_LABELS[name]) + ":", edit)
         layout.addLayout(form)
         self.opening_label = QLabel()
         self.closing_label = QLabel()
@@ -174,11 +183,13 @@ class CreditsDialog(QDialog):
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
         self._refresh()
+        tips.label_rows(self)
 
     def values(self) -> dict:
         return templates.clean_credit_fields({name: edit.text() for name, edit in self.edits.items()})
 
     def _refresh(self) -> None:
         opening, closing = templates.credit_texts(self.values())
-        self.opening_label.setText(f"Opening: {opening or '(none, there is no title, author or narrator)'}")
-        self.closing_label.setText(f"Closing: {closing}")
+        self.opening_label.setText(tr("Opening: {opening}", opening=opening or tr('(none, there is no title, author '
+                                                                                  'or narrator)')))
+        self.closing_label.setText(tr("Closing: {closing}", closing=closing))

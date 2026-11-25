@@ -12,8 +12,9 @@ from PySide6.QtWidgets import (
 
 from kokoro_gui.daw import outline
 from kokoro_gui.daw.undo import SetFieldCommand
+from kokoro_gui.i18n import N_, ntr, tr
 
-COLUMNS = ("Title", "Status", "Length")
+COLUMNS = (N_("Title"), N_("Status"), N_("Length"))
 # `Clip.status` a cleared "proofed" goes back to: it was generated.
 CLEARED_STATUS = "generated"
 _ROW = Qt.ItemDataRole.UserRole
@@ -21,7 +22,7 @@ _ROW = Qt.ItemDataRole.UserRole
 
 class OutlineDock(QDockWidget):
     def __init__(self, app, parent=None):
-        super().__init__("Outline", parent)
+        super().__init__(tr("Outline"), parent)
         self.setObjectName("dock_outline")
         self.app = app
         self.outline = outline.Outline(outline.EMPTY, [], 0.0, False)
@@ -33,7 +34,9 @@ class OutlineDock(QDockWidget):
         layout.setContentsMargins(4, 4, 4, 4)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(list(COLUMNS))
+        self.tree.setToolTip(tr("The subprojects, or the markers when there are none. Double-click to go there, "
+                                "right-click for more."))
+        self.tree.setHeaderLabels([tr(name) for name in COLUMNS])
         self.tree.setRootIsDecorated(False)
         self.tree.setUniformRowHeights(True)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -99,11 +102,11 @@ class OutlineDock(QDockWidget):
         try:
             self.tree.clear()
             for row in fresh.rows:
-                item = QTreeWidgetItem([row.title, row.status, outline.format_hms(row.duration_s, row.estimated)])
+                item = QTreeWidgetItem([row.title, tr(row.status), outline.format_hms(row.duration_s, row.estimated)])
                 item.setData(0, _ROW, row)
                 item.setTextAlignment(2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 if row.status == outline.MISSING:
-                    item.setToolTip(1, "The subproject's file can't be found.")
+                    item.setToolTip(1, tr("The subproject's file can't be found."))
                 self.tree.addTopLevelItem(item)
                 if current is not None and self._row_key(item) == current:
                     self.tree.setCurrentItem(item)
@@ -113,13 +116,13 @@ class OutlineDock(QDockWidget):
 
     @staticmethod
     def _footer_text(result) -> str:
-        total = f"Total {outline.format_hms(result.total_s, result.estimated)}"
+        total = tr("Total {length}", length=outline.format_hms(result.total_s, result.estimated))
         if result.kind == outline.CHAPTERS:
             count = len(result.rows)
-            return f"{count} subproject{'s' if count != 1 else ''}. {total}"
+            return ntr("{n} subproject. {total}", "{n} subprojects. {total}", count, total=total)
         if result.kind == outline.MARKERS:
-            return f"{len(result.rows)} marker{'s' if len(result.rows) != 1 else ''}. {total}"
-        return f"No subprojects or markers. {total}"
+            return ntr("{n} marker. {total}", "{n} markers. {total}", len(result.rows), total=total)
+        return tr("No subprojects or markers. {total}", total=total)
 
     @staticmethod
     def _row_key(item):
@@ -204,12 +207,17 @@ class OutlineDock(QDockWidget):
         if clip is None:
             return None
         menu = QMenu(self)
+        menu.setToolTipsVisible(True)
         if row.clip_status == "approved":
-            menu.addAction("Clear proofed", lambda: self.set_proofed(clip.id, False))
+            mark = menu.addAction(tr("Clear proofed"), lambda: self.set_proofed(clip.id, False))
+            mark.setToolTip(tr("This subproject needs another listen."))
         else:
-            menu.addAction("Mark proofed", lambda: self.set_proofed(clip.id, True))
+            mark = menu.addAction(tr("Mark proofed"), lambda: self.set_proofed(clip.id, True))
+            mark.setToolTip(tr("You have checked this subproject."))
         menu.addSeparator()
-        menu.addAction("Enter subproject", lambda: self.app.enter_subproject(clip))
-        generate = menu.addAction("Generate", lambda: self.app.generate_subproject(clip))
+        enter = menu.addAction(tr("Enter subproject"), lambda: self.app.enter_subproject(clip))
+        enter.setToolTip(tr("Open this subproject in the transcript and on the timeline."))
+        generate = menu.addAction(tr("Generate"), lambda: self.app.generate_subproject(clip))
+        generate.setToolTip(tr("Make audio for the stale clips inside this subproject."))
         generate.setEnabled(row.state != "missing")
         return menu

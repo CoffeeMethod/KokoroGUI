@@ -28,6 +28,7 @@ import re
 from typing import Callable, NamedTuple
 
 from kokoro_gui.engine import runtime
+from kokoro_gui.i18n import ntr
 
 SEGMENT_FILE = re.compile(r"^([0-9a-f]{64})_\d+\.(wav|flac|mp3|ogg)$")
 REF_CODES_FILE = re.compile(r"^[0-9a-f]{16}\.npy$")
@@ -58,8 +59,7 @@ def format_size(n: int) -> str:
 
 def describe(usage: Usage) -> str:
     """"12 files, 3.4 MB"."""
-    noun = "file" if usage.count == 1 else "files"
-    return f"{usage.count} {noun}, {format_size(usage.bytes)}"
+    return ntr("{n} file, {size}", "{n} files, {size}", usage.count, size=format_size(usage.bytes))
 
 
 # -- Where things live ----------------------------------------------------------

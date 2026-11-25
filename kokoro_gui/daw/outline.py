@@ -13,12 +13,13 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from kokoro_gui.daw import markers as marker_ops
+from kokoro_gui.i18n import N_
 
-MISSING = "missing"
-NOT_STARTED = "not started"
-IN_PROGRESS = "in progress"
-DONE = "done"
-PROOFED = "proofed"
+MISSING = N_("missing")
+NOT_STARTED = N_("not started")
+IN_PROGRESS = N_("in progress")
+DONE = N_("done")
+PROOFED = N_("proofed")
 
 CHAPTERS = "chapters"
 MARKERS = "markers"

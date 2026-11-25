@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QListWidget, QPushButton, QScrollArea, QSpinBox, QStackedWidget, QVBoxLayout, QWidget,
 )
 
+from kokoro_gui import i18n
 from kokoro_gui.audio.mixer import DEFAULT_DUCK_DB
 from kokoro_gui.daw.arrangement import (
     DEFAULT_GAP_S, DEFAULT_HEADING_GAP_S, DEFAULT_PARAGRAPH_GAP_S, align_onset_enabled, gap_jitter_range,
@@ -44,13 +45,15 @@ from kokoro_gui.daw.timecode import FRAME_RATES, tc_to_frames, timecode_settings
 from kokoro_gui.daw.undo import SetFieldCommand
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.engines.base import ConfigFieldType, per_engine_fields
+from kokoro_gui.i18n import N_, tr
+from kokoro_gui.qt import tips
 from kokoro_gui.qt import project as project_io
-from kokoro_gui.qt import spec, theme
+from kokoro_gui.qt import localize, spec, theme
 from kokoro_gui.qt.schema_form import SchemaFormWidget
 
-PAGES = ("General", "Generation", "Performance", "Project", "Timeline", "Source track")
-DEVICES = (("auto", "Auto"), ("cpu", "CPU"), ("cuda", "CUDA"))
-THEMES = (("light", "Light"), ("dark", "Dark"))
+PAGES = (N_("General"), N_("Generation"), N_("Performance"), N_("Project"), N_("Timeline"), N_("Source track"))
+DEVICES = (("auto", N_("Auto")), ("cpu", N_("CPU")), ("cuda", N_("CUDA")))
+THEMES = (("light", N_("Light")), ("dark", N_("Dark")))
 
 
 def _spin(lo: float, hi: float, step: float, value: float, decimals: int = 2) -> QDoubleSpinBox:
@@ -65,7 +68,7 @@ def _spin(lo: float, hi: float, step: float, value: float, decimals: int = 2) ->
 def _combo(items, current) -> QComboBox:
     combo = QComboBox()
     for value, label in items:
-        combo.addItem(label, value)
+        combo.addItem(tr(label), value)
     index = combo.findData(current)
     combo.setCurrentIndex(index if index >= 0 else 0)
     return combo
@@ -86,14 +89,15 @@ class SettingsWindow(QDialog):
     def __init__(self, app, parent=None):
         super().__init__(parent or app)
         self.setObjectName("settings_window")
-        self.setWindowTitle("Settings")
+        self.setWindowTitle(tr("Settings"))
         self.app = app
         self.widgets: dict = {}
         self.engine_forms: dict = {}
         self._remove_source = False
 
         self.page_list = QListWidget()
-        self.page_list.addItems(PAGES)
+        self.page_list.setToolTip(tr("The pages of settings."))
+        self.page_list.addItems([tr(name) for name in PAGES])
         self.page_list.setFixedWidth(170)
         self.page_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.pages = QStackedWidget()
@@ -146,6 +150,7 @@ class SettingsWindow(QDialog):
             self.pages.addWidget(scroll)
         self.pages.setCurrentIndex(row)
         self._initial = self._values()
+        tips.label_rows(self)
         self._watch_all()
         self._sync_apply()
 
@@ -156,20 +161,25 @@ class SettingsWindow(QDialog):
         return form
 
     def _build_general(self, layout: QVBoxLayout) -> None:
-        form = self._form(layout, "General")
+        form = self._form(layout, tr("General"))
         theme_combo = _combo(THEMES, self.app.settings.get("theme", theme.DEFAULT_THEME))
-        form.addRow("Theme:", theme_combo)
+        theme_combo.setToolTip(tr("Light or dark colors."))
+        form.addRow(tr("Theme:"), theme_combo)
+        language = _combo(localize.choices(), self.app.settings.get("language", i18n.SYSTEM_LANGUAGE))
+        language.setToolTip(tr("The language of menus, panels and messages. A change shows after a restart."))
+        form.addRow(tr("Language:"), language)
         device = _combo(DEVICES, self.app.settings.get("device", "auto"))
+        device.setToolTip(tr("Where the engines run. Auto uses CUDA when torch finds it."))
         cuda = device.findData("cuda")
         if not self.app._cuda_available():
             device.model().item(cuda).setEnabled(False)
-            device.setItemData(cuda, "torch reports no CUDA device", Qt.ItemDataRole.ToolTipRole)
-        form.addRow("Device:", device)
-        self.widgets.update({"theme": theme_combo, "device": device})
+            device.setItemData(cuda, tr("torch reports no CUDA device"), Qt.ItemDataRole.ToolTipRole)
+        form.addRow(tr("Device:"), device)
+        self.widgets.update({"theme": theme_combo, "language": language, "device": device})
 
     def _build_generation(self, layout: QVBoxLayout) -> None:
         schema = self.app.backend.get_config_schema()
-        fields = [dataclasses.replace(f, group="Segmentation" if f.key in spec.SEGMENTATION_KEYS else "Output")
+        fields = [dataclasses.replace(f, group=N_("Segmentation") if f.key in spec.SEGMENTATION_KEYS else N_("Output"))
                   for f in schema if f.key in spec.PROGRAM_SCHEMA_KEYS]
         values = {f.key: self.app.settings.get(f.key, spec.SETTINGS_DEFAULTS.get(f.key, f.default)) for f in fields}
         self.generation_form = SchemaFormWidget(fields, values)
@@ -177,7 +187,7 @@ class SettingsWindow(QDialog):
 
     def _build_performance(self, layout: QVBoxLayout) -> None:
         schema = self.app.backend.get_config_schema()
-        shared = [dataclasses.replace(f, group="All engines") for f in schema
+        shared = [dataclasses.replace(f, group=N_("All engines")) for f in schema
                   if spec.is_program_field(f) and f.group == spec.PROGRAM_SCHEMA_GROUP
                   and f.key not in self._per_engine_keys(schema)]
         self.shared_performance_form = SchemaFormWidget(
@@ -201,59 +211,62 @@ class SettingsWindow(QDialog):
 
     def _build_project(self, layout: QVBoxLayout) -> None:
         settings = self.app.document.settings
-        form = self._form(layout, "Project")
+        form = self._form(layout, tr("Project"))
         focus = getattr(self.app, "focus", None)
         if focus is not None and focus.parent_id is not None:
             title = QLineEdit(focus.title())
-            title.setToolTip("The subproject's name in its parent.")
-            form.addRow("Subproject title:", title)
+            title.setToolTip(tr("The subproject's name in its parent."))
+            form.addRow(tr("Subproject title:"), title)
             self.widgets["title"] = title
         gap = _spin(0.0, 10.0, 0.05, float(settings.get("gap_s", DEFAULT_GAP_S)))
         para = _spin(0.0, 10.0, 0.05, float(settings.get("paragraph_gap_s", DEFAULT_PARAGRAPH_GAP_S)))
-        gap.setToolTip("Silence between clips placed one after another.")
-        para.setToolTip("Silence between clips across a blank line.")
-        form.addRow("Gap (s):", gap)
-        form.addRow("Paragraph gap (s):", para)
+        gap.setToolTip(tr("Silence between clips placed one after another."))
+        para.setToolTip(tr("Silence between clips across a blank line."))
+        form.addRow(tr("Gap (s):"), gap)
+        form.addRow(tr("Paragraph gap (s):"), para)
         chapter = _spin(0.0, 10.0, 0.05, self._setting_s("chapter_gap_s", float(para.value())))
-        chapter.setToolTip("Silence before a subproject, such as the next chapter. Follows the paragraph gap "
-                           "until you set it.")
+        chapter.setToolTip(tr("Silence before a subproject, such as the next chapter. Follows the paragraph gap "
+                              "until you set it."))
         heading_gap = _spin(0.0, 10.0, 0.05, self._setting_s("heading_gap_after_s", DEFAULT_HEADING_GAP_S))
-        heading_gap.setToolTip("Silence after the heading: the first clip, when it is one short line that "
-                               "doesn't end like a sentence.")
+        heading_gap.setToolTip(tr("Silence after the heading: the first clip, when it is one short line that "
+                                  "doesn't end like a sentence."))
         heading_speed = _spin(0.25, 2.0, 0.05, self._setting_s("heading_speed", 1.0))
         heading_speed.setSuffix("x")
-        heading_speed.setToolTip("Reads the heading at this multiple of its speed. 1.00 leaves it as is. "
-                                 "Changing it makes the heading stale.")
-        form.addRow("Chapter gap (s):", chapter)
-        form.addRow("Gap after a heading (s):", heading_gap)
-        form.addRow("Heading speed:", heading_speed)
+        heading_speed.setToolTip(tr("Reads the heading at this multiple of its speed. 1.00 leaves it as is. "
+                                    "Changing it makes the heading stale."))
+        form.addRow(tr("Chapter gap (s):"), chapter)
+        form.addRow(tr("Gap after a heading (s):"), heading_gap)
+        form.addRow(tr("Heading speed:"), heading_speed)
         jitter_range = gap_jitter_range(self.app.document)
-        jitter = QCheckBox("Vary the gap when the speaker changes")
+        jitter = QCheckBox(tr("Vary the gap when the speaker changes"))
         jitter.setChecked(jitter_range is not None)
-        jitter.setToolTip("Each speaker change draws its gap between these two values, the same draw every "
-                          "time, so the pacing sounds less mechanical. Same-speaker and paragraph gaps "
-                          "stay as set.")
+        jitter.setToolTip(tr("Each speaker change draws its gap between these two values, the same draw every "
+                             "time, so the pacing sounds less mechanical. Same-speaker and paragraph gaps "
+                             "stay as set."))
         jitter_min = _spin(0.0, 10.0, 0.05, jitter_range[0] if jitter_range else 0.2)
+        jitter_min.setToolTip(tr("The shortest gap at a speaker change."))
         jitter_max = _spin(0.0, 10.0, 0.05, jitter_range[1] if jitter_range else 0.8)
+        jitter_max.setToolTip(tr("The longest gap at a speaker change."))
         for spin in (jitter_min, jitter_max):
             spin.setEnabled(jitter_range is not None)
             jitter.toggled.connect(spin.setEnabled)
         form.addRow("", jitter)
-        form.addRow("Between (s):", _row(jitter_min, QLabel("and"), jitter_max))
+        form.addRow(tr("Between (s):"), _row(jitter_min, QLabel(tr("and")), jitter_max))
 
-        crossfade = QCheckBox("Auto-crossfade overlapping clips")
+        crossfade = QCheckBox(tr("Auto-crossfade overlapping clips"))
+        crossfade.setToolTip(tr("Fade clips into each other where they overlap on one track."))
         crossfade.setChecked(bool(settings.get("auto_crossfade", False)))
         form.addRow("", crossfade)
-        ripple = QCheckBox("Ripple on regenerate")
+        ripple = QCheckBox(tr("Ripple on regenerate"))
         ripple.setChecked(bool(settings.get("ripple", True)))
-        ripple.setToolTip("When a regenerated clip changes length, move the clips placed after it by the "
-                          "difference. A clip locked in time stays put.")
+        ripple.setToolTip(tr("When a regenerated clip changes length, move the clips placed after it by the "
+                             "difference. A clip locked in time stays put."))
         form.addRow("", ripple)
-        align = QCheckBox("Align locked clips to their first word")
+        align = QCheckBox(tr("Align locked clips to their first word"))
         align.setChecked(align_onset_enabled(self.app.document))
-        align.setToolTip("Start each clip locked in time a little early, by the silence before its first "
-                         "word, so the word lands on the clip's time. Skipped for a clip with trim on. "
-                         "On by default when the project has a locked clip.")
+        align.setToolTip(tr("Start each clip locked in time a little early, by the silence before its first "
+                            "word, so the word lands on the clip's time. Skipped for a clip with trim on. "
+                            "On by default when the project has a locked clip."))
         form.addRow("", align)
         self.widgets.update({"gap_s": gap, "paragraph_gap_s": para, "chapter_gap_s": chapter,
                              "heading_gap_after_s": heading_gap, "heading_speed": heading_speed,
@@ -268,76 +281,81 @@ class SettingsWindow(QDialog):
 
     def _build_timeline(self, layout: QVBoxLayout) -> None:
         settings = self.app.document.settings
-        form = self._form(layout, "Tracks")
+        form = self._form(layout, tr("Tracks"))
         track_layout = self.app.document.track_layout()
-        layout_combo = _combo((("character", "One per character"), ("unified", "Unified")), track_layout["mode"])
-        layout_combo.setToolTip("Unified puts every clip on a few lanes and moves to the next lane "
-                                "whenever the speaker changes.")
+        layout_combo = _combo((("character", tr("One per character")), ("unified", tr("Unified"))),
+                              track_layout["mode"])
+        layout_combo.setToolTip(tr("Unified puts every clip on a few lanes and moves to the next lane "
+                                   "whenever the speaker changes."))
         lanes = QSpinBox()
+        lanes.setToolTip(tr("How many lanes the unified layout uses."))
         lanes.setRange(1, 16)
         lanes.setValue(int(track_layout.get("lanes", 3)))
-        lanes.setSuffix(" lanes")
+        lanes.setSuffix(tr(" lanes"))
         lanes.setEnabled(track_layout["mode"] == "unified")
         layout_combo.currentIndexChanged.connect(lambda _i: lanes.setEnabled(layout_combo.currentData() == "unified"))
-        form.addRow("Track layout:", _row(layout_combo, lanes, stretch_first=True))
+        form.addRow(tr("Track layout:"), _row(layout_combo, lanes, stretch_first=True))
         try:
             duck_db = float(settings.get("duck_db", DEFAULT_DUCK_DB))
         except (TypeError, ValueError):
             duck_db = DEFAULT_DUCK_DB
         duck = _spin(-40.0, 0.0, 1.0, max(-40.0, min(0.0, duck_db)), decimals=1)
         duck.setSuffix(" dB")
-        duck.setToolTip("How far a track with D (duck) on goes down while other clips play.")
-        form.addRow("Ducking:", duck)
+        duck.setToolTip(tr("How far a track with D (duck) on goes down while other clips play."))
+        form.addRow(tr("Ducking:"), duck)
 
-        form = self._form(layout, "Timecode")
+        form = self._form(layout, tr("Timecode"))
         tc = timecode_settings(settings)
-        enabled = QCheckBox("Show timecode")
+        enabled = QCheckBox(tr("Show timecode"))
+        enabled.setToolTip(tr("Show HH:MM:SS:FF instead of minutes and seconds."))
         enabled.setChecked(bool(tc["enabled"]))
-        drop = QCheckBox("Drop-frame")
+        drop = QCheckBox(tr("Drop-frame"))
         drop.setChecked(bool(tc["drop_frame"]))
-        drop.setToolTip("29.97 and 59.94 only.")
+        drop.setToolTip(tr("29.97 and 59.94 only."))
         fps = QComboBox()
+        fps.setToolTip(tr("The frame rate of your video."))
         for rate in FRAME_RATES:
-            fps.addItem(f"{rate:g} fps", rate)
+            fps.addItem(tr("{rate:g} fps", rate=rate), rate)
         index = fps.findData(float(tc["frame_rate"]))
         fps.setCurrentIndex(index if index >= 0 else FRAME_RATES.index(25.0))
         start = QLineEdit(str(tc["start"]))
-        start.setToolTip("Timecode of the project's first frame, HH:MM:SS:FF.")
+        start.setToolTip(tr("Timecode of the project's first frame, HH:MM:SS:FF."))
         form.addRow("", _row(enabled, drop))
-        form.addRow("Frame rate:", fps)
-        form.addRow("Start:", start)
+        form.addRow(tr("Frame rate:"), fps)
+        form.addRow(tr("Start:"), start)
         self.widgets.update({"track_layout": layout_combo, "track_lanes": lanes, "duck_db": duck,
                              "tc_enabled": enabled, "tc_drop": drop, "tc_fps": fps, "tc_start": start})
 
     def _build_source_track(self, layout: QVBoxLayout) -> None:
-        form = self._form(layout, "Source track")
+        form = self._form(layout, tr("Source track"))
         track = source_track_settings(self.app.document.settings)
         label = QLabel(self._source_track_name(track))
-        label.setToolTip("The original dialogue. The transport's Original and Both play it under each "
-                         "clip that has a reference range.")
-        remove = QPushButton("Remove")
+        label.setToolTip(tr("The original dialogue. The transport's Original and Both play it under each "
+                            "clip that has a reference range."))
+        remove = QPushButton(tr("Remove"))
+        remove.setToolTip(tr("Take the source track out of the project when you apply."))
         remove.setEnabled(track is not None)
         remove.clicked.connect(self._remove_source_track)
         offset = _spin(-3600.0, 3600.0, 0.1, track["offset_s"] if track else 0.0, decimals=3)
         offset.setEnabled(track is not None)
-        offset.setToolTip("Where reference time zero is in the source track, in seconds.")
-        form.addRow("Track:", _row(label, remove, stretch_first=True))
-        form.addRow("Offset (s):", offset)
+        offset.setToolTip(tr("Where reference time zero is in the source track, in seconds."))
+        form.addRow(tr("Track:"), _row(label, remove, stretch_first=True))
+        form.addRow(tr("Offset (s):"), offset)
         self.widgets.update({"source_track": label, "source_remove": remove, "source_offset": offset})
 
     def _source_track_name(self, track) -> str:
         if track is None:
-            return "None (File > Import Source Track)"
+            return tr("None (File > Import Source Track)")
         name = os.path.basename(track["path"])
         if project_io.source_track_path(self.app.document, self.app.project_dir) is None:
-            name += " (missing)"
+            name += tr(" (missing)")
         return name
 
     def _remove_source_track(self) -> None:
         """Staged like everything else: the setting clears on Apply. The
         copy stays in the project dir, so an undo brings the track back."""
         self._remove_source = True
-        self.widgets["source_track"].setText("None (removed on Apply)")
+        self.widgets["source_track"].setText(tr("None (removed on Apply)"))
         self.widgets["source_remove"].setEnabled(False)
         self.widgets["source_offset"].setEnabled(False)
         self._sync_apply()
@@ -351,6 +369,7 @@ class SettingsWindow(QDialog):
         w = self.widgets
         values = {
             ("app", "theme"): w["theme"].currentData(),
+            ("app", "language"): w["language"].currentData(),
             ("app", "device"): w["device"].currentData(),
         }
         for key, value in {**self.generation_form.values(), **self.shared_performance_form.values()}.items():
@@ -424,6 +443,8 @@ class SettingsWindow(QDialog):
             if where == "app":
                 if key == "theme":
                     app.set_theme(value)
+                elif key == "language":
+                    app.set_language(value)
                 elif key == "device":
                     app.set_device(value)
                 else:

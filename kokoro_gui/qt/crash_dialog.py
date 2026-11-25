@@ -13,32 +13,34 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui import logging_setup
+from kokoro_gui.i18n import N_, tr
 from kokoro_gui.qt.reveal import reveal
 
-MESSAGE = "Something went wrong. The details are saved in the log."
+MESSAGE = N_("Something went wrong. The details are saved in the log.")
 
 
 class CrashDialog(QDialog):
     def __init__(self, traceback_text: str, log_path: str, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("KokoroGUI error")
+        self.setWindowTitle(tr("KokoroGUI error"))
         self.resize(640, 420)
         self.log_path = log_path
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(MESSAGE))
+        layout.addWidget(QLabel(tr(MESSAGE)))
         path_label = QLabel(log_path)
         path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(path_label)
         self.text_edit = QPlainTextEdit(traceback_text)
+        self.text_edit.setToolTip(tr("The error, as the log has it."))
         self.text_edit.setReadOnly(True)
         layout.addWidget(self.text_edit)
 
         buttons = QDialogButtonBox()
-        self.copy_button = QPushButton("Copy")
+        self.copy_button = QPushButton(tr("Copy"))
         self.copy_button.clicked.connect(self.copy_text)
-        self.open_log_button = QPushButton("Open Log Folder")
+        self.open_log_button = QPushButton(tr("Open Log Folder"))
         self.open_log_button.clicked.connect(self.open_log_folder)
-        self.close_button = QPushButton("Close")
+        self.close_button = QPushButton(tr("Close"))
         self.close_button.clicked.connect(self.reject)
         buttons.addButton(self.copy_button, QDialogButtonBox.ButtonRole.ActionRole)
         buttons.addButton(self.open_log_button, QDialogButtonBox.ButtonRole.ActionRole)

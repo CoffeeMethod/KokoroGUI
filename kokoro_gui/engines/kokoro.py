@@ -28,17 +28,18 @@ from kokoro_gui.engines.base import (
     common_fields,
 )
 from kokoro_gui.engines.registry import register_engine
+from kokoro_gui.i18n import N_
 
 # Kokoro's languages as `(label, lang_code)`, in the order the GUI lists them.
 LANGUAGES = [
-    ("American English", "a"),
-    ("British English", "b"),
-    ("Spanish", "e"),
-    ("French", "f"),
-    ("Italian", "i"),
-    ("Portuguese", "p"),
-    ("Japanese", "j"),
-    ("Chinese", "z"),
+    (N_("American English"), "a"),
+    (N_("British English"), "b"),
+    (N_("Spanish"), "e"),
+    (N_("French"), "f"),
+    (N_("Italian"), "i"),
+    (N_("Portuguese"), "p"),
+    (N_("Japanese"), "j"),
+    (N_("Chinese"), "z"),
 ]
 
 # The voices built into the model, per lang_code.
@@ -105,13 +106,16 @@ class KokoroBackendAdapter(BackendHooksMixin):
         `get_voices(lang_code)`, which lists the built-ins for the language
         and the custom mixes on disk."""
         return [
-            ConfigField("lang_code", "Language", ConfigFieldType.CHOICE,
-                        default="a", choices=list(LANGUAGES), group="Generation"),
-            ConfigField("voice", "Voice", ConfigFieldType.CHOICE,
-                        default="af_heart", group="Generation"),
+            ConfigField("lang_code", N_("Language"), ConfigFieldType.CHOICE,
+                        default="a", choices=list(LANGUAGES), group=N_("Generation"),
+                        tooltip=N_("The language the text is in.")),
+            ConfigField("voice", N_("Voice"), ConfigFieldType.CHOICE,
+                        default="af_heart", group=N_("Generation"),
+                        tooltip=N_("The voice that speaks.")),
             *common_fields(),
-            ConfigField("lexicon", "Lexicon Substitutions", ConfigFieldType.TEXT,
-                        default=[], group="Advanced"),
+            ConfigField("lexicon", N_("Lexicon Substitutions"), ConfigFieldType.TEXT,
+                        default=[], group=N_("Advanced"),
+                        tooltip=N_("Rules for how words are read aloud.")),
         ]
 
     def builtin_voices(self, lang_code: Optional[str] = None) -> list:

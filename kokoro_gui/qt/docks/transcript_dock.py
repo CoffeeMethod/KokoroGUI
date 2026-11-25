@@ -35,24 +35,25 @@ from PySide6.QtWidgets import (
 from kokoro_gui.daw.undo import SetClipFxCommand, SetFieldCommand
 from kokoro_gui.engine import presets
 from kokoro_gui.engine.presets import filter_fx_preset_values
+from kokoro_gui.i18n import N_, tr
 from kokoro_gui.qt.empty_state import EmptyState
 from kokoro_gui.qt.find_bar import FindBar
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
 from kokoro_gui.qt.transcript_editor import TranscriptEditor, clip_fx_name
 
-FX_NONE_LABEL = "(none)"
-FX_EDIT_LABEL = "Edit in FX tab..."
-CHARACTER_MANAGE_LABEL = "Manage characters..."
-_MIXED_LABEL = "(mixed)"
-VARIANT_DEFAULT_LABEL = "(default)"
-FX_TIP = "The FX of the caret's clip."
-FX_NO_CLIP_TIP = "Put the caret in a clip to pick its FX."
-EMPTY_TEXT = 'The transcript is empty. Type or paste text here, or <a href="import">import a text file</a>.'
+FX_NONE_LABEL = N_("(none)")
+FX_EDIT_LABEL = N_("Edit in FX tab...")
+CHARACTER_MANAGE_LABEL = N_("Manage characters...")
+_MIXED_LABEL = N_("(mixed)")
+VARIANT_DEFAULT_LABEL = N_("(default)")
+FX_TIP = N_("The FX of the caret's clip.")
+FX_NO_CLIP_TIP = N_("Put the caret in a clip to pick its FX.")
+EMPTY_TEXT = N_('The transcript is empty. Type or paste text here, or <a href="import">import a text file</a>.')
 
 
 class TranscriptDock(QDockWidget):
     def __init__(self, app, parent=None):
-        super().__init__("Transcript", parent)
+        super().__init__(tr("Transcript"), parent)
         self.setObjectName("dock_transcript")
         self.app = app
         self._syncing = False
@@ -68,8 +69,8 @@ class TranscriptDock(QDockWidget):
         scope_layout = QHBoxLayout(self.scope_bar)
         scope_layout.setContentsMargins(0, 0, 0, 0)
         self.scope_label = QLabel()
-        self.scope_back_btn = QPushButton("Back")
-        self.scope_back_btn.setToolTip("Show the project the timeline is in.")
+        self.scope_back_btn = QPushButton(tr("Back"))
+        self.scope_back_btn.setToolTip(tr("Show the project the timeline is in."))
         self.scope_back_btn.clicked.connect(lambda: self.app.set_focus(self.app.level))
         scope_layout.addWidget(self.scope_label, 1)
         scope_layout.addWidget(self.scope_back_btn)
@@ -77,25 +78,26 @@ class TranscriptDock(QDockWidget):
         layout.addWidget(self.scope_bar)
 
         header = QHBoxLayout()
-        header.addWidget(QLabel("Character:"))
+        header.addWidget(QLabel(tr("Character:")))
         self.character_combo = QComboBox()
         self.character_combo.setMinimumWidth(120)
-        self.character_combo.setToolTip("The character of the selected text, else of the caret's clip, else of its "
-                                        "line. Picking one assigns it.")
+        self.character_combo.setToolTip(tr("The character of the selected text, else of the caret's clip, else of its "
+                                           "line. Picking one assigns it."))
         header.addWidget(self.character_combo, 1)
         self.manage_btn = QToolButton()
-        self.manage_btn.setText("Manage...")
-        self.manage_btn.setToolTip("Add, edit and remove characters (Edit > Characters)")
-        self.manage_btn.setAccessibleName("Manage characters")
+        self.manage_btn.setText(tr("Manage..."))
+        self.manage_btn.setToolTip(tr("Add, edit and remove characters (Edit > Characters)"))
+        self.manage_btn.setAccessibleName(tr("Manage characters"))
         self.manage_btn.clicked.connect(lambda _checked=False: self.app.open_characters_dialog())
         header.addWidget(self.manage_btn)
         header.addSpacing(8)
-        header.addWidget(QLabel("FX:"))
+        header.addWidget(QLabel(tr("FX:")))
         self.fx_combo = QComboBox()
         self.fx_combo.setMinimumWidth(120)
         header.addWidget(self.fx_combo, 1)
-        self.variant_label = QLabel("Variant:")
+        self.variant_label = QLabel(tr("Variant:"))
         self.variant_combo = QComboBox()
+        self.variant_combo.setToolTip(tr("Which of the character's variants speaks this clip."))
         self.variant_combo.setMinimumWidth(100)
         header.addSpacing(8)
         header.addWidget(self.variant_label)
@@ -133,7 +135,7 @@ class TranscriptDock(QDockWidget):
         self.editor.cursorPositionChanged.connect(self.sync_header)
 
     def refresh_empty_state(self) -> None:
-        self.empty_state.show_message(EMPTY_TEXT if self.editor.document().isEmpty() else "")
+        self.empty_state.show_message(tr(EMPTY_TEXT) if self.editor.document().isEmpty() else "")
 
     def show_find(self, replace: bool = False) -> None:
         """Edit > Find or Find and Replace: shows the dock and opens the bar."""
@@ -153,7 +155,7 @@ class TranscriptDock(QDockWidget):
         self.scope_bar.setVisible(bool(text))
         if text:
             self.scope_label.setText(text)
-            self.scope_back_btn.setText(f"Back to {self.app.level.title()}")
+            self.scope_back_btn.setText(tr("Back to {title}", title=self.app.level.title()))
         self.find_bar.on_busy_changed()
         self.app.selection.changed.connect(self.sync_header)
         self.sync_header()
@@ -164,11 +166,11 @@ class TranscriptDock(QDockWidget):
         self._syncing = True
         try:
             self.character_combo.clear()
-            self.character_combo.addItem(_MIXED_LABEL, None)
+            self.character_combo.addItem(tr(_MIXED_LABEL), None)
             for character in self.app.document.characters:
                 self.character_combo.addItem(character.name, character.id)
             self.character_combo.insertSeparator(self.character_combo.count())
-            self.character_combo.addItem(CHARACTER_MANAGE_LABEL, "__manage__")
+            self.character_combo.addItem(tr(CHARACTER_MANAGE_LABEL), "__manage__")
         finally:
             self._syncing = False
         self.sync_header()
@@ -177,11 +179,11 @@ class TranscriptDock(QDockWidget):
         self._syncing = True
         try:
             self.fx_combo.clear()
-            self.fx_combo.addItem(FX_NONE_LABEL, "")
+            self.fx_combo.addItem(tr(FX_NONE_LABEL), "")
             for name in list_fx_preset_names(self.app.project_dir):
                 self.fx_combo.addItem(name, name)
             self.fx_combo.insertSeparator(self.fx_combo.count())
-            self.fx_combo.addItem(FX_EDIT_LABEL, "__edit__")
+            self.fx_combo.addItem(tr(FX_EDIT_LABEL), "__edit__")
         finally:
             self._syncing = False
         self.sync_header()
@@ -202,7 +204,7 @@ class TranscriptDock(QDockWidget):
 
             fx_name = clip_fx_name(self.app.document, clip) if clip is not None else None
             self.fx_combo.setEnabled(clip is not None)
-            self.fx_combo.setToolTip(FX_TIP if clip is not None else FX_NO_CLIP_TIP)
+            self.fx_combo.setToolTip(tr(FX_TIP) if clip is not None else tr(FX_NO_CLIP_TIP))
             if not fx_name or fx_name == "custom":
                 fx_index = 0 if not fx_name else -1
                 if fx_name == "custom":
@@ -236,7 +238,7 @@ class TranscriptDock(QDockWidget):
         character = self.app.document.get_character(clip.character_id) if clip is not None else None
         variants = sorted((character.variants or {}).keys()) if character is not None else []
         self.variant_combo.clear()
-        self.variant_combo.addItem(VARIANT_DEFAULT_LABEL, "")
+        self.variant_combo.addItem(tr(VARIANT_DEFAULT_LABEL), "")
         for name in variants:
             self.variant_combo.addItem(name, name)
         current = (clip.overrides or {}).get("variant", "") if clip is not None else ""

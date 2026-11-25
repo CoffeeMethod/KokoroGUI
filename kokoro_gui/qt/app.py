@@ -75,13 +75,14 @@ from kokoro_gui.daw.undo import (
     AssignCharacterCommand, ImportBedCommand, ImportCuesCommand, ImportRecordingCommand, JoinClipsCommand,
     SetFieldCommand, SplitClipCommand,
 )
-from kokoro_gui import logging_setup
+from kokoro_gui import i18n, logging_setup
 from kokoro_gui.core import config as core_config, engines as core_engines, keys as core_keys, render as core_render
 from kokoro_gui.engine import cache_admin, runtime, text_extraction
 from kokoro_gui.engine.lexicon import normalize_rules
 from kokoro_gui.engines import registry as engine_registry
 from kokoro_gui.engines.missing import MissingBackend
-from kokoro_gui.qt import document_state, fx_resolve, project as project_io, spec, theme
+from kokoro_gui.i18n import N_, ntr, tr
+from kokoro_gui.qt import document_state, fx_resolve, localize, project as project_io, spec, theme
 from kokoro_gui.qt import settings as qt_settings
 from kokoro_gui.qt.open_projects import OpenProject, ParkedTree
 from kokoro_gui.qt.reveal import reveal
@@ -156,11 +157,12 @@ def _depth_in(tree):
     return _depth
 
 
-ADD_CREDITS_TIP = "Add opening and closing credit subprojects from the book's title, author and narrator."
-SPLIT_CLIP_TIP = ("Cut the clip under the playhead in two at the word it is on. "
-                  "S does the same with the timeline focused.")
-JOIN_CLIP_TIP = ("Merge the selected clip, or the one under the playhead, with the clip "
-                 "after it. They need the same character and kind.")
+ADD_CREDITS_TIP = N_("Add opening and closing credit subprojects from the book's title, author and narrator.")
+JIT_TIP = N_("With no clips in the project, play the text while it is generated instead of writing a file first.")
+SPLIT_CLIP_TIP = (N_("Cut the clip under the playhead in two at the word it is on. "
+                     "S does the same with the timeline focused."))
+JOIN_CLIP_TIP = (N_("Merge the selected clip, or the one under the playhead, with the clip "
+                    "after it. They need the same character and kind."))
 
 
 class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThroughMixin, WorkspaceMenuMixin,
@@ -385,7 +387,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
                 break
             first = self._backend_for(engine_id)
         if first is None:
-            raise RuntimeError("No TTS engine could be loaded; see the install section of the README.")
+            raise RuntimeError(tr("No TTS engine could be loaded; see the install section of the README."))
         self._install_segment_key_fn()
         self._install_nested_state_fn(self.root)
 
@@ -422,7 +424,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._rebuild_transport_schedule()
         self._update_window_title()
 
-        self.set_status(self._first_launch_device_notice() or "Initializing engine...")
+        self.set_status(self._first_launch_device_notice() or tr("Initializing engine..."))
         if self._launch_workspace_notice:
             self.set_status(self._launch_workspace_notice, "warning")
         # Focus first: a nested block's child becomes the docks' document
@@ -853,13 +855,13 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         runs that uses the character's engine or `engine_id` (the engine
         would load under the worker)."""
         if self.generate_blocked():
-            QMessageBox.warning(self, "Busy", "Cancel the current job before changing a character's engine.")
+            QMessageBox.warning(self, tr("Busy"), tr("Cancel the current job before changing a character's engine."))
             return False
         if self.is_generating():
             in_use = self.generating_engine_ids()
             if in_use is None or {engine_id, character.backend_id} & in_use:
-                QMessageBox.warning(self, "Busy", "A generate is using this engine. Wait for it to finish, or "
-                                                  "cancel it, before changing the character's engine.")
+                QMessageBox.warning(self, tr("Busy"), tr("A generate is using this engine. Wait for it to finish, or "
+                                                     "cancel it, before changing the character's engine."))
                 return False
         backend = self._backend_for(engine_id)
         if backend is None:
@@ -984,144 +986,178 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         bar = self.menuBar()
 
         # File
-        self.file_menu = bar.addMenu("&File")
-        self.new_action = self._action("&New", self.new_project, QKeySequence.StandardKey.New)
-        self.new_subproject_action = self._action("New &Subproject", self.new_subproject_from_selection)
-        self.open_action = self._action("&Open...", self.open_project_dialog, QKeySequence.StandardKey.Open)
-        self.recent_menu = self.file_menu.addMenu("Recent")
-        self.welcome_action = self._action("&Welcome...", self.show_welcome)
-        self.save_action = self._action("&Save", self.save_project, QKeySequence.StandardKey.Save)
-        self.save_as_action = self._action("Save &As...", self.save_project_as_dialog, QKeySequence.StandardKey.SaveAs)
+        self.file_menu = bar.addMenu(tr("&File"))
+        self.new_action = self._action(tr("&New"), self.new_project, QKeySequence.StandardKey.New)
+        self.new_action.setToolTip(tr("Start an empty project."))
+        self.new_subproject_action = self._action(tr("New &Subproject"), self.new_subproject_from_selection)
+        self.new_subproject_action.setToolTip(tr("Move the selected text into a subproject, such as a chapter. "
+                                                 "With nothing selected, add an empty one."))
+        self.open_action = self._action(tr("&Open..."), self.open_project_dialog, QKeySequence.StandardKey.Open)
+        self.open_action.setToolTip(tr("Open a .tbaw project."))
+        self.recent_menu = self.file_menu.addMenu(tr("Recent"))
+        self.welcome_action = self._action(tr("&Welcome..."), self.show_welcome)
+        self.welcome_action.setToolTip(tr("Show the welcome window with your recent projects."))
+        self.save_action = self._action(tr("&Save"), self.save_project, QKeySequence.StandardKey.Save)
+        self.save_action.setToolTip(tr("Save the project to its file."))
+        self.save_as_action = self._action(tr("Save &As..."), self.save_project_as_dialog,
+                                           QKeySequence.StandardKey.SaveAs)
+        self.save_as_action.setToolTip(tr("Save the project to a new file."))
         self.file_menu.insertAction(self.recent_menu.menuAction(), self.new_action)
         self.file_menu.insertAction(self.recent_menu.menuAction(), self.new_subproject_action)
-        self.add_subproject_action = self._action("Add Su&bproject...", self.add_subproject_dialog)
+        self.add_subproject_action = self._action(tr("Add Su&bproject..."), self.add_subproject_dialog)
+        self.add_subproject_action.setToolTip(tr("Put another project file into this one as a subproject."))
         self.file_menu.insertAction(self.recent_menu.menuAction(), self.add_subproject_action)
-        self.new_from_template_action = self._action("New from &Template...", self.new_from_template_dialog)
+        self.new_from_template_action = self._action(tr("New from &Template..."), self.new_from_template_dialog)
+        self.new_from_template_action.setToolTip(tr("Start a project from a template you saved."))
         self.file_menu.insertAction(self.recent_menu.menuAction(), self.new_from_template_action)
         self.file_menu.insertAction(self.recent_menu.menuAction(), self.open_action)
         self.file_menu.addAction(self.welcome_action)
         self.file_menu.addSeparator()
         self.file_menu.addAction(self.save_action)
         self.file_menu.addAction(self.save_as_action)
-        self.save_as_template_action = self._action("Save as Temp&late...", self.save_as_template_dialog)
+        self.save_as_template_action = self._action(tr("Save as Temp&late..."), self.save_as_template_dialog)
+        self.save_as_template_action.setToolTip(tr("Keep this project's settings, library characters and "
+                                                   "subprojects as a template for new projects."))
         self.file_menu.addAction(self.save_as_template_action)
-        self.show_in_folder_menu = self.file_menu.addMenu("Show in Fol&der")
+        self.show_in_folder_menu = self.file_menu.addMenu(tr("Show in Fol&der"))
         self.show_project_file_action = self._action(
-            "&Project File", lambda: self._reveal_path(self.project_path))
+            tr("&Project File"), lambda: self._reveal_path(self.project_path))
         self.show_working_folder_action = self._action(
-            "&Working Folder", lambda: self._reveal_path(self.root.project_dir))
+            tr("&Working Folder"), lambda: self._reveal_path(self.root.project_dir))
         self.show_last_export_action = self._action(
-            "Last &Export", lambda: self._reveal_path(self._last_export_path))
+            tr("Last &Export"), lambda: self._reveal_path(self._last_export_path))
         for action in (self.show_project_file_action, self.show_working_folder_action,
                        self.show_last_export_action):
             self.show_in_folder_menu.addAction(action)
         self.show_in_folder_menu.aboutToShow.connect(self._sync_show_in_folder_actions)
         self._sync_show_in_folder_actions()
         self.file_menu.addSeparator()
-        self.import_text_action = self._action("Import &Text...", self.import_text_dialog)
+        self.import_text_action = self._action(tr("Import &Text..."), self.import_text_dialog)
+        self.import_text_action.setToolTip(tr("Bring in a .txt, .pdf or .epub, with cleanup rules and a choice "
+                                              "of sections."))
         self.file_menu.addAction(self.import_text_action)
-        self.import_subtitles_action = self._action("Import S&ubtitles...", self.import_subtitles_dialog)
+        self.import_subtitles_action = self._action(tr("Import S&ubtitles..."), self.import_subtitles_dialog)
+        self.import_subtitles_action.setToolTip(tr("Turn a subtitle file into clips placed at each cue's time, "
+                                                   "for dubbing."))
         self.file_menu.addAction(self.import_subtitles_action)
-        self.import_audio_action = self._action("Import Au&dio...", self.import_audio_dialog)
-        self.import_audio_action.setToolTip("Add an audio file as a music bed, or as a recording to edit as text.")
+        self.import_audio_action = self._action(tr("Import Au&dio..."), self.import_audio_dialog)
+        self.import_audio_action.setToolTip(tr("Add an audio file as a music bed, or as a recording to edit as text."))
         self.file_menu.addAction(self.import_audio_action)
-        self.import_source_track_action = self._action("Import Sou&rce Track...", self.import_source_track_dialog)
+        self.import_source_track_action = self._action(tr("Import Sou&rce Track..."), self.import_source_track_dialog)
+        self.import_source_track_action.setToolTip(tr("Add the original dialogue, so you can compare it with the dub."))
         self.file_menu.addAction(self.import_source_track_action)
-        self.load_video_action = self._action("Load &Video...", self.load_video_dialog)
+        self.load_video_action = self._action(tr("Load &Video..."), self.load_video_dialog)
+        self.load_video_action.setToolTip(tr("Show a reference video that follows the timeline."))
         self.file_menu.addAction(self.load_video_action)
-        self.add_credits_action = self._action("Add &Credits...", self.add_credits_dialog)
-        self.add_credits_action.setToolTip(ADD_CREDITS_TIP)
+        self.add_credits_action = self._action(tr("Add &Credits..."), self.add_credits_dialog)
+        self.add_credits_action.setToolTip(tr(ADD_CREDITS_TIP))
         self.file_menu.addAction(self.add_credits_action)
         self.file_menu.aboutToShow.connect(self._sync_add_credits_action)
-        self.export_action = self._action("&Export...", self.export_dialog, "Ctrl+E")
+        self.export_action = self._action(tr("&Export..."), self.export_dialog, "Ctrl+E")
+        self.export_action.setToolTip(tr("Write the arrangement to audio files."))
         self.file_menu.addAction(self.export_action)
-        self.measure_loudness_action = self._action("&Measure Loudness...", self.measure_loudness)
+        self.measure_loudness_action = self._action(tr("&Measure Loudness..."), self.measure_loudness)
+        self.measure_loudness_action.setToolTip(tr("Mix the project and report its loudness and peaks. Nothing "
+                                                   "is written."))
         self.file_menu.addAction(self.measure_loudness_action)
         self.file_menu.addSeparator()
-        self.quit_action = self._action("&Quit", self.close, QKeySequence.StandardKey.Quit)
+        self.quit_action = self._action(tr("&Quit"), self.close, QKeySequence.StandardKey.Quit)
+        self.quit_action.setToolTip(tr("Close KokoroGUI."))
         self.file_menu.addAction(self.quit_action)
         self._rebuild_recent_menu()
 
         # Edit
-        self.edit_menu = bar.addMenu("&Edit")
-        self.undo_action = self._action("Undo", self.undo, QKeySequence.StandardKey.Undo)
-        self.redo_action = self._action("Redo", self.redo, QKeySequence.StandardKey.Redo)
+        self.edit_menu = bar.addMenu(tr("&Edit"))
+        self.undo_action = self._action(tr("Undo"), self.undo, QKeySequence.StandardKey.Undo)
+        self.undo_action.setToolTip(tr("Undo the last edit."))
+        self.redo_action = self._action(tr("Redo"), self.redo, QKeySequence.StandardKey.Redo)
+        self.redo_action.setToolTip(tr("Redo the edit you undid."))
         self.edit_menu.addAction(self.undo_action)
         self.edit_menu.addAction(self.redo_action)
         self.edit_menu.addSeparator()
-        self.cut_action = self._action("Cu&t", lambda: self._editor_call("cut"))
-        self.copy_action = self._action("&Copy", lambda: self._editor_call("copy"))
-        self.paste_action = self._action("&Paste", lambda: self._editor_call("paste"))
+        self.cut_action = self._action(tr("Cu&t"), lambda: self._editor_call("cut"))
+        self.cut_action.setToolTip(tr("Cut the selected transcript text."))
+        self.copy_action = self._action(tr("&Copy"), lambda: self._editor_call("copy"))
+        self.copy_action.setToolTip(tr("Copy the selected transcript text."))
+        self.paste_action = self._action(tr("&Paste"), lambda: self._editor_call("paste"))
+        self.paste_action.setToolTip(tr("Paste into the transcript at the caret."))
         for a in (self.cut_action, self.copy_action, self.paste_action):
             self.edit_menu.addAction(a)
         self.edit_menu.addSeparator()
         # Ctrl+F, Ctrl+H, F3 and Shift+F3 are rows of keymap.KEYS.
-        self.find_action = self._action("Fin&d...", self.find_in_transcript)
-        self.find_action.setToolTip("Search the transcript and the open subprojects (Ctrl+F).")
-        self.find_replace_action = self._action("Find and &Replace...", self.replace_in_transcript)
-        self.find_replace_action.setToolTip("Search and replace in the transcript and the open subprojects (Ctrl+H).")
-        self.find_next_action = self._action("Find &Next", self.find_next_match)
-        self.find_next_action.setToolTip("Go to the next match (F3).")
-        self.find_previous_action = self._action("Find Pre&vious", self.find_previous_match)
-        self.find_previous_action.setToolTip("Go to the previous match (Shift+F3).")
+        self.find_action = self._action(tr("Fin&d..."), self.find_in_transcript)
+        self.find_action.setToolTip(tr("Search the transcript and the open subprojects (Ctrl+F)."))
+        self.find_replace_action = self._action(tr("Find and &Replace..."), self.replace_in_transcript)
+        self.find_replace_action.setToolTip(tr("Search and replace in the transcript and the open subprojects "
+                                               "(Ctrl+H)."))
+        self.find_next_action = self._action(tr("Find &Next"), self.find_next_match)
+        self.find_next_action.setToolTip(tr("Go to the next match (F3)."))
+        self.find_previous_action = self._action(tr("Find Pre&vious"), self.find_previous_match)
+        self.find_previous_action.setToolTip(tr("Go to the previous match (Shift+F3)."))
         for a in (self.find_action, self.find_replace_action, self.find_next_action, self.find_previous_action):
             self.edit_menu.addAction(a)
         self.edit_menu.addSeparator()
-        self.split_clip_action = self._action("&Split Clip at Playhead", self.split_clip_at_playhead)
-        self.split_clip_action.setToolTip(SPLIT_CLIP_TIP)
-        self.join_clip_action = self._action("&Join with Next Clip", self.join_selected_with_next)
-        self.join_clip_action.setToolTip(JOIN_CLIP_TIP)
+        self.split_clip_action = self._action(tr("&Split Clip at Playhead"), self.split_clip_at_playhead)
+        self.split_clip_action.setToolTip(tr(SPLIT_CLIP_TIP))
+        self.join_clip_action = self._action(tr("&Join with Next Clip"), self.join_selected_with_next)
+        self.join_clip_action.setToolTip(tr(JOIN_CLIP_TIP))
         self.edit_menu.addAction(self.split_clip_action)
         self.edit_menu.addAction(self.join_clip_action)
         self.edit_menu.aboutToShow.connect(self._sync_split_join_actions)
         self.edit_menu.addSeparator()
-        self.remove_fillers_action = self._action("Remove &Filler Words...", self.remove_filler_words)
-        self.remove_fillers_action.setToolTip("Find um, uh and the like in the imported recordings, pick the ones "
-                                              "to cut, and remove them with their audio in one undo step.")
+        self.remove_fillers_action = self._action(tr("Remove &Filler Words..."), self.remove_filler_words)
+        self.remove_fillers_action.setToolTip(tr("Find um, uh and the like in the imported recordings, pick the ones "
+                                                 "to cut, and remove them with their audio in one undo step."))
         self.edit_menu.addAction(self.remove_fillers_action)
-        self.attribute_dialogue_action = self._action("&Attribute Dialogue...", self.attribute_dialogue)
-        self.attribute_dialogue_action.setToolTip("Find the quotes in the transcript, guess who speaks each from its "
-                                                  "speech tag, review the guesses and assign them in one undo step.")
+        self.attribute_dialogue_action = self._action(tr("&Attribute Dialogue..."), self.attribute_dialogue)
+        self.attribute_dialogue_action.setToolTip(tr("Find the quotes in the transcript, guess who speaks each from "
+                                                     "its speech tag, review the guesses and assign them in one "
+                                                     "undo step."))
         self.edit_menu.addAction(self.attribute_dialogue_action)
         self.edit_menu.addSeparator()
-        self.characters_action = self._action("&Characters...", self.open_characters_dialog)
+        self.characters_action = self._action(tr("&Characters..."), self.open_characters_dialog)
+        self.characters_action.setToolTip(tr("Create characters and pick each one's engine, voice, FX and color."))
         self.edit_menu.addAction(self.characters_action)
 
         # Options
         # No Engine menu: each character picks its engine in Edit >
         # Characters (grill V3).
-        self.options_menu = bar.addMenu("&Options")
-        self.settings_window_action = self._action("&Settings...", self.open_settings_window, "Ctrl+,")
-        self.settings_window_action.setToolTip("Program and project settings: generation, performance, "
-                                               "pacing, tracks, timecode.")
+        self.options_menu = bar.addMenu(tr("&Options"))
+        self.settings_window_action = self._action(tr("&Settings..."), self.open_settings_window, "Ctrl+,")
+        self.settings_window_action.setToolTip(tr("Program and project settings: generation, performance, "
+                                                  "pacing, tracks, timecode."))
         self.options_menu.addAction(self.settings_window_action)
         self.options_menu.addSeparator()
-        self.device_menu = self.options_menu.addMenu("Device")
+        self.device_menu = self.options_menu.addMenu(tr("Device"))
         self.device_group = QActionGroup(self)
         self.device_group.setExclusive(True)
         self.device_actions: dict = {}
-        self.detected_device_action = self.device_menu.addAction(f"Detected: {device_summary()}")
+        self.detected_device_action = self.device_menu.addAction(tr("Detected: {device_summary}",
+                                                                    device_summary=device_summary()))
+        self.detected_device_action.setToolTip(tr("The fastest device torch found on this machine."))
         self.detected_device_action.setEnabled(False)
         self.device_menu.addSeparator()
         cuda_ok = self._cuda_available()
-        for device_id, label in (("auto", "Auto"), ("cpu", "CPU"), ("cuda", "CUDA")):
+        for device_id, label in (("auto", tr("Auto")), ("cpu", tr("CPU")), ("cuda", tr("CUDA"))):
             action = QAction(label, self)
+            action.setToolTip(tr("Run the engines on this device. Auto uses CUDA when torch finds it."))
             action.setCheckable(True)
             action.setChecked(self.settings.get("device", "auto") == device_id)
             if device_id == "cuda" and not cuda_ok:
                 action.setEnabled(False)
-                action.setToolTip("torch reports no CUDA device")
+                action.setToolTip(tr("torch reports no CUDA device"))
             action.triggered.connect(lambda checked=False, d=device_id: self.set_device(d))
             self.device_group.addAction(action)
             self.device_menu.addAction(action)
             self.device_actions[device_id] = action
 
-        self.theme_menu = self.options_menu.addMenu("Theme")
+        self.theme_menu = self.options_menu.addMenu(tr("Theme"))
         self.theme_group = QActionGroup(self)
         self.theme_group.setExclusive(True)
         self.theme_actions: dict = {}
-        for theme_id, label in (("light", "Light"), ("dark", "Dark")):
+        for theme_id, label in (("light", tr("Light")), ("dark", tr("Dark"))):
             action = QAction(label, self)
+            action.setToolTip(tr("Use these colors."))
             action.setCheckable(True)
             action.setChecked(self.settings.get("theme", theme.DEFAULT_THEME) == theme_id)
             action.triggered.connect(lambda checked=False, t=theme_id: self.set_theme(t))
@@ -1129,34 +1165,58 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self.theme_menu.addAction(action)
             self.theme_actions[theme_id] = action
 
+        self.language_menu = self.options_menu.addMenu(tr("Language"))
+        self.language_group = QActionGroup(self)
+        self.language_group.setExclusive(True)
+        self.language_actions: dict = {}
+        for code, label in localize.choices():
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(self.settings.get("language", i18n.SYSTEM_LANGUAGE) == code)
+            action.setToolTip(tr("Show KokoroGUI in this language after a restart."))
+            action.triggered.connect(lambda checked=False, c=code: self.set_language(c))
+            self.language_group.addAction(action)
+            self.language_menu.addAction(action)
+            self.language_actions[code] = action
+
         self.options_menu.addSeparator()
-        self.copy_carries_action = QAction("Copy carries character/FX", self)
+        self.copy_carries_action = QAction(tr("Copy carries character/FX"), self)
+        self.copy_carries_action.setToolTip(tr("Text copied in the transcript keeps its character and FX when "
+                                               "you paste it here."))
         self.copy_carries_action.setCheckable(True)
         self.copy_carries_action.setChecked(bool(self.settings.get("character_fx_copy", True)))
         self.copy_carries_action.toggled.connect(lambda v: self._set_setting("character_fx_copy", v))
         self.options_menu.addAction(self.copy_carries_action)
 
-        self.paste_splits_action = QAction("Paste splits character/FX", self)
+        self.paste_splits_action = QAction(tr("Paste splits character/FX"), self)
+        self.paste_splits_action.setToolTip(tr("Pasted text with another character or FX becomes its own clip. "
+                                               "Off, it joins the clip you paste into."))
         self.paste_splits_action.setCheckable(True)
         self.paste_splits_action.setChecked(bool(self.settings.get("character_fx_paste_splits", True)))
         self.paste_splits_action.toggled.connect(lambda v: self._set_setting("character_fx_paste_splits", v))
         self.options_menu.addAction(self.paste_splits_action)
 
-        self.notify_sound_action = QAction("Sound when a long job finishes", self)
+        self.notify_sound_action = QAction(tr("Sound when a long job finishes"), self)
+        self.notify_sound_action.setToolTip(tr("Play a sound when a job that took a while ends and another "
+                                               "window is in front."))
         self.notify_sound_action.setCheckable(True)
         self.notify_sound_action.setChecked(bool(self.settings.get("notify_sound", True)))
         self.notify_sound_action.toggled.connect(lambda v: self._set_setting("notify_sound", v))
         self.options_menu.addAction(self.notify_sound_action)
 
         # Grill PG9: a program setting, never part of a project.
-        self.clone_consent_action = QAction("Confirm consent before cloning", self)
+        self.clone_consent_action = QAction(tr("Confirm consent before cloning"), self)
+        self.clone_consent_action.setToolTip(tr("Ask you to confirm the speaker's permission each time you "
+                                                "clone a voice from a recording."))
         self.clone_consent_action.setCheckable(True)
         self.clone_consent_action.setChecked(bool(self.settings.get("clone_consent_confirm", True)))
         self.clone_consent_action.toggled.connect(lambda v: self._set_setting("clone_consent_confirm", v))
         self.options_menu.addAction(self.clone_consent_action)
 
-        self.details_menu = self.options_menu.addMenu("Transcript details")
-        self.details_action = QAction("Show details", self)
+        self.details_menu = self.options_menu.addMenu(tr("Transcript details"))
+        self.details_action = QAction(tr("Show details"), self)
+        self.details_action.setToolTip(tr("Show how the transcript will be spoken: segments, clip info, lexicon "
+                                          "rewrites and gaps."))
         self.details_action.setCheckable(True)
         self.details_action.setChecked(bool(self.settings.get("transcript_details", False)))
         self.details_action.toggled.connect(self.set_transcript_details)
@@ -1164,7 +1224,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.details_menu.addSeparator()
         self.details_layer_actions: dict = {}
         for key, label in spec.DETAIL_LAYERS:
-            action = QAction(label, self)
+            action = QAction(tr(label), self)
             action.setCheckable(True)
             action.setChecked(bool(self.settings.get(key, True)))
             action.toggled.connect(lambda checked, k=key: self.set_details_layer(k, checked))
@@ -1172,18 +1232,19 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self.details_layer_actions[key] = action
         self._sync_details_actions()
 
-        self.spellcheck_action = QAction("Spellcheck", self)
+        self.spellcheck_action = QAction(tr("Spellcheck"), self)
         self.spellcheck_action.setCheckable(True)
         self.spellcheck_action.setChecked(bool(self.settings.get("spellcheck", False)))
-        self.spellcheck_action.setToolTip("Underline words in the transcript that the dictionary doesn't know. "
-                                          "English, Spanish, French, Italian and Portuguese, by the character's language.")
+        self.spellcheck_action.setToolTip(tr("Underline words in the transcript that the dictionary doesn't know. "
+                                             "English, Spanish, French, Italian and Portuguese, by the "
+                                             "character's language."))
         if not spell.available():
             self.spellcheck_action.setEnabled(False)
-            self.spellcheck_action.setToolTip("Needs the pyspellchecker package: pip install pyspellchecker")
+            self.spellcheck_action.setToolTip(tr("Needs the pyspellchecker package: pip install pyspellchecker"))
         self.spellcheck_action.toggled.connect(self.set_spellcheck)
         self.options_menu.addAction(self.spellcheck_action)
 
-        self.jit_action =QAction("JIT streaming (no-clips fallback only)", self)
+        self.jit_action =QAction(tr("JIT streaming (no-clips fallback only)"), self)
         self.jit_action.setCheckable(True)
         self.jit_action.setChecked(bool(self.jit_enabled))
         self.jit_action.toggled.connect(self._on_jit_toggled)
@@ -1191,12 +1252,12 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._sync_jit_action_enabled()
 
         self.options_menu.addSeparator()
-        self.storage_action = self._action("Storage...", self.open_storage_dialog)
-        self.storage_action.setToolTip("Size of the generated audio cache and Audio8 reference codes, Clear, "
-                                       "and the size limit.")
+        self.storage_action = self._action(tr("Storage..."), self.open_storage_dialog)
+        self.storage_action.setToolTip(tr("Size of the generated audio cache and Audio8 reference codes, Clear, "
+                                          "and the size limit."))
         self.options_menu.addAction(self.storage_action)
-        self.force_refresh_action = QAction("Force refresh", self)
-        self.force_refresh_action.setToolTip("Re-check every clip and file and redraw the transcript and timeline.")
+        self.force_refresh_action = QAction(tr("Force refresh"), self)
+        self.force_refresh_action.setToolTip(tr("Re-check every clip and file and redraw the transcript and timeline."))
         self.force_refresh_action.setStatusTip(self.force_refresh_action.toolTip())
         self.force_refresh_action.triggered.connect(self.force_refresh)
         self.options_menu.addAction(self.force_refresh_action)
@@ -1205,15 +1266,20 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._build_workspace_menu(bar)
 
         # Help
-        self.help_menu = bar.addMenu("&Help")
-        # A greyed entry says why, where it has a tooltip.
+        self.help_menu = bar.addMenu(tr("&Help"))
+        # Every entry has a tooltip; a greyed one says why.
         for menu in (self.file_menu, self.recent_menu, self.show_in_folder_menu, self.edit_menu, self.options_menu,
-                     self.device_menu, self.details_menu):
+                     self.device_menu, self.theme_menu, self.language_menu, self.details_menu, self.help_menu):
             menu.setToolTipsVisible(True)
-        self.documentation_action = self._action("&Documentation", self.open_documentation)
-        self.shortcuts_action = self._action("&Keyboard Shortcuts", self.show_shortcuts)
-        self.open_log_folder_action = self._action("Open &Log Folder", self.open_log_folder)
-        self.about_action = self._action("&About KokoroGUI", self.show_about)
+        self.documentation_action = self._action(tr("&Documentation"), self.open_documentation)
+        self.documentation_action.setToolTip(tr("Open the documentation in your browser."))
+        self.shortcuts_action = self._action(tr("&Keyboard Shortcuts"), self.show_shortcuts)
+        self.shortcuts_action.setToolTip(tr("List every keyboard shortcut."))
+        self.open_log_folder_action = self._action(tr("Open &Log Folder"), self.open_log_folder)
+        self.open_log_folder_action.setToolTip(tr("Open the folder that holds KokoroGUI's log file."))
+        self.about_action = self._action(tr("&About KokoroGUI"), self.show_about)
+        self.about_action.setToolTip(tr("Versions, engines, folders and the detected device, ready to copy into "
+                                        "a bug report."))
         self.help_menu.addAction(self.documentation_action)
         self.help_menu.addAction(self.shortcuts_action)
         self.help_menu.addAction(self.open_log_folder_action)
@@ -1226,7 +1292,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def open_log_folder(self) -> None:
         log_path = logging_setup.resolve_log_path(runtime.CACHE_DIR)
         if not reveal(os.path.dirname(log_path)):
-            self.set_status("No log folder yet. It is created when the app starts from main.py.", "warning")
+            self.set_status(tr("No log folder yet. It is created when the app starts from main.py."), "warning")
 
     def show_shortcuts(self) -> ShortcutsDialog:
         dialog = ShortcutsDialog(self)
@@ -1263,11 +1329,12 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         detected = device_summary()
         chosen = self.settings.get("device", "auto")
         if chosen == "cpu":
-            return f"Engines will run on the CPU (detected: {detected}). Change it in Options > Device."
+            return tr("Engines will run on the CPU (detected: {detected}). Change it in Options > Device.",
+                      detected=detected)
         if detected.startswith("MPS"):
-            return (f"Detected {detected}. Engines run on the CPU, since they don't support MPS. "
-                    "Change it in Options > Device.")
-        return f"Engines will run on {detected}. Change it in Options > Device."
+            return (tr("Detected {detected}. Engines run on the CPU, since they don't support MPS. "
+                       "Change it in Options > Device.", detected=detected))
+        return tr("Engines will run on {detected}. Change it in Options > Device.", detected=detected)
 
     def _first_launch_device_notice(self) -> str | None:
         """The device line for the status bar, once per install: None after
@@ -1425,8 +1492,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             shortcut = QShortcut(QKeySequence(binding.sequence), parent)
             shortcut.setContext(context)
             shortcut.activated.connect(getattr(self, binding.slot_name))
-            shortcut.setProperty(SHORTCUT_DESCRIPTION_PROPERTY, binding.label)
-            shortcut.setProperty(SHORTCUT_GROUP_PROPERTY, binding.group)
+            shortcut.setProperty(SHORTCUT_DESCRIPTION_PROPERTY, tr(binding.label))
+            shortcut.setProperty(SHORTCUT_GROUP_PROPERTY, tr(binding.group))
             shortcut.setEnabled(not binding.while_generating)
             setattr(self, f"{binding.id}_shortcut", shortcut)
             self._key_shortcuts.append((binding, shortcut))
@@ -1589,7 +1656,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self.editor.rehighlight_all()
         self.refresh_timeline()
         self._rebuild_transport_schedule()
-        self.set_status("Refreshed every clip, file and view.", "success")
+        self.set_status(tr("Refreshed every clip, file and view."), "success")
 
     def changeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().changeEvent(event)
@@ -2096,7 +2163,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def _sync_jit_action_enabled(self) -> None:
         supported = self.backend.capabilities.supports_jit_streaming
         self.jit_action.setEnabled(supported)
-        self.jit_action.setToolTip("" if supported else f"{self.backend.display_name} doesn't support streaming - runs as Standard.")
+        self.jit_action.setToolTip(tr(JIT_TIP) if supported else tr("{display_name} doesn't support streaming - runs "
+                                                                    "as Standard.",
+                                                                    display_name=self.backend.display_name))
 
     def _on_jit_toggled(self, checked: bool) -> None:
         self.jit_enabled = checked
@@ -2172,9 +2241,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
                 action.blockSignals(True)
                 action.setChecked(checked)
                 action.blockSignals(False)
-        for action in self.details_layer_actions.values():
+        for key, action in self.details_layer_actions.items():
             action.setEnabled(on)
-            action.setToolTip("" if on else "Turn on Show details first.")
+            action.setToolTip(tr(spec.DETAIL_LAYER_TIPS[key]) if on else tr("Turn on Show details first."))
 
     def _apply_details(self) -> None:
         if self.editor is not None:
@@ -2227,16 +2296,18 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             return None
         kind, seconds = gap
         if kind == "time":
-            return f"at {segment_view.format_length(seconds)}"
+            return tr("at {length}", length=segment_view.format_length(seconds))
         if kind == "overlap":
-            return f"overlap {seconds:.2f} s"
-        text = f"gap {seconds:.2f} s"
+            return tr("overlap {seconds:.2f} s", seconds=seconds)
+        text = tr("gap {seconds:.2f} s", seconds=seconds)
         if kind == "paragraph":
             text += " ¶"
         elif kind == "override":
-            text += " (set)"
-        elif kind in ("chapter", "heading"):
-            text += f" ({kind})"
+            text += tr(" (set)")
+        elif kind == "chapter":
+            text += tr(" (chapter)")
+        elif kind == "heading":
+            text += tr(" (heading)")
         return text
 
     def _voice_label(self, clip) -> str:
@@ -2249,17 +2320,19 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         """Hover text over one segment's text in the transcript."""
         document = self.project_for(clip).document
         count = len(segment_view.clip_pieces(document, clip))
-        ending = "the end of the clip" if piece.index == count - 1 else segment_view.LEVEL_ENDINGS[piece.level]
-        words = f"{piece.words} word" + ("" if piece.words == 1 else "s")
-        lines = [f"Segment {piece.index + 1} of {count} · {words} · ends at {ending}"]
+        ending = tr("the end of the clip") if piece.index == count - 1 else tr(segment_view.LEVEL_ENDINGS[piece.level])
+        words = ntr("{n} word", "{n} words", piece.words)
+        lines = [tr("Segment {index} of {count} · {words} · ends at {ending}", index=piece.index + 1, count=count,
+                    words=words, ending=ending)]
         segments = sorted(clip.segments, key=lambda s: s.order_index)
         if stale:
             rates = fit_ops.speaking_rates(document)
             seconds = segment_view.estimated_length_s(document, clip, rates, text=document.text[piece.start:piece.end])
-            lines.append(f"{segment_view.format_length(seconds, estimate=True)} (estimate) · stale")
+            lines.append(tr("{length} (estimate) · stale", length=segment_view.format_length(seconds, estimate=True)))
         elif piece.index < len(segments):
             take = int((clip.overrides or {}).get("take", 0) or 0)
-            lines.append(f"{segment_view.format_length(segments[piece.index].duration)} · take {take + 1}")
+            lines.append(tr("{length} · take {take}",
+                            length=segment_view.format_length(segments[piece.index].duration), take=take + 1))
         return "\n".join(lines)
 
     def clip_info_text(self, clip, offset=None) -> str:
@@ -2270,9 +2343,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             return ""
         document = self.project_for(clip).document
         if clip.has_placeholder:
-            return "Audio file" if clip.is_bed else "Subproject"
+            return tr("Audio file") if clip.is_bed else tr("Subproject")
         character = document.get_character(clip.character_id)
-        parts = [character.name if character is not None else "No character"]
+        parts = [character.name if character is not None else tr("No character")]
         if segment_view.has_pieces(clip):
             backend = self.backend_for(clip)
             voice = self._voice_label(clip)
@@ -2280,18 +2353,19 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             pieces = segment_view.clip_pieces(document, clip)
             piece = segment_view.piece_at(pieces, offset) if offset is not None else None
             if piece is not None:
-                parts.append(f"segment {piece.index + 1}/{len(pieces)}")
+                parts.append(tr("segment {index}/{count}", index=piece.index + 1, count=len(pieces)))
             elif pieces:
-                parts.append(f"{len(pieces)} segment" + ("" if len(pieces) == 1 else "s"))
+                parts.append(ntr("{n} segment", "{n} segments", len(pieces)))
         else:
-            parts.append("recording")
+            parts.append(tr("recording"))
         stale = self.clip_is_stale(clip)
         length = self.clip_length_text(clip, stale)
         if length:
             parts.append(length)
         if segment_view.has_pieces(clip):
-            parts.append("stale" if stale else f"take {int((clip.overrides or {}).get('take', 0) or 0) + 1}")
-        parts.append(STATUS_LABELS.get(clip.status, clip.status).lower())
+            parts.append(tr("stale") if stale
+                         else tr("take {take}", take=int((clip.overrides or {}).get("take", 0) or 0) + 1))
+        parts.append(tr(STATUS_LABELS.get(clip.status, clip.status)).lower())
         gap = self.gap_label(clip)
         if gap:
             parts.append(gap)
@@ -2305,9 +2379,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if self.is_generating() and device != self.settings.get("device", "auto"):
             for device_id, action in self.device_actions.items():
                 action.setChecked(device_id == self.settings.get("device", "auto"))
-            self.set_status("A generate is running. Change the device once it finishes, or cancel it.", "warning")
-            QMessageBox.warning(self, "Busy", "A generate is running. Change the device once it finishes, "
-                                              "or cancel it.")
+            self.set_status(tr("A generate is running. Change the device once it finishes, or cancel it."), "warning")
+            QMessageBox.warning(self, tr("Busy"), tr("A generate is running. Change the device once it finishes, "
+                                                 "or cancel it."))
             return
         self.settings["device"] = device
         for device_id, action in self.device_actions.items():
@@ -2315,7 +2389,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self.schedule_save()
         if self.is_busy():
             return
-        self.set_status(f"Re-initializing engines on {device}...")
+        self.set_status(tr("Re-initializing engines on {device}...", device=device))
         for engine_id in sorted(self._ready_backends):
             lang_code = self.engine_settings(engine_id).get("lang_code")
             self._backends[engine_id].ensure_ready(lang_code, device=device)
@@ -2327,6 +2401,14 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             action.setChecked(theme_id == name)
         self.themeChanged.emit()
         self.schedule_save()
+
+    def set_language(self, code: str) -> None:
+        """Keeps the choice; the window changes at the next launch."""
+        self.settings["language"] = code
+        for other, action in self.language_actions.items():
+            action.setChecked(other == code)
+        self.schedule_save()
+        self.set_status(tr("The language changes after you restart KokoroGUI."))
 
     def _sync_mixing_dock(self) -> None:
         wants = self.voices_backend().capabilities.supports_voice_mixing
@@ -2395,7 +2477,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         (`_voices_placement_of` the editor this one replaces) puts it where
         that one was, closed if it was closed; without it, the tab after
         Lexicon."""
-        dock.setWindowTitle("Voices")
+        dock.setWindowTitle(tr("Voices"))
         dock.setObjectName("dock_voices")
         neighbour = placement.get("tab_with") if placement else None
         if neighbour is not None and (neighbour not in self._all_docks() or neighbour.isHidden()
@@ -2430,13 +2512,14 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         document = self.focus.document
         ready = bool(document.text.strip()) or bool(document.nested_clips())
         self.add_credits_action.setEnabled(ready)
-        self.add_credits_action.setToolTip(ADD_CREDITS_TIP if ready else "Add some text or a subproject first.")
+        self.add_credits_action.setToolTip(tr(ADD_CREDITS_TIP) if ready else tr("Add some text or a subproject first."))
 
     def _rebuild_recent_menu(self) -> None:
         self.recent_menu.clear()
         recent = [p for p in self.settings.get("recent_projects", []) if isinstance(p, str)]
         if not recent:
-            empty = self.recent_menu.addAction("(empty)")
+            empty = self.recent_menu.addAction(tr("(empty)"))
+            empty.setToolTip(tr("Projects you open or save are listed here."))
             empty.setEnabled(False)
             return
         for path in recent:
@@ -2444,7 +2527,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             action.setToolTip(path)
             action.triggered.connect(lambda checked=False, p=path: self.open_project(p))
         self.recent_menu.addSeparator()
-        self.recent_menu.addAction("Clear list").triggered.connect(self._clear_recent_projects)
+        clear = self.recent_menu.addAction(tr("Clear list"))
+        clear.setToolTip(tr("Empty this list. The project files stay."))
+        clear.triggered.connect(self._clear_recent_projects)
 
     def _clear_recent_projects(self) -> None:
         project_io.clear_recent(self.settings)
@@ -2455,20 +2540,23 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         """Each entry is enabled only while its target exists on disk."""
         working = self.root.project_dir
         last = self._last_export_path
-        for action, there, tip in (
+        for action, there, tip, missing_tip in (
             (self.show_project_file_action, bool(self.project_path) and os.path.exists(self.project_path),
-             "The project has no file yet. Save it first."),
+             tr("Show the project's .tbaw file in your file manager."),
+             tr("The project has no file yet. Save it first.")),
             (self.show_working_folder_action, bool(working) and os.path.isdir(working),
-             "The project has no working folder."),
+             tr("Open the folder KokoroGUI keeps this project's audio in while you work."),
+             tr("The project has no working folder.")),
             (self.show_last_export_action, bool(last) and os.path.exists(last),
-             "No export to show. Export first, or the last one was moved."),
+             tr("Show the last exported file in your file manager."),
+             tr("No export to show. Export first, or the last one was moved.")),
         ):
             action.setEnabled(there)
-            action.setToolTip("" if there else tip)
+            action.setToolTip(tip if there else missing_tip)
 
     def _reveal_path(self, path: str | None) -> None:
         if not reveal(path):
-            self.set_status("Nothing to show: that file or folder is gone.", "warning")
+            self.set_status(tr("Nothing to show: that file or folder is gone."), "warning")
 
     def show_welcome(self) -> WelcomeDialog:
         """Window-modal via `open()`, not `exec()`, so engine init keeps
@@ -2620,10 +2708,10 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         """True to cancel the running generate and quit, False to keep
         working (PG2). A method so tests can replace it."""
         box = QMessageBox(self)
-        box.setWindowTitle("Generate in progress")
-        box.setText("A generate is still running.")
-        quit_btn = box.addButton("Cancel the generate and quit", QMessageBox.ButtonRole.DestructiveRole)
-        keep_btn = box.addButton("Keep working", QMessageBox.ButtonRole.RejectRole)
+        box.setWindowTitle(tr("Generate in progress"))
+        box.setText(tr("A generate is still running."))
+        quit_btn = box.addButton(tr("Cancel the generate and quit"), QMessageBox.ButtonRole.DestructiveRole)
+        keep_btn = box.addButton(tr("Keep working"), QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(keep_btn)
         box.exec()
         return box.clickedButton() is quit_btn
@@ -2634,11 +2722,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         """Save / Discard / Cancel for a dirty project (grill TB12). A
         method so tests can replace it."""
         box = QMessageBox(self)
-        box.setWindowTitle("Unsaved changes")
+        box.setWindowTitle(tr("Unsaved changes"))
         box.setText(self._unsaved_changes_text())
-        save_btn = box.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
-        discard_btn = box.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
-        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        save_btn = box.addButton(tr("Save"), QMessageBox.ButtonRole.AcceptRole)
+        discard_btn = box.addButton(tr("Discard"), QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(tr("Cancel"), QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(save_btn)
         box.exec()
         clicked = box.clickedButton()
@@ -2651,10 +2739,10 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def _unsaved_changes_text(self) -> str:
         """The close prompt's line: the root, and by name any subproject
         whose unsaved edits it carries (one prompt for the whole tree)."""
-        text = f"{project_io.project_title(self.project_path)} has unsaved changes."
+        text = tr("{project_title} has unsaved changes.", project_title=project_io.project_title(self.project_path))
         children = [c.title() for c in self.children.values() if c.dirty]
         if children:
-            text += " Changed subprojects: " + ", ".join(children) + "."
+            text += tr(" Changed subprojects: ") + ", ".join(children) + "."
         return text
 
     def _close_current_project(self, then) -> None:
@@ -2684,9 +2772,10 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if choice == "discard":
             if self._open_tree_has_work():
                 QMessageBox.warning(
-                    self, "Still generating",
-                    f"{project_io.project_title(self.project_path)} is still generating. Cancel its queued work "
-                    "in the Queue dock before you discard its changes.")
+                    self, tr("Still generating"),
+                    tr("{project_title} is still generating. Cancel its queued work "
+                       "in the Queue dock before you discard its changes.",
+                       project_title=project_io.project_title(self.project_path)))
                 return
             self._teardown_project(discard=True)
             then()
@@ -2789,7 +2878,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._closed_child_states.clear()
         self._switch_document(tree.root.document, tree.root.path, tree.root.project_settings)
         self._evict_other_project_dirs()
-        self.set_status(f"Opened {tree.root.title()}.")
+        self.set_status(tr("Opened {title}.", title=tree.root.title()))
 
     def _release_parked(self, tree, evict: bool = True) -> None:
         """A parked tree's last item ended: autosave, GC and unlock each
@@ -2842,11 +2931,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if park and self.is_generating() and self.can_park_generation():
             return False
         if self.is_generating():
-            QMessageBox.warning(self, "Busy", "A generate is running in this project. Wait for it to finish, "
-                                              f"or cancel it, before {what}.")
+            QMessageBox.warning(self, tr("Busy"), tr("A generate is running in this project. Wait for it to finish, "
+                                                 "or cancel it, before {what}.", what=what))
             return True
         if self.is_busy():
-            QMessageBox.warning(self, "Busy", f"Finish or cancel the current job before {what}.")
+            QMessageBox.warning(self, tr("Busy"), tr("Finish or cancel the current job before {what}.", what=what))
             return True
         return False
 
@@ -2854,7 +2943,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         """File > New. `then()` runs once the new project is in place.
         Refused while a job runs, like Open, except a running queue: it goes
         on in the background (plan 30)."""
-        if self._replace_blocked("starting a new project", park=True):
+        if self._replace_blocked(tr("starting a new project"), park=True):
             return
 
         def _start():
@@ -2863,7 +2952,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self._begin_untitled_project_dir(document)
             self._switch_document(document, None)
             self._evict_other_project_dirs()
-            self.set_status("New project with the library's characters. Save As to name it.")
+            self.set_status(tr("New project with the library's characters. Save As to name it."))
             if then is not None:
                 then()
 
@@ -2874,10 +2963,10 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def open_project(self, path: str) -> None:
         # A running queue goes on in the background: the open project is
         # parked when it still has work (plan 30).
-        if self._replace_blocked("opening another project", park=True):
+        if self._replace_blocked(tr("opening another project"), park=True):
             return
         if not os.path.isfile(path):
-            QMessageBox.warning(self, "Open failed", f"Couldn't read {path}.")
+            QMessageBox.warning(self, tr("Open failed"), tr("Couldn't read {path}.", path=path))
             project_io.forget_recent(self.settings, path)
             self._rebuild_recent_menu()
             return
@@ -2887,7 +2976,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         try:
             info = project_io.inspect_bundle(path)
         except project_io.ProjectError as e:
-            QMessageBox.warning(self, "Open failed", str(e))
+            QMessageBox.warning(self, tr("Open failed"), str(e))
             return
         if self.project_path and os.path.abspath(path) == self.project_path and self.project_id == info.project_id:
             return  # already open: the welcome dialog's Resume
@@ -2899,9 +2988,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
                 self._close_current_project(lambda: self._unpark(tree) if self.parked_projects.get(
                     info.project_id) is tree else self._open_bundle(info))
             else:
-                QMessageBox.warning(self, "Busy", f"{tree.root.title()} is still generating in the background and "
-                                                  "has the same project id. Wait for it to finish, or cancel it, "
-                                                  "before opening this copy.")
+                QMessageBox.warning(self, tr("Busy"), tr("{title} is still generating in the background and "
+                                                     "has the same project id. Wait for it to finish, or cancel it, "
+                                                     "before opening this copy.", title=tree.root.title()))
             return
         self._close_current_project(lambda: self._open_bundle(info))
 
@@ -2915,19 +3004,20 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
                 os.path.getmtime(os.path.join(project_dir, project_io.DOCUMENT))))
         except OSError:
             pass
-        lines = [f"Recover unsaved changes{' from ' + stamp if stamp else ''}?"]
+        lines = [tr("Recover unsaved changes from {stamp}?", stamp=stamp) if stamp else tr("Recover unsaved changes?")]
         theirs = session.get("source_path")
         if theirs and os.path.abspath(theirs) != os.path.abspath(info.path):
-            lines.append(f"They were made on {theirs}.")
+            lines.append(tr("They were made on {theirs}.", theirs=theirs))
         changed = not project_io.session_matches_file(session, info)
         if changed:
-            lines.append("The file was changed outside KokoroGUI since.")
+            lines.append(tr("The file was changed outside KokoroGUI since."))
         box = QMessageBox(self)
-        box.setWindowTitle("Recover project")
+        box.setWindowTitle(tr("Recover project"))
         box.setText("\n".join(lines))
-        keep_btn = box.addButton("Keep session", QMessageBox.ButtonRole.AcceptRole)
-        take_btn = box.addButton("Take file" if changed else "Discard session", QMessageBox.ButtonRole.DestructiveRole)
-        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        keep_btn = box.addButton(tr("Keep session"), QMessageBox.ButtonRole.AcceptRole)
+        take_btn = box.addButton(tr("Take file") if changed else tr("Discard session"),
+                                 QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(tr("Cancel"), QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(keep_btn)
         box.exec()
         clicked = box.clickedButton()
@@ -2945,13 +3035,13 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         try:
             project_dir = project_io.choose_project_dir(info.project_id, info.path)
         except project_io.ProjectError as e:
-            QMessageBox.warning(self, "Open failed", str(e))
+            QMessageBox.warning(self, tr("Open failed"), str(e))
             self._start_untitled_after_failed_open()
             return
         try:
             lock = project_io.ProjectLock(project_dir).acquire()
         except project_io.ProjectLockedError as e:
-            QMessageBox.warning(self, "Already open", str(e))
+            QMessageBox.warning(self, tr("Already open"), str(e))
             self._start_untitled_after_failed_open()
             return
         try:
@@ -2991,11 +3081,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
         heavy_bytes = project_io.heavy_bytes(info)
         try:
-            project_io.check_free_space(project_io.projects_root(), heavy_bytes, "open the project")
+            project_io.check_free_space(project_io.projects_root(), heavy_bytes, tr("open the project"))
             project_io.extract_small(info, project_dir)
         except (project_io.ProjectError, OSError) as e:
             lock.release()
-            QMessageBox.warning(self, "Open failed", str(e))
+            QMessageBox.warning(self, tr("Open failed"), str(e))
             self._start_untitled_after_failed_open()
             return
 
@@ -3003,16 +3093,17 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self._finish_open(info, project_dir, lock, recovered)
             return
 
-        self._begin_project_io(f"Opening {project_io.project_title(info.path)}...", read_only=True)
+        self._begin_project_io(tr("Opening {project_title}...", project_title=project_io.project_title(info.path)),
+                               read_only=True)
 
         def _work():
-            project_io.extract_audio(info, project_dir, progress=self._io_progress("Extracting audio"))
+            project_io.extract_audio(info, project_dir, progress=self._io_progress(tr("Extracting audio")))
 
         def _done(_result, error):
             self._end_project_io(read_only=True)
             if error is not None:
                 lock.release()
-                QMessageBox.warning(self, "Open failed", str(error))
+                QMessageBox.warning(self, tr("Open failed"), str(error))
                 self._start_untitled_after_failed_open()
                 return
             self._finish_open(info, project_dir, lock, recovered)
@@ -3038,7 +3129,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             loaded = project_io.finish_open(info, project_dir, versions, recovered=recovered)
         except (OSError, ValueError, KeyError) as e:
             lock.release()
-            QMessageBox.warning(self, "Open failed", f"Couldn't read the project: {e}")
+            QMessageBox.warning(self, tr("Open failed"), tr("Couldn't read the project: {error}", error=e))
             self._start_untitled_after_failed_open()
             return
         self.carry_proof_over(previous_session, project_dir)
@@ -3054,7 +3145,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         for notice in loaded.notices:
             self.set_status(notice, "warning")
         if not loaded.notices:
-            self.set_status(f"Opened {project_io.project_title(info.path)}.")
+            self.set_status(tr("Opened {project_title}.", project_title=project_io.project_title(info.path)))
         self.announce_restored_queue()
         if project_io.video_settings(self.root.project_settings) is not None and self.video_path() is None:
             self._offer_video_relink()
@@ -3071,7 +3162,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             return
         loaded = project_io.load_json_project(path)
         if loaded is None:
-            QMessageBox.warning(self, "Open failed", f"Couldn't read {path}.")
+            QMessageBox.warning(self, tr("Open failed"), tr("Couldn't read {path}.", path=path))
             project_io.forget_recent(self.settings, path)
             self._rebuild_recent_menu()
             return
@@ -3088,8 +3179,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             project_io.forget_recent(self.settings, path)
             self._rebuild_recent_menu()
             if counts["adopted"] or counts["dropped"]:
-                self.set_status(f"Migrated {os.path.basename(path)}: {counts['adopted']} segment(s) kept, "
-                                f"{counts['dropped']} will regenerate.", "info")
+                self.set_status(tr("Migrated {file}: {adopted} segment(s) kept, "
+                                   "{dropped} will regenerate.", file=os.path.basename(path),
+                                   adopted=counts['adopted'], dropped=counts['dropped']), "info")
             save_to = target
             if not os.access(os.path.dirname(os.path.abspath(target)) or ".", os.W_OK):
                 save_to = self._save_as_path_dialog()
@@ -3104,7 +3196,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._close_current_project(_migrate)
 
     def open_project_dialog(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Open project", "", project_io.PROJECT_FILTER)
+        path, _ = QFileDialog.getOpenFileName(self, tr("Open project"), "", tr(project_io.PROJECT_FILTER))
         if path:
             self.open_project(path)
 
@@ -3119,7 +3211,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         # written. Anything that lands while the zip is written marks the
         # project dirty again afterwards (`_recheck_dirty`).
         if self.is_io_busy():
-            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before saving.")
+            QMessageBox.warning(self, tr("Busy"), tr("Finish or cancel the current job before saving."))
             return
         self._save_bundle(self.project_path, then=self._recheck_dirty)
 
@@ -3136,11 +3228,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         `audio_path` changes; only `source_path` moves. Refused while a
         generate runs, like Open."""
         if self.is_generating():
-            QMessageBox.warning(self, "Busy", "A generate is running. Wait for it to finish, or cancel it, "
-                                              "before Save As.")
+            QMessageBox.warning(self, tr("Busy"), tr("A generate is running. Wait for it to finish, or cancel it, "
+                                                 "before Save As."))
             return
         if self.is_busy():
-            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before saving.")
+            QMessageBox.warning(self, tr("Busy"), tr("Finish or cancel the current job before saving."))
             return
         new_path = os.path.abspath(project_io.bundle_path_for(path))
         self._rebase_linked_paths(new_path)
@@ -3153,7 +3245,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
     def _save_as_path_dialog(self) -> str | None:
         start = self.project_path or ""
-        path, _ = QFileDialog.getSaveFileName(self, "Save project as", start, project_io.PROJECT_FILTER)
+        path, _ = QFileDialog.getSaveFileName(self, tr("Save project as"), start, tr(project_io.PROJECT_FILTER))
         return os.path.abspath(project_io.bundle_path_for(path)) if path else None
 
     def save_project_as_dialog(self) -> None:
@@ -3182,24 +3274,25 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             )
             warnings = [*warnings, *root_warnings]
         except Exception as e:  # noqa: BLE001 - surfaced, never a crash
-            self.set_status(f"Save failed: {e}", "error")
+            self.set_status(tr("Save failed: {error}", error=e), "error")
             return
         for warning in warnings:
-            self.set_status(f"Save: {warning}", "warning")
+            self.set_status(tr("Save: {warning}", warning=warning), "warning")
         known_ids = list(engine_registry.list_engines())
-        self._begin_project_io(f"Saving {project_io.project_title(path)}...", read_only=False)
+        self._begin_project_io(tr("Saving {project_title}...", project_title=project_io.project_title(path)),
+                               read_only=False)
 
         def _work():
             child_results = [project_io.write_bundle(child_plan, known_ids) for _c, child_plan, _s in child_plans]
             # The parent's plan listed its children's bundles by path; their
             # bytes are the ones just written.
             return child_results, project_io.write_bundle(plan, known_ids,
-                                                          progress=self._io_progress("Writing bundle"))
+                                                          progress=self._io_progress(tr("Writing bundle")))
 
         def _done(result, error):
             self._end_project_io(read_only=False)
             if error is not None:
-                self.set_status(f"Save failed: {error}", "error")
+                self.set_status(tr("Save failed: {error}", error=error), "error")
                 return
             child_results, result = result
             self._record_child_saves(child_plans, child_results)
@@ -3207,13 +3300,14 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             try:
                 self._record_saved(root, path, result)
             except OSError as e:
-                self.set_status(f"Saved, but couldn't record the session: {e}", "warning")
+                self.set_status(tr("Saved, but couldn't record the session: {error}", error=e), "warning")
             self._update_window_title()
             if self.any_project_dirty():
-                self.set_status(f"Saved {project_io.project_title(path)}. Edits made while saving are still unsaved.",
+                self.set_status(tr("Saved {project_title}. Edits made while saving are still unsaved.",
+                                   project_title=project_io.project_title(path)),
                                 "info")
             else:
-                self.set_status(f"Saved {project_io.project_title(path)}.", "success")
+                self.set_status(tr("Saved {project_title}.", project_title=project_io.project_title(path)), "success")
             if then is not None:
                 then()
 
@@ -3246,7 +3340,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         same drive. The offset is kept. Returns False when `path` isn't a file."""
         path = os.path.abspath(path)
         if not os.path.isfile(path):
-            QMessageBox.warning(self, "Load video", f"Couldn't read {path}.")
+            QMessageBox.warning(self, tr("Load video"), tr("Couldn't read {path}.", path=path))
             return False
         project_io.trust_video(self.root.project_dir, path)
         block = project_io.video_settings(self.root.project_settings)
@@ -3259,11 +3353,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self.video_dock.show()
             self.video_dock.raise_()
         self.schedule_save()
-        self.set_status(f"Reference video: {os.path.basename(path)}.")
+        self.set_status(tr("Reference video: {file}.", file=os.path.basename(path)))
         return True
 
     def load_video_dialog(self) -> bool:
-        path, _ = QFileDialog.getOpenFileName(self, "Load video", "", project_io.VIDEO_FILTER)
+        path, _ = QFileDialog.getOpenFileName(self, tr("Load video"), "", tr(project_io.VIDEO_FILTER))
         return bool(path) and self.load_video(path)
 
     def set_video_offset(self, offset_s: float) -> None:
@@ -3282,8 +3376,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         for it, the way a missing linked subproject asks for its file (NP4)."""
         block = project_io.video_settings(self.root.project_settings) or {}
         missing = project_io.resolve_video_path(self.root.project_settings, self.root.path) or block.get("path")
-        answer = QMessageBox.question(self, "Video not found",
-                                      f"The reference video {missing} isn't there.\nFind the video file?")
+        answer = QMessageBox.question(self, tr("Video not found"),
+                                      tr("The reference video {missing} isn't there.\nFind the video file?",
+                                         missing=missing))
         if answer == QMessageBox.StandardButton.Yes:
             return self.load_video_dialog()
         return False
@@ -3365,7 +3460,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         QApplication.processEvents()
 
     def import_text_dialog(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Import text", filter="Documents (*.txt *.pdf *.epub)")
+        path, _ = QFileDialog.getOpenFileName(self, tr("Import text"), filter=tr("Documents (*.txt *.pdf *.epub)"))
         if path:
             self.import_text(path)
 
@@ -3378,7 +3473,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if target is None:
             self.import_book(path)
             return
-        self._read_book(f"Reading {os.path.basename(path)}...",
+        self._read_book(tr("Reading {file}...", file=os.path.basename(path)),
                         lambda stop: text_extraction.extract_text_from_file(path, should_stop=stop),
                         lambda text: self._finish_import_text(path, text, target))
 
@@ -3387,7 +3482,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         import wizard (`ImportDialog`) and runs the chosen path on its
         choices. `targets` limits which destinations the wizard offers (the
         welcome dialog has no project to add to)."""
-        self._read_book(f"Reading {os.path.basename(path)}...",
+        self._read_book(tr("Reading {file}...", file=os.path.basename(path)),
                         lambda stop: text_extraction.extract_sections(path, should_stop=stop),
                         lambda sections: self._finish_import_book(path, sections, targets, default_target))
 
@@ -3401,14 +3496,14 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
     def _finish_import_book(self, path: str, sections: list, targets, default_target) -> None:
         if not sections:
-            QMessageBox.warning(self, "Empty", "No text found in that file.")
+            QMessageBox.warning(self, tr("Empty"), tr("No text found in that file."))
             return
         choice = self._ask_import_choices(path, sections, targets, default_target)
         if choice is None:
             return
         target, parts = choice
         if not parts:
-            QMessageBox.warning(self, "Empty", "Nothing was left to import after the cleanup.")
+            QMessageBox.warning(self, tr("Empty"), tr("Nothing was left to import after the cleanup."))
             return
         if target == IMPORT_SECTIONS and len(parts) > 1:
             self.new_from_sections(parts)
@@ -3423,7 +3518,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         unreadable file) is reported in a dialog. Returns False when a job
         is already running and nothing was started."""
         if self.is_busy() or self._text_read_thread is not None:
-            self.set_status("Wait for the current job to finish before importing text.", "warning")
+            self.set_status(tr("Wait for the current job to finish before importing text."), "warning")
             return False
         stop = self._text_read_stop = threading.Event()
 
@@ -3449,12 +3544,12 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         self._text_read_thread = None
         self.end_side_job()
         if isinstance(error, text_extraction.ExtractionCancelled):
-            self.set_status("Import cancelled.", "warning")
+            self.set_status(tr("Import cancelled."), "warning")
             return
         if error is not None:
             message = str(error) or type(error).__name__
-            self.set_status(f"Import failed: {message}", "error")
-            QMessageBox.critical(self, "Import failed", f"Read failed: {message}")
+            self.set_status(tr("Import failed: {message}", message=message), "error")
+            QMessageBox.critical(self, tr("Import failed"), tr("Read failed: {message}", message=message))
             return
         then(result)
 
@@ -3471,10 +3566,10 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
     def _finish_import_text(self, path: str, text: str, target: str) -> None:
         if not text:
-            QMessageBox.warning(self, "Empty", "No text found in that file.")
+            QMessageBox.warning(self, tr("Empty"), tr("No text found in that file."))
             return
         if target == "new":
-            if self._replace_blocked("starting a new project"):
+            if self._replace_blocked(tr("starting a new project")):
                 return
             self.new_project()
         editor = self.editor
@@ -3487,11 +3582,12 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         cursor.insertText(text)
         cursor.endEditBlock()
         editor.setTextCursor(cursor)
-        self.set_status(f"Imported {os.path.basename(path)}.")
+        self.set_status(tr("Imported {file}.", file=os.path.basename(path)))
 
     def import_subtitles_dialog(self) -> None:
         patterns = " ".join("*" + ext for ext in subtitles.SUBTITLE_EXTENSIONS)
-        path, _ = QFileDialog.getOpenFileName(self, "Import subtitles", filter=f"Subtitles ({patterns})")
+        path, _ = QFileDialog.getOpenFileName(self, tr("Import subtitles"), filter=tr("Subtitles ({patterns})",
+                                                                                      patterns=patterns))
         if path:
             self.import_subtitles(path)
 
@@ -3519,10 +3615,10 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         try:
             cues = subtitles.parse(path)
         except (OSError, subtitles.SubtitleError) as e:
-            QMessageBox.critical(self, "Import failed", f"Read failed: {e}")
+            QMessageBox.critical(self, tr("Import failed"), tr("Read failed: {error}", error=e))
             return []
         if not cues:
-            QMessageBox.warning(self, "Empty", "No subtitle cues found in that file.")
+            QMessageBox.warning(self, tr("Empty"), tr("No subtitle cues found in that file."))
             return []
         document = self.document
         rows = speaker_rows(cues)
@@ -3539,7 +3635,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if self.editor is not None:
             self.editor.load_text(document.text)
         self.on_characters_changed()
-        self.set_status(f"Imported {len(cues)} subtitle cue(s) from {os.path.basename(path)}.")
+        self.set_status(tr("Imported {count} subtitle cue(s) from {file}.", count=len(cues),
+                           file=os.path.basename(path)))
         return command.clip_ids
 
     def import_audio_dialog(self) -> None:
@@ -3547,7 +3644,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         (`recording_import.ImportAudioDialog`): a music bed (phase 5 P2) or
         a recording to edit as text (P3), with its transcript from Whisper
         or a caption file."""
-        path, _ = QFileDialog.getOpenFileName(self, "Import audio", "", project_io.AUDIO_FILTER)
+        path, _ = QFileDialog.getOpenFileName(self, tr("Import audio"), "", tr(project_io.AUDIO_FILTER))
         if not path:
             return
         choice = self._ask_audio_import(path)
@@ -3613,30 +3710,31 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
         # A recording imports beside a generate: its own thread, its own clips.
         if self.is_io_busy() or self._recording_thread is not None:
-            self.set_status("Wait for the current job to finish before importing a recording.", "warning")
+            self.set_status(tr("Wait for the current job to finish before importing a recording."), "warning")
             return False
         if not self.project_dir:
-            QMessageBox.warning(self, "Import failed", "This project has no folder to copy the recording into.")
+            QMessageBox.warning(self, tr("Import failed"), tr("This project has no folder to copy the recording into."))
             return False
         try:
             sf.info(path)
         except Exception as e:
-            QMessageBox.critical(self, "Import failed", f"Can't read {os.path.basename(path)} as audio: {e}")
+            QMessageBox.critical(self, tr("Import failed"), tr("Can't read {file} as audio: {error}",
+                                                               file=os.path.basename(path), error=e))
             return False
         cues = None
         if transcript == recording_import.CAPTIONS:
             try:
                 cues = subtitles.parse(caption_path or "")
             except (OSError, subtitles.SubtitleError) as e:
-                QMessageBox.critical(self, "Import failed", f"Couldn't read the caption file: {e}")
+                QMessageBox.critical(self, tr("Import failed"), tr("Couldn't read the caption file: {error}", error=e))
                 return False
             if not cues:
-                QMessageBox.warning(self, "Empty", "No cues found in that caption file.")
+                QMessageBox.warning(self, tr("Empty"), tr("No cues found in that caption file."))
                 return False
         try:
             stored = project_io.import_audio_file(path, self.project_dir)
         except (OSError, project_io.ProjectError) as e:
-            QMessageBox.critical(self, "Import failed", str(e))
+            QMessageBox.critical(self, tr("Import failed"), str(e))
             return False
         source, entry = imported.source_entry(stored)
         job = recording_import.RecordingJob(path=stored, name=os.path.basename(path), source=source, entry=entry,
@@ -3684,8 +3782,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self._recordingTranscribed.emit((job, error))
 
         self.begin_side_job()
-        self.set_status("Downloading Whisper model..." if downloading
-                        else f"Transcribing {job.name} with Whisper...", "busy")
+        self.set_status(tr("Downloading Whisper model...") if downloading
+                        else tr("Transcribing {name} with Whisper...", name=job.name), "busy")
         self._recording_thread = threading.Thread(target=_work, name="import-recording", daemon=True)
         self._recording_thread.start()
         return True
@@ -3700,18 +3798,19 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
     def _on_recording_progress(self, done: int, total: int) -> None:
         if total > 1:
-            self.transport_dock.set_progress(100.0 * done / total, f"Refining word timing {done}/{total}")
+            self.transport_dock.set_progress(100.0 * done / total, tr("Refining word timing {done}/{total}", done=done,
+                                                                      total=total))
 
     def _on_recording_transcribed(self, payload) -> None:
         job, error = payload
         self._recording_thread = None
         self.end_side_job()
         if error:
-            self.set_status(f"Transcription failed: {error}", "error")
-            QMessageBox.critical(self, "Import failed", f"Transcription failed: {error}")
+            self.set_status(tr("Transcription failed: {error}", error=error), "error")
+            QMessageBox.critical(self, tr("Import failed"), tr("Transcription failed: {error}", error=error))
             return
         if not job.rows:
-            self.set_status(f"Whisper heard no words in {job.name}.", "warning")
+            self.set_status(tr("Whisper heard no words in {name}.", name=job.name), "warning")
             return
         self._review_recording(job)
 
@@ -3738,7 +3837,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         the new clips' ids ([] when cancelled or dropped)."""
         project = self._recording_target(job)
         if project is None:
-            self.set_status(f"Dropped the transcript of {job.name}: its project is no longer open.", "warning")
+            self.set_status(tr("Dropped the transcript of {name}: its project is no longer open.", name=job.name),
+                            "warning")
             return []
         document = project.document
         characters = None
@@ -3746,7 +3846,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             characters = [(c.id, c.name) for c in document.characters if self.can_clone(c)]
         dialog = recording_import.RecordingReviewDialog(job.rows, job.source, job.path, characters, parent=self)
         if not self._ask_recording_review(dialog):
-            self.set_status("Recording import cancelled.")
+            self.set_status(tr("Recording import cancelled."))
             return []
         rows = dialog.rows()
         if not rows:
@@ -3765,7 +3865,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if self.editor is not None and project is self.focus:
             self.editor.load_text(document.text)
         self.on_characters_changed()
-        self.set_status(f"Imported {job.name}: {len(command.clip_ids)} clip(s) to edit as text.", "success")
+        self.set_status(tr("Imported {name}: {count} clip(s) to edit as text.", name=job.name,
+                           count=len(command.clip_ids)), "success")
         return command.clip_ids
 
     def _ask_bed_placement(self, playhead_s: float):
@@ -3775,10 +3876,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if playhead_s <= 0.0:
             return 0.0
         box = QMessageBox(self)
-        box.setWindowTitle("Import audio")
-        box.setText("Where should the audio start?")
-        start = box.addButton("At the start", QMessageBox.ButtonRole.AcceptRole)
-        playhead = box.addButton(f"At the playhead ({playhead_s:.1f}s)", QMessageBox.ButtonRole.ActionRole)
+        box.setWindowTitle(tr("Import audio"))
+        box.setText(tr("Where should the audio start?"))
+        start = box.addButton(tr("At the start"), QMessageBox.ButtonRole.AcceptRole)
+        playhead = box.addButton(tr("At the playhead ({playhead_s:.1f}s)", playhead_s=playhead_s),
+                                 QMessageBox.ButtonRole.ActionRole)
         box.addButton(QMessageBox.StandardButton.Cancel)
         box.setDefaultButton(start)
         box.exec()
@@ -3803,12 +3905,13 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
             sf.info(path)
         except Exception as e:
-            QMessageBox.critical(self, "Import failed", f"Can't read {os.path.basename(path)} as audio: {e}")
+            QMessageBox.critical(self, tr("Import failed"), tr("Can't read {file} as audio: {error}",
+                                                               file=os.path.basename(path), error=e))
             return None
         try:
             stored = project_io.import_audio_file(path, self.project_dir)
         except (OSError, project_io.ProjectError) as e:
-            QMessageBox.critical(self, "Import failed", str(e))
+            QMessageBox.critical(self, tr("Import failed"), str(e))
             return None
         title = os.path.splitext(os.path.basename(path))[0].strip() or "Audio"
         command = ImportBedCommand(stored, title, at_s)
@@ -3818,11 +3921,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self.editor.rehighlight()
         self.schedule_save()
         self.refresh_timeline()
-        self.set_status(f"Imported {os.path.basename(path)} as a music bed.")
+        self.set_status(tr("Imported {file} as a music bed.", file=os.path.basename(path)))
         return command.clip_id
 
     def import_source_track_dialog(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Import source track", filter=project_io.AUDIO_FILTER)
+        path, _ = QFileDialog.getOpenFileName(self, tr("Import source track"), filter=tr(project_io.AUDIO_FILTER))
         if path:
             self.import_source_track(path)
 
@@ -3838,17 +3941,18 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
         project_dir = self.project_dir
         if not project_dir:
-            QMessageBox.warning(self, "Import failed", "This project has no folder to copy the track into.")
+            QMessageBox.warning(self, tr("Import failed"), tr("This project has no folder to copy the track into."))
             return False
         try:
             sf.info(path)
         except Exception as e:
-            QMessageBox.critical(self, "Import failed", f"Couldn't read {os.path.basename(path)} as audio: {e}")
+            QMessageBox.critical(self, tr("Import failed"), tr("Couldn't read {file} as audio: {error}",
+                                                               file=os.path.basename(path), error=e))
             return False
         try:
             copied = project_io.import_audio_file(path, project_dir)
         except (OSError, project_io.ProjectError) as e:
-            QMessageBox.critical(self, "Import failed", f"Import failed: {e}")
+            QMessageBox.critical(self, tr("Import failed"), tr("Import failed: {error}", error=e))
             return False
         previous = source_track_settings(self.document.settings)
         value = {"path": project_io.source_track_relpath(copied, project_dir),
@@ -3860,7 +3964,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             self.settings_dock.refresh_scope_fields()
         self.schedule_save()
         self.refresh_timeline()
-        self.set_status(f"Source track: {os.path.basename(path)}.")
+        self.set_status(tr("Source track: {file}.", file=os.path.basename(path)))
         return True
 
     def export_dialog(self) -> None:
@@ -3879,7 +3983,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if report is None:
             self.set_status(note, "error")
             return
-        self.set_status("Measured loudness.", "success")
+        self.set_status(tr("Measured loudness."), "success")
         self._loudness_dialog = LoudnessDialog(report, note, parent=self)
         self._loudness_dialog.show()
 
@@ -3961,9 +4065,10 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def on_engine_status(self, msg: str, is_error: bool) -> None:
         if not is_error and msg.startswith(WHOLE_DOCUMENT_SAVED) and os.path.isfile(msg[len(WHOLE_DOCUMENT_SAVED):]):
             self._log_whole_document_output(msg[len(WHOLE_DOCUMENT_SAVED):])
+            msg = tr("Done! Saved: {path}", path=msg[len(WHOLE_DOCUMENT_SAVED):])
         self.set_status(msg, "error" if is_error else "info")
         if is_error and "pip install" in msg:
-            QMessageBox.critical(self, "Missing Dependencies", msg)
+            QMessageBox.critical(self, tr("Missing Dependencies"), msg)
 
     def on_engine_progress(self, percent: float, elapsed: float, eta: str, detail: str) -> None:
         self.transport_dock.set_progress(percent, detail, elapsed=elapsed, eta=eta)
@@ -4022,10 +4127,11 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             character = self.active_character()
         backend = self.backend_for_character(character)
         if isinstance(backend, MissingBackend):
-            self.set_status(f"{backend.message}: nothing to preview with.", "warning")
+            self.set_status(tr("{message}: nothing to preview with.", message=backend.message), "warning")
             return False
         if not backend.is_ready():
-            QMessageBox.information(self, "Wait", "Engine is initializing... please wait 2 seconds and try again.")
+            QMessageBox.information(self, tr("Wait"), tr("Engine is initializing... please wait 2 seconds and try "
+                                                         "again."))
             return False
 
         # The character's voice on its own engine (the selected clip's
@@ -4055,15 +4161,15 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         fd, tmp_path = tempfile.mkstemp(suffix=".wav", prefix="kokorogui-preview-")
         os.close(fd)
         self._preview_path = tmp_path
-        self.set_status("Generating preview...", "busy")
+        self.set_status(tr("Generating preview..."), "busy")
 
         def _done(future):
             try:
                 success = future.result()
-                payload = tmp_path if success else "Preview failed."
+                payload = tmp_path if success else tr("Preview failed.")
             except Exception as e:
                 success = False
-                payload = f"Preview error: {e}"
+                payload = tr("Preview error: {error}", error=e)
             self.previewFinished.emit(success, payload)
 
         future = backend.preview(text, state["voice"], state["speed"], tmp_path,
@@ -4135,9 +4241,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
 
     def _on_preview_finished(self, success: bool, payload: str) -> None:
         if success:
-            self.set_status("Playing preview...", "success")
+            self.set_status(tr("Playing preview..."), "success")
             playback.play(payload)
-            QTimer.singleShot(3000, self, lambda: self.set_status("Ready"))
+            QTimer.singleShot(3000, self, lambda: self.set_status(tr("Ready")))
         else:
             self.set_status(payload, "error")
 
@@ -4151,14 +4257,14 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if not level.document.clips:
             if self.is_generating():
                 # The whole-document path doesn't queue.
-                self.set_status("A generate is running. Generate the whole text once it finishes.", "warning")
+                self.set_status(tr("A generate is running. Generate the whole text once it finishes."), "warning")
                 return
             self.start_conversion()
             return
 
         dirty = level.document.dirty_clips()
         if not dirty:
-            QMessageBox.information(self, "Up to date", "All clips are already generated.")
+            QMessageBox.information(self, tr("Up to date"), tr("All clips are already generated."))
             return
 
         # Once a document has any clips, Generate always queues the
@@ -4204,7 +4310,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         project = self.level
         stale = self.stale_selected_clips(project)
         if not stale:
-            self.set_status("Nothing stale in the selection", "warning")
+            self.set_status(tr("Nothing stale in the selection"), "warning")
             return
         self.timeline_dock.generate_dirty_clips_requested(project, clip_ids={clip.id for clip in stale})
 
@@ -4235,9 +4341,9 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             return
         percent = int((completed / total) * 100) if total else 0
         if current_clip_label:
-            detail = f"Generated {completed}/{total} clips"
+            detail = tr("Generated {completed}/{total} clips", completed=completed, total=total)
         else:
-            detail = f"Generating {total} clip(s)..."
+            detail = tr("Generating {total} clip(s)...", total=total)
         self.transport_dock.set_progress(percent, detail)
 
     def on_batch_generation_finished(self, succeeded: int, failed: int, failed_clip_ids: list) -> None:
@@ -4266,7 +4372,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         preset exists (grill TE12). While a generate runs the new clips join
         its queue."""
         if self.generate_blocked():
-            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before auto-splitting.")
+            QMessageBox.warning(self, tr("Busy"), tr("Finish or cancel the current job before auto-splitting."))
             return
 
         triples, unmatched = plan_auto_split_clips(
@@ -4276,12 +4382,12 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if unmatched:
             names = ", ".join(sorted(set(unmatched)))
             QMessageBox.warning(
-                self, "Unmatched speaker names",
-                f"No character found for: {names}. Those blocks were skipped.",
+                self, tr("Unmatched speaker names"),
+                tr("No character found for: {names}. Those blocks were skipped.", names=names),
             )
 
         if not triples:
-            QMessageBox.information(self, "Nothing to split", "No taggable text found to auto-split.")
+            QMessageBox.information(self, tr("Nothing to split"), tr("No taggable text found to auto-split."))
             return
 
         gaps = plan_pause_gaps(self.document, triples)
@@ -4292,8 +4398,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         missing_fx = sorted({name for name in tag_fx.values() if name not in known_fx})
         if missing_fx:
             QMessageBox.warning(
-                self, "Unknown FX",
-                f"No FX found for: {', '.join(missing_fx)}. Those clips use their character's FX.",
+                self, tr("Unknown FX"),
+                tr("No FX found for: {names}. Those clips use their character's FX.", names=', '.join(missing_fx)),
             )
         for start, end, character_id in triples:
             fields = {"gap_before_s": gaps[start]} if start in gaps else None
@@ -4314,14 +4420,15 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def start_conversion(self) -> None:
         text_data = self.editor.toPlainText().strip()
         if not text_data:
-            QMessageBox.warning(self, "Empty", "No text to process.")
+            QMessageBox.warning(self, tr("Empty"), tr("No text to process."))
             return
 
         if isinstance(self.backend, MissingBackend):
-            self.set_status(f"{self.backend.message}: can't generate.", "warning")
+            self.set_status(tr("{message}: can't generate.", message=self.backend.message), "warning")
             return
         if not self.backend.is_ready():
-            QMessageBox.information(self, "Wait", "Engine is initializing... please wait 2 seconds and try again.")
+            QMessageBox.information(self, tr("Wait"), tr("Engine is initializing... please wait 2 seconds and try "
+                                                         "again."))
             return
 
         config = self._assemble_config()
@@ -4341,7 +4448,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         for backend in self._backends.values():
             backend.cancel()
         self.cancel_queue()
-        self.set_status("Cancelling... waiting for workers...", "warning")
+        self.set_status(tr("Cancelling... waiting for workers..."), "warning")
 
     # --- keyboard map slots (keymap.KEYS) ---------------------------------
 
@@ -4387,14 +4494,14 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def go_to_previous_marker(self) -> None:
         target = keymap.previous_time(self._marker_times(), self.transport.position())
         if target is None:
-            self.set_status("No marker before the playhead.", "warning")
+            self.set_status(tr("No marker before the playhead."), "warning")
         else:
             self.transport.seek(target)
 
     def go_to_next_marker(self) -> None:
         target = keymap.next_time(self._marker_times(), self.transport.position())
         if target is None:
-            self.set_status("No marker after the playhead.", "warning")
+            self.set_status(tr("No marker after the playhead."), "warning")
         else:
             self.transport.seek(target)
 
@@ -4404,7 +4511,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
     def toggle_snap_to_grid(self) -> None:
         button = self.timeline_dock.snap_button
         button.toggle()
-        self.set_status("Snap to grid on." if button.isChecked() else "Snap to grid off.")
+        self.set_status(tr("Snap to grid on.") if button.isChecked() else tr("Snap to grid off."))
 
     def delete_selected_bed(self) -> bool:
         """Delete on the timeline: removes the selected music bed (its
@@ -4413,7 +4520,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         selected = self.selection.selected_clip_id
         clip = self.level.document.get_clip(selected) if selected else None
         if clip is None or not clip.is_bed:
-            self.set_status("Select a music bed to delete it.", "warning")
+            self.set_status(tr("Select a music bed to delete it."), "warning")
             return False
         self.timeline_dock.on_bed_action_requested(clip.id, "remove")
         return True
@@ -4697,7 +4804,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             return False
         offset = self.split_offset_at(clip_id, seconds)
         if offset is None:
-            self.set_status("No word boundary to cut this clip at.", "warning")
+            self.set_status(tr("No word boundary to cut this clip at."), "warning")
             return False
         problem = document.split_problem(clip, offset)
         if problem:
@@ -4705,7 +4812,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             return False
         document.undo_stack.push(SplitClipCommand(clip_id, offset))
         self._after_split_or_join()
-        self.set_status("Split the clip in two.", "success")
+        self.set_status(tr("Split the clip in two."), "success")
         return True
 
     def record_guide_take(self, clip_id: str | None = None):
@@ -4723,7 +4830,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         project = self.project_of_clip_id(clip_id) if clip_id else None
         clip = project.document.get_clip(clip_id) if project is not None else None
         if clip is None or clip.source != "generated":
-            self.set_status("Select a speech clip to record a guide take on.", "warning")
+            self.set_status(tr("Select a speech clip to record a guide take on."), "warning")
             return None
         panel = self.guide_take_panel
         if panel is None:
@@ -4743,7 +4850,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         """Edit > Split Clip at Playhead and the timeline's S key."""
         clip = self._playhead_clip()
         if clip is None:
-            self.set_status("Put the playhead on a clip to split it.", "warning")
+            self.set_status(tr("Put the playhead on a clip to split it."), "warning")
             return False
         return self.split_clip_at(clip.id, self.transport.position())
 
@@ -4765,7 +4872,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         first = document.get_clip(clip_id)
         second = document.next_clip(clip_id) if first is not None else None
         if second is None:
-            self.set_status("There is no clip after this one to join.", "warning")
+            self.set_status(tr("There is no clip after this one to join."), "warning")
             return False
         problem = document.join_problem(first, second)
         if problem:
@@ -4773,14 +4880,14 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
             return False
         document.undo_stack.push(JoinClipsCommand(first.id, second.id))
         self._after_split_or_join()
-        self.set_status("Joined the two clips.", "success")
+        self.set_status(tr("Joined the two clips."), "success")
         return True
 
     def join_selected_with_next(self) -> bool:
         """Edit > Join with Next Clip."""
         pair = self._join_pair()
         if pair is None:
-            self.set_status("Select a clip that has another clip after it.", "warning")
+            self.set_status(tr("Select a clip that has another clip after it."), "warning")
             return False
         return self.join_clip_with_next(pair[0].id)
 
@@ -4797,15 +4904,15 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         document = self.level.document
         clip = self._playhead_clip()
         offset = self.split_offset_at(clip.id, self.transport.position()) if clip is not None else None
-        problem = "Put the playhead on a clip." if clip is None else (
-            "Put the playhead between two words of the clip." if offset is None
+        problem = tr("Put the playhead on a clip.") if clip is None else (
+            tr("Put the playhead between two words of the clip.") if offset is None
             else document.split_problem(clip, offset))
         self.split_clip_action.setEnabled(problem is None)
-        self.split_clip_action.setToolTip(problem or SPLIT_CLIP_TIP)
+        self.split_clip_action.setToolTip(problem or tr(SPLIT_CLIP_TIP))
         pair = self._join_pair()
-        problem = "Select a clip with another clip after it." if pair is None else document.join_problem(*pair)
+        problem = tr("Select a clip with another clip after it.") if pair is None else document.join_problem(*pair)
         self.join_clip_action.setEnabled(problem is None)
-        self.join_clip_action.setToolTip(problem or JOIN_CLIP_TIP)
+        self.join_clip_action.setToolTip(problem or tr(JOIN_CLIP_TIP))
 
     # --- filler words (plan 32) ------------------------------------------
 
@@ -4819,14 +4926,14 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         editor = self.editor
         hits = fillers.find_fillers(self.document) if editor is not None else []
         if not hits:
-            self.set_status("No filler words found in the recordings.", "info")
+            self.set_status(tr("No filler words found in the recordings."), "info")
             return 0
         dialog = FillerDialog(self.document, hits, self)
         if not self._ask_fillers(dialog):
             return 0
         removed = editor.delete_ranges([(hit.start, hit.end) for hit in dialog.checked_fillers()])
         if removed:
-            self.set_status(f"Removed {removed} filler {'word' if removed == 1 else 'words'}.", "success")
+            self.set_status(ntr("Removed {n} filler word.", "Removed {n} filler words.", removed), "success")
         return removed
 
     # --- dialogue attribution (plan 26) ------------------------------------
@@ -4846,7 +4953,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         if editor is None:
             return None
         if self.is_busy():
-            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before attributing dialogue.")
+            QMessageBox.warning(self, tr("Busy"), tr("Finish or cancel the current job before attributing dialogue."))
             return None
         cursor = editor.textCursor()
         selection = (cursor.selectionStart(), cursor.selectionEnd()) if cursor.hasSelection() else None
@@ -4945,7 +5052,7 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
         QApplication.processEvents()
 
     def _on_word_align_progress(self, done: int, total: int) -> None:
-        self.set_status(f"Aligning words {done}/{total}", "busy")
+        self.set_status(tr("Aligning words {done}/{total}", done=done, total=total), "busy")
 
     def _on_words_aligned(self, results) -> None:
         self._word_align_thread = None
@@ -4962,7 +5069,8 @@ class QtTTSApp(SubprojectsMixin, GenerationQueueMixin, ProofMixin, ListenThrough
                 applied += 1
         if applied:
             self.schedule_save()
-        self.set_status(f"Aligned words for {applied} segment(s).", "success" if applied else "info")
+        self.set_status(tr("Aligned words for {applied} segment(s).", applied=applied),
+                        "success" if applied else "info")
 
     def _on_transport_state(self, state: str) -> None:
         self.transport_dock.set_playing(state == "playing")

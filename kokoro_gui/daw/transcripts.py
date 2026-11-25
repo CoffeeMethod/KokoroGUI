@@ -29,6 +29,7 @@ from typing import Optional
 from kokoro_gui.daw import markers as marker_ops
 from kokoro_gui.daw.arrangement import Arrangement
 from kokoro_gui.engine.text_extraction import strip_markup
+from kokoro_gui.i18n import tr
 
 TEXT_EXTRAS = ("vtt", "srt_speakers", "transcript_json", "txt", "chapters_json", "show_notes")
 # What follows the base name. The speaker SRT has its own, so it never
@@ -225,11 +226,12 @@ def write_extras(document, arrangement: Arrangement, out_dir: str, base: str, ex
             if has_chapters is None:
                 has_chapters = bool(chapter_rows(document, arrangement, range_s, head_s))
             if not has_chapters:
-                empty.append("the chapters file" if key == "chapters_json" else "the show notes")
+                empty.append(tr("the chapters file") if key == "chapters_json" else tr("the show notes"))
             if key == "chapters_json":
                 write_chapters_json(document, arrangement, path, range_s=range_s, head_s=head_s)
             else:
                 write_show_notes(document, arrangement, path, range_s=range_s, head_s=head_s)
         paths.append(path)
-    warnings = [f"no markers or subprojects, so {' and '.join(empty)} came out empty"] if empty else []
+    warnings = [tr("no markers or subprojects, so {names} came out empty",
+                   names=tr(" and ").join(empty))] if empty else []
     return paths, warnings

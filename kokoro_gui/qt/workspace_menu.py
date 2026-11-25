@@ -17,6 +17,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QGuiApplication
 from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox, QTabBar, QTabWidget, QToolButton
 
+from kokoro_gui.i18n import N_, tr
 from kokoro_gui.qt.workspace import (
     ADVANCED,
     SIMPLE,
@@ -29,17 +30,39 @@ from kokoro_gui.qt.workspace import (
 
 LAYOUT_SAVE_DEBOUNCE_MS = 1000
 
-NO_VOICE_EDITOR_TIP = "The engine in use has no voice editor, so there is no Voices panel."
+NO_VOICE_EDITOR_TIP = N_("The engine in use has no voice editor, so there is no Voices panel.")
 
-SAVE_AS_HELP = ("Name for this layout. The workspace keeps it as saved: moving or closing panels later "
-                "changes only the window until you choose Update workspace.")
+SAVE_AS_HELP = (N_("Name for this layout. The workspace keeps it as saved: moving or closing panels later "
+                   "changes only the window until you choose Update workspace."))
+
+
+# What each panel is for, by its dock's object name.
+PANEL_TIPS = {
+    "dock_transcript": N_("Write the text and give it characters."),
+    "dock_settings": N_("The voice of the selected clip, its character, or the defaults."),
+    "dock_fx": N_("The FX of the selected clip, its character, or the defaults."),
+    "dock_lexicon": N_("Rules for how words are read aloud."),
+    "dock_outline": N_("The subprojects or markers, with their length and status."),
+    "dock_proof": N_("Compare the generated audio with the text."),
+    "dock_queue": N_("What is waiting to be generated."),
+    "dock_output": N_("The files you exported."),
+    "dock_voices": N_("Mix voices or add References, depending on the engine."),
+    "dock_video": N_("The reference video."),
+    "dock_timeline": N_("The clips in time, on tracks."),
+    "dock_transport": N_("Play, record and generate."),
+}
+
+
+def shown_name(name: str) -> str:
+    """A built-in's name in the window's language; a custom one as typed."""
+    return tr(name) if name in WORKSPACE_NAMES else name
 
 
 class WorkspaceMenuMixin:
     # -- construction --------------------------------------------------------
 
     def _build_workspace_menu(self, bar) -> None:
-        self.workspace_menu = bar.addMenu("&Workspace")
+        self.workspace_menu = bar.addMenu(tr("&Workspace"))
         self.workspace_menu.setToolTipsVisible(True)
         self.workspace_menu.aboutToShow.connect(self._sync_workspace_actions)
         self.workspace_group = QActionGroup(self)
@@ -48,20 +71,22 @@ class WorkspaceMenuMixin:
         for name in WORKSPACE_NAMES:
             self.workspace_actions[name] = self._workspace_action(name)
 
-        self.save_workspace_as_action = self._action("Save workspace as...", self.save_workspace_as)
-        self.save_workspace_as_action.setToolTip("Keep the current layout as a new named workspace.")
-        self.update_workspace_action = self._action("Update workspace", self.update_workspace)
-        self.update_workspace_action.setToolTip("Save the current layout into the active workspace.")
-        self.revert_workspace_action = self._action("Revert to saved layout", self.revert_workspace)
-        self.revert_workspace_action.setToolTip("Put the panels back the way the active workspace was saved.")
-        self.rename_workspace_action = self._action("Rename workspace...", self.rename_workspace)
-        self.delete_workspace_action = self._action("Delete workspace...", self.delete_workspace)
-        self.panels_menu = QMenu("&Panels", self)
+        self.save_workspace_as_action = self._action(tr("Save workspace as..."), self.save_workspace_as)
+        self.save_workspace_as_action.setToolTip(tr("Keep the current layout as a new named workspace."))
+        self.update_workspace_action = self._action(tr("Update workspace"), self.update_workspace)
+        self.update_workspace_action.setToolTip(tr("Save the current layout into the active workspace."))
+        self.revert_workspace_action = self._action(tr("Revert to saved layout"), self.revert_workspace)
+        self.revert_workspace_action.setToolTip(tr("Put the panels back the way the active workspace was saved."))
+        self.rename_workspace_action = self._action(tr("Rename workspace..."), self.rename_workspace)
+        self.rename_workspace_action.setToolTip(tr("Give a saved workspace another name."))
+        self.delete_workspace_action = self._action(tr("Delete workspace..."), self.delete_workspace)
+        self.delete_workspace_action.setToolTip(tr("Remove a saved workspace and its layout."))
+        self.panels_menu = QMenu(tr("&Panels"), self)
         self.panels_menu.setToolTipsVisible(True)
         self.panels_menu.aboutToShow.connect(self._rebuild_panels_menu)
-        self.reset_layout_action = self._action("Restore default layout...", self.reset_workspace)
-        self.reset_layout_action.setToolTip("Arrange the panels the way this workspace starts. A saved workspace "
-                                            "keeps its saved layout until you choose Update workspace.")
+        self.reset_layout_action = self._action(tr("Restore default layout..."), self.reset_workspace)
+        self.reset_layout_action.setToolTip(tr("Arrange the panels the way this workspace starts. A saved workspace "
+                                               "keeps its saved layout until you choose Update workspace."))
 
         self._layout_timer = QTimer(self)
         self._layout_timer.setSingleShot(True)
@@ -89,8 +114,8 @@ class WorkspaceMenuMixin:
             if not bar.usesScrollButtons():
                 bar.setUsesScrollButtons(True)
             for button in bar.findChildren(QToolButton):
-                name = {Qt.ArrowType.LeftArrow: "Scroll tabs left",
-                        Qt.ArrowType.RightArrow: "Scroll tabs right"}.get(button.arrowType())
+                name = {Qt.ArrowType.LeftArrow: tr("Scroll tabs left"),
+                        Qt.ArrowType.RightArrow: tr("Scroll tabs right")}.get(button.arrowType())
                 if name and button.toolTip() != name:
                     button.setToolTip(name)
                     button.setAccessibleName(name)
@@ -102,7 +127,8 @@ class WorkspaceMenuMixin:
                     bar.setTabToolTip(i, full)
 
     def _workspace_action(self, name: str) -> QAction:
-        action = QAction(menu_label(name), self)
+        action = QAction(menu_label(shown_name(name)), self)
+        action.setToolTip(tr("Arrange the panels the way this workspace keeps them."))
         action.setCheckable(True)
         action.triggered.connect(lambda checked=False, n=name: self.activate_workspace(n))
         self.workspace_group.addAction(action)
@@ -135,7 +161,7 @@ class WorkspaceMenuMixin:
             return
         self.set_status(text, "warning")
         if box:
-            QMessageBox.warning(self, "Workspace", text)
+            QMessageBox.warning(self, tr("Workspace"), text)
 
     def _show_launch_workspace_notice(self) -> None:
         text, self._launch_workspace_notice = getattr(self, "_launch_workspace_notice", ""), ""
@@ -163,7 +189,7 @@ class WorkspaceMenuMixin:
         for name, action in self.workspace_actions.items():
             active = name == manager.active
             action.setChecked(active)
-            action.setText(menu_label(name) + (" (modified)" if active and modified else ""))
+            action.setText(menu_label(shown_name(name)) + (tr(" (modified)") if active and modified else ""))
 
         custom_active = manager.is_custom()
         self.update_workspace_action.setEnabled(custom_active and modified)
@@ -204,12 +230,15 @@ class WorkspaceMenuMixin:
         menu.clear()
         for dock in self.panel_docks():
             if dock is None:
-                placeholder = menu.addAction("Voices")
+                placeholder = menu.addAction(tr("Voices"))
                 placeholder.setEnabled(False)
-                placeholder.setToolTip(NO_VOICE_EDITOR_TIP)
-                placeholder.setStatusTip(NO_VOICE_EDITOR_TIP)
+                placeholder.setToolTip(tr(NO_VOICE_EDITOR_TIP))
+                placeholder.setStatusTip(tr(NO_VOICE_EDITOR_TIP))
                 continue
-            menu.addAction(dock.toggleViewAction())
+            toggle = dock.toggleViewAction()
+            toggle.setToolTip(tr(PANEL_TIPS[dock.objectName()]) if dock.objectName() in PANEL_TIPS
+                              else tr("Show or hide this panel."))
+            menu.addAction(toggle)
 
     # -- layout edits --------------------------------------------------------
 
@@ -291,18 +320,18 @@ class WorkspaceMenuMixin:
     def save_workspace_as(self) -> None:
         manager = self.workspaces
         suggested = manager.active if manager.is_custom() else ""
-        name, ok = QInputDialog.getText(self, "Save Workspace As", SAVE_AS_HELP, text=suggested)
+        name, ok = QInputDialog.getText(self, tr("Save Workspace As"), tr(SAVE_AS_HELP), text=suggested)
         if not ok:
             return
         try:
             manager.save_as(name)
         except WorkspaceExistsError as clash:
-            if not self._confirm("Replace Workspace",
-                                 f"Replace the saved layout of {clash.name} with the current one?"):
+            if not self._confirm(tr("Replace Workspace"),
+                                 tr("Replace the saved layout of {name} with the current one?", name=clash.name)):
                 return
             manager.save_as(name, replace=True)
         except WorkspaceNameError as error:
-            QMessageBox.warning(self, "Save Workspace As", str(error))
+            QMessageBox.warning(self, tr("Save Workspace As"), str(error))
             return
         self._after_workspace_change()
 
@@ -315,8 +344,8 @@ class WorkspaceMenuMixin:
         if not manager.is_custom():
             return
         if manager.is_modified() and not self._confirm(
-                "Revert to Saved Layout", f"Discard the changes to the panels and go back to {manager.active} "
-                                          "as it was saved?"):
+                tr("Revert to Saved Layout"), tr("Discard the changes to the panels and go back to {active} "
+                                             "as it was saved?", active=manager.active)):
             self._sync_workspace_actions()
             return
         manager.revert()
@@ -330,33 +359,33 @@ class WorkspaceMenuMixin:
         names = manager.custom_names()
         if not names:
             return None
-        name, ok = QInputDialog.getItem(self, title, "Workspace:", names, 0, False)
+        name, ok = QInputDialog.getItem(self, title, tr("Workspace:"), names, 0, False)
         return name if ok and name in names else None
 
     def rename_workspace(self) -> None:
-        old = self._pick_custom_workspace("Rename Workspace")
+        old = self._pick_custom_workspace(tr("Rename Workspace"))
         if old is None:
             return
-        new, ok = QInputDialog.getText(self, "Rename Workspace", f"New name for {old}:", text=old)
+        new, ok = QInputDialog.getText(self, tr("Rename Workspace"), tr("New name for {old}:", old=old), text=old)
         if not ok:
             return
         try:
             self.workspaces.rename(old, new)
         except WorkspaceNameError as error:
-            QMessageBox.warning(self, "Rename Workspace", str(error))
+            QMessageBox.warning(self, tr("Rename Workspace"), str(error))
             return
         self._sync_workspace_actions()
         self.save_layout()
 
     def delete_workspace(self) -> None:
-        name = self._pick_custom_workspace("Delete Workspace")
+        name = self._pick_custom_workspace(tr("Delete Workspace"))
         if name is None:
             return
         active = name == self.workspaces.active
-        text = f"Delete the workspace {name}? Its saved layout can't be brought back."
+        text = tr("Delete the workspace {name}? Its saved layout can't be brought back.", name=name)
         if active:
-            text += f" The window switches to {ADVANCED}."
-        if not self._confirm("Delete Workspace", text):
+            text += tr(" The window switches to {advanced}.", advanced=tr(ADVANCED))
+        if not self._confirm(tr("Delete Workspace"), text):
             return
         self.workspaces.delete(name)
         self._after_workspace_change()
@@ -367,13 +396,14 @@ class WorkspaceMenuMixin:
         manager = self.workspaces
         if manager.is_custom():
             if manager.is_modified() and not self._confirm(
-                    "Restore Default Layout", "Discard the changes to the panels and arrange them the default way? "
-                                              f"The saved layout of {manager.active} stays until you choose "
-                                              "Update workspace."):
+                    tr("Restore Default Layout"), tr("Discard the changes to the panels and arrange them the default "
+                                                     "way? "
+                                                 "The saved layout of {active} stays until you choose "
+                                                 "Update workspace.", active=manager.active)):
                 return
-        elif not self._confirm("Restore Default Layout",
-                               f"Arrange the panels the way {manager.active} starts? The changes {manager.active} "
-                               "remembered are discarded."):
+        elif not self._confirm(tr("Restore Default Layout"),
+                               tr("Arrange the panels the way {active} starts? The changes {active} "
+                                  "remembered are discarded.", active=tr(manager.active))):
             return
         manager.reset()
         self._after_workspace_change()

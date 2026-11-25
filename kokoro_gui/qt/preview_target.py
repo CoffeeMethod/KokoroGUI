@@ -7,6 +7,7 @@ book-size transcript on every caret move.
 """
 from __future__ import annotations
 
+from kokoro_gui.i18n import tr
 from kokoro_gui.qt.scope_target import shorten
 
 SELECTION = "selection"
@@ -52,18 +53,20 @@ def describe(editor, character) -> str:
     cursor = editor.textCursor()
     if source == SELECTION:
         length = cursor.selectionEnd() - cursor.selectionStart()
-        what = "the selected text"
+        what = tr("the selected text")
     elif source == TRANSCRIPT:
         length = editor.document().characterCount() - 1
-        what = "the transcript"
+        what = tr("the transcript")
     else:
-        length, what = 0, "a sample line"
+        length, what = 0, tr("a sample line")
     if length > SPOKEN_LIMIT:
-        what = f"the start of {what}"
-    voice = f" as {shorten(character.name)}" if character is not None else ""
-    return f"Preview speaks {what}{voice}."
+        what = tr("the start of {what}", what=what)
+    if character is None:
+        return tr("Preview speaks {what}.", what=what)
+    return tr("Preview speaks {what} as {name}.", what=what, name=shorten(character.name))
 
 
-TOOLTIP = ("Hear text in a character's voice without changing the project. It speaks the selected text, else the "
-           f"transcript, up to {SPOKEN_LIMIT} characters (the first two parts of tagged text, {SPOKEN_LIMIT} each), "
-           "with the default FX. It does not play the timeline's audio; Play does.")
+def tooltip() -> str:
+    return tr("Hear text in a character's voice without changing the project. It speaks the selected text, else the "
+              "transcript, up to {limit} characters (the first two parts of tagged text, {limit} each), "
+              "with the default FX. It does not play the timeline's audio; Play does.", limit=SPOKEN_LIMIT)

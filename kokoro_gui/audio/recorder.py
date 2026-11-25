@@ -31,6 +31,8 @@ import numpy as np
 
 import playback
 
+from kokoro_gui.i18n import tr
+
 DEFAULT_SAMPLE_RATE = 48000
 BEEPS = 3
 BEEP_HZ = 1000.0
@@ -94,7 +96,7 @@ def count_in(sample_rate: int = DEFAULT_SAMPLE_RATE) -> np.ndarray:
 
 def default_stream_factory(sample_rate: int, channels: int, device, callback: Callable):
     if not available():
-        raise RecorderError("No audio input: sounddevice or PortAudio is missing.")
+        raise RecorderError(tr("No audio input: sounddevice or PortAudio is missing."))
     return playback.sd.InputStream(samplerate=sample_rate, channels=channels, dtype="float32", device=device,
                                    blocksize=playback.stream_blocksize(sample_rate), callback=callback)
 
@@ -135,7 +137,7 @@ class Recorder:
         except RecorderError:
             raise
         except Exception as e:
-            raise RecorderError(f"Couldn't open the input: {e}") from e
+            raise RecorderError(tr("Couldn't open the input: {error}", error=e)) from e
         self._stream = stream
 
     def _callback(self, indata, frames, _time_info, status) -> None:

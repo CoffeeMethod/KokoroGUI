@@ -12,6 +12,7 @@ import os
 
 from kokoro_gui.engine import runtime
 from kokoro_gui.engines.voice_store import EmbeddingStore
+from kokoro_gui.i18n import tr
 
 # Kokoro's `.pt` voices: `runtime.CUSTOM_VOICES_DIR` and a project's
 # `engines/kokoro/voices/` (Claude/old/PLAN_tbaw_bundle.md section 4).
@@ -50,7 +51,7 @@ class VoiceMixingMixin:
         p = self.pipeline
         if not p:
             p = kokoro_engine.get_thread_pipeline('a')
-            if not p: raise RuntimeError("No pipeline available for mixing")
+            if not p: raise RuntimeError(tr("No pipeline available for mixing"))
 
         # Resolve inputs (handle custom vs standard)
         v1_arg = self.resolve_voice_path(v1_name)
@@ -62,7 +63,7 @@ class VoiceMixingMixin:
         t2 = p.load_voice(v2_arg)
 
         if t1 is None or t2 is None:
-            raise ValueError("Failed to load one of the voices.")
+            raise ValueError(tr("Failed to load one of the voices."))
 
         # Ensure they are on CPU for mixing
         if isinstance(t1, torch.Tensor): t1 = t1.cpu()

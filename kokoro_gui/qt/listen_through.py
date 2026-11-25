@@ -27,6 +27,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QLineEdit
 from kokoro_gui.audio import transport as transport_mod
 from kokoro_gui.daw import markers as marker_ops
 from kokoro_gui.daw.undo import SetFieldCommand
+from kokoro_gui.i18n import tr
 from kokoro_gui.qt import keymap
 
 RATE_SETTING = "playback_rate"
@@ -68,7 +69,8 @@ class FlagNotePopup(QFrame):
         self.label = QLabel("")
         layout.addWidget(self.label)
         self.edit = QLineEdit()
-        self.edit.setPlaceholderText("Note (Enter saves, Esc keeps the flag without one)")
+        self.edit.setToolTip(tr("What to fix here. Enter keeps the note."))
+        self.edit.setPlaceholderText(tr("Note (Enter saves, Esc keeps the flag without one)"))
         self.edit.setMinimumWidth(320)
         self.edit.returnPressed.connect(lambda: self._finish(self.edit.text()))
         self.edit.installEventFilter(self)
@@ -129,10 +131,11 @@ class ListenThroughMixin:
     def _step_playback_rate(self, steps, up: bool) -> None:
         target = step_rate(self.transport.rate, steps, up)
         if target is None:
-            self.set_status(f"Playback speed is already {rate_label(self.transport.rate)}"
-                            f"{', the fastest' if up else ', the slowest'}.")
+            rate = rate_label(self.transport.rate)
+            self.set_status(tr("Playback speed is already {rate}, the fastest.", rate=rate) if up
+                            else tr("Playback speed is already {rate}, the slowest.", rate=rate))
             return
-        self.set_status(f"Playback speed {rate_label(self.set_playback_rate(target))}.")
+        self.set_status(tr("Playback speed {rate_label}.", rate_label=rate_label(self.set_playback_rate(target))))
 
     def rate_up_key(self) -> None:
         self._step_playback_rate(transport_mod.RATE_STEPS, up=True)
@@ -147,7 +150,7 @@ class ListenThroughMixin:
             return
         target = step_rate(self.transport.rate, keymap.LISTEN_RATES, up=True)
         if target is not None:
-            self.set_status(f"Playback speed {rate_label(self.set_playback_rate(target))}.")
+            self.set_status(tr("Playback speed {rate_label}.", rate_label=rate_label(self.set_playback_rate(target))))
 
     # -- flags -------------------------------------------------------------------
 
@@ -159,7 +162,7 @@ class ListenThroughMixin:
         new_list, marker = marker_ops.add_marker(document.settings, self.transport.position(),
                                                  marker_ops.next_flag_name(document.settings))
         self._push_markers(new_list)
-        self.set_status(f"{marker['name']} at {format_clock(marker['seconds'])}.")
+        self.set_status(tr("{name} at {clock}.", name=marker['name'], clock=format_clock(marker['seconds'])))
         self._flag_popup.begin(marker["id"], marker["name"], self._flag_popup_position())
 
     def _flag_popup_position(self) -> QPoint:
@@ -185,13 +188,13 @@ class ListenThroughMixin:
     def go_to_previous_flag(self) -> None:
         target = keymap.previous_time(self._flag_times(), self.transport.position())
         if target is None:
-            self.set_status("No flag before the playhead.", "warning")
+            self.set_status(tr("No flag before the playhead."), "warning")
         else:
             self.transport.seek(target)
 
     def go_to_next_flag(self) -> None:
         target = keymap.next_time(self._flag_times(), self.transport.position())
         if target is None:
-            self.set_status("No flag after the playhead.", "warning")
+            self.set_status(tr("No flag after the playhead."), "warning")
         else:
             self.transport.seek(target)

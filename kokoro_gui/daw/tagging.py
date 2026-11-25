@@ -24,6 +24,8 @@ import os
 import struct
 from typing import Optional
 
+from kokoro_gui.i18n import tr
+
 MAX_COVER_BYTES = 5 * 1024 * 1024
 TAG_FORMATS = ("mp3", "flac", "ogg")
 META_KEYS = ("title", "artist", "album", "track", "year", "description", "genre")
@@ -121,21 +123,22 @@ def check_cover(path: str) -> tuple:
     `path`; raises `CoverError` with a sentence when it can't be used."""
     path = (path or "").strip()
     if not path:
-        raise CoverError("no cover image chosen")
+        raise CoverError(tr("no cover image chosen"))
     if _is_network_path(path):
-        raise CoverError("network paths aren't supported; copy the cover locally first")
+        raise CoverError(tr("network paths aren't supported; copy the cover locally first"))
     real = os.path.realpath(path)
     if _is_network_path(real):
-        raise CoverError("network paths aren't supported; copy the cover locally first")
+        raise CoverError(tr("network paths aren't supported; copy the cover locally first"))
     if not os.path.isfile(real):
-        raise CoverError(f"the cover image {os.path.basename(path)} doesn't exist")
+        raise CoverError(tr("the cover image {file} doesn't exist", file=os.path.basename(path)))
     if os.path.getsize(real) > MAX_COVER_BYTES:
-        raise CoverError(f"the cover image is over {MAX_COVER_BYTES // (1024 * 1024)} MB")
+        raise CoverError(tr("the cover image is over {max_cover_bytes} MB",
+                            max_cover_bytes=MAX_COVER_BYTES // (1024 * 1024)))
     with open(real, "rb") as f:
         data = f.read(MAX_COVER_BYTES + 1)
     mime, width, height, depth = _image_info(data)
     if not mime:
-        raise CoverError("the cover image must be a JPEG or PNG")
+        raise CoverError(tr("the cover image must be a JPEG or PNG"))
     return real, data, mime, width, height, depth
 
 
@@ -280,7 +283,7 @@ def write_tags(path: str, fmt: str, meta: Optional[dict] = None, chapters: Optio
             cover = check_cover(cover_path)
         except CoverError as e:
             reason = str(e)
-            warnings.append(f"{reason[0].upper()}{reason[1:]}, so it was left out of the tags")
+            warnings.append(tr("{reason}, so it was left out of the tags", reason=reason[0].upper() + reason[1:]))
     meta = _clean(meta)
     if fmt == "mp3":
         _write_mp3(path, meta, chapter_spans(chapters, duration_s), cover)

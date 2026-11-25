@@ -469,7 +469,7 @@ def test_disabled_transport_controls_say_why(qt_app):
     dock.set_queue_state(pending=True, paused=False)
     assert dock.queue_pause_btn.toolTip() == transport_dock.PAUSE_QUEUE_TIP
     dock.set_busy(False)
-    assert dock.preview_btn.toolTip() == preview_target.TOOLTIP
+    assert dock.preview_btn.toolTip() == preview_target.tooltip()
 
     dock._refresh_generate_menu()
     assert not dock.generate_selection_action.isEnabled()
@@ -494,7 +494,7 @@ def test_disabled_dock_controls_say_why(qt_app):
     assert not dock.volume_spin.isEnabled()
     assert dock.volume_spin.toolTip() == settings_dock_module.BUSY_FIELD_TIP
     dock.set_generating(False)
-    assert dock.volume_spin.isEnabled() and dock.volume_spin.toolTip() == ""
+    assert dock.volume_spin.isEnabled() and dock.volume_spin.toolTip() == settings_dock_module.VOLUME_TIP
 
     clip = qt_app.document.assign_character_to_range(0, 2, qt_app.document.characters[0].id)
     clip.character_id = "gone"

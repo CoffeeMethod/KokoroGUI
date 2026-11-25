@@ -35,6 +35,7 @@ import re
 import shutil
 
 from kokoro_gui.engine import presets as engine_presets
+from kokoro_gui.i18n import tr
 
 
 def list_fx_preset_names(project_dir: str | None = None) -> list[str]:
@@ -98,9 +99,9 @@ def import_ir_file(src_path: str) -> str:
     try:
         info = sf.info(src)
     except Exception as e:  # noqa: BLE001 - soundfile raises several types for a bad file
-        raise ValueError(f"not a readable audio file: {e}") from e
+        raise ValueError(tr("not a readable audio file: {error}", error=e)) from e
     if info.samplerate <= 0 or info.frames / info.samplerate > MAX_IR_SECONDS:
-        raise ValueError(f"it is longer than {MAX_IR_SECONDS:g} seconds")
+        raise ValueError(tr("it is longer than {max_ir_seconds:g} seconds", max_ir_seconds=MAX_IR_SECONDS))
     stem = os.path.splitext(os.path.basename(src))[0]
     base = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "", stem).strip() or "impulse"
     directory = _global_ir_dir()

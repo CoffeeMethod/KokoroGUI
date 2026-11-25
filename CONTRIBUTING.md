@@ -98,6 +98,45 @@ opt-in. It isn't run in CI.
   syntax errors, undefined names, unused imports and variables, and mutable defaults, and CI runs
   it. There is no formatter: match the style of the file you're in.
 
+## Translations
+
+The interface's text is in `kokoro_gui/locales/`, one JSON file per language. `en.json` is the template, and the English text
+is the key. Start a language with its code and its own name:
+
+```bash
+python scripts/i18n.py new fr "Français"
+```
+
+Then fill in the empty strings in `kokoro_gui/locales/fr.json`, or give the file to a translator or an AI. A string left empty
+shows in English. The rules:
+
+- Change the values, never the keys.
+- Keep every `{placeholder}` as it is, `{seconds:.1f}` included. It can move within the sentence.
+- Keep the spaces and line breaks at the start and end of a string. Some strings are joined to others.
+- Keep HTML tags and their `href`. Keep file patterns such as `(*.wav)`, `;;` in a file dialog's list, and `[Speaker]:`.
+- `&` before a letter is the key that opens a menu entry (Alt+letter). Pick a letter of the translated word that no other entry
+  of that menu uses. `&&` is a plain ampersand.
+- `plurals` holds the forms the language needs (`one`, `few`, `many` and so on). `{n}` is the count. A form that says the
+  number in words can leave it out.
+- `"`, `\n` and `\\` stay escaped, since the file is JSON.
+
+```bash
+python scripts/i18n.py check fr
+```
+
+`check` lists what is missing or wrong. An entry with a wrong placeholder is skipped when the app loads the file, so that string
+shows in English. Pick the language in Options > Language and restart. A `new` file shows up there without a code change.
+
+When you write code:
+
+- Wrap text a person reads in `tr("...")`, with placeholders instead of an f-string: `tr("Saved {name}.", name=name)`. Use
+  `ntr("{n} clip", "{n} clips", count)` for a count.
+- A table built while a module loads marks its text with `N_("...")`, and whoever shows it calls `tr()`.
+- Text that is stored in a project or a settings file, sent to an engine or written into an exported file isn't translated.
+- Run `python scripts/i18n.py extract` after you add or change a string and commit the result. `tests/test_i18n.py` fails until
+  you do.
+- A button, field or menu entry gets a tooltip (`tests/gui_qt/test_language_and_tooltips.py`).
+
 ## Adding an engine
 
 An engine is one module with two classes, and nothing under `kokoro_gui/qt/`, `daw/` or `audio/`

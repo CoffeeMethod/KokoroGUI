@@ -64,6 +64,8 @@ from kokoro_gui.daw import library_copy, revision, share
 from kokoro_gui.daw.undo import CompositeCommand, SetClipFxCommand
 from kokoro_gui.engine import presets
 from kokoro_gui.engine.presets import filter_fx_preset_values
+from kokoro_gui.i18n import N_, tr
+from kokoro_gui.qt import tips
 from kokoro_gui.qt import fx_resolve, scope_target, share_dialogs, spec
 from kokoro_gui.qt.collapsible import CollapsibleSection
 from kokoro_gui.qt.docks.scope_fields import MIXED, MIXED_LABEL, MixedCheckBox, MixedSpinBox, common_value, mark_mixed
@@ -73,12 +75,12 @@ from kokoro_gui.qt.fx_resolve import PLACEHOLDER_LABEL as _PLACEHOLDER_LABEL
 
 CLIP_EDIT_DEBOUNCE_MS = 300
 PROJECT_EDIT_DEBOUNCE_MS = 300
-FILE_FIELD_NONE = "None"
+FILE_FIELD_NONE = N_("None")
 
 
 class FXDock(QDockWidget):
     def __init__(self, app, parent=None):
-        super().__init__("Audio FX", parent)
+        super().__init__(tr("Audio FX"), parent)
         self.setObjectName("dock_fx")
         self.app = app
 
@@ -117,6 +119,8 @@ class FXDock(QDockWidget):
 
         preset_row = QHBoxLayout()
         self.preset_combo = QComboBox()
+        self.preset_combo.setToolTip(tr("The saved FX to use here. Right-click to copy one a project carries "
+                                        "into the library."))
         self.preset_combo.activated.connect(self._on_preset_activated)
         # Right-click: Save to library (plan 41), on the shown FX and, in the
         # open list, the FX under the pointer.
@@ -129,22 +133,27 @@ class FXDock(QDockWidget):
             lambda pos: self._show_preset_menu(
                 self.preset_combo.itemData(combo_view.indexAt(pos).row()) if combo_view.indexAt(pos).isValid() else None,
                 combo_view.viewport().mapToGlobal(pos)))
-        save_btn = QPushButton("Save FX...")
+        save_btn = QPushButton(tr("Save FX..."))
+        save_btn.setToolTip(tr("Save these settings as FX you can pick by name."))
         save_btn.clicked.connect(self._save_preset_dialog)
-        refresh_btn = QPushButton("Refresh")
+        refresh_btn = QPushButton(tr("Refresh"))
+        refresh_btn.setToolTip(tr("Read the FX folder again."))
         refresh_btn.clicked.connect(self.refresh_presets)
-        preset_row.addWidget(QLabel("FX:"))
+        preset_row.addWidget(QLabel(tr("FX:")))
         preset_row.addWidget(self.preset_combo, 1)
         # Share files (plan 40): FX, with their impulse responses, out to a
         # `.kgshare` and in.
         self.share_btn = QToolButton()
-        self.share_btn.setText("Share")
-        self.share_btn.setToolTip("Move FX to or from another machine as a share file.")
+        self.share_btn.setText(tr("Share"))
+        self.share_btn.setToolTip(tr("Move FX to or from another machine as a share file."))
         self.share_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         share_menu = QMenu(self.share_btn)
-        self.export_action = share_menu.addAction("Export FX...")
+        share_menu.setToolTipsVisible(True)
+        self.export_action = share_menu.addAction(tr("Export FX..."))
+        self.export_action.setToolTip(tr("Write FX to a .kgshare file for another machine or person."))
         self.export_action.triggered.connect(lambda _checked=False: self.export_fx())
-        self.import_action = share_menu.addAction("Import FX...")
+        self.import_action = share_menu.addAction(tr("Import FX..."))
+        self.import_action.setToolTip(tr("Add the FX in a .kgshare file to your library."))
         self.import_action.triggered.connect(lambda _checked=False: self.import_fx())
         self.share_btn.setMenu(share_menu)
         preset_row.addWidget(save_btn)
@@ -168,13 +177,14 @@ class FXDock(QDockWidget):
             specs_by_group[s.group].append(s)
 
         for group in spec.FX_GROUP_ORDER:
-            box = self.group_sections[group] = CollapsibleSection(group)
+            box = self.group_sections[group] = CollapsibleSection(tr(group))
             box_layout = QVBoxLayout()
             box.set_body_layout(box_layout)
             self._build_group(box_layout, specs_by_group[group])
             for key, label, toggle_group in spec.FX_STANDALONE_TOGGLES:
                 if toggle_group == group:
-                    check = MixedCheckBox(label)
+                    check = MixedCheckBox(tr(label))
+                    check.setToolTip(tr(spec.FX_TIPS[key]))
                     check.setChecked(self.app.settings.get(key, False))
                     check.toggled.connect(self._on_widget_changed)
                     self._enabled_checks[key] = check
@@ -192,6 +202,7 @@ class FXDock(QDockWidget):
         self.refresh_for_selection()
         for section in self.group_sections.values():
             section.set_collapsed(not section.state)
+        tips.label_rows(self)
 
     def _build_group(self, box_layout: QVBoxLayout, specs: list) -> None:
         sections: dict[str, list] = {}
@@ -206,20 +217,22 @@ class FXDock(QDockWidget):
             section_specs = sections[section]
             enabled_key = section_specs[0].enabled_key
             if enabled_key:
-                header = MixedCheckBox(section)
+                header = MixedCheckBox(tr(section))
+                header.setToolTip(tr(spec.FX_TIPS[enabled_key]))
                 header.setChecked(self.app.settings.get(enabled_key, False))
                 header.toggled.connect(self._on_widget_changed)
                 self._enabled_checks[enabled_key] = header
                 box_layout.addWidget(header)
             else:
-                box_layout.addWidget(QLabel(f"<b>{section}</b>"))
+                box_layout.addWidget(QLabel(f"<b>{tr(section)}</b>"))
 
             form = QFormLayout()
             for s in section_specs:
                 if isinstance(s, spec.FXFileSpec):
-                    form.addRow(s.label + ":", self._build_file_field(s))
+                    form.addRow(tr(s.label) + ":", self._build_file_field(s))
                     continue
                 spin = MixedSpinBox()
+                spin.setToolTip(tr(spec.FX_TIPS[s.key]))
                 spin.setRange(s.minimum, s.maximum)
                 span = s.maximum - s.minimum
                 spin.setSingleStep(span / s.steps if s.steps else 0.1)
@@ -227,7 +240,7 @@ class FXDock(QDockWidget):
                 spin.setSuffix(f" {s.unit}" if s.unit else "")
                 spin.setValue(self.app.settings.get(s.key, s.minimum))
                 spin.valueChanged.connect(self._on_widget_changed)
-                form.addRow(s.label + ":", spin)
+                form.addRow(tr(s.label) + ":", spin)
                 self._value_widgets[s.key] = spin
             box_layout.addLayout(form)
 
@@ -236,10 +249,11 @@ class FXDock(QDockWidget):
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         combo = QComboBox()
-        combo.addItem(FILE_FIELD_NONE, "")
+        combo.setToolTip(tr(spec.FX_TIPS[s.key]))
+        combo.addItem(tr(FILE_FIELD_NONE), "")
         combo.currentIndexChanged.connect(self._on_widget_changed)
-        add_btn = QPushButton("Add...")
-        add_btn.setToolTip("Copy a wav file into the global impulse response store (presets/fx/ir)")
+        add_btn = QPushButton(tr("Add..."))
+        add_btn.setToolTip(tr("Copy a wav file into the global impulse response store (presets/fx/ir)"))
         add_btn.clicked.connect(lambda _checked=False, key=s.key: self._add_ir_file(key))
         layout.addWidget(combo, 1)
         layout.addWidget(add_btn)
@@ -257,12 +271,12 @@ class FXDock(QDockWidget):
         combo.blockSignals(True)
         try:
             combo.clear()
-            combo.addItem(FILE_FIELD_NONE, "")
+            combo.addItem(tr(FILE_FIELD_NONE), "")
             names = list_ir_names(getattr(self.app, "project_dir", None))
             for name in names:
                 combo.addItem(name, name)
             if current and current not in names:
-                combo.addItem(f"{current} (missing)", current)
+                combo.addItem(tr("{current} (missing)", current=current), current)
             index = combo.findData(current)
             combo.setCurrentIndex(index if index >= 0 else 0)
         finally:
@@ -276,13 +290,13 @@ class FXDock(QDockWidget):
             self._fill_file_combo(combo, combo.currentData())
 
     def _add_ir_file(self, key: str) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Add impulse response", "", "WAV files (*.wav)")
+        path, _ = QFileDialog.getOpenFileName(self, tr("Add impulse response"), "", tr("WAV files (*.wav)"))
         if not path:
             return
         try:
             name = import_ir_file(path)
         except (OSError, ValueError) as e:
-            QMessageBox.critical(self, "Error", f"Couldn't add the impulse response: {e}")
+            QMessageBox.critical(self, tr("Error"), tr("Couldn't add the impulse response: {error}", error=e))
             return
         self.refresh_ir_choices()
         combo = self._file_combos[key]
@@ -315,7 +329,7 @@ class FXDock(QDockWidget):
         self._targets = self._selected_clips() if self._mode == "clip" else []
         self._loading = True
         try:
-            mixed_entry = self.preset_combo.findData(MIXED_LABEL)
+            mixed_entry = self.preset_combo.findData(tr(MIXED_LABEL))
             if mixed_entry >= 0:
                 self.preset_combo.removeItem(mixed_entry)
             values, preset_name = self._resolved_values()
@@ -361,40 +375,41 @@ class FXDock(QDockWidget):
         if self._mode == "character":
             name = self._character_preset_name(self._target)
             if name:
-                return f'Edits are saved to the FX "{name}", so everything that uses it changes.'
-            return f"{scope_target.shorten(self._target.name)} has no FX yet. An edit saves one under that name."
+                return tr('Edits are saved to the FX "{name}", so everything that uses it changes.', name=name)
+            return tr("{name} has no FX yet. An edit saves one under that name.",
+                      name=scope_target.shorten(self._target.name))
         if self.several:
-            return (f"An edit changes the controls you touch on all {len(self._targets)} clips, as one undo step. "
-                    "Each clip keeps its own FX after that.")
+            return (tr("An edit changes the controls you touch on all {count} clips, as one undo step. "
+                       "Each clip keeps its own FX after that.", count=len(self._targets)))
         if self._mode == "clip":
             if self._target.fx_override:
-                return "This clip has its own FX. Edits change this clip only."
+                return tr("This clip has its own FX. Edits change this clip only.")
             source = fx_resolve.real_preset_name(self._target.overrides.get("fx_preset"))
             if source is None:
                 source = self._character_preset_name(self.app.document.get_character(self._target.character_id))
-            follows = f'the FX "{source}"' if source else "the defaults"
-            return f"This clip follows {follows}. An edit gives it its own FX."
-        return "Shared by every project. A character's or clip's own FX go on top."
+            follows = tr('the FX "{source}"', source=source) if source else tr("the defaults")
+            return tr("This clip follows {follows}. An edit gives it its own FX.", follows=follows)
+        return tr("Shared by every project. A character's or clip's own FX go on top.")
 
     def _sync_group_states(self) -> None:
         """Which effects of a group are on, in its title."""
         for group, section in self.group_sections.items():
             states: dict = {}  # effect -> "on", "mixed" or "missing file"
             for s in spec.FX_FIELD_SPECS:
-                if s.group == group and s.section not in states:
+                if s.group == group and tr(s.section) not in states:
                     state = self._section_state(s)
                     if state:
-                        states[s.section] = state
+                        states[tr(s.section)] = state
             for key, label, toggle_group in spec.FX_STANDALONE_TOGGLES:
                 if toggle_group == group:
                     state = self._check_state(self._enabled_checks[key])
                     if state:
-                        states[label] = state
+                        states[tr(label)] = state
             parts = []
-            for state in ("on", "mixed", "missing file"):
+            for state, shown in (("on", tr("on")), ("mixed", tr("mixed")), ("missing file", tr("missing file"))):
                 names = [name for name, value in states.items() if value == state]
                 if names:
-                    parts.append(f"{', '.join(names)} {state}")
+                    parts.append(f"{', '.join(names)} {shown}")
             section.set_state("; ".join(parts))
 
     @staticmethod
@@ -410,7 +425,7 @@ class FXDock(QDockWidget):
             return self._check_state(self._enabled_checks[s.enabled_key])
         if isinstance(s, spec.FXFileSpec):
             combo = self._file_combos[s.key]
-            if combo.currentText() == MIXED_LABEL:
+            if combo.currentText() == tr(MIXED_LABEL):
                 return "mixed"
             if not combo.currentData() or self._value_widgets["convolution_mix"].value() <= 0:
                 return ""
@@ -441,7 +456,7 @@ class FXDock(QDockWidget):
             if common_value(resolutions, lambda r, k=key: r.values.get(k)) is MIXED:
                 mark_mixed(widget)
         if common_value(resolutions, lambda r: r.preset_name) is MIXED:
-            self._set_combo_text(MIXED_LABEL)
+            self._set_combo_text(tr(MIXED_LABEL))
 
     def _character_preset_name(self, character):
         return fx_resolve.real_preset_name(character.preset_data.get("fx_preset")) if character is not None else None
@@ -464,7 +479,7 @@ class FXDock(QDockWidget):
                 self.preset_combo.addItem(name, name)
             if name == "custom":
                 if self.preset_combo.findData("(custom)") < 0:
-                    self.preset_combo.addItem("(custom)", "(custom)")
+                    self.preset_combo.addItem(tr("(custom)"), "(custom)")
                 self.preset_combo.setCurrentIndex(self.preset_combo.findData("(custom)"))
             else:
                 self.preset_combo.setCurrentIndex(max(0, self.preset_combo.findData(name or _PLACEHOLDER)))
@@ -546,8 +561,8 @@ class FXDock(QDockWidget):
         if character.id in self._character_confirmed:
             return True
         answer = QMessageBox.question(
-            self, "Edit character FX",
-            f"This changes the FX for every clip using {character.name}. Continue?",
+            self, tr("Edit character FX"),
+            tr("This changes the FX for every clip using {name}. Continue?", name=character.name),
         )
         if answer != QMessageBox.StandardButton.Yes:
             return False
@@ -620,9 +635,10 @@ class FXDock(QDockWidget):
         self.preset_combo.clear()
         for name in presets:
             # The placeholder shows as "No FX" but stays the stored value.
-            self.preset_combo.addItem(_PLACEHOLDER_LABEL if name == _PLACEHOLDER else name, name)
+            self.preset_combo.addItem(tr(_PLACEHOLDER_LABEL) if name == _PLACEHOLDER else name, name)
             if any(i.kind == share.KIND_FX for i in self.library_items(name)):
-                self.preset_combo.setItemData(self.preset_combo.count() - 1, "In this project", Qt.ItemDataRole.ToolTipRole)
+                self.preset_combo.setItemData(self.preset_combo.count() - 1, tr("In this project"),
+                                              Qt.ItemDataRole.ToolTipRole)
         self.preset_combo.setCurrentIndex(max(0, self.preset_combo.findData(current if current in presets else _PLACEHOLDER)))
         self.preset_combo.blockSignals(False)
         if getattr(self.app, "settings_dock", None) is not None:
@@ -637,7 +653,7 @@ class FXDock(QDockWidget):
             with open(fpath, "w", encoding="utf-8") as fh:
                 json.dump(data, fh, indent=4)
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save FX: {e}")
+            QMessageBox.critical(self, tr("Error"), tr("Failed to save FX: {error}", error=e))
             return False
         # A clip whose character uses this preset post-processes differently
         # now; the post config memo keys on `revision.FILES`.
@@ -645,7 +661,7 @@ class FXDock(QDockWidget):
         return True
 
     def _save_preset_dialog(self) -> None:
-        name, ok = QInputDialog.getText(self, "Save FX", "Name for this FX:")
+        name, ok = QInputDialog.getText(self, tr("Save FX"), tr("Name for this FX:"))
         if not ok or not name:
             return
         name = re.sub(r'[<>:"/\\|?*]', "", name).strip()
@@ -653,7 +669,7 @@ class FXDock(QDockWidget):
             return
         data = {k: self.get_state()[k] for k in spec.FX_PRESET_KEYS}
         if self._write_preset_file(name, data):
-            QMessageBox.information(self, "Saved", f"FX '{name}' saved.")
+            QMessageBox.information(self, tr("Saved"), tr("FX '{name}' saved.", name=name))
             self.refresh_presets()
             self._set_combo_text(name)
 
@@ -666,7 +682,7 @@ class FXDock(QDockWidget):
         """Copies the project's own FX `name`, and its impulse response, into the
         library (plan 41). Returns the `CopyResult` or None."""
         return share_dialogs.save_items_to_library(self.app, self, self.library_items(name),
-                                                   title="Save FX to library")
+                                                   title=tr("Save FX to library"))
 
     def preset_menu(self, name):
         """The right-click menu of an FX in the list, or None for the "no FX" row."""
@@ -687,14 +703,14 @@ class FXDock(QDockWidget):
         current = self.preset_combo.currentData()
         preselect = set(names) if names is not None else ({current} if current in available else set())
         return share_dialogs.export_to_file(self.app, self, fx_names=available, preselect=preselect,
-                                            title="Export FX", path=path)
+                                            title=tr("Export FX"), path=path)
 
     def import_fx(self, path: str | None = None):
         """Reads the FX (and impulse responses) in a share file into the
         global FX folder; characters and voices in it are not offered here.
         Returns the `ImportResult` or None."""
         return share_dialogs.import_from_file(self.app, self, kinds=(share.KIND_FX, share.KIND_IR),
-                                              title="Import FX", path=path)
+                                              title=tr("Import FX"), path=path)
 
     def load_preset(self, name: str) -> None:
         """Project-scope load: applies the preset's values to the "none"
@@ -711,7 +727,7 @@ class FXDock(QDockWidget):
             with open(fpath, "r", encoding="utf-8") as fh:
                 data = filter_fx_preset_values(json.load(fh))
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load FX: {e}")
+            QMessageBox.critical(self, tr("Error"), tr("Failed to load FX: {error}", error=e))
             return
         self.app.settings["fx_preset"] = safe_name
         if self._mode == "none":
@@ -726,7 +742,7 @@ class FXDock(QDockWidget):
 
     def _on_preset_activated(self, index: int) -> None:
         name = self.preset_combo.itemData(index)
-        if not name or name in (_PLACEHOLDER, "(custom)", MIXED_LABEL):
+        if not name or name in (_PLACEHOLDER, "(custom)", tr(MIXED_LABEL)):
             return
         if self.several:
             self._apply_preset_to_several(name)

@@ -11,6 +11,7 @@ import time
 
 from kokoro_gui.engine import runtime
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys, filter_fx_preset_values
+from kokoro_gui.i18n import tr
 
 
 class JITMixin:
@@ -29,7 +30,7 @@ class JITMixin:
         4. Buffer management (2 mins ahead).
         """
         try:
-            if self.on_status: self.on_status("JIT: Preparing...", False)
+            if self.on_status: self.on_status(tr("JIT: Preparing..."), False)
             os.makedirs(config['out_dir'], exist_ok=True)
 
             # 1. Parse segments
@@ -63,7 +64,7 @@ class JITMixin:
                     all_text_segments.append((c, seg_config))
 
             if not all_text_segments:
-                if self.on_status: self.on_status("No text for JIT.", False)
+                if self.on_status: self.on_status(tr("No text for JIT."), False)
                 if self.on_finish: self.on_finish()
                 return
 
@@ -88,7 +89,8 @@ class JITMixin:
                         if self.cancel_event.is_set(): break
 
                         if self.on_status:
-                            self.on_status(f"JIT: Generating segment {i+1}/{total_segments}...", False)
+                            self.on_status(tr("JIT: Generating segment {i}/{total_segments}...", i=i+1,
+                                              total_segments=total_segments), False)
 
                         chunk_files = await asyncio.to_thread(self.process_chunk_task, (i, seg_text, seg_config), None)
 
@@ -118,7 +120,7 @@ class JITMixin:
 
                         idx += 1
                         if self.on_status:
-                            self.on_status(f"JIT: Playing segment {idx}...", False)
+                            self.on_status(tr("JIT: Playing segment {idx}...", idx=idx), False)
 
                         clean_snip = item['text'].replace("\n", " ").strip()
                         if len(clean_snip) > 40: clean_snip = clean_snip[:37] + "..."
@@ -126,7 +128,8 @@ class JITMixin:
                         elapsed = time.time() - start_time
                         if self.on_progress:
                             percent = (idx / total_segments) * 100
-                            self.on_progress(percent, elapsed, "--:--", f"Playing: {clean_snip}")
+                            self.on_progress(percent, elapsed, "--:--", tr("Playing: {clean_snip}",
+                                                                           clean_snip=clean_snip))
 
                         # Play audio (Synchronously in thread)
                         await asyncio.to_thread(runtime.playback.play, item['path'], True)
@@ -148,16 +151,17 @@ class JITMixin:
 
             # --- Cleanup and Save State ---
             if self.cancel_event.is_set():
-                if self.on_status: self.on_status("JIT Stopped. Saving state...", False)
+                if self.on_status: self.on_status(tr("JIT Stopped. Saving state..."), False)
             else:
-                if self.on_status: self.on_status("JIT Finished.", False)
+                if self.on_status: self.on_status(tr("JIT Finished."), False)
 
             # Combine what was played/generated so far
             all_work_so_far = played_segments + generated_but_unplayed
             if all_work_so_far:
                 combined_path = os.path.join(config['out_dir'], f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_jit_output.wav")
                 await self.smart_combine([s['path'] for s in all_work_so_far], combined_path, None)
-                if self.on_status: self.on_status(f"JIT Output saved: {combined_path}", False)
+                if self.on_status: self.on_status(tr("JIT Output saved: {combined_path}", combined_path=combined_path),
+                                                  False)
 
             # Save remaining text
             if generated_but_unplayed:
@@ -175,10 +179,10 @@ class JITMixin:
                 rem_path = os.path.join(config['out_dir'], f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_remaining.txt")
                 with open(rem_path, "w", encoding="utf-8") as f:
                     f.write(remaining_text)
-                if self.on_status: self.on_status(f"Remaining text saved: {rem_path}", False)
+                if self.on_status: self.on_status(tr("Remaining text saved: {rem_path}", rem_path=rem_path), False)
 
         except Exception as e:
             print(f"JIT Critical Error: {e}")
-            if self.on_status: self.on_status(f"JIT Error: {e}", True)
+            if self.on_status: self.on_status(tr("JIT Error: {error}", error=e), True)
         finally:
             if self.on_finish: self.on_finish()

@@ -39,14 +39,16 @@ from PySide6.QtWidgets import (
 from kokoro_gui.daw import imported
 from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character
 from kokoro_gui.engines import registry as engine_registry
+from kokoro_gui.i18n import N_, tr
+from kokoro_gui.qt import tips
 
 ENGINE_ID = "audio8"
 MIN_S = 5.0
 MAX_S = 30.0
 # The program setting (config_qt.json) that asks for consent each time.
 CONSENT_SETTING = "clone_consent_confirm"
-CONSENT_TEXT = "I have this speaker's permission to clone their voice."
-MENU_TEXT = "Clone this speaker from the selection..."
+CONSENT_TEXT = N_("I have this speaker's permission to clone their voice.")
+MENU_TEXT = N_("Clone this speaker from the selection...")
 
 
 @dataclass
@@ -108,9 +110,11 @@ def clone_span(document, start: int, end: int) -> Optional[CloneSpan]:
 def duration_problem(duration_s: float) -> Optional[str]:
     """Why a stretch this long can't be a reference, or None."""
     if duration_s < MIN_S:
-        return f"The selection is {duration_s:.1f} s. Select at least {MIN_S:.0f} s of speech."
+        return tr("The selection is {duration_s:.1f} s. Select at least {min_s:.0f} s of speech.",
+                  duration_s=duration_s, min_s=MIN_S)
     if duration_s > MAX_S:
-        return f"The selection is {duration_s:.1f} s. Select at most {MAX_S:.0f} s of speech."
+        return tr("The selection is {duration_s:.1f} s. Select at most {max_s:.0f} s of speech.",
+                  duration_s=duration_s, max_s=MAX_S)
     return None
 
 
@@ -144,17 +148,17 @@ def name_problem(name: str, store, document, character, project_dir: Optional[st
     refused, so no other voice changes under it."""
     name = name.strip()
     if not name:
-        return "Enter a name."
+        return tr("Enter a name.")
     safe = store._safe_name(name)
     if not safe:
-        return "That name can't be a file name."
+        return tr("That name can't be a file name.")
     if store.find_wav(safe, project_dir) is not None:
-        return f"A reference named {safe} already exists."
+        return tr("A reference named {safe} already exists.", safe=safe)
     if as_variant(character):
         if name in (character.variants or {}):
-            return f"{character.name} already has a variant named {name}."
+            return tr("{character} already has a variant named {name}.", character=character.name, name=name)
     elif any(c.name == name for c in document.characters):
-        return f"A character named {name} already exists."
+        return tr("A character named {name} already exists.", name=name)
     return None
 
 
@@ -187,11 +191,11 @@ class CloneResult:
     def how_to_use(self) -> str:
         """The final message's instructions."""
         if self.variant is None:
-            return (f"Type your correction inside the recording, select it and pick {self.character.name} "
-                    "from the Characters menu. Then generate it as usual.")
-        return (f"Type your correction inside the recording, select it and pick {self.character.name} from "
-                f"the Characters menu, then pick the variant {self.variant} in the Transcript dock. "
-                "Then generate it as usual.")
+            return (tr("Type your correction inside the recording, select it and pick {name} "
+                       "from the Characters menu. Then generate it as usual.", name=self.character.name))
+        return (tr("Type your correction inside the recording, select it and pick {name} from "
+                   "the Characters menu, then pick the variant {variant} in the Transcript dock. "
+                   "Then generate it as usual.", name=self.character.name, variant=self.variant))
 
 
 def save_clone(app, document, span: CloneSpan, name: str, transcript: str, store=None) -> CloneResult:
@@ -201,13 +205,13 @@ def save_clone(app, document, span: CloneSpan, name: str, transcript: str, store
     transcript, `OSError` when the file can't be read or written."""
     store = store if store is not None else reference_store()
     if store is None:
-        raise ValueError("Audio8 is not installed.")
+        raise ValueError(tr("Audio8 is not installed."))
     character = document.get_character(span.character_id)
     problem = name_problem(name, store, document, character, getattr(app, "project_dir", None))
     if problem:
         raise ValueError(problem)
     if not transcript.strip():
-        raise ValueError("Enter the transcript of the selection.")
+        raise ValueError(tr("Enter the transcript of the selection."))
     tmp = slice_to_wav(span.path, span.start_s, span.end_s)
     try:
         wav_path = store.save_reference(name.strip(), tmp, transcript)
@@ -238,33 +242,38 @@ class CloneDialog(QDialog):
 
     def __init__(self, span: CloneSpan, name: str, problem_of_name, ask_consent: bool = True, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Clone this speaker")
+        self.setWindowTitle(tr("Clone this speaker"))
         self._span = span
         self._problem_of_name = problem_of_name
         self.ask_consent = ask_consent
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("The selection becomes an Audio8 reference: its audio and what is said in it."))
+        layout.addWidget(QLabel(tr("The selection becomes an Audio8 reference: its audio and what is said in it.")))
 
         form = QFormLayout()
         self.transcript_edit = QPlainTextEdit(span.text)
+        self.transcript_edit.setToolTip(tr("What the speaker says in the selection. The closer it matches the "
+                                           "audio, the better the clone."))
         self.transcript_edit.setMaximumHeight(100)
-        form.addRow("Transcript:", self.transcript_edit)
+        form.addRow(tr("Transcript:"), self.transcript_edit)
         length_row = QHBoxLayout()
         self.duration_label = QLabel(f"{span.duration_s:.1f} s")
-        self.play_button = QPushButton("Play")
+        self.play_button = QPushButton(tr("Play"))
+        self.play_button.setToolTip(tr("Play the selected part of the recording."))
         self.play_button.clicked.connect(self.play)
         length_row.addWidget(self.duration_label)
         length_row.addWidget(self.play_button)
         length_row.addStretch(1)
-        form.addRow("Length:", length_row)
+        form.addRow(tr("Length:"), length_row)
         self.name_edit = QLineEdit(name)
-        form.addRow("Name:", self.name_edit)
+        self.name_edit.setToolTip(tr("The name of the new Reference."))
+        form.addRow(tr("Name:"), self.name_edit)
         layout.addLayout(form)
 
-        self.consent_check = QCheckBox(CONSENT_TEXT)
-        self.dont_ask_check = QCheckBox("Don't ask again")
-        self.dont_ask_check.setToolTip("Stored in the program's settings, never in the project. "
-                                       "Options > Confirm consent before cloning asks again.")
+        self.consent_check = QCheckBox(tr(CONSENT_TEXT))
+        self.consent_check.setToolTip(tr("Cloning stays off until you tick this."))
+        self.dont_ask_check = QCheckBox(tr("Don't ask again"))
+        self.dont_ask_check.setToolTip(tr("Stored in the program's settings, never in the project. "
+                                          "Options > Confirm consent before cloning asks again."))
         self.consent_check.setVisible(ask_consent)
         self.dont_ask_check.setVisible(ask_consent)
         layout.addWidget(self.consent_check)
@@ -276,7 +285,7 @@ class CloneDialog(QDialog):
 
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
                                         self)
-        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Clone")
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("Clone"))
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
@@ -287,6 +296,7 @@ class CloneDialog(QDialog):
         self.consent_check.toggled.connect(self.dont_ask_check.setEnabled)
         self.dont_ask_check.setEnabled(False)
         self._sync()
+        tips.label_rows(self)
 
     @property
     def ok_button(self):
@@ -298,12 +308,12 @@ class CloneDialog(QDialog):
         if problem:
             return problem
         if not self.transcript_edit.toPlainText().strip():
-            return "Enter the transcript of the selection."
+            return tr("Enter the transcript of the selection.")
         problem = self._problem_of_name(self.name_edit.text())
         if problem:
             return problem
         if self.ask_consent and not self.consent_check.isChecked():
-            return "Tick the box to confirm you have the speaker's permission."
+            return tr("Tick the box to confirm you have the speaker's permission.")
         return None
 
     def _sync(self) -> None:
@@ -331,16 +341,16 @@ def clone_from_selection(app, start: int, end: int) -> Optional[CloneResult]:
     the dialog, then `save_clone` and the final message. None when it is
     refused, cancelled or fails (the status line says why)."""
     if app.is_busy():
-        app.set_status("Finish or cancel the current job before cloning a voice.", "warning")
+        app.set_status(tr("Finish or cancel the current job before cloning a voice."), "warning")
         return None
     store = reference_store()
     if store is None:
-        app.set_status("Cloning a speaker needs Audio8, which is not installed.", "warning")
+        app.set_status(tr("Cloning a speaker needs Audio8, which is not installed."), "warning")
         return None
     document = app.document
     span = clone_span(document, start, end)
     if span is None:
-        app.set_status("Select words inside one imported recording to clone its speaker.", "warning")
+        app.set_status(tr("Select words inside one imported recording to clone its speaker."), "warning")
         return None
     character = document.get_character(span.character_id)
     project_dir = getattr(app, "project_dir", None)
@@ -359,9 +369,9 @@ def clone_from_selection(app, start: int, end: int) -> Optional[CloneResult]:
     try:
         result = save_clone(app, document, span, name, transcript, store=store)
     except (OSError, ValueError, RuntimeError) as e:
-        QMessageBox.warning(app, "Clone failed", str(e))
-        app.set_status(f"Clone failed: {e}", "error")
+        QMessageBox.warning(app, tr("Clone failed"), str(e))
+        app.set_status(tr("Clone failed: {error}", error=e), "error")
         return None
-    app.set_status(f"Saved the reference {result.reference}.", "success")
-    QMessageBox.information(app, "Speaker cloned", result.how_to_use())
+    app.set_status(tr("Saved the reference {reference}.", reference=result.reference), "success")
+    QMessageBox.information(app, tr("Speaker cloned"), result.how_to_use())
     return result

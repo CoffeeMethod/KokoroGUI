@@ -10,6 +10,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QMessageBox
 
 from kokoro_gui.engine import asr
+from kokoro_gui.i18n import tr
 
 # `confirm_whisper_download` results.
 PROCEED = "proceed"    # cached already, or the user said Yes
@@ -20,14 +21,16 @@ CANCEL = "cancel"
 def ask_whisper_download(parent, model_name: str, size: str | None) -> str:
     """The Yes / Use another engine / Cancel box. Its own function so the
     GUI test fixture can answer it without a modal."""
-    about = f" about {size}" if size else ""
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Icon.Question)
-    box.setWindowTitle("Download Whisper model")
-    box.setText(f"Whisper {model_name} downloads{about} the first time. Continue?")
-    yes = box.addButton("Yes", QMessageBox.ButtonRole.AcceptRole)
-    other = box.addButton("Use another engine", QMessageBox.ButtonRole.ActionRole)
-    box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+    box.setWindowTitle(tr("Download Whisper model"))
+    if size:
+        box.setText(tr("Whisper {model} downloads about {size} the first time. Continue?", model=model_name, size=size))
+    else:
+        box.setText(tr("Whisper {model} downloads the first time. Continue?", model=model_name))
+    yes = box.addButton(tr("Yes"), QMessageBox.ButtonRole.AcceptRole)
+    other = box.addButton(tr("Use another engine"), QMessageBox.ButtonRole.ActionRole)
+    box.addButton(tr("Cancel"), QMessageBox.ButtonRole.RejectRole)
     box.setDefaultButton(yes)
     box.exec()
     clicked = box.clickedButton()

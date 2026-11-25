@@ -83,6 +83,7 @@ from kokoro_gui.daw.imported import segment_plays
 from kokoro_gui.daw.mixplan import ClipMix, clip_mixes
 from kokoro_gui.daw.timecode import format_position
 from kokoro_gui.engine.text_extraction import strip_markup
+from kokoro_gui.i18n import ntr, tr
 
 SOUNDFILE_FORMATS = {"wav", "flac", "ogg"}
 CUE_SHEET_COLUMNS = ("start", "end", "character", "source_text", "text", "status", "note")
@@ -485,7 +486,7 @@ def render_mix(document, sample_rate: int = 24000, arrangement: Optional[Arrange
         if not indices:
             continue
         if progress:
-            progress(0.8 + 0.01 * number / len(groups), f"Mixing stem {name}")
+            progress(0.8 + 0.01 * number / len(groups), tr("Mixing stem {name}", name=name))
         stem_list.append(Stem(name, _mix_clips(_stem_clips(loaded, set(indices)), total_frames, sample_rate,
                                                duck_db, channels)))
     return MixResult(samples=mixed, arrangement=arrangement, per_clip=per_clip, skipped=skipped,
@@ -619,13 +620,13 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
     mix_rate = int(out_rate) if out_rate else sample_rate
     if mix_rate != sample_rate:
         if progress:
-            progress(0.81, f"Resampling to {mix_rate} Hz")
+            progress(0.81, tr("Resampling to {mix_rate} Hz", mix_rate=mix_rate))
         mixed = resample_mix(mixed, sample_rate, mix_rate)
         stem_samples = [resample_mix(s, sample_rate, mix_rate) for s in stem_samples]
     result = ExportResult(audio_path=out_path, skipped_clip_ids=mix.skipped)
     if loudness is not None:
         if progress:
-            progress(0.82, "Measuring loudness")
+            progress(0.82, tr("Measuring loudness"))
         mixed, result.loudness_before, result.loudness_after, result.loudness_limited, stem_samples = _normalized(
             mixed, mix_rate, loudness, stem_samples)
     head_s, tail_s = max(0.0, float(head_s or 0.0)), max(0.0, float(tail_s or 0.0))
@@ -642,7 +643,7 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
         report = loudness_mod.measure(mixed, mix_rate)
     result.duration_s = len(mixed) / float(mix_rate)
     if progress:
-        progress(0.85, "Writing mixdown")
+        progress(0.85, tr("Writing mixdown"))
     tagged = False
     if ext == "m4b":
         tagged = _write_m4b(out_path, mixed, mix_rate, bitrate_kbps, tags, document, arrangement_out, range_s,
@@ -661,7 +662,7 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
         timecode = _start_timecode(document, range_s)
         for number, (stem, samples) in enumerate(zip(mix.stems, stem_samples)):
             if progress:
-                progress(0.85 + 0.1 * number / len(stem_samples), f"Writing stem {stem.name}")
+                progress(0.85 + 0.1 * number / len(stem_samples), tr("Writing stem {name}", name=stem.name))
             stem_file = stem_path(out_dir, base, stem.name, timecode, ext, used)
             write_audio(stem_file, np.clip(samples, -1.0, 1.0), mix_rate, ext, bitrate_kbps=bitrate_kbps)
             result.stem_files.append(stem_file)
@@ -691,7 +692,7 @@ def mixdown(document, out_path: str, fmt: str = "wav", sample_rate: int = 24000,
                        *[p for p in (result.srt_path, result.cue_sheet_path) if p], *result.text_files]
 
     if progress:
-        progress(1.0, "Export finished")
+        progress(1.0, tr("Export finished"))
     return result
 
 
@@ -716,7 +717,7 @@ def _tag_file(path: str, ext: str, tags: dict, document, arrangement: Arrangemen
     on disk."""
     name = os.path.basename(path)
     if not tagging.available():
-        warning = "mutagen isn't installed, so the files have no tags (pip install mutagen)"
+        warning = tr("mutagen isn't installed, so the files have no tags (pip install mutagen)")
         if warning not in warnings:
             warnings.append(warning)
         return False
@@ -726,7 +727,7 @@ def _tag_file(path: str, ext: str, tags: dict, document, arrangement: Arrangemen
     try:
         problems = tagging.write_tags(path, ext, tags, chapters, tags.get("cover"), duration_s=duration_s)
     except Exception as e:  # noqa: BLE001 - the audio is written; tagging is a courtesy
-        warnings.append(f"Couldn't write the tags into {name}: {e}")
+        warnings.append(tr("Couldn't write the tags into {name}: {error}", name=name, error=e))
         return False
     warnings.extend(problem for problem in problems if problem not in warnings)
     return True
@@ -748,7 +749,6 @@ class ChapterPlan:
     warnings: list = field(default_factory=list)
 
 
-SPLIT_NOUNS = {"subprojects": "subproject", "markers": "marker range"}
 MAX_TITLE_CHARS = 100
 
 
@@ -807,8 +807,11 @@ def plan_chapters(document, arrangement: Arrangement, split: str, max_file_s: Op
                   if not any(p.end_s > lo and p.start_s < hi for _t, lo, hi in spans))
     warnings = []
     if outside:
-        warnings.append(f"{outside} clip{'s' if outside != 1 else ''} outside any "
-                        f"{SPLIT_NOUNS[split]} weren't exported")
+        warnings.append(
+            ntr("{n} clip outside any subproject weren't exported", "{n} clips outside any subproject weren't exported",
+                outside) if split == "subprojects" else
+            ntr("{n} clip outside any marker range weren't exported",
+                "{n} clips outside any marker range weren't exported", outside))
     return ChapterPlan(chapters, warnings)
 
 

@@ -21,6 +21,8 @@ import math
 import re
 from dataclasses import dataclass, field
 
+from kokoro_gui.i18n import tr
+
 DEFAULT_THRESHOLD = 0.92
 MIN_THRESHOLD, MAX_THRESHOLD = 0.5, 1.0
 # Stored issues per clip, and the longest phrase kept in one.
@@ -145,10 +147,10 @@ def issue_text(issue) -> str:
     `changed: 'mill' heard as 'meal'`."""
     kind, expected, heard = issue
     if kind == DROPPED:
-        return f"dropped: '{expected}'"
+        return tr("dropped: '{expected}'", expected=expected)
     if kind == ADDED:
-        return f"added: '{heard}'"
-    return f"changed: '{expected}' heard as '{heard}'"
+        return tr("added: '{heard}'", heard=heard)
+    return tr("changed: '{expected}' heard as '{heard}'", expected=expected, heard=heard)
 
 
 def segment_keys(clip) -> list:

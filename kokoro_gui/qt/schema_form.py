@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.engines.base import ConfigField, ConfigFieldType
+from kokoro_gui.i18n import tr
 from kokoro_gui.qt.collapsible import CollapsibleSection
 
 
@@ -149,12 +150,12 @@ class SchemaFormWidget(QWidget):
                     form.setContentsMargins(0, 0, 0, 0)
                     box.setLayout(form)
                 elif f.group in (collapsible or {}):
-                    box = self.sections[f.group] = CollapsibleSection(f.group, collapsed=collapsible[f.group])
+                    box = self.sections[f.group] = CollapsibleSection(tr(f.group), collapsed=collapsible[f.group])
                     box.set_body_layout(form)
                     if on_collapsed is not None:
                         box.collapsedChanged.connect(lambda folded, g=f.group: on_collapsed(g, folded))
                 else:
-                    box = QGroupBox(f.group)
+                    box = QGroupBox(tr(f.group))
                     box.setLayout(form)
                 groups[f.group] = form
                 group_order.append(f.group)
@@ -163,6 +164,10 @@ class SchemaFormWidget(QWidget):
             label = groups[f.group].labelForField(self._widgets[f.key])
             if label is not None:
                 self._labels[f.key] = label
+            if f.tooltip:
+                self._widgets[f.key].setToolTip(tr(f.tooltip))
+                if label is not None:
+                    label.setToolTip(tr(f.tooltip))
 
         outer.addStretch(1)
         self.set_values(values)
@@ -174,9 +179,9 @@ class SchemaFormWidget(QWidget):
         if f.type in (ConfigFieldType.CHOICE,) or choices is not None:
             combo = QComboBox()
             for label, value in (choices or []):
-                combo.addItem(str(label), value)
+                combo.addItem(tr(str(label)), value)
             combo.currentIndexChanged.connect(lambda _i, k=f.key: self._emit_change(k))
-            form.addRow(f.label, combo)
+            form.addRow(tr(f.label), combo)
             self._widgets[f.key] = combo
             self._getters[f.key] = lambda c=combo: c.currentData()
             self._setters[f.key] = lambda v, c=combo: self._set_combo(c, v)
@@ -184,7 +189,7 @@ class SchemaFormWidget(QWidget):
         elif f.type == ConfigFieldType.BOOL:
             box = QCheckBox()
             box.toggled.connect(lambda _v, k=f.key: self._emit_change(k))
-            form.addRow(f.label, box)
+            form.addRow(tr(f.label), box)
             self._widgets[f.key] = box
             self._getters[f.key] = box.isChecked
             self._setters[f.key] = box.setChecked
@@ -194,7 +199,7 @@ class SchemaFormWidget(QWidget):
             spin.setRange(*_int_range(f))
             spin.setSingleStep(int(f.step or 1))
             spin.valueChanged.connect(lambda _v, k=f.key: self._emit_change(k))
-            form.addRow(f.label, spin)
+            form.addRow(tr(f.label), spin)
             self._widgets[f.key] = spin
             self._getters[f.key] = spin.value
             self._setters[f.key] = spin.setValue
@@ -205,7 +210,7 @@ class SchemaFormWidget(QWidget):
             spin.setSingleStep(float(f.step or 0.1))
             spin.setDecimals(3)
             spin.valueChanged.connect(lambda _v, k=f.key: self._emit_change(k))
-            form.addRow(f.label, spin)
+            form.addRow(tr(f.label), spin)
             self._widgets[f.key] = spin
             self._getters[f.key] = spin.value
             self._setters[f.key] = spin.setValue
@@ -215,10 +220,12 @@ class SchemaFormWidget(QWidget):
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
             edit = QLineEdit()
-            browse = QPushButton("Browse...")
+            browse = QPushButton(tr("Browse..."))
+            browse.setToolTip(tr("Choose a file."))
+            edit.setToolTip(tr(f.tooltip))
 
             def _browse(_checked=False, e=edit):
-                path, _ = QFileDialog.getOpenFileName(self, "Select file")
+                path, _ = QFileDialog.getOpenFileName(self, tr("Select file"))
                 if path:
                     e.setText(path)
 
@@ -226,7 +233,7 @@ class SchemaFormWidget(QWidget):
             layout.addWidget(edit)
             layout.addWidget(browse)
             edit.textChanged.connect(lambda _v, k=f.key: self._emit_change(k))
-            form.addRow(f.label, row)
+            form.addRow(tr(f.label), row)
             self._widgets[f.key] = row
             self._getters[f.key] = edit.text
             self._setters[f.key] = edit.setText
@@ -234,7 +241,7 @@ class SchemaFormWidget(QWidget):
         else:  # TEXT, or any future type - plain line edit fallback
             edit = QLineEdit()
             edit.textChanged.connect(lambda _v, k=f.key: self._emit_change(k))
-            form.addRow(f.label, edit)
+            form.addRow(tr(f.label), edit)
             self._widgets[f.key] = edit
             self._getters[f.key] = edit.text
             self._setters[f.key] = edit.setText
@@ -278,7 +285,7 @@ class SchemaFormWidget(QWidget):
         combo.blockSignals(True)
         combo.clear()
         for label, value in choices:
-            combo.addItem(str(label), value)
+            combo.addItem(tr(str(label)), value)
         combo.blockSignals(False)
         if current is not None:
             self._set_combo(combo, current)

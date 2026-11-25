@@ -23,11 +23,13 @@ from typing import Callable, Optional
 from PySide6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QVBoxLayout
 
 from kokoro_gui.daw.migration import DEFAULT_CHARACTER_NAME
+from kokoro_gui.i18n import N_, tr
+from kokoro_gui.qt import tips
 
 NARRATOR = "__narrator__"
 NEW_CHARACTER = "__new__"
 NO_SPEAKER = ""
-NO_SPEAKER_LABEL = "(no speaker)"
+NO_SPEAKER_LABEL = N_("(no speaker)")
 
 
 def speaker_rows(cues) -> list:
@@ -114,39 +116,41 @@ class SpeakerMappingDialog(QDialog):
     order rows appear in), `NO_SPEAKER` for untagged cues; `characters`
     the document's `Character` records. Nothing here touches a document."""
 
-    def __init__(self, speakers, characters, parent=None, title: str = "Map speakers to characters"):
+    def __init__(self, speakers, characters, parent=None, title: str = ""):
         super().__init__(parent)
-        self.setWindowTitle(title)
+        self.setWindowTitle(title or tr("Map speakers to characters"))
         self._characters = list(characters)
         self._combos: dict = {}
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Pick the character that voices each speaker in the file."))
+        layout.addWidget(QLabel(tr("Pick the character that voices each speaker in the file.")))
         form = QFormLayout()
         layout.addLayout(form)
         narrator = narrator_character(self._characters)
-        narrator_label = f"Narrator ({narrator.name})" if narrator is not None else \
-            f"Narrator (new {DEFAULT_CHARACTER_NAME})"
+        narrator_label = tr("Narrator ({name})", name=narrator.name) if narrator is not None else \
+            tr("Narrator (new {default_character_name})", default_character_name=DEFAULT_CHARACTER_NAME)
         for speaker in speakers:
             if speaker in self._combos:
                 continue
             combo = QComboBox(self)
+            combo.setToolTip(tr("The character that speaks these lines."))
             combo.addItem(narrator_label, NARRATOR)
             if speaker != NO_SPEAKER:
-                combo.addItem(f"New character: {speaker}", NEW_CHARACTER)
+                combo.addItem(tr("New character: {speaker}", speaker=speaker), NEW_CHARACTER)
             if self._characters:
                 combo.insertSeparator(combo.count())
             for character in self._characters:
                 combo.addItem(character.name, character.id)
             self._combos[speaker] = combo
             self.set_choice(speaker, default_choice(speaker, self._characters))
-            form.addRow(NO_SPEAKER_LABEL if speaker == NO_SPEAKER else speaker, combo)
+            form.addRow(tr(NO_SPEAKER_LABEL) if speaker == NO_SPEAKER else speaker, combo)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Import")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("Import"))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        tips.label_rows(self)
 
     def speakers(self) -> list:
         return list(self._combos)

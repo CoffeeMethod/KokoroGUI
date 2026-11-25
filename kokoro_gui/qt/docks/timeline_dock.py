@@ -54,13 +54,14 @@ from kokoro_gui.daw.undo import (
 from kokoro_gui.engine import presets
 from kokoro_gui.engine.audio_fx import clamp_time_stretch
 from kokoro_gui.engine.presets import filter_fx_preset_values
+from kokoro_gui.i18n import N_, ntr, tr
 from kokoro_gui.qt.empty_state import EmptyState
 from kokoro_gui.qt.timeline_view import TimelineWidget
 
-EMPTY_NO_TEXT = 'No clips yet. Write in the transcript, or <a href="import">import a text file</a>.'
-EMPTY_NO_CLIPS = ('No clips yet. Pick a Character for some text in the transcript, or '
-                  '<a href="split">auto-split the transcript and generate it</a>.')
-EMPTY_NO_AUDIO = 'No audio yet. <a href="generate">Generate</a> makes it for every stale clip.'
+EMPTY_NO_TEXT = N_('No clips yet. Write in the transcript, or <a href="import">import a text file</a>.')
+EMPTY_NO_CLIPS = (N_('No clips yet. Pick a Character for some text in the transcript, or '
+                     '<a href="split">auto-split the transcript and generate it</a>.'))
+EMPTY_NO_AUDIO = N_('No audio yet. <a href="generate">Generate</a> makes it for every stale clip.')
 
 
 def _set_override(clip, key: str, value) -> None:
@@ -107,7 +108,7 @@ class TimelineDock(QDockWidget):
     _batchGenerationRaw = Signal()
 
     def __init__(self, app, parent=None):
-        super().__init__("Timeline", parent)
+        super().__init__(tr("Timeline"), parent)
         self.setObjectName("dock_timeline")
         self.app = app
 
@@ -143,8 +144,9 @@ class TimelineDock(QDockWidget):
 
         # Review filter (phase 2, A5): dims the blocks that don't match.
         self.status_filter_combo = QComboBox()
-        for label, key in (("All clips", "all"), ("Not approved", "not_approved"),
-                           ("Needs rewrite", "needs_rewrite")):
+        self.status_filter_combo.setToolTip(tr("Dim the clips whose status doesn't match."))
+        for label, key in ((tr("All clips"), "all"), (tr("Not approved"), "not_approved"),
+                           (tr("Needs rewrite"), "needs_rewrite")):
             self.status_filter_combo.addItem(label, key)
         self.status_filter_combo.currentIndexChanged.connect(
             lambda _i: self.timeline_view.set_status_filter(self.status_filter_combo.currentData()))
@@ -163,27 +165,27 @@ class TimelineDock(QDockWidget):
         self.breadcrumb_layout.setSpacing(2)
         filter_row.addWidget(self.breadcrumb)
         filter_row.addSpacing(8)
-        filter_row.addWidget(QLabel("Show:"))
+        filter_row.addWidget(QLabel(tr("Show:")))
         filter_row.addWidget(self.status_filter_combo)
         filter_row.addStretch(1)
-        self.zoom_fit_button = QPushButton("Zoom to fit")
-        self.zoom_fit_button.setToolTip("Zoom out until the whole arrangement fits the window, and scroll to "
-                                        "the start.")
+        self.zoom_fit_button = QPushButton(tr("Zoom to fit"))
+        self.zoom_fit_button.setToolTip(tr("Zoom out until the whole arrangement fits the window, and scroll to "
+                                           "the start."))
         self.zoom_fit_button.clicked.connect(lambda _checked=False: self.timeline_view.zoom_to_fit())
         filter_row.addWidget(self.zoom_fit_button)
         # Snap to grid is a view setting, kept in config_qt.json and never in
         # the project. The G key (timeline focused) flips it.
-        self.snap_button = QPushButton("Snap to grid")
+        self.snap_button = QPushButton(tr("Snap to grid"))
         self.snap_button.setCheckable(True)
-        self.snap_button.setToolTip("Dragged clips and markers land on the nearest grid line (G with the timeline "
-                                    "focused). Clip edges, markers and the playhead still catch within a few pixels.")
+        self.snap_button.setToolTip(tr("Dragged clips and markers land on the nearest grid line (G with the timeline "
+                                       "focused). Clip edges, markers and the playhead still catch within a few pixels."))
         self.snap_button.setChecked(bool(self.app.settings.get("snap_to_grid", False)))
         self.timeline_view.set_snap_to_grid(self.snap_button.isChecked())
         self.snap_button.toggled.connect(self._on_snap_toggled)
         filter_row.addWidget(self.snap_button)
-        self.fit_all_button = QPushButton("Fit all over slot")
-        self.fit_all_button.setToolTip("Fit every clip that runs past its target duration: regenerate "
-                                       "faster, or time-stretch on an engine without a speed control.")
+        self.fit_all_button = QPushButton(tr("Fit all over slot"))
+        self.fit_all_button.setToolTip(tr("Fit every clip that runs past its target duration: regenerate "
+                                          "faster, or time-stretch on an engine without a speed control."))
         self.fit_all_button.clicked.connect(lambda _checked=False: self.fit_all_over_slot())
         filter_row.addWidget(self.fit_all_button)
         column.addLayout(filter_row)
@@ -264,6 +266,7 @@ class TimelineDock(QDockWidget):
             if index:
                 self.breadcrumb_layout.addWidget(QLabel("\u203a"))
             button = QPushButton(project.title())
+            button.setToolTip(tr("Show this level on the timeline."))
             button.setFlat(True)
             button.setEnabled(project is not app.level)
             button.clicked.connect(lambda checked=False, p=project: self.app.set_level(p))
@@ -278,11 +281,11 @@ class TimelineDock(QDockWidget):
     def refresh_empty_state(self) -> None:
         document = self._doc
         if not document.clips:
-            message = EMPTY_NO_CLIPS if document.text.strip() else EMPTY_NO_TEXT
+            message = tr(EMPTY_NO_CLIPS) if document.text.strip() else tr(EMPTY_NO_TEXT)
         elif any(clip.segments or clip.source != "generated" for clip in document.clips):
             message = ""
         else:
-            message = EMPTY_NO_AUDIO
+            message = tr(EMPTY_NO_AUDIO)
         self.empty_state.show_message(message)
 
     def refresh(self) -> None:
@@ -396,7 +399,7 @@ class TimelineDock(QDockWidget):
         ids = [c.id for c in clips]
         if action == "generate":
             if not self.generate_dirty_clips_requested(self.app.level, clip_ids=set(ids)):
-                self.app.set_status("Nothing stale in the selection", "warning")
+                self.app.set_status(tr("Nothing stale in the selection"), "warning")
             return
         if action == "align":
             self.app.schedule_word_alignment(ids, force=True)
@@ -433,10 +436,11 @@ class TimelineDock(QDockWidget):
     def _ask_marker_text(self, marker: dict):
         """`(name, note)` from two input boxes, or None on cancel. Its own
         method so tests answer it without a modal."""
-        name, ok = QInputDialog.getText(self, "Rename marker", "Name:", text=marker["name"])
+        name, ok = QInputDialog.getText(self, tr("Rename marker"), tr("Name:"), text=marker["name"])
         if not ok:
             return None
-        note, ok = QInputDialog.getText(self, "Marker note", "Note (a listen-through flag):", text=marker["note"])
+        note, ok = QInputDialog.getText(self, tr("Marker note"), tr("Note (a listen-through flag):"),
+                                        text=marker["note"])
         return (name, note) if ok else None
 
     def on_marker_rename_requested(self, marker_id: str) -> None:
@@ -563,7 +567,7 @@ class TimelineDock(QDockWidget):
         (the user is waiting for it). Returns whether a generate started or
         was queued."""
         if self.app.generate_blocked():
-            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before generating a clip.")
+            QMessageBox.warning(self, tr("Busy"), tr("Finish or cancel the current job before generating a clip."))
             return False
 
         # The job holds its project: the results land there even when the
@@ -584,7 +588,7 @@ class TimelineDock(QDockWidget):
             return None
         blocked = self.app.cannot_generate(clip, project)
         if blocked:
-            self.app.set_status(f"{blocked}: this clip can't be generated.", "warning")
+            self.app.set_status(tr("{blocked}: this clip can't be generated.", blocked=blocked), "warning")
             return None
         return clip
 
@@ -606,9 +610,9 @@ class TimelineDock(QDockWidget):
                 return False
             return True
 
-        title = project.document.clip_text(clip)[:60].strip() or "Clip"
+        title = project.document.clip_text(clip)[:60].strip() or tr("Clip")
         self.app.enqueue_task(project, [clip_id], title, _start, front=True)
-        self.app.set_status("Queued that clip to generate next.", "info")
+        self.app.set_status(tr("Queued that clip to generate next."), "info")
         return True
 
     def _generate_clip_now(self, clip_id: str, regenerate: bool = False, project=None) -> bool:
@@ -630,7 +634,7 @@ class TimelineDock(QDockWidget):
             try:
                 results = future.result()
                 success = bool(results)
-                error = "" if success else "Generation produced no audio (cancelled or empty text)."
+                error = "" if success else tr("Generation produced no audio (cancelled or empty text).")
             except Exception as e:
                 results, success, error = [], False, str(e)
 
@@ -657,7 +661,7 @@ class TimelineDock(QDockWidget):
         shifts = self._ripple_shifts(before, clip_ids, project)
         if shifts:
             project.document.undo_stack.push(RippleCommand(shifts))
-            self.app.set_status(f"Ripple: moved {len(shifts)} clip(s) after the regenerated audio.")
+            self.app.set_status(tr("Ripple: moved {count} clip(s) after the regenerated audio.", count=len(shifts)))
         return len(shifts)
 
     def _ripple_shifts(self, before, clip_ids, project) -> dict:
@@ -721,7 +725,7 @@ class TimelineDock(QDockWidget):
                 self._advance_fit(job)
         elif not success:
             self._pending_results.pop(clip_id, None)
-            self.app.set_status(f"Clip generation failed: {error}", "error")
+            self.app.set_status(tr("Clip generation failed: {error}", error=error), "error")
             if job is not None:
                 self._fit_queue.clear()
                 self._finish_fit(job, failed=True)
@@ -783,7 +787,7 @@ class TimelineDock(QDockWidget):
         if project is None:
             return False
         if self.app.generate_blocked():
-            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before fitting a clip.")
+            QMessageBox.warning(self, tr("Busy"), tr("Finish or cancel the current job before fitting a clip."))
             return False
         if self.app.is_generating():
             return self._enqueue_fits([(clip_id, project)], project)
@@ -796,12 +800,12 @@ class TimelineDock(QDockWidget):
         `clips_over_slot` lists and fits them one after another (as one
         queue task while a generate runs). Returns how many were queued."""
         if self.app.generate_blocked():
-            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before fitting clips.")
+            QMessageBox.warning(self, tr("Busy"), tr("Finish or cancel the current job before fitting clips."))
             return 0
         project = project or self.app.level
         clips = self.clips_over_slot(project)
         if not clips:
-            self.app.set_status("No clip runs over its slot.")
+            self.app.set_status(tr("No clip runs over its slot."))
             return 0
         pairs = [(clip.id, project) for clip in clips]
         if self.app.is_generating():
@@ -828,10 +832,10 @@ class TimelineDock(QDockWidget):
             return True
 
         clip = project.document.get_clip(pairs[0][0])
-        title = "Fit to slot" if len(pairs) > 1 or clip is None else \
-            f"Fit to slot: {project.document.clip_text(clip)[:50].strip()}"
+        title = tr("Fit to slot") if len(pairs) > 1 or clip is None else \
+            tr("Fit to slot: {clip_text}", clip_text=project.document.clip_text(clip)[:50].strip())
         self.app.enqueue_task(project, [clip_id for clip_id, _project in pairs], title, _start, front=True)
-        self.app.set_status("Queued the fit to run next.", "info")
+        self.app.set_status(tr("Queued the fit to run next."), "info")
         return True
 
     def _start_next_fit(self) -> None:
@@ -850,9 +854,9 @@ class TimelineDock(QDockWidget):
             self._fit_looping = False
         if not self._fits and len(self._fit_batch) > 1:
             rewrites = sum(1 for _clip_id, rewrite in self._fit_batch if rewrite)
-            message = f"Fitted {len(self._fit_batch)} clips to their slots."
+            message = tr("Fitted {count} clips to their slots.", count=len(self._fit_batch))
             if rewrites:
-                message += f" {rewrites} marked Needs rewrite."
+                message += tr(" {rewrites} marked Needs rewrite.", rewrites=rewrites)
             self.app.set_status(message, "warning" if rewrites else "success")
         if not self._fits and not self._fit_queue and self._fit_done is not None:
             # The fit ran as a queue task. Its clips aren't counted as
@@ -948,15 +952,16 @@ class TimelineDock(QDockWidget):
 
     @staticmethod
     def _fit_message(job, final, ratio, rewrite: bool) -> str:
-        percent = f"{round(ratio * 100)}%" if ratio is not None else "unknown length"
+        percent = f"{round(ratio * 100)}%" if ratio is not None else tr("unknown length")
         if job.key == "time_stretch":
-            how = f"stretched x{float(final):.2f}" if final is not None else "no stretch needed"
+            how = tr("stretched x{final:.2f}", final=float(final)) if final is not None else tr("no stretch needed")
         else:
-            passes = f"{job.passes} pass" + ("" if job.passes == 1 else "es")
-            how = f"speed {float(final):.2f} after {passes}" if final is not None else "at its own speed"
-        message = f"Fit to slot: {percent} of the target, {how}."
+            passes = ntr("{n} pass", "{n} passes", job.passes)
+            how = tr("speed {final:.2f} after {passes}", final=float(final),
+                     passes=passes) if final is not None else tr("at its own speed")
+        message = tr("Fit to slot: {percent} of the target, {how}.", percent=percent, how=how)
         if rewrite:
-            message += " Too long to fit: marked Needs rewrite."
+            message += tr(" Too long to fit: marked Needs rewrite.")
         return message
 
     # -- per-clip FX preset menu (item 5, "Per-clip FX button") --------------
@@ -1021,15 +1026,17 @@ class TimelineDock(QDockWidget):
         this dialog), the same way a monkeypatched `.exec()` can reach in and
         supply canned "user typed X and picked character Y" input."""
         dialog = QDialog(self)
-        dialog.setWindowTitle("Replace with TTS")
+        dialog.setWindowTitle(tr("Replace with TTS"))
         layout = QVBoxLayout(dialog)
 
-        layout.addWidget(QLabel("Text:"))
+        layout.addWidget(QLabel(tr("Text:")))
         text_edit = QPlainTextEdit(original_text)
+        text_edit.setToolTip(tr("What the new voice says in place of the selected part."))
         layout.addWidget(text_edit)
 
-        layout.addWidget(QLabel("Character:"))
+        layout.addWidget(QLabel(tr("Character:")))
         character_combo = QComboBox()
+        character_combo.setToolTip(tr("The character that speaks it."))
         default_index = 0
         for index, character in enumerate(self._doc.characters):
             character_combo.addItem(character.name, character.id)
@@ -1040,9 +1047,11 @@ class TimelineDock(QDockWidget):
         layout.addWidget(character_combo)
 
         button_row = QHBoxLayout()
-        ok_btn = QPushButton("OK")
+        ok_btn = QPushButton(tr("OK"))
+        ok_btn.setToolTip(tr("Replace the selected part with a generated clip."))
         ok_btn.clicked.connect(dialog.accept)
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = QPushButton(tr("Cancel"))
+        cancel_btn.setToolTip(tr("Leave the clip as it is."))
         cancel_btn.clicked.connect(dialog.reject)
         button_row.addWidget(ok_btn)
         button_row.addWidget(cancel_btn)
@@ -1119,7 +1128,7 @@ class TimelineDock(QDockWidget):
         other job (an Open, an export started first) refuses it. Returns how
         many clips were queued."""
         if self.app.generate_blocked():
-            QMessageBox.warning(self, "Busy", "Finish or cancel the current job before generating.")
+            QMessageBox.warning(self, tr("Busy"), tr("Finish or cancel the current job before generating."))
             return 0
 
         project = project or self.app.level

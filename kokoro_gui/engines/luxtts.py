@@ -21,6 +21,7 @@ from kokoro_gui.engines.base import (
 )
 from kokoro_gui.engines.registry import register_engine
 from kokoro_gui.engines.voice_store import ReferenceStore
+from kokoro_gui.i18n import N_, tr
 
 MODEL_ID = "YatharthS/LuxTTS"
 UPSTREAM_REVISION = "28ae6a61151684fffc9d1a7aa15eafa02286fe0b"
@@ -35,9 +36,9 @@ def _load_lux(device):
     try:
         from zipvoice.luxvoice import LuxTTS
     except ImportError as error:
-        raise RuntimeError("LuxTTS dependencies are missing. In the app's Python environment, "
-                           "run: python -m pip install -r requirements-luxtts.txt. "
-                           f"Details: {error}") from error
+        raise RuntimeError(tr("LuxTTS dependencies are missing. In the app's Python environment, "
+                              "run: python -m pip install -r requirements-luxtts.txt. "
+                              "Details: {error}", error=error)) from error
     return LuxTTS(MODEL_ID, device=device, threads=2)
 
 
@@ -47,7 +48,7 @@ def _device(device):
         import torch
         return "cuda" if torch.cuda.is_available() else "cpu"
     if device not in ("cpu", "cuda", "mps"):
-        raise ValueError(f"Unsupported LuxTTS device: {device}")
+        raise ValueError(tr("Unsupported LuxTTS device: {device}", device=device))
     return device
 
 
@@ -94,11 +95,11 @@ class LuxTTSModel(ModelBase):
             return self._lux
 
     def loading_message(self):
-        return "Loading LuxTTS (first use downloads speech and reference transcription models)..."
+        return tr("Loading LuxTTS (first use downloads speech and reference transcription models)...")
 
     def ready_message(self, lang_code):
         device = getattr(self._lux, "device", self._device)
-        return f"LuxTTS ready ({device}, 48 kHz)."
+        return tr("LuxTTS ready ({device}, 48 kHz).", device=device)
 
     def engine_version(self):
         return f"{MODEL_ID}:{UPSTREAM_REVISION}:adapter-2:{LuxTTSBackendAdapter.package_version()}"
@@ -125,12 +126,12 @@ class LuxTTSModel(ModelBase):
         import soundfile as sf
 
         if not path or not os.path.isfile(path):
-            raise ValueError("Select and save a LuxTTS Reference before generating.")
+            raise ValueError(tr("Select and save a LuxTTS Reference before generating."))
         if os.path.getsize(path) > 200 * 1024 * 1024:
-            raise ValueError("A LuxTTS Reference's WAV must be no larger than 200 MB.")
+            raise ValueError(tr("A LuxTTS Reference's WAV must be no larger than 200 MB."))
         info = sf.info(path)
         if info.duration < 3:
-            raise ValueError("A LuxTTS Reference's WAV must contain at least 3 seconds of speech.")
+            raise ValueError(tr("A LuxTTS Reference's WAV must contain at least 3 seconds of speech."))
 
     def synthesize(self, text, voice, speed, lang_code, params):
         if not text or not text.strip():
@@ -144,11 +145,11 @@ class LuxTTSModel(ModelBase):
         for key, (low, high) in bounds.items():
             value = float(settings[key])
             if not math.isfinite(value) or not low <= value <= high:
-                raise ValueError(f"LuxTTS {key} must be between {low} and {high}.")
+                raise ValueError(tr("LuxTTS {key} must be between {low} and {high}.", key=key, low=low, high=high))
         if float(settings["num_steps"]) != int(settings["num_steps"]):
-            raise ValueError("LuxTTS num_steps must be an integer.")
+            raise ValueError(tr("LuxTTS num_steps must be an integer."))
         if not math.isfinite(float(speed)) or not 0.1 <= float(speed) <= 4:
-            raise ValueError("LuxTTS speed must be between 0.1 and 4.")
+            raise ValueError(tr("LuxTTS speed must be between 0.1 and 4."))
         path = self.resolve_voice_path(voice, params.get("project_dir"))
         self._validate_reference(path)
         with self._lock:
@@ -176,7 +177,7 @@ class LuxTTSModel(ModelBase):
             # 24 kHz head internally). No sample-rate guessing or time stretch.
             audio = np.asarray(wav, dtype=np.float32).reshape(-1)
             if not np.isfinite(audio).all() or audio.size == 0:
-                raise ValueError("LuxTTS returned empty or invalid audio.")
+                raise ValueError(tr("LuxTTS returned empty or invalid audio."))
             return Synthesis(audio)
 
 
@@ -202,27 +203,35 @@ class LuxTTSBackendAdapter(BackendHooksMixin):
         try:
             return importlib.metadata.version("zipvoice")
         except importlib.metadata.PackageNotFoundError:
-            return "not installed"
+            return tr("not installed")
 
     @classmethod
     def get_config_schema(cls):
         return [
-            ConfigField("lang_code", "Language", ConfigFieldType.CHOICE,
-                        default="en", choices=[("English", "en")], group="Generation"),
-            ConfigField("voice", "Reference", ConfigFieldType.CHOICE, group="Generation"),
+            ConfigField("lang_code", N_("Language"), ConfigFieldType.CHOICE,
+                        default="en", choices=[("English", "en")], group=N_("Generation"),
+                        tooltip=N_("The language the text is in.")),
+            ConfigField("voice", N_("Reference"), ConfigFieldType.CHOICE, group=N_("Generation"),
+                        tooltip=N_("The Reference whose voice is cloned.")),
             *common_fields(max_threads=1),
-            ConfigField("num_steps", "Sampling Steps", ConfigFieldType.INT,
-                        default=4, min=1, max=32, step=1, group="Model"),
-            ConfigField("guidance_scale", "Guidance Scale", ConfigFieldType.FLOAT,
-                        default=3.0, min=0, max=10, step=0.1, group="Model"),
-            ConfigField("t_shift", "Time Shift", ConfigFieldType.FLOAT,
-                        default=0.9, min=0.1, max=1, step=0.05, group="Model"),
-            ConfigField("ref_duration", "Reference Duration (seconds)", ConfigFieldType.FLOAT,
-                        default=5.0, min=3, max=1000, step=1, group="Model"),
-            ConfigField("ref_rms", "Reference RMS", ConfigFieldType.FLOAT,
-                        default=0.01, min=0.001, max=0.1, step=0.001, group="Model"),
-            ConfigField("return_smooth", "Smooth Audio", ConfigFieldType.BOOL,
-                        default=False, group="Model"),
+            ConfigField("num_steps", N_("Sampling Steps"), ConfigFieldType.INT,
+                        default=4, min=1, max=32, step=1, group=N_("Model"),
+                        tooltip=N_("How many steps the model takes. More is slower and can sound better.")),
+            ConfigField("guidance_scale", N_("Guidance Scale"), ConfigFieldType.FLOAT,
+                        default=3.0, min=0, max=10, step=0.1, group=N_("Model"),
+                        tooltip=N_("How closely the model follows the text and the Reference.")),
+            ConfigField("t_shift", N_("Time Shift"), ConfigFieldType.FLOAT,
+                        default=0.9, min=0.1, max=1, step=0.05, group=N_("Model"),
+                        tooltip=N_("Shifts where in the process the model spends its steps.")),
+            ConfigField("ref_duration", N_("Reference Duration (seconds)"), ConfigFieldType.FLOAT,
+                        default=5.0, min=3, max=1000, step=1, group=N_("Model"),
+                        tooltip=N_("How many seconds of the Reference are used.")),
+            ConfigField("ref_rms", N_("Reference RMS"), ConfigFieldType.FLOAT,
+                        default=0.01, min=0.001, max=0.1, step=0.001, group=N_("Model"),
+                        tooltip=N_("The loudness the Reference is brought to before it is used.")),
+            ConfigField("return_smooth", N_("Smooth Audio"), ConfigFieldType.BOOL,
+                        default=False, group=N_("Model"),
+                        tooltip=N_("Smooth the generated audio.")),
         ]
 
     def cancel(self):

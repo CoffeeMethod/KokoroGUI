@@ -9,14 +9,15 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel
 
 from kokoro_gui.engines import registry as engine_registry
+from kokoro_gui.i18n import tr
 
 
 def engine_header(app, backend_id: str) -> tuple:
     """`(layout, combo)` for a voice dock editing `backend_id`'s voices."""
     row = QHBoxLayout()
-    row.addWidget(QLabel("Engine:"))
+    row.addWidget(QLabel(tr("Engine:")))
     combo = QComboBox()
-    combo.setToolTip("Whose voices to edit. Selecting a clip or character switches back to its engine.")
+    combo.setToolTip(tr("Whose voices to edit. Selecting a clip or character switches back to its engine."))
     for engine_id in app.voice_editor_engines():
         combo.addItem(engine_registry.get_display_name(engine_id), engine_id)
     index = combo.findData(backend_id)

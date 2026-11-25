@@ -84,6 +84,7 @@ from kokoro_gui.daw.beds import bed_segments
 from kokoro_gui.daw.dirty import is_recorded_take
 from kokoro_gui.daw.models import CLIP_STATUSES
 from kokoro_gui.daw.timecode import format_position
+from kokoro_gui.i18n import N_, tr
 from kokoro_gui.qt import theme, waveform_data
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
 from kokoro_gui.qt.selection import SelectionModel
@@ -99,8 +100,8 @@ AUTOMATION_POINT_RADIUS_PX = 4.0
 AUTOMATION_HIT_PX = 7.0
 AUTOMATION_MAX_GAIN = 2.0
 PAN_DETENT = 0.05
-STATUS_LABELS = {"todo": "To do", "generated": "Generated", "approved": "Approved",
-                 "needs_rewrite": "Needs rewrite"}
+STATUS_LABELS = {"todo": N_("To do"), "generated": N_("Generated"), "approved": N_("Approved"),
+                 "needs_rewrite": N_("Needs rewrite")}
 # Which statuses each timeline filter shows at full opacity.
 STATUS_FILTERS = {
     "all": set(CLIP_STATUSES),
@@ -873,21 +874,21 @@ class TrackHeaderView(QGraphicsView):
             self._labels.append(label)
 
             toggles = [
-                self._toggle("M", "Mute", bool(track.mute)),
-                self._toggle("S", "Solo", bool(track.solo)),
-                self._toggle("A", "Show volume automation", track.id in automation_shown),
-                self._toggle("D", "Duck under speech: turn this track down while other clips play",
+                self._toggle("M", tr("Mute"), bool(track.mute)),
+                self._toggle("S", tr("Solo"), bool(track.solo)),
+                self._toggle("A", tr("Show volume automation"), track.id in automation_shown),
+                self._toggle("D", tr("Duck under speech: turn this track down while other clips play"),
                              bool(track.duck)),
             ]
             for j, button in enumerate(toggles):
                 self._add_widget(button, 6 + j * (TOGGLE_WIDTH_PX + 4), y + 24)
             mute, solo, auto, duck = toggles
             gain_y, pan_y = y + 48, y + 48 + SLIDER_HEIGHT_PX + 2
-            self._slider_label("Vol", gain_y, pal.text_muted)
-            self._slider_label("Pan", pan_y, pal.text_muted)
-            gain = self._add_widget(self._slider(0, 200, gain_to_slider(track.gain), "Volume"),
+            self._slider_label(tr("Vol"), gain_y, pal.text_muted)
+            self._slider_label(tr("Pan"), pan_y, pal.text_muted)
+            gain = self._add_widget(self._slider(0, 200, gain_to_slider(track.gain), tr("Volume")),
                                     SLIDER_LEFT_PX, gain_y)
-            pan_slider = self._slider(-100, 100, pan_to_slider(track.pan), "Pan")
+            pan_slider = self._slider(-100, 100, pan_to_slider(track.pan), tr("Pan"))
             pan_slider.setProperty("centered", True)  # no accent fill from the left edge
             pan = self._add_widget(pan_slider, SLIDER_LEFT_PX, pan_y)
             tid = track.id
@@ -1093,6 +1094,7 @@ class TimelineView(QGraphicsView):
             return None
 
         menu = QMenu(self)
+        menu.setToolTipsVisible(True)
         selected = self._selection_model.selected_clip_ids if self._selection_model is not None else ()
         if len(selected) > 1 and block.clip_id in selected and self._document is not None:
             return self._build_batch_menu(menu, list(selected))
@@ -1101,13 +1103,15 @@ class TimelineView(QGraphicsView):
             return self._build_subproject_menu(menu, clip)
         if clip is not None and clip.is_bed:
             return self._build_bed_menu(menu, clip, block)
-        generate_action = menu.addAction("Generate")
+        generate_action = menu.addAction(tr("Generate"))
+        generate_action.setToolTip(tr("Make new audio for this clip."))
         generate_action.triggered.connect(
             lambda checked=False, cid=block.clip_id: self.generateClipRequested.emit(cid)
         )
 
         if block.audio_path:
-            play_action = menu.addAction("Play")
+            play_action = menu.addAction(tr("Play"))
+            play_action.setToolTip(tr("Play this clip."))
             play_action.triggered.connect(
                 lambda checked=False, cid=block.clip_id: self.playClipRequested.emit(cid)
             )
@@ -1115,35 +1119,39 @@ class TimelineView(QGraphicsView):
         clip = self._document.get_clip(block.clip_id) if self._document is not None else None
         if clip is not None and clip.timeline_timestamp is not None:
             menu.addSeparator()
-            unpin = menu.addAction("Unpin from timeline")
+            unpin = menu.addAction(tr("Unpin from timeline"))
+            unpin.setToolTip(tr("Let the clip follow the one before it again."))
             unpin.triggered.connect(lambda checked=False, cid=block.clip_id: self.unpinRequested.emit(cid))
 
         if clip is not None:
             menu.addSeparator()
             self._add_split_join(menu, clip, x_to_seconds(self.mapToScene(pos).x(), self._zoom))
-            lock = menu.addAction("Lock in time")
+            lock = menu.addAction(tr("Lock in time"))
             lock.setCheckable(True)
             lock.setChecked(bool(clip.pinned))
-            lock.setToolTip("Ripple on regenerate won't move this clip.")
+            lock.setToolTip(tr("Ripple on regenerate won't move this clip."))
             lock.triggered.connect(lambda checked=False, cid=clip.id: self.lockInTimeRequested.emit(cid, bool(checked)))
             menu.addSeparator()
             self._add_take_menu(menu, clip)
-            record = menu.addAction("Record guide take...")
-            record.setToolTip("Record yourself reading this line, after a count-in. The take is the clip's audio.")
+            record = menu.addAction(tr("Record guide take..."))
+            record.setToolTip(tr("Record yourself reading this line, after a count-in. The take is the clip's audio."))
             record.triggered.connect(lambda checked=False, cid=clip.id: self.recordTakeRequested.emit(cid))
-            status_menu = menu.addMenu("Status")
+            status_menu = menu.addMenu(tr("Status"))
+            status_menu.setToolTipsVisible(True)
             for status in CLIP_STATUSES:
-                action = status_menu.addAction(STATUS_LABELS[status])
+                action = status_menu.addAction(tr(STATUS_LABELS[status]))
+                action.setToolTip(tr("Set the clip's status."))
                 action.setCheckable(True)
                 action.setChecked(clip.status == status)
                 action.triggered.connect(
                     lambda checked=False, cid=clip.id, st=status: self.statusChangeRequested.emit(cid, st))
             if any(s.audio_path for s in clip.segments):
-                align = menu.addAction("Align words")
+                align = menu.addAction(tr("Align words"))
+                align.setToolTip(tr("Find where each word is spoken, with Whisper."))
                 align.triggered.connect(lambda checked=False, cid=clip.id: self.alignWordsRequested.emit(cid))
             if fit_ops.target_duration_s(clip) is not None:
-                fit = menu.addAction("Fit to slot")
-                fit.setToolTip("Regenerate faster or slower, or time-stretch, until the clip fills its target.")
+                fit = menu.addAction(tr("Fit to slot"))
+                fit.setToolTip(tr("Regenerate faster or slower, or time-stretch, until the clip fills its target."))
                 fit.triggered.connect(lambda checked=False, cid=clip.id: self.fitToSlotRequested.emit(cid))
 
         return menu
@@ -1153,29 +1161,41 @@ class TimelineView(QGraphicsView):
         every selected clip as one undo step (or one queue request)."""
         clips = [c for c in (self._document.get_clip(cid) for cid in clip_ids) if c is not None]
         speech = [c for c in clips if not c.is_nested and not c.is_bed]
-        title = menu.addAction(f"{len(clip_ids)} clips selected")
+        title = menu.addAction(tr("{count} clips selected", count=len(clip_ids)))
+        title.setToolTip(tr("The entries below apply to all of them."))
         title.setEnabled(False)
         menu.addSeparator()
 
         def emit(action, value=None):
             return lambda checked=False: self.batchActionRequested.emit(list(clip_ids), action, value)
 
-        menu.addAction("Generate stale clips").triggered.connect(emit("generate"))
-        status_menu = menu.addMenu("Status")
+        generate = menu.addAction(tr("Generate stale clips"))
+        generate.setToolTip(tr("Make audio for the stale clips among the selected ones."))
+        generate.triggered.connect(emit("generate"))
+        status_menu = menu.addMenu(tr("Status"))
+        status_menu.setToolTipsVisible(True)
         for status in CLIP_STATUSES:
-            action = status_menu.addAction(STATUS_LABELS[status])
+            action = status_menu.addAction(tr(STATUS_LABELS[status]))
+            action.setToolTip(tr("Set the status of every selected clip."))
             action.setCheckable(True)
             action.setChecked(bool(speech) and all(c.status == status for c in speech))
             action.triggered.connect(emit("status", status))
-        fx_menu = menu.addMenu("FX")
+        fx_menu = menu.addMenu(tr("FX"))
+        fx_menu.setToolTipsVisible(True)
         for name in list_fx_preset_names():
-            fx_menu.addAction(name).triggered.connect(emit("fx", name))
+            use = fx_menu.addAction(name)
+            use.setToolTip(tr("Use the FX {name} on every selected clip.", name=name))
+            use.triggered.connect(emit("fx", name))
         fx_menu.addSeparator()
-        fx_menu.addAction("Clear FX").triggered.connect(emit("fx", ""))
-        clear_gap = menu.addAction("Remove gap override")
+        clear = fx_menu.addAction(tr("Clear FX"))
+        clear.setToolTip(tr("Take the selected clips' own FX off, so they follow their characters."))
+        clear.triggered.connect(emit("fx", ""))
+        clear_gap = menu.addAction(tr("Remove gap override"))
+        clear_gap.setToolTip(tr("Go back to the project's gap before each clip."))
         clear_gap.setEnabled(any(c.gap_before_s is not None for c in speech))
         clear_gap.triggered.connect(emit("clear_gap"))
-        align = menu.addAction("Align words")
+        align = menu.addAction(tr("Align words"))
+        align.setToolTip(tr("Find where each word is spoken, with Whisper."))
         align.setEnabled(any(s.audio_path for c in speech for s in c.segments))
         align.triggered.connect(emit("align"))
         return menu
@@ -1185,14 +1205,17 @@ class TimelineView(QGraphicsView):
         merges the clip with the one after it. A disabled entry's tooltip
         says why."""
         menu.setToolTipsVisible(True)
-        split = menu.addAction("Split here")
+        split = menu.addAction(tr("Split here"))
+        split.setToolTip(tr("Cut the clip in two at the word under the pointer."))
         if clip.timeline_timestamp is not None:
             split.setEnabled(False)
-            split.setToolTip("A clip placed on the timeline can't be split. Unpin it first.")
+            split.setToolTip(tr("A clip placed on the timeline can't be split. Unpin it first."))
         split.triggered.connect(lambda checked=False, cid=clip.id, t=seconds: self.splitRequested.emit(cid, t))
         following = self._document.next_clip(clip.id)
-        problem = self._document.join_problem(clip, following) if following is not None else "No clip follows this one."
-        join = menu.addAction("Join with next")
+        problem = self._document.join_problem(clip, following) if following is not None else tr("No clip follows "
+                                                                                                "this one.")
+        join = menu.addAction(tr("Join with next"))
+        join.setToolTip(tr("Merge this clip with the one after it."))
         if problem:
             join.setEnabled(False)
             join.setToolTip(problem)
@@ -1203,12 +1226,16 @@ class TimelineView(QGraphicsView):
         """A nested block: Enter, Generate, Detach to file... or
         Embed, Relink..., Remove."""
         kind = (clip.child or {}).get("kind", "embedded")
-        items = [("Enter", "enter"), ("Generate", "render")]
-        items.append(("Detach to file...", "detach") if kind == "embedded" else ("Embed", "embed"))
-        items.append(("Relink...", "relink"))
-        items.append(("Remove", "remove"))
-        for label, action_name in items:
+        items = [(tr("Enter"), "enter", tr("Open this subproject in the transcript and on the timeline.")),
+                 (tr("Generate"), "render", tr("Make audio for the stale clips inside this subproject."))]
+        items.append((tr("Detach to file..."), "detach", tr("Move this subproject into a project file of its own."))
+                     if kind == "embedded" else
+                     (tr("Embed"), "embed", tr("Move the linked project into this one.")))
+        items.append((tr("Relink..."), "relink", tr("Point this block at another project file.")))
+        items.append((tr("Remove"), "remove", tr("Take this subproject out of the project.")))
+        for label, action_name, tip in items:
             action = menu.addAction(label)
+            action.setToolTip(tip)
             action.triggered.connect(
                 lambda checked=False, cid=clip.id, a=action_name: self.subprojectActionRequested.emit(cid, a))
         return menu
@@ -1217,27 +1244,32 @@ class TimelineView(QGraphicsView):
         """A music bed's block: Play, Loop, Reset trim, Unpin, Lock in
         time, Remove. No Generate, Take or Align words: it isn't TTS."""
         if block.audio_path and not block.estimated:
-            menu.addAction("Play").triggered.connect(
-                lambda checked=False, cid=clip.id: self.playClipRequested.emit(cid))
-        loop = menu.addAction("Loop")
+            play = menu.addAction(tr("Play"))
+            play.setToolTip(tr("Play this audio."))
+            play.triggered.connect(lambda checked=False, cid=clip.id: self.playClipRequested.emit(cid))
+        loop = menu.addAction(tr("Loop"))
         loop.setCheckable(True)
         loop.setChecked(bool(clip.overrides.get("loop", False)))
-        loop.setToolTip("Repeat the audio; drag the right edge to set how long.")
+        loop.setToolTip(tr("Repeat the audio; drag the right edge to set how long."))
         loop.triggered.connect(lambda checked=False, cid=clip.id: self.bedActionRequested.emit(cid, "loop"))
-        reset = menu.addAction("Reset trim")
+        reset = menu.addAction(tr("Reset trim"))
+        reset.setToolTip(tr("Play the whole audio file again."))
         reset.setEnabled("trim" in clip.overrides)
         reset.triggered.connect(lambda checked=False, cid=clip.id: self.bedActionRequested.emit(cid, "reset_trim"))
         menu.addSeparator()
         if clip.timeline_timestamp is not None:
-            menu.addAction("Unpin from timeline").triggered.connect(
-                lambda checked=False, cid=clip.id: self.unpinRequested.emit(cid))
-        lock = menu.addAction("Lock in time")
+            unpin = menu.addAction(tr("Unpin from timeline"))
+            unpin.setToolTip(tr("Let the clip follow the one before it again."))
+            unpin.triggered.connect(lambda checked=False, cid=clip.id: self.unpinRequested.emit(cid))
+        lock = menu.addAction(tr("Lock in time"))
         lock.setCheckable(True)
         lock.setChecked(bool(clip.pinned))
+        lock.setToolTip(tr("Ripple on regenerate won't move this clip."))
         lock.triggered.connect(lambda checked=False, cid=clip.id: self.lockInTimeRequested.emit(cid, bool(checked)))
         menu.addSeparator()
-        menu.addAction("Remove").triggered.connect(
-            lambda checked=False, cid=clip.id: self.bedActionRequested.emit(cid, "remove"))
+        remove = menu.addAction(tr("Remove"))
+        remove.setToolTip(tr("Take this audio out of the project."))
+        remove.triggered.connect(lambda checked=False, cid=clip.id: self.bedActionRequested.emit(cid, "remove"))
         return menu
 
     def _add_take_menu(self, menu: QMenu, clip) -> None:
@@ -1250,17 +1282,17 @@ class TimelineView(QGraphicsView):
         if len(takes) < 2:
             return
         current_text = " ".join(self._document.clip_text(clip).split())
-        take_menu = menu.addMenu("Take")
+        take_menu = menu.addMenu(tr("Take"))
         take_menu.setToolTipsVisible(True)
         for index in sorted(takes):
             segments = takes[index]
             seconds = sum(float(s.duration or 0.0) for s in segments)
             text = " ".join(" ".join(s.text for s in segments).split())
-            label = f"Take {index + 1} ({seconds:.1f}s)"
+            label = tr("Take {index} ({seconds:.1f}s)", index=index + 1, seconds=seconds)
             if is_recorded_take(segments):
-                label = f"Take {index + 1} (recorded, {seconds:.1f}s)"
+                label = tr("Take {index} (recorded, {seconds:.1f}s)", index=index + 1, seconds=seconds)
             elif text != current_text:
-                label += " - old text"
+                label += tr(" - old text")
             action = take_menu.addAction(label)
             action.setToolTip(text)
             action.setCheckable(True)
@@ -1268,33 +1300,42 @@ class TimelineView(QGraphicsView):
             if index != active:
                 action.triggered.connect(
                     lambda checked=False, cid=clip.id, i=index: self.takeSelected.emit(cid, i))
-        delete_menu = menu.addMenu("Delete take")
+        delete_menu = menu.addMenu(tr("Delete take"))
+        delete_menu.setToolTipsVisible(True)
         for index in sorted(clip.takes):
-            action = delete_menu.addAction(f"Take {index + 1}")
+            action = delete_menu.addAction(tr("Take {index}", index=index + 1))
+            action.setToolTip(tr("Delete this take. The one that plays stays."))
             action.triggered.connect(
                 lambda checked=False, cid=clip.id, i=index: self.takeDeleteRequested.emit(cid, i))
 
     def _build_ruler_menu(self, scene_x: float) -> QMenu:
         menu = QMenu(self)
+        menu.setToolTipsVisible(True)
         marker = self._ruler.marker_at_x(scene_x) if self._ruler is not None else None
         if marker is not None:
             mid = marker["id"]
-            menu.addAction("Rename marker...").triggered.connect(
-                lambda checked=False: self.markerRenameRequested.emit(mid))
-            menu.addAction("Delete marker").triggered.connect(
-                lambda checked=False: self.markerDeleteRequested.emit(mid))
+            rename = menu.addAction(tr("Rename marker..."))
+            rename.setToolTip(tr("Change the marker's name, or its note when it is a flag."))
+            rename.triggered.connect(lambda checked=False: self.markerRenameRequested.emit(mid))
+            delete = menu.addAction(tr("Delete marker"))
+            delete.setToolTip(tr("Remove this marker from the ruler."))
+            delete.triggered.connect(lambda checked=False: self.markerDeleteRequested.emit(mid))
             later = [m for m in self._markers() if m["seconds"] > marker["seconds"]]
             if later:
                 end_s = later[0]["seconds"]
-                menu.addAction("Loop to next marker").triggered.connect(
-                    lambda checked=False: self.loopRangeRequested.emit(marker["seconds"], end_s))
+                loop = menu.addAction(tr("Loop to next marker"))
+                loop.setToolTip(tr("Repeat the part between this marker and the next."))
+                loop.triggered.connect(lambda checked=False: self.loopRangeRequested.emit(marker["seconds"], end_s))
         else:
             seconds = x_to_seconds(scene_x, self._zoom)
-            menu.addAction("Add marker here").triggered.connect(
-                lambda checked=False: self.markerAddRequested.emit(seconds))
+            add = menu.addAction(tr("Add marker here"))
+            add.setToolTip(tr("Put a named marker at this time."))
+            add.triggered.connect(lambda checked=False: self.markerAddRequested.emit(seconds))
         if self._loop_s is not None:
             menu.addSeparator()
-            menu.addAction("Clear loop").triggered.connect(lambda checked=False: self.loopClearRequested.emit())
+            clear = menu.addAction(tr("Clear loop"))
+            clear.setToolTip(tr("Remove the loop region."))
+            clear.triggered.connect(lambda checked=False: self.loopClearRequested.emit())
         return menu
 
     def _markers(self) -> list:
@@ -1382,13 +1423,16 @@ class TimelineView(QGraphicsView):
 
     def _build_fx_menu(self, block: ClipBlockItem) -> QMenu:
         menu = QMenu(self)
+        menu.setToolTipsVisible(True)
         for name in list_fx_preset_names():
             action = menu.addAction(name)
+            action.setToolTip(tr("Use the FX {name} on this clip.", name=name))
             action.triggered.connect(
                 lambda checked=False, cid=block.clip_id, n=name: self.fxPresetRequested.emit(cid, n)
             )
         menu.addSeparator()
-        clear_action = menu.addAction("Clear FX")
+        clear_action = menu.addAction(tr("Clear FX"))
+        clear_action.setToolTip(tr("Take this clip's own FX off, so it follows its character."))
         clear_action.triggered.connect(
             lambda checked=False, cid=block.clip_id: self.fxPresetRequested.emit(cid, "")
         )
@@ -1668,15 +1712,15 @@ class TimelineView(QGraphicsView):
             return
 
         msg = QMessageBox(self)
-        msg.setWindowTitle("Reassign Character?")
+        msg.setWindowTitle(tr("Reassign Character?"))
         msg.setText(
-            "This track belongs to a different character. Reassign this "
-            "clip's character to match the track, or just move it to this "
-            "lane while keeping its own character?"
+            tr("This track belongs to a different character. Reassign this "
+               "clip's character to match the track, or just move it to this "
+               "lane while keeping its own character?")
         )
-        reassign_btn = msg.addButton("Reassign", QMessageBox.ButtonRole.AcceptRole)
-        move_btn = msg.addButton("Just Move", QMessageBox.ButtonRole.ActionRole)
-        msg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        reassign_btn = msg.addButton(tr("Reassign"), QMessageBox.ButtonRole.AcceptRole)
+        move_btn = msg.addButton(tr("Just Move"), QMessageBox.ButtonRole.ActionRole)
+        msg.addButton(tr("Cancel"), QMessageBox.ButtonRole.RejectRole)
         msg.exec()
         clicked = msg.clickedButton()
 

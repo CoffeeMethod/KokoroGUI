@@ -46,6 +46,7 @@ from kokoro_gui.engines.base import (
 )
 from kokoro_gui.engines.registry import register_engine
 from kokoro_gui.engines.voice_store import ReferenceStore
+from kokoro_gui.i18n import N_, tr
 
 TTS_MODEL_ID = "Audio8/Audio8-TTS-Preview-0.6b"
 # Pinned because the repo ships code we run (trust_remote_code). To bump: read the new commit with
@@ -96,8 +97,8 @@ def _ref_codes_cache_dir() -> str:
 # real run.
 AUDIO8_LANGUAGE_CHOICES = [
     (name, name) for name in (
-        "English", "Chinese", "Cantonese", "French", "German", "Italian",
-        "Japanese", "Korean", "Dutch", "Polish", "Spanish",
+        N_("English"), N_("Chinese"), N_("Cantonese"), N_("French"), N_("German"), N_("Italian"),
+        N_("Japanese"), N_("Korean"), N_("Dutch"), N_("Polish"), N_("Spanish"),
     )
 ]
 
@@ -134,8 +135,8 @@ def _get_model():
             from transformers import AutoModel, AutoProcessor
         except ImportError as e:
             raise RuntimeError(
-                "The Audio8 engine needs the 'transformers' package "
-                "(pip install -r requirements.txt)."
+                tr("The Audio8 engine needs the 'transformers' package "
+                   "(pip install -r requirements.txt).")
             ) from e
         try:
             processor = AutoProcessor.from_pretrained(
@@ -145,7 +146,7 @@ def _get_model():
                 TTS_MODEL_ID, revision=TTS_MODEL_REVISION, trust_remote_code=True
             )
         except Exception as e:
-            raise RuntimeError(f"Failed to load {TTS_MODEL_ID}: {e}") from e
+            raise RuntimeError(tr("Failed to load {tts_model_id}: {error}", tts_model_id=TTS_MODEL_ID, error=e)) from e
         _model, _processor = model, processor
         return _model, _processor
 
@@ -165,17 +166,17 @@ class Audio8Model(ModelBase):
         self._engine = engine
 
     def loading_message(self):
-        return "Loading Audio8 TTS model (first use downloads it)..."
+        return tr("Loading Audio8 TTS model (first use downloads it)...")
 
     def load(self, lang_code, device):
         _get_model()
         return True
 
     def ready_message(self, lang_code):
-        return "Audio8 TTS ready."
+        return tr("Audio8 TTS ready.")
 
     def load_error(self, error, lang_code):
-        return f"Audio8 model load failed: {error}"
+        return tr("Audio8 model load failed: {error}", error=error)
 
     def synthesize(self, text, voice, speed, lang_code, params):
         """`voice` is an already resolved reference wav path; its transcript
@@ -523,15 +524,19 @@ class Audio8BackendAdapter(BackendHooksMixin):
     @classmethod
     def get_config_schema(cls) -> list:
         return [
-            ConfigField("lang_code", "Language", ConfigFieldType.CHOICE,
-                        default="English", choices=list(AUDIO8_LANGUAGE_CHOICES), group="Generation"),
-            ConfigField("voice", "Reference", ConfigFieldType.CHOICE,
-                        default=None, group="Generation"),
+            ConfigField("lang_code", N_("Language"), ConfigFieldType.CHOICE,
+                        default="English", choices=list(AUDIO8_LANGUAGE_CHOICES), group=N_("Generation"),
+                        tooltip=N_("The language the text is in.")),
+            ConfigField("voice", N_("Reference"), ConfigFieldType.CHOICE,
+                        default=None, group=N_("Generation"),
+                        tooltip=N_("The Reference whose voice is cloned.")),
             # Parallelism is capped low: every segment serializes through
             # the shared model lock (see the module docstring).
             *common_fields(max_threads=4, pitch=False),
-            ConfigField("cache_reference_codes", "Cache Reference Encoding", ConfigFieldType.BOOL,
-                        default=True, group="Advanced"),
+            ConfigField("cache_reference_codes", N_("Cache Reference Encoding"), ConfigFieldType.BOOL,
+                        default=True, group=N_("Advanced"),
+                        tooltip=N_("Keep each Reference in the form the model reads, so it loads faster the "
+                                   "next time.")),
             # `ArkttsModel.generate`/`generate_audio` sampling knobs (see
             # `Audio8Engine.__init__`/`process_chunk_task`/`generate_segment`)
             # - model-specific, unlike everything above, so broken out into
@@ -540,14 +545,20 @@ class Audio8BackendAdapter(BackendHooksMixin):
             # total, per the model's config) is clamped internally by
             # `ArkttsModel.generate` - the 2048 ceiling here just matches
             # that reality instead of offering a value that's silently capped.
-            ConfigField("max_new_tokens", "Max New Tokens", ConfigFieldType.INT,
-                        default=1024, min=64, max=2048, step=64, group="Model"),
-            ConfigField("temperature", "Temperature", ConfigFieldType.SLIDER,
-                        default=0.8, min=0.1, max=2.0, step=0.05, group="Model"),
-            ConfigField("top_p", "Top P", ConfigFieldType.SLIDER,
-                        default=0.95, min=0.0, max=1.0, step=0.01, group="Model"),
-            ConfigField("top_k", "Top K", ConfigFieldType.INT,
-                        default=50, min=0, max=200, step=1, group="Model"),
+            ConfigField("max_new_tokens", N_("Max New Tokens"), ConfigFieldType.INT,
+                        default=1024, min=64, max=2048, step=64, group=N_("Model"),
+                        tooltip=N_("The longest audio the model may make for one piece. Raise it if speech "
+                                   "is cut off.")),
+            ConfigField("temperature", N_("Temperature"), ConfigFieldType.SLIDER,
+                        default=0.8, min=0.1, max=2.0, step=0.05, group=N_("Model"),
+                        tooltip=N_("How much the reading varies. Low is steady, high is livelier and less "
+                                   "predictable.")),
+            ConfigField("top_p", N_("Top P"), ConfigFieldType.SLIDER,
+                        default=0.95, min=0.0, max=1.0, step=0.01, group=N_("Model"),
+                        tooltip=N_("The model picks only among its likeliest choices that add up to this share.")),
+            ConfigField("top_k", N_("Top K"), ConfigFieldType.INT,
+                        default=50, min=0, max=200, step=1, group=N_("Model"),
+                        tooltip=N_("The model picks only among this many of its likeliest choices.")),
         ]
 
     def cancel(self) -> None:

@@ -57,6 +57,8 @@ from kokoro_gui.daw import library_copy
 from kokoro_gui.daw.models import DEFAULT_HIGHLIGHT_PALETTE, Character
 from kokoro_gui.engines.missing import MissingBackend
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
+from kokoro_gui.i18n import N_, tr
+from kokoro_gui.qt import tips
 from kokoro_gui.qt import share_dialogs, theme
 from kokoro_gui.qt.fx_presets import list_fx_preset_names
 
@@ -64,17 +66,17 @@ from kokoro_gui.qt.fx_presets import list_fx_preset_names
 # character linked at project scope, which its subprojects follow), and
 # this file only. A linked character neither store has on this machine plays
 # its inlined snapshot.
-SCOPE_LOCAL = "Local"
-SCOPE_GLOBAL = "Global"
-SCOPE_PROJECT = "Project"
-SCOPE_MISSING = "Linked (not found here)"
+SCOPE_LOCAL = N_("Local")
+SCOPE_GLOBAL = N_("Global")
+SCOPE_PROJECT = N_("Project")
+SCOPE_MISSING = N_("Linked (not found here)")
 SCOPE_LIBRARY = SCOPE_GLOBAL  # the phase 3 name
 _SCOPE_LABELS = {"local": SCOPE_LOCAL, "global": SCOPE_GLOBAL, "project": SCOPE_PROJECT, "missing": SCOPE_MISSING}
 _ID_ROLE = 0x0100
 _SCOPE_ROLE = 0x0101
 
-_FX_NONE = "(none)"
-_VARIANT_DEFAULT = "(default)"
+_FX_NONE = N_("(none)")
+_VARIANT_DEFAULT = N_("(default)")
 
 # Preview speaks at most this many characters of a clip's text.
 PREVIEW_CHARS = 200
@@ -123,7 +125,7 @@ class _ScopeBadgeDelegate(QStyledItemDelegate):
         painter.save()
         painter.setPen(QColor(theme.current().text_muted))
         rect = QRect(option.rect).adjusted(0, 0, -6, 0)
-        painter.drawText(rect, int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), scope)
+        painter.drawText(rect, int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), tr(scope))
         painter.restore()
 
 
@@ -131,7 +133,7 @@ class CharactersDialog(QDialog):
     def __init__(self, app, parent=None):
         super().__init__(parent or app)
         self.app = app
-        self.setWindowTitle("Characters")
+        self.setWindowTitle(tr("Characters"))
         self.resize(560, 360)
         self._current: Character | None = None
         self._loading = False
@@ -141,6 +143,7 @@ class CharactersDialog(QDialog):
 
         left = QVBoxLayout()
         self.list = QListWidget()
+        self.list.setToolTip(tr("The characters in this project. The word at the right says where each one is stored."))
         self.list.setItemDelegate(_ScopeBadgeDelegate(self.list))
         self.list.currentItemChanged.connect(self._on_current_changed)
         left.addWidget(self.list, 1)
@@ -148,45 +151,51 @@ class CharactersDialog(QDialog):
         # Split button: the face adds a local character, the arrow offers
         # "From library...".
         self.add_btn = QToolButton()
-        self.add_btn.setText("Add")
+        self.add_btn.setToolTip(tr("Add a new character, or one from the library."))
+        self.add_btn.setText(tr("Add"))
         self.add_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self.add_btn.clicked.connect(self.add_character)
         add_menu = QMenu(self.add_btn)
-        self.add_local_action = add_menu.addAction("New local character")
+        add_menu.setToolTipsVisible(True)
+        self.add_local_action = add_menu.addAction(tr("New local character"))
+        self.add_local_action.setToolTip(tr("Add a character that only this project has."))
         self.add_local_action.triggered.connect(self.add_character)
-        self.add_library_action = add_menu.addAction("From library...")
+        self.add_library_action = add_menu.addAction(tr("From library..."))
+        self.add_library_action.setToolTip(tr("Add characters you keep in the library."))
         self.add_library_action.triggered.connect(self.pick_from_library)
         self.add_btn.setMenu(add_menu)
-        self.remove_btn = QPushButton("Remove")
+        self.remove_btn = QPushButton(tr("Remove"))
+        self.remove_btn.setToolTip(tr("Remove this character from the project. Its clips must be reassigned first."))
         self.remove_btn.clicked.connect(self.remove_current)
         btn_row.addWidget(self.add_btn)
         btn_row.addWidget(self.remove_btn)
         left.addLayout(btn_row)
-        self.promote_btn = QPushButton("Promote to Library")
-        self.promote_btn.setToolTip("Make this character a library entry, shared with every project.")
+        self.promote_btn = QPushButton(tr("Promote to Library"))
+        self.promote_btn.setToolTip(tr("Make this character a library entry, shared with every project."))
         self.promote_btn.clicked.connect(self.promote_current)
         left.addWidget(self.promote_btn)
         # Share files (plan 40): characters out to a `.kgshare`, and in.
         share_row = QHBoxLayout()
-        self.export_btn = QPushButton("Export...")
-        self.export_btn.setToolTip("Save characters, with their FX and voice files, to a share file for another machine.")
+        self.export_btn = QPushButton(tr("Export..."))
+        self.export_btn.setToolTip(tr("Save characters, with their FX and voice files, to a share file for another "
+                                      "machine."))
         self.export_btn.clicked.connect(self.export_characters)
-        self.import_btn = QPushButton("Import...")
-        self.import_btn.setToolTip("Add the characters, FX and voices in a share file to the library.")
+        self.import_btn = QPushButton(tr("Import..."))
+        self.import_btn.setToolTip(tr("Add the characters, FX and voices in a share file to the library."))
         self.import_btn.clicked.connect(self.import_characters)
         share_row.addWidget(self.export_btn)
         share_row.addWidget(self.import_btn)
         left.addLayout(share_row)
         # Plan 41: keep what the project carried in (its voices, FX, impulse response).
-        self.save_assets_btn = QPushButton("Save Voices and FX to Library")
-        self.save_assets_btn.setToolTip("Copy this character's voice files, FX and impulse response that only this "
-                                        "project holds into your library, so other projects can use them.")
+        self.save_assets_btn = QPushButton(tr("Save Voices and FX to Library"))
+        self.save_assets_btn.setToolTip(tr("Copy this character's voice files, FX and impulse response that only this "
+                                           "project holds into your library, so other projects can use them."))
         self.save_assets_btn.clicked.connect(self.save_assets_to_library)
         left.addWidget(self.save_assets_btn)
         # In a subproject (NP3): share a character with the whole book.
-        self.promote_project_btn = QPushButton("Promote to Project")
-        self.promote_project_btn.setToolTip("Make this character the top-level project's, shared by every "
-                                            "subproject in it.")
+        self.promote_project_btn = QPushButton(tr("Promote to Project"))
+        self.promote_project_btn.setToolTip(tr("Make this character the top-level project's, shared by every "
+                                               "subproject in it."))
         self.promote_project_btn.clicked.connect(self.promote_to_project)
         self.promote_project_btn.hide()
         left.addWidget(self.promote_project_btn)
@@ -195,79 +204,89 @@ class CharactersDialog(QDialog):
         right = QWidget()
         form = QFormLayout(right)
         self.name_edit = QLineEdit()
-        self.name_edit.setToolTip("The name in this project. The library entry keeps its own.")
+        self.name_edit.setToolTip(tr("The name in this project. The library entry keeps its own."))
         self.name_edit.textEdited.connect(self._on_name_edited)
-        form.addRow("Name:", self.name_edit)
+        form.addRow(tr("Name:"), self.name_edit)
 
         scope_row = QHBoxLayout()
         self.scope_label = QLabel()
-        self.rename_in_library_btn = QPushButton("Rename in library")
-        self.rename_in_library_btn.setToolTip("Give the library entry this project's name for the character.")
+        self.rename_in_library_btn = QPushButton(tr("Rename in library"))
+        self.rename_in_library_btn.setToolTip(tr("Give the library entry this project's name for the character."))
         self.rename_in_library_btn.clicked.connect(self.rename_in_library)
         scope_row.addWidget(self.scope_label, 1)
         scope_row.addWidget(self.rename_in_library_btn)
-        form.addRow("Scope:", scope_row)
+        form.addRow(tr("Scope:"), scope_row)
 
         color_row = QHBoxLayout()
         self.color_btn = QPushButton()
+        self.color_btn.setToolTip(tr("Pick the color that marks this character's text and clips."))
         self.color_btn.setFixedWidth(60)
         self.color_btn.clicked.connect(self._pick_color)
         self.color_edit = QLineEdit()
+        self.color_edit.setToolTip(tr("The highlight color as #rrggbb."))
         self.color_edit.setPlaceholderText("#rrggbb")
         self.color_edit.editingFinished.connect(self._on_color_edited)
         color_row.addWidget(self.color_btn)
         color_row.addWidget(self.color_edit, 1)
-        form.addRow("Color:", color_row)
+        form.addRow(tr("Color:"), color_row)
 
         # The engine this character generates with (grill V3): each
         # character picks its own; the app keeps every engine in use
         # resident.
         self.engine_combo = QComboBox()
+        self.engine_combo.setToolTip(tr("The engine that speaks this character."))
         for label, engine_id in self.app.engine_choices():
             self.engine_combo.addItem(label, engine_id)
         self.engine_combo.activated.connect(lambda _i: self._on_engine_picked())
-        form.addRow("Engine:", self.engine_combo)
+        form.addRow(tr("Engine:"), self.engine_combo)
 
         self.voice_combo = QComboBox()
+        self.voice_combo.setToolTip(tr("The voice this character speaks with. You can type a voice's name."))
         self.voice_combo.setEditable(True)
         self.voice_combo.currentTextChanged.connect(self._on_voice_changed)
         voice_row = QHBoxLayout()
         voice_row.addWidget(self.voice_combo, 1)
         # A cloning character's variants: hear one instead of its voice.
         self.preview_variant_combo = QComboBox()
-        self.preview_variant_combo.setToolTip("Hear this variant's reference instead of the character's voice.")
+        self.preview_variant_combo.setToolTip(tr("Hear this variant's reference instead of the character's voice."))
         voice_row.addWidget(self.preview_variant_combo)
-        self.preview_btn = QPushButton("Preview")
-        self.preview_btn.setToolTip("Hear the character as it is now: a line from its last clip, else a sample sentence.")
+        self.preview_btn = QPushButton(tr("Preview"))
+        self.preview_btn.setToolTip(tr("Hear the character as it is now: a line from its last clip, else a sample "
+                                       "sentence."))
         self.preview_btn.clicked.connect(self.preview_character)
         voice_row.addWidget(self.preview_btn)
-        form.addRow("Voice:", voice_row)
+        form.addRow(tr("Voice:"), voice_row)
         self.preview_status_label = QLabel("")
         self.preview_status_label.setWordWrap(True)
         form.addRow("", self.preview_status_label)
         self.app.previewFinished.connect(self._on_preview_finished)
 
         self.fx_combo = QComboBox()
-        self.fx_combo.addItem(_FX_NONE)
+        self.fx_combo.setToolTip(tr("The FX on this character's clips. A clip's own FX replace it."))
+        self.fx_combo.addItem(tr(_FX_NONE))
         for name in list_fx_preset_names(self.app.project_dir):
             self.fx_combo.addItem(name)
         self.fx_combo.currentTextChanged.connect(self._on_fx_changed)
-        form.addRow("FX:", self.fx_combo)
+        form.addRow(tr("FX:"), self.fx_combo)
 
-        self.variants_label = QLabel("Variants:")
+        self.variants_label = QLabel(tr("Variants:"))
         variants_box = QWidget()
         variants_layout = QVBoxLayout(variants_box)
         variants_layout.setContentsMargins(0, 0, 0, 0)
         self.variants_table = QTableWidget(0, 2)
-        self.variants_table.setHorizontalHeaderLabels(["Variant", "Reference"])
+        self.variants_table.setToolTip(tr("Named References for other ways this character speaks, such as a "
+                                          "whisper. A clip picks one by name."))
+        self.variants_table.setHorizontalHeaderLabels([tr("Variant"), tr("Reference")])
         self.variants_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.variants_table.verticalHeader().setVisible(False)
         self.variants_table.itemChanged.connect(lambda _item: self._commit_variants())
         variants_layout.addWidget(self.variants_table)
         variant_buttons = QHBoxLayout()
-        self.add_variant_btn = QPushButton("Add variant")
+        self.add_variant_btn = QPushButton(tr("Add variant"))
+        self.add_variant_btn.setToolTip(tr("Add a row for another variant."))
         self.add_variant_btn.clicked.connect(self.add_variant)
-        self.remove_variant_btn = QPushButton("Remove variant")
+        self.remove_variant_btn = QPushButton(tr("Remove variant"))
+        self.remove_variant_btn.setToolTip(tr("Remove the selected variant."))
         self.remove_variant_btn.clicked.connect(self.remove_variant)
         variant_buttons.addWidget(self.add_variant_btn)
         variant_buttons.addWidget(self.remove_variant_btn)
@@ -282,6 +301,7 @@ class CharactersDialog(QDialog):
         root.addWidget(right, 2)
 
         self.reload()
+        tips.label_rows(self)
 
     # -- list ------------------------------------------------------------------
 
@@ -327,7 +347,7 @@ class CharactersDialog(QDialog):
 
     def _show_scope(self, character: Character | None) -> None:
         scope = self.scope_of(character) if character is not None else ""
-        self.scope_label.setText(scope)
+        self.scope_label.setText(tr(scope))
         self.promote_btn.setEnabled(scope in (SCOPE_LOCAL, SCOPE_PROJECT))
         self.promote_project_btn.setVisible(self._in_subproject())
         self.promote_project_btn.setEnabled(self._in_subproject() and scope == SCOPE_LOCAL)
@@ -361,9 +381,9 @@ class CharactersDialog(QDialog):
             if voice and self.voice_combo.findText(voice) < 0:
                 self.voice_combo.addItem(voice)
             self.voice_combo.setCurrentText(voice or "")
-            fx = character.preset_data.get("fx_preset") or _FX_NONE
+            fx = character.preset_data.get("fx_preset") or tr(_FX_NONE)
             if fx == "Select FX Preset...":
-                fx = _FX_NONE
+                fx = tr(_FX_NONE)
             if self.fx_combo.findText(fx) < 0:
                 self.fx_combo.addItem(fx)
             self.fx_combo.setCurrentText(fx)
@@ -380,6 +400,7 @@ class CharactersDialog(QDialog):
 
     def _reference_combo(self, value: str) -> QComboBox:
         combo = QComboBox()
+        combo.setToolTip(tr("The Reference this variant speaks with."))
         combo.setEditable(True)
         for voice in self.app.get_all_voices(backend=self.app.backend_for_character(self._current)):
             combo.addItem(voice)
@@ -463,7 +484,7 @@ class CharactersDialog(QDialog):
         self.preview_variant_combo.blockSignals(True)
         try:
             self.preview_variant_combo.clear()
-            self.preview_variant_combo.addItem(_VARIANT_DEFAULT, "")
+            self.preview_variant_combo.addItem(tr(_VARIANT_DEFAULT), "")
             for name in names:
                 self.preview_variant_combo.addItem(name, name)
             index = self.preview_variant_combo.findData(previous or "")
@@ -490,7 +511,7 @@ class CharactersDialog(QDialog):
             return False
         backend = self.app.backend_for_character(character)
         if isinstance(backend, MissingBackend):
-            self.preview_status_label.setText(f"{backend.message}: nothing to preview with.")
+            self.preview_status_label.setText(tr("{message}: nothing to preview with.", message=backend.message))
             return False
         speaker = character
         variant = self.preview_variant_combo.currentData() or ""
@@ -500,10 +521,10 @@ class CharactersDialog(QDialog):
             speaker = copy.copy(character)
             speaker.preset_data = {**character.preset_data, "voice": reference}
         self._set_previewing(True)
-        self.preview_status_label.setText("Generating preview...")
+        self.preview_status_label.setText(tr("Generating preview..."))
         if not self.app.preview_text(self.preview_sample(character), character=speaker):
             self._set_previewing(False)
-            self.preview_status_label.setText("Nothing to preview with yet.")
+            self.preview_status_label.setText(tr("Nothing to preview with yet."))
             return False
         return True
 
@@ -515,7 +536,7 @@ class CharactersDialog(QDialog):
         if not self._previewing:
             return
         self._set_previewing(False)
-        self.preview_status_label.setText("Playing preview." if success else payload)
+        self.preview_status_label.setText(tr("Playing preview.") if success else payload)
 
     def _set_color_widgets(self, color: str) -> None:
         self.color_edit.setText(color)
@@ -541,7 +562,7 @@ class CharactersDialog(QDialog):
             return
         for i, preset in enumerate(DEFAULT_HIGHLIGHT_PALETTE):
             QColorDialog.setCustomColor(i, QColor(preset))
-        color = QColorDialog.getColor(QColor(self._current.highlight_color), self, "Highlight color")
+        color = QColorDialog.getColor(QColor(self._current.highlight_color), self, tr("Highlight color"))
         if color.isValid():
             self.set_color(color.name())
 
@@ -601,7 +622,7 @@ class CharactersDialog(QDialog):
     def _on_fx_changed(self, text: str) -> None:
         if self._loading or self._current is None:
             return
-        if text and text != _FX_NONE:
+        if text and text != tr(_FX_NONE):
             self._current.preset_data["fx_preset"] = text
         else:
             self._current.preset_data.pop("fx_preset", None)
@@ -654,13 +675,14 @@ class CharactersDialog(QDialog):
     def pick_from_library(self) -> list:
         entries = self.library_entries_to_add()
         if not entries:
-            QMessageBox.information(self, "Character library",
-                                    "Every library character is already in this project.")
+            QMessageBox.information(self, tr("Character library"),
+                                    tr("Every library character is already in this project."))
             return []
         picker = QDialog(self)
-        picker.setWindowTitle("Add from library")
+        picker.setWindowTitle(tr("Add from library"))
         layout = QVBoxLayout(picker)
         listing = QListWidget()
+        listing.setToolTip(tr("Characters in the library that this project doesn't use yet."))
         listing.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         for entry in entries:
             item = QListWidgetItem(entry.name)
@@ -683,12 +705,12 @@ class CharactersDialog(QDialog):
         characters = list(self.app.document.characters)
         preselect = {self._current.id} if self._current is not None else set()
         return share_dialogs.export_to_file(self.app, self, characters=characters, preselect=preselect,
-                                            title="Export Characters", path=path)
+                                            title=tr("Export Characters"), path=path)
 
     def import_characters(self, path: str | None = None):
         """Reads a share file into the library (characters, and the FX and
         voice files they use). Returns the `ImportResult` or None."""
-        result = share_dialogs.import_from_file(self.app, self, title="Import Characters", path=path)
+        result = share_dialogs.import_from_file(self.app, self, title=tr("Import Characters"), path=path)
         if result is not None:
             self.reload()
         return result
@@ -702,7 +724,7 @@ class CharactersDialog(QDialog):
             return None
         items = library_copy.character_items(character, getattr(self.app, "project_dir", None),
                                              share_dialogs._fx_dir())
-        return share_dialogs.save_items_to_library(self.app, self, items, title="Save to library")
+        return share_dialogs.save_items_to_library(self.app, self, items, title=tr("Save to library"))
 
     def promote_current(self) -> str | None:
         """WF7: saves a local character as a new library entry and links this
@@ -763,8 +785,9 @@ class CharactersDialog(QDialog):
         doc = self.app.document
         in_use = [c for c in doc.clips if c.character_id == character.id]
         if in_use:
-            QMessageBox.warning(self, "In use",
-                                f"{character.name} is used by {len(in_use)} clip(s). Reassign them first.")
+            QMessageBox.warning(self, tr("In use"),
+                                tr("{name} is used by {count} clip(s). Reassign them first.", name=character.name,
+                                   count=len(in_use)))
             return
         doc.characters = [c for c in doc.characters if c.id != character.id]
         doc.tracks = [t for t in doc.tracks if t.character_id != character.id]

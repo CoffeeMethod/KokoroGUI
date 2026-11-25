@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import unicodedata
 
+from kokoro_gui.i18n import N_, tr
 from kokoro_gui.qt import settings as qt_settings
 
 # A saved blob outside these bounds is not something `saveState()` or
@@ -45,9 +46,9 @@ MIN_BLOB_BYTES = 8
 MAX_BLOB_BYTES = 1024 * 1024
 PREFIX_BYTES = 4
 
-ADVANCED = "Advanced"
-SIMPLE = "Simple"
-WORKSPACE_NAMES = (ADVANCED, SIMPLE)  # the built-ins
+ADVANCED = N_("Advanced")
+SIMPLE = N_("Simple")
+WORKSPACE_NAMES = (ADVANCED, SIMPLE)  # the built-ins, the names `config_qt.json` holds
 
 MAX_NAME_CHARS = 64
 MAX_CUSTOM_WORKSPACES = 50
@@ -66,7 +67,7 @@ class WorkspaceExistsError(WorkspaceNameError):
     `name` is that workspace's name; the caller asks before replacing it."""
 
     def __init__(self, name: str):
-        super().__init__(f"A workspace called {name} already exists.")
+        super().__init__(tr("A workspace called {name} already exists.", name=name))
         self.name = name
 
 
@@ -76,17 +77,17 @@ def validate_name(name, existing=(), current: str | None = None) -> str:
     names, compared ignoring case; `current` is the one being renamed, which
     may keep its name or change its case."""
     if not isinstance(name, str):
-        raise WorkspaceNameError("Type a name for the workspace.")
+        raise WorkspaceNameError(tr("Type a name for the workspace."))
     cleaned = unicodedata.normalize("NFC", name).strip()
     if not cleaned:
-        raise WorkspaceNameError("Type a name for the workspace.")
+        raise WorkspaceNameError(tr("Type a name for the workspace."))
     if len(cleaned) > MAX_NAME_CHARS:
-        raise WorkspaceNameError(f"Use {MAX_NAME_CHARS} characters or fewer.")
+        raise WorkspaceNameError(tr("Use {max_name_chars} characters or fewer.", max_name_chars=MAX_NAME_CHARS))
     if any(unicodedata.category(ch) in ("Cc", "Cs", "Zl", "Zp") for ch in cleaned):
-        raise WorkspaceNameError("Use a name on one line, without control characters.")
+        raise WorkspaceNameError(tr("Use a name on one line, without control characters."))
     folded = cleaned.casefold()
     if folded in {builtin.casefold() for builtin in WORKSPACE_NAMES}:
-        raise WorkspaceNameError(f"{cleaned} is a built-in workspace. Choose another name.")
+        raise WorkspaceNameError(tr("{cleaned} is a built-in workspace. Choose another name.", cleaned=cleaned))
     for other in existing:
         if other != current and other.casefold() == folded:
             raise WorkspaceExistsError(other)
@@ -172,7 +173,8 @@ class WorkspaceManager:
         for name in WORKSPACE_NAMES:
             if name in workspaces and _clean_entry(workspaces[name], need_state=False) is None:
                 del workspaces[name]
-                self.notices.append(f"The saved {name} layout was damaged, so {name} starts from its default.")
+                self.notices.append(tr("The saved {name} layout was damaged, so {name} starts from its default.",
+                                       name=name))
 
         customs = self._settings.get("custom_workspaces")
         cleaned: dict = {}
@@ -191,11 +193,11 @@ class WorkspaceManager:
                 if good != name and self._settings.get("active_workspace") == name:
                     self._settings["active_workspace"] = good
         elif customs is not None:
-            dropped.append("all of them")
+            dropped.append(tr("all of them"))
         self._settings["custom_workspaces"] = cleaned
         if dropped:
-            self.notices.append("Some saved workspaces were damaged and were removed: "
-                                f"{', '.join(dropped[:5])}.")
+            self.notices.append(tr("Some saved workspaces were damaged and were removed: "
+                                   "{names}.", names=', '.join(dropped[:5])))
 
         live = self._settings.get("workspace_live")
         if not isinstance(live, dict) or not isinstance(live.get("workspace"), str) \
@@ -286,8 +288,8 @@ class WorkspaceManager:
                 self.recover_offscreen_docks()
                 self._loaded(sticky=bool(live.get("modified")))
                 return
-            self.notices.append(f"The last arrangement of {name} couldn't be restored, so its saved layout "
-                                "is shown.")
+            self.notices.append(tr("The last arrangement of {name} couldn't be restored, so its saved layout "
+                                   "is shown.", name=name))
         else:
             self._restore_geometry(self.saved(name))
         self.activate(name, save_outgoing=False)
@@ -313,8 +315,12 @@ class WorkspaceManager:
             finally:
                 self._loading = False
             if entry is not None and entry.get("state"):
-                self.notices.append(f"The {name} layout couldn't be restored, so the default layout is shown"
-                                    + (". Use Update workspace to save a working one." if custom else "."))
+                if custom:
+                    self.notices.append(tr("The {name} layout couldn't be restored, so the default layout is shown. "
+                                           "Use Update workspace to save a working one.", name=name))
+                else:
+                    self.notices.append(tr("The {name} layout couldn't be restored, so the default layout is shown.",
+                                           name=name))
         else:
             self.recover_offscreen_docks()
         self._loaded(sticky=custom and not restored)
@@ -367,7 +373,8 @@ class WorkspaceManager:
             name = clash.name
         customs = self._settings["custom_workspaces"]
         if name not in customs and len(customs) >= MAX_CUSTOM_WORKSPACES:
-            raise WorkspaceNameError(f"There are already {MAX_CUSTOM_WORKSPACES} workspaces. Delete one first.")
+            raise WorkspaceNameError(tr("There are already {max_custom_workspaces} workspaces. Delete one first.",
+                                        max_custom_workspaces=MAX_CUSTOM_WORKSPACES))
         if not self.is_custom():
             self.capture()  # the built-in remembers the layout it leaves
         customs[name] = self._snapshot()
@@ -394,7 +401,7 @@ class WorkspaceManager:
 
     def rename(self, old: str, new: str) -> str:
         if not self.is_custom(old):
-            raise WorkspaceNameError("Built-in workspaces can't be renamed.")
+            raise WorkspaceNameError(tr("Built-in workspaces can't be renamed."))
         new = validate_name(new, self.custom_names(), current=old)
         customs = self._settings["custom_workspaces"]
         self._settings["custom_workspaces"] = {(new if key == old else key): value for key, value in customs.items()}

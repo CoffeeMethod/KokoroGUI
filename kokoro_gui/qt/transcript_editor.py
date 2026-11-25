@@ -98,6 +98,7 @@ from kokoro_gui.daw.auto_split import plan_auto_split_clips
 from kokoro_gui.daw.undo import ApplyWordsCommand, AssignCharacterCommand, TextEditCommand
 from kokoro_gui.engine.segmenting import PAUSE, WORD
 from kokoro_gui.engine.text_extraction import parse_tag_content, tag_overrides
+from kokoro_gui.i18n import N_, tr
 from kokoro_gui.qt import clone_from_recording
 from kokoro_gui.qt import project as project_io
 from kokoro_gui.qt import theme
@@ -126,13 +127,20 @@ STATUS_DOT_PX = 6
 STATUS_DOT_INDENT_PX = 8
 GUTTER_BUTTON_PX = 16
 SPLIT_RULE_DEBOUNCE_MS = 150
+# Qt's own context menu entries, by object name.
+_EDIT_TIPS = {
+    "edit-undo": N_("Undo the last edit."), "edit-redo": N_("Redo the edit you undid."),
+    "edit-cut": N_("Cut the selected transcript text."), "edit-copy": N_("Copy the selected transcript text."),
+    "edit-paste": N_("Paste into the transcript at the caret."), "edit-delete": N_("Delete the selected text."),
+    "select-all": N_("Select the whole transcript."),
+}
 _FX_PLACEHOLDER = "Select FX Preset..."
 # Alpha of the underline under imported recording words (phase 5 P3): faint,
 # so it reads as "this carries audio" without competing with the dirty one.
 IMPORTED_UNDERLINE_ALPHA = 110
 # A clipboard's timed-words payload bigger than this is ignored.
 MAX_WORDS_PAYLOAD_BYTES = 16 * 1024 * 1024
-UNTIMED_TOOLTIP = "No character: this text has no audio. Assign a character to generate it."
+UNTIMED_TOOLTIP = N_("No character: this text has no audio. Assign a character to generate it.")
 
 
 def _is_word_entry(word) -> bool:
@@ -471,7 +479,7 @@ def _between(items: list, lo: int, hi: int) -> list:
 def placeholder_label(clip) -> str:
     """The gutter label on a placeholder line: "Subproject" for a nested
     clip, "Audio" for a music bed."""
-    return "Audio" if getattr(clip, "is_bed", False) else "Subproject"
+    return tr("Audio") if getattr(clip, "is_bed", False) else tr("Subproject")
 
 
 class TranscriptGutter(QWidget):
@@ -816,10 +824,10 @@ class TranscriptGutter(QWidget):
         what a "no character" mark means."""
         for rect, _line_start, _line_end in self._mark_rects:
             if rect.contains(pos):
-                return UNTIMED_TOOLTIP
+                return tr(UNTIMED_TOOLTIP)
         for rect, _clip_id in self._play_rects:
             if rect.contains(pos):
-                return "Play this recording"
+                return tr("Play this recording")
         for rect, clip_id in self._info_rects:
             if rect.contains(pos):
                 clip = self.editor.app.document.get_clip(clip_id)
@@ -827,12 +835,12 @@ class TranscriptGutter(QWidget):
                     return self.editor.app.clip_info_text(clip)
         for rect, reason in self._blocked_rects:
             if rect.contains(pos):
-                return f"{reason}: this clip can't be generated here."
+                return tr("{reason}: this clip can't be generated here.", reason=reason)
         for rect, line_start, _line_end in self._label_rects:
             if rect.contains(pos):
                 clip = self.editor.app.document.clip_covering(line_start)
                 if clip is not None and clip.source_text:
-                    return f"Source: {clip.source_text}"
+                    return tr("Source: {source_text}", source_text=clip.source_text)
         return None
 
     def event(self, event) -> bool:  # noqa: N802 (Qt override)
@@ -876,8 +884,10 @@ class TranscriptGutter(QWidget):
             return None
 
         menu = QMenu(self)
+        menu.setToolTipsVisible(True)
         for character in daw_doc.characters:
             action = menu.addAction(character.name)
+            action.setToolTip(tr("Give this line to {name}.", name=character.name))
             action.triggered.connect(
                 lambda checked=False, cid=character.id: self.editor._push_assign_character(line_start, line_end, cid)
             )
@@ -1147,7 +1157,7 @@ class TranscriptEditor(QTextEdit):
         `[Speaker:FX]:` shorthand). A range over a placeholder line (a
         subproject's or a music bed's) is refused."""
         if self.app.document.overlaps_nested(start, end):
-            self.app.set_status("A subproject's or an audio file's line can't be assigned a character.",
+            self.app.set_status(tr("A subproject's or an audio file's line can't be assigned a character."),
                                 "warning")
             return
         self.app.document.undo_stack.push(AssignCharacterCommand(start, end, character_id,
@@ -1358,7 +1368,7 @@ class TranscriptEditor(QTextEdit):
         lines = []
         for start, end, spoken in self._highlighter.rewrites(clip):
             if start <= offset < end:
-                lines.append(f"Spoken as: {spoken}")
+                lines.append(tr("Spoken as: {spoken}", spoken=spoken))
                 break
         piece = segment_view.piece_at(self._highlighter.pieces(clip), offset)
         if piece is not None and hasattr(self.app, "segment_tooltip"):
@@ -1683,9 +1693,9 @@ class TranscriptEditor(QTextEdit):
     def _placeholder_status(self, start: int, end: int, inserting: bool = False) -> None:
         clip = self._placeholder_touched(start, end, inserting)
         if getattr(clip, "is_bed", False):
-            self.app.set_status("An imported audio file's line is read-only; it shows the file's name.", "warning")
+            self.app.set_status(tr("An imported audio file's line is read-only; it shows the file's name."), "warning")
         else:
-            self.app.set_status("A subproject's line is read-only; select it to edit the subproject.", "warning")
+            self.app.set_status(tr("A subproject's line is read-only; select it to edit the subproject."), "warning")
 
     def _key_edit_range(self, event):
         """`(start, end, inserting)` the key would edit, or None for a key
@@ -1904,7 +1914,7 @@ class TranscriptEditor(QTextEdit):
             if fx_name in list_fx_preset_names(self.app.project_dir):
                 overrides["fx_preset"] = fx_name
             else:
-                self.app.set_status(f"No FX named '{fx_name}': the clip uses its character's FX.",
+                self.app.set_status(tr("No FX named '{fx_name}': the clip uses its character's FX.", fx_name=fx_name),
                                     "warning")
         # `[Name, overlap:0.3]:` puts the clip over the end of the one before it.
         option_overrides, problems = tag_overrides(options)
@@ -1924,22 +1934,31 @@ class TranscriptEditor(QTextEdit):
         """Split out from `contextMenuEvent` so tests can inspect the menu's
         contents without ever calling the blocking `.exec()`."""
         menu = self.createStandardContextMenu()
+        for action in menu.actions():
+            if action.objectName() in _EDIT_TIPS:
+                action.setToolTip(tr(_EDIT_TIPS[action.objectName()]))
+        menu.setToolTipsVisible(True)
         menu.addSeparator()
 
-        characters_menu = menu.addMenu("Characters")
+        characters_menu = menu.addMenu(tr("Characters"))
+        characters_menu.setToolTipsVisible(True)
         characters = self.app.document.characters
         characters_menu.setEnabled(self.textCursor().hasSelection() and bool(characters))
         for character in characters:
             action = characters_menu.addAction(character.name)
+            action.setToolTip(tr("Give the selected text to {name}.", name=character.name))
             action.triggered.connect(lambda checked=False, cid=character.id: self._assign_character(cid))
 
-        explain = menu.addAction("How will this be read?")
+        explain = menu.addAction(tr("How will this be read?"))
+        explain.setToolTip(tr("Show the selected text in the Lexicon tab, as your rules and the engine read it."))
         explain.setEnabled(self.textCursor().hasSelection() and getattr(self.app, "lexicon_dock", None) is not None)
         explain.triggered.connect(self._explain_selection)
 
         # Plan 33: a selection inside a recording can become its speaker's clone.
         cursor = self.textCursor()
-        clone = menu.addAction(clone_from_recording.MENU_TEXT)
+        clone = menu.addAction(tr(clone_from_recording.MENU_TEXT))
+        clone.setToolTip(tr("Make a Reference from the selected part of a recording, so an engine can speak in that "
+                            "voice."))
         clone.setEnabled(cursor.hasSelection() and clone_from_recording.clone_span(
             self.app.document, cursor.selectionStart(), cursor.selectionEnd()) is not None)
         clone.triggered.connect(self._clone_from_selection)
@@ -2050,7 +2069,7 @@ class TranscriptEditor(QTextEdit):
             if chars_added == len(source.text()):
                 self._apply_pasted_words(insert_position, chars_added, payload, source_character_id)
             else:
-                self.app.set_status("Pasted without timing: the text changed on the way in.", "warning")
+                self.app.set_status(tr("Pasted without timing: the text changed on the way in."), "warning")
             return
 
         splits_enabled = self.app.settings.get("character_fx_paste_splits", True)
@@ -2076,14 +2095,14 @@ class TranscriptEditor(QTextEdit):
         words = payload["words"]
         usable = [w for w in words if _is_word_entry(w) and (w[2] in known or w[2] in added)]
         if not usable:
-            self.app.set_status("Pasted without timing: the recording it came from isn't in this project.",
+            self.app.set_status(tr("Pasted without timing: the recording it came from isn't in this project."),
                                 "warning")
             return
         if document.get_character(character_id) is None:
             character_id = None
         self.undo_coordinator.push_joined(ApplyWordsCommand(position, length, usable, added, character_id))
         if len(usable) < len(words):
-            self.app.set_status("Some pasted words lost their timing: their recording isn't in this project.",
+            self.app.set_status(tr("Some pasted words lost their timing: their recording isn't in this project."),
                                 "warning")
         self.rehighlight()
         self.app.schedule_save()
