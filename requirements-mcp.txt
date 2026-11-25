@@ -1,0 +1,2 @@
+# The MCP server (python -m kokoro_gui.headless.mcp_server). Nothing else needs it.
+mcp>=2.3,<3
