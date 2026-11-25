@@ -191,7 +191,7 @@ nav.wrap{ display: flex; align-items: center; justify-content: space-between; ga
   letter-spacing: .06em; text-transform: uppercase;
 }
 .navlinks{ display: flex; align-items: center; gap: .1rem; }
-.navlinks a{ text-decoration: none; font-size: .88rem; color: var(--text-2); font-weight: 500; padding: .4em .65em; border-radius: 6px; }
+.navlinks a{ text-decoration: none; font-size: .88rem; color: var(--text-2); font-weight: 500; padding: .4em .65em; white-space: nowrap; border-radius: 6px; }
 .navlinks a:hover{ color: var(--text); background: var(--surface-2); }
 .navlinks a[aria-current="page"]{ color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); border-radius: 0; }
 .navctas{ display: flex; align-items: center; gap: .5rem; }
@@ -202,7 +202,7 @@ nav.wrap{ display: flex; align-items: center; justify-content: space-between; ga
 }
 .icon-btn:hover{ color: var(--text); background: var(--surface-2); }
 .menu-btn{ display: none; }
-@media (max-width: 880px){
+@media (max-width: 1060px){
   .navlinks{ display: none; }
   .menu-btn{ display: flex; }
   header.site.open .navlinks{

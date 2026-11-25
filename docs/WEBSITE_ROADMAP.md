@@ -7,14 +7,14 @@ it's headed.
 
 ## Where it stands today
 
-Five pages, no build step. `docs/index.html` is the pitch: a hero with a transcript and its
+Six pages, no build step. `docs/index.html` is the pitch: a hero with a transcript and its
 timeline, the app screenshot, "four moves" (write, assign, generate, mix), a workflow picker
 (Audiobooks, Dubbing, Podcasts & radio drama, Game & animation; tabs, the last pick remembered in
 `localStorage`), the features as mixer tracks, the engine table, the signal chain as six steps,
 the `.tbaw` pitch, a two-entry "What's new" and install. `docs/changes.html` is the full
 changelog (the README only carries one-liners). `docs/scripting.html` is the Tags guide (the
-filename stayed), `docs/settings.html` is every field in every panel, and `docs/format.html` is
-the `.tbaw` spec.
+filename stayed), `docs/settings.html` is every field in every panel, `docs/format.html` is
+the `.tbaw` spec, and `docs/cli.html` is the command line and the MCP server.
 
 The look is "script meets timeline", decided with the maintainer on 2026-09-25: the brand is
 KokoroGUI with "a text-based audio workflow" as the tagline. Colors are the app's own dark and
@@ -65,7 +65,7 @@ Low effort, no new infrastructure:
   (1600×1000). Make a dedicated 1200×630 image and point the tags at it.
 - **Search setup outside the repo.** Each page has a canonical URL and JSON-LD
   (`SoftwareApplication`, `WebSite` and `FAQPage` on the index, `BreadcrumbList` elsewhere), and
-  `docs/sitemap.xml` lists the five pages; update its `lastmod` when a page changes. Still to do
+  `docs/sitemap.xml` lists the six pages; update its `lastmod` when a page changes. Still to do
   by hand: verify the site in Google Search Console and Bing Webmaster Tools and submit the
   sitemap there (a `robots.txt` under `/KokoroGUI/` is never read, only one at the domain root),
   and set the repo's About homepage to the site and its topics to `kokoro`, `kokoro-tts`,
@@ -100,8 +100,8 @@ Still static-hostable, no server required:
 
 ## Phase 3: multi-page docs site
 
-Partially done: `scripting.html`, `settings.html` and `format.html` cover the inline syntax, the
-settings breakdown and the bundle format, as flat files next to `index.html` rather than a
+Partially done: `scripting.html`, `settings.html`, `format.html` and `cli.html` cover the inline syntax, the
+settings breakdown, the bundle format and the command line, as flat files next to `index.html` rather than a
 `docs/guide/` subdirectory (not worth the extra nesting at four pages). What's left:
 
 - Installation troubleshooting (common eSpeak NG / PyTorch setup failures and their fixes).

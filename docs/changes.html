@@ -72,6 +72,7 @@
       <a href="scripting.html">Tags</a>
       <a href="settings.html">Settings</a>
       <a href="format.html">.tbaw format</a>
+      <a href="cli.html">CLI &amp; MCP</a>
     </div>
     <div class="navctas">
       <button class="icon-btn" id="themeToggle" aria-label="Toggle color theme" title="Toggle color theme">
@@ -148,6 +149,42 @@
           <li>
             <h4>Closing the window during a generate asks first</h4>
             <p>Closing while a generate runs shows "Cancel the generate and quit" and "Keep working". Cancelling stops the engines, keeps the segments of every clip that finished before the cancel, and then closes the window, still asking Save / Discard / Cancel if the project has unsaved changes. Before, the window closed with the workers still running. An export in progress doesn't ask.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
+        <h3>Command line and MCP</h3>
+        <ul class="change-list">
+          <li>
+            <h4>KokoroGUI runs from a terminal</h4>
+            <p><code>python -m kokoro_gui.headless</code>, from the KokoroGUI folder, has <code>engines</code>, <code>voices</code>, <code>devices</code>, <code>say</code>, <code>render</code>, <code>play</code> and <code>stop</code>. It opens no window and needs no new packages. It uses the app's engines, voices and working folders, and the same code the app does for settings, stale checks, mixing and saving. stdout holds only the result, progress is JSON lines on stderr, <code>--json</code> prints one object, and each kind of error has its own exit code. Every option is on the <a class="link" href="cli.html">command line page</a>.</p>
+            <p>Values are the app's factory defaults. Your <code>config_qt.json</code>, Lexicon and character library are read only when you pass <code>--settings</code>, and then only the default engine, the Lexicon and each engine's own settings. Models don't download unless you pass <code>--allow-download</code> or set <code>KOKOROGUI_ALLOW_DOWNLOAD=1</code>. A missing one stops the command with <code>model_not_downloaded</code>.</p>
+          </li>
+          <li>
+            <h4>say: a line of text into a WAV</h4>
+            <p><code>say "Hello there."</code> makes one mono WAV in one voice, in a new folder under <code>audio_output/headless/</code>, at <code>--out</code>, or on stdout with <code>-o -</code>. The text is treated as Markdown unless you pass <code>--plain</code>. A phrase you repeat with the same voice and settings is read from <code>cache/headless_speak/</code>. That folder has no size limit, and Options &gt; Storage doesn't show it.</p>
+          </li>
+          <li>
+            <h4>render: a script into a project</h4>
+            <p><code>render episode.md --cast Sam=am_adam</code> reads the tags the transcript uses (<code>[Sam]:</code>, <code>[Sam:Radio]:</code>, <code>[Sam, overlap:0.3]:</code>, <code>[pause:1.5]</code>) and writes a <code>.tbaw</code> and a WAV mixdown, mono or stereo. Each paragraph is a clip, each speaker a character with a track, and clips follow each other with no gap except the pauses. An FX plays only when a tag or the cast names one. The project opens in the app with nothing stale. A failed or cancelled render leaves no output, and what it had generated stays in its working folder.</p>
+            <p>There is no length limit, and the mix is built in memory, about 2 GB for an hour of speech at 24 kHz. A character doesn't store its language, so a project rendered with <code>--settings</code> in one language shows as stale in an app set to another.</p>
+          </li>
+          <li>
+            <h4>render --update: only the changed paragraphs</h4>
+            <p>Give it a <code>.tbaw</code> and a new script, and it rebuilds the project in place. Paragraphs that didn't change keep their audio. The project's settings, characters, tracks and mixer stay. Edits made to clips in the app don't. It refuses a project with recordings, music, subprojects or guide takes, one that's open in the app, and one with unsaved changes unless you pass <code>--discard-session</code>. If it fails, the project and the mixdown are put back.</p>
+          </li>
+          <li>
+            <h4>Playback as it generates</h4>
+            <p><code>--play after</code> plays the finished file, and <code>--play stream</code> starts with the first piece, on every engine. <code>--detach</code> plays in a process of its own and returns at once. One detached player runs at a time, and <code>stop</code> or <code>--interrupt</code> ends it. <code>KOKOROGUI_PLAYBACK=off</code> plays nothing.</p>
+          </li>
+          <li>
+            <h4>An MCP server for AI agents</h4>
+            <p><code>pip install -r requirements-mcp.txt</code> adds the MCP SDK (version 2), and an agent's client can then start <code>python -m kokoro_gui.headless.mcp_server</code>. Its tools are <code>list_engines</code>, <code>list_voices</code>, <code>speak</code>, <code>render_script</code>, <code>play</code>, <code>stop_playback</code> and <code>playback_status</code>. A model loads once per session, one call generates at a time, and <code>speak</code> plays while it generates unless told not to. Results hold paths and numbers, never audio. Every path a tool takes must be inside <code>audio_output/headless/</code> or the folder the server started in. Client configuration and the environment variables are on the <a class="link" href="cli.html#mcp">command line page</a>.</p>
+          </li>
+          <li>
+            <h4>Existing projects</h4>
+            <p>Nothing changes for a project you already have. The <code>.tbaw</code> format, the saved settings and the segment keys are the same, so no clip goes stale from this.</p>
           </li>
         </ul>
       </div>
@@ -1266,6 +1303,7 @@
           <li><a href="scripting.html">Tags guide</a></li>
           <li><a href="settings.html">Settings reference</a></li>
           <li><a href="format.html">.tbaw format</a></li>
+          <li><a href="cli.html">Command line and MCP</a></li>
         </ul>
       </div>
       <div>

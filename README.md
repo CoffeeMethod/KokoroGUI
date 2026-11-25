@@ -43,6 +43,8 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
     text and lists the ones that don't match, worst first.
 -   **Templates and credits.** Save a project's settings, characters and subproject titles as a template and start the next
     episode from it. Add Credits writes the opening and closing credits an audiobook needs.
+-   **Command line and MCP.** Speak text or render a tagged script to a project and a mixdown without opening the
+    window, from a terminal or from an AI agent over MCP.
 -   **One-file projects.** A `.tbaw` holds the text, the audio and every voice it uses, so it opens
     on another machine.
 
@@ -50,6 +52,9 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 Unreleased:
 
+-   A [command line](docs/cli.html) that speaks text into a WAV and renders a `[Speaker]:` script into a `.tbaw` and a mixdown,
+    then regenerates only the paragraphs that changed when you update it
+-   An [MCP server](docs/cli.html#mcp), so an AI agent can speak, render and play on your machine
 -   The Settings tab is now Voice & Clip. It and Audio FX name what an edit changes, their groups fold, the Transport says
     what Preview will speak, and a greyed-out control says why
 -   The right-hand panel tabs sit on top with every name in full, and scroll when they don't fit
@@ -191,6 +196,17 @@ Run `python main.py`, or double-click `run.bat` on Windows.
 4.  Press Space to play. Drag clips on the timeline to move them.
 5.  File > Export writes the audio file. File > Save writes the `.tbaw`.
 
+Without the window, from the same folder:
+
+```bash
+python -m kokoro_gui.headless say "Hello there." --play stream
+python -m kokoro_gui.headless render episode.md --cast Sam=am_adam --cast Ann=af_bella
+```
+
+Models download only with `--allow-download`. For an AI agent, `pip install -r requirements-mcp.txt` and point its MCP client
+at `python -m kokoro_gui.headless.mcp_server`. [Command line and MCP](docs/cli.html) has every option and the client
+configuration.
+
 The [docs site](docs/index.html) covers the workflows, every setting, tags and the `.tbaw`
 format.
 
@@ -203,7 +219,8 @@ pytest -m integration tests/integration -s # real generation, needs eSpeak NG
 ```
 
 CI runs the fast suite on Windows, Ubuntu and macOS, without the Qt widget tests. Those run locally,
-headless. The integration tests write each sample next to a transcript under `tests/output/` for
+headless. The MCP server's tests skip unless `requirements-mcp.txt` is installed, and CI doesn't install it.
+The integration tests write each sample next to a transcript under `tests/output/` for
 you to listen to.
 
 ## Contributing

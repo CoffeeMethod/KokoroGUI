@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Command line and MCP server · KokoroGUI</title>
+<meta name="description" content="Run KokoroGUI from a terminal or as an MCP server: speak text into a WAV, render a tagged script into a .tbaw project and a mixdown, update it in place, and let an AI agent do both." />
+<meta name="robots" content="index, follow, max-image-preview:large" />
+<link rel="canonical" href="https://coffeemethod.github.io/KokoroGUI/cli.html" />
+<meta name="theme-color" content="#1e1f22" />
+<meta property="og:site_name" content="KokoroGUI" />
+<meta property="og:title" content="Command line and MCP server · KokoroGUI" />
+<meta property="og:description" content="Run KokoroGUI from a terminal or as an MCP server: speak text into a WAV, render a tagged script into a .tbaw project and a mixdown, update it in place, and let an AI agent do both." />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://coffeemethod.github.io/KokoroGUI/cli.html" />
+<meta property="og:image" content="https://coffeemethod.github.io/KokoroGUI/assets/shell_dark.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "KokoroGUI",
+      "item": "https://coffeemethod.github.io/KokoroGUI/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Command line and MCP",
+      "item": "https://coffeemethod.github.io/KokoroGUI/cli.html"
+    }
+  ]
+}
+</script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231e1f22'/%3E%3Crect x='12' y='13' width='40' height='5' rx='2.5' fill='%23868a91'/%3E%3Crect x='12' y='23' width='26' height='5' rx='2.5' fill='%23e3a72f'/%3E%3Cg fill='%234f8fe6'%3E%3Crect x='12' y='41' width='4' height='8' rx='2'/%3E%3Crect x='19' y='36' width='4' height='18' rx='2'/%3E%3Crect x='26' y='39' width='4' height='12' rx='2'/%3E%3C/g%3E%3Cg fill='%23e0655c'%3E%3Crect x='33' y='34' width='4' height='22' rx='2'/%3E%3Crect x='40' y='39' width='4' height='12' rx='2'/%3E%3Crect x='47' y='42' width='4' height='6' rx='2'/%3E%3C/g%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/site.css" />
+</head>
+<body>
+
+<header class="site">
+  <nav class="wrap">
+    <a class="brand" href="index.html">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect width="64" height="64" rx="14" fill="var(--surface-2)" stroke="var(--border-2)"/>
+        <rect x="12" y="13" width="40" height="5" rx="2.5" fill="var(--text-3)"/>
+        <rect x="12" y="23" width="26" height="5" rx="2.5" fill="var(--c1)"/>
+        <g fill="var(--c2)"><rect x="12" y="41" width="4" height="8" rx="2"/><rect x="19" y="36" width="4" height="18" rx="2"/><rect x="26" y="39" width="4" height="12" rx="2"/></g>
+        <g fill="var(--c3)"><rect x="33" y="34" width="4" height="22" rx="2"/><rect x="40" y="39" width="4" height="12" rx="2"/><rect x="47" y="42" width="4" height="6" rx="2"/></g>
+      </svg>
+      <span class="brand-word">KokoroGUI<span class="ver">TBAW · 4.0 beta</span></span>
+    </a>
+    <div class="navlinks">
+      <a href="index.html#workflows">Workflows</a>
+      <a href="index.html#features">Features</a>
+      <a href="changes.html">Changes</a>
+      <a href="scripting.html">Tags</a>
+      <a href="settings.html">Settings</a>
+      <a href="format.html">.tbaw format</a>
+      <a href="cli.html" aria-current="page">CLI &amp; MCP</a>
+    </div>
+    <div class="navctas">
+      <button class="icon-btn" id="themeToggle" aria-label="Toggle color theme" title="Toggle color theme">
+        <svg id="iconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg id="iconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
+      </button>
+      <button class="icon-btn menu-btn" id="menuToggle" aria-label="Open menu" aria-expanded="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <a class="btn btn-primary" href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+</header>
+
+<main>
+  <section class="page-head" data-clip="CLI &amp; MCP" data-cc="c2">
+    <div class="wrap">
+      <span class="eyebrow c2">Reference</span>
+      <h1>Text to audio without the window</h1>
+      <p class="lede">KokoroGUI also runs from a terminal, and as an MCP server that an AI agent can call. Both speak a line of text into a WAV, or turn a script into a project you can open in the app and a mixdown you can play. They use the same engines, voices and cache as the app.</p>
+      <div class="toc">
+        <a href="#start">Start</a>
+        <a href="#scripts">Scripts</a>
+        <a href="#say">say</a>
+        <a href="#render">render</a>
+        <a href="#update">Updating a project</a>
+        <a href="#playback">Playback</a>
+        <a href="#output">Output and exit codes</a>
+        <a href="#mcp">MCP server</a>
+        <a href="#tools">MCP tools</a>
+        <a href="#environment">Environment</a>
+        <a href="#limits">Limits</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="start" data-cc="c1">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">01 · Start</span>Run it from the KokoroGUI folder</h2>
+        <p>There's nothing extra to install for the command line. Activate the environment you made for the app and run it from the KokoroGUI folder, because <code>custom_voices/</code>, <code>presets/fx/</code>, <code>cache/</code> and <code>audio_output/</code> are all looked up in the folder you start from.</p>
+      </div>
+      <div class="code-block reveal" style="max-width:760px; margin-top:1.3rem;" data-copy>
+        <div class="head"><span>Terminal</span></div>
+        <pre>python -m kokoro_gui.headless engines
+python -m kokoro_gui.headless voices --engine kokoro --lang a
+python -m kokoro_gui.headless say "Hello there." --voice af_heart --play stream
+python -m kokoro_gui.headless render episode.md --cast Sam=am_adam --cast Ann=af_bella</pre>
+      </div>
+      <div class="table-wrap reveal" style="max-width:820px; margin-top:1.3rem;">
+        <table class="ref">
+          <caption>Commands</caption>
+          <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>engines</code></td><td>Lists every engine, whether it's installed and why not, and which one is the default.</td></tr>
+            <tr><td><code>voices</code></td><td>Lists one engine's voices with their language. <code>--engine</code> picks the engine, <code>--lang</code> one language.</td></tr>
+            <tr><td><code>devices</code></td><td>Lists what <code>--device</code> takes on this machine, and says whether audio can play.</td></tr>
+            <tr><td><code>say</code></td><td>Speaks a short text into one WAV. No project.</td></tr>
+            <tr><td><code>render</code></td><td>Renders a script into a <code>.tbaw</code> project and a WAV mixdown.</td></tr>
+            <tr><td><code>play</code></td><td>Plays an audio file, or a part of it with <code>--start</code> and <code>--end</code> in seconds.</td></tr>
+            <tr><td><code>stop</code></td><td>Stops the detached player (see <a class="link" href="#playback">Playback</a>).</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose reveal" style="margin-top:1.3rem;">
+        <p>These options work with every command, before or after its name:</p>
+      </div>
+      <div class="table-wrap reveal" style="max-width:820px; margin-top:1.1rem;">
+        <table class="ref">
+          <caption>Options for every command</caption>
+          <thead><tr><th>Option</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>--json</code></td><td>Prints the result, or the error, as one JSON object on stdout.</td></tr>
+            <tr><td><code>--quiet</code></td><td>No progress lines on stderr.</td></tr>
+            <tr><td><code>--device</code></td><td><code>auto</code>, <code>cpu</code> or <code>cuda</code>.</td></tr>
+            <tr><td><code>--settings PATH</code></td><td>Reads a <code>config_qt.json</code> for its default engine, its Lexicon and each engine's language, voice and model settings. Nothing else in it counts.</td></tr>
+            <tr><td><code>--allow-download</code></td><td>Lets a model download. Without it nothing is fetched.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose reveal" style="margin-top:1.3rem;">
+        <p><strong>Models.</strong> Downloads are off by default. A model or a Kokoro voice that isn't in the Hugging Face cache yet stops the command with <code>model_not_downloaded</code>, so generate once in the app or pass <code>--allow-download</code> the first time.</p>
+        <p><strong>Settings.</strong> Without <code>--settings</code>, speed, pitch, language and the rest are the app's factory defaults. Your own <code>config_qt.json</code>, Lexicon and character library aren't read.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="scripts" data-cc="c5">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">02 · Scripts</span>The tags are the ones the transcript uses</h2>
+        <p>A script is plain text. <code>[Name]:</code> at the start of a line says who speaks from there on, <code>[Name:FX]:</code> adds a saved FX, <code>[Name, overlap:0.3]:</code> starts a line over the one before it, and <code>[pause:1.5]</code> adds seconds of silence. The <a class="link" href="scripting.html">Tags guide</a> describes each one. Two things differ from Auto-split: a name doesn't need to exist as a character first, and the tags are removed from the project's text.</p>
+      </div>
+      <div class="code-block reveal" style="max-width:760px; margin-top:1.3rem;">
+        <div class="head">episode.md</div>
+        <pre><span class="c2">[Sam]:</span> Welcome back.
+
+This is a second paragraph, so it's a second clip.
+
+[pause:1.5]
+<span class="c3">[Ann:Radio]:</span> Good evening from the tower.</pre>
+      </div>
+      <div class="prose reveal" style="margin-top:1.3rem;">
+        <ul>
+          <li>Each paragraph of a speaker's block is one clip, and each speaker gets a character and a track.</li>
+          <li>Text before the first tag belongs to a character named Narrator.</li>
+          <li>Clips follow each other with no gap. A <code>[pause:x]</code> is the only silence. The last of two pauses in a row counts, and one at the end of the script does nothing and warns.</li>
+          <li>A speaker the cast doesn't name gets the engine's default voice and a warning. A tag's FX name that doesn't exist is a warning too, and the line plays dry. In the cast it's an error.</li>
+          <li>A <code>.md</code> file loses its Markdown first and keeps its tags. A <code>.txt</code> file and a script on stdin are read as they are.</li>
+        </ul>
+        <p>A script file must be <code>.txt</code> or <code>.md</code> in UTF-8, and the same size limits apply as when you import text in the app.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="say" data-cc="c3">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">03 · say</span>One text, one voice, one WAV</h2>
+        <p>The text is an argument, or comes from stdin when you leave it out or pass <code>-</code>. By default it's treated as Markdown: headings, links and lists are read as plain sentences, a fenced code block is dropped, and a bare address is read as its site's name. Speaker tags and <code>[pause:x]</code> aren't read out and have no effect here.</p>
+      </div>
+      <div class="table-wrap reveal" style="max-width:820px; margin-top:1.1rem;">
+        <table class="ref">
+          <caption>say</caption>
+          <thead><tr><th>Option</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>--engine</code>, <code>--voice</code></td><td>The engine's id and a voice from its list. A voice that isn't in the list is an error that names the ones that are.</td></tr>
+            <tr><td><code>--speed</code></td><td>0.1 to 4.</td></tr>
+            <tr><td><code>--pitch</code></td><td>-12 to 12 semitones.</td></tr>
+            <tr><td><code>--plain</code></td><td>The text isn't Markdown, so leave it alone.</td></tr>
+            <tr><td><code>-o</code>, <code>--out</code></td><td>A new <code>.wav</code>, or <code>-</code> to write the WAV to stdout. Without it the WAV gets a new folder in <code>audio_output/headless/</code>, named after the time and the first words.</td></tr>
+            <tr><td><code>--no-save</code></td><td>Writes no WAV, for when you only want to hear it.</td></tr>
+            <tr><td><code>--play</code></td><td><code>off</code> (the default), <code>after</code> or <code>stream</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose reveal" style="margin-top:1.3rem;">
+        <p>Generated audio is kept in <code>cache/headless_speak/</code>, so a phrase you repeat with the same voice and settings is read from disk instead of generated.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="render" data-cc="c4">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">04 · render</span>A script becomes a project and a mixdown</h2>
+        <p>The result is a <code>.tbaw</code> and a WAV with the same name in a new folder under <code>audio_output/headless/</code>. The project opens in the app with every clip generated, so you can carry on there: change a word, move a clip, add FX, export.</p>
+      </div>
+      <div class="table-wrap reveal" style="max-width:820px; margin-top:1.1rem;">
+        <table class="ref">
+          <caption>render</caption>
+          <thead><tr><th>Option</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>--engine</code></td><td>The engine every speaker uses.</td></tr>
+            <tr><td><code>--cast NAME=VOICE</code></td><td>Gives a speaker a voice. Repeat it for each speaker. Names ignore case.</td></tr>
+            <tr><td><code>--cast-file PATH</code></td><td>A JSON object of speaker to voice, or to an object with any of <code>voice</code>, <code>speed</code>, <code>pitch</code> and <code>fx_preset</code>. A <code>--cast</code> for the same name wins.</td></tr>
+            <tr><td><code>--title</code></td><td>The project's title and the files' name. Without it the name is the script's first words.</td></tr>
+            <tr><td><code>-o</code>, <code>--out</code></td><td>The output folder, made when it's missing.</td></tr>
+            <tr><td><code>--channels</code></td><td><code>1</code> (the default) or <code>2</code>.</td></tr>
+            <tr><td><code>--align</code></td><td>Adds word times from Whisper where the engine gives none (Audio8 and LuxTTS), if the Whisper model is downloaded or downloads are allowed.</td></tr>
+            <tr><td><code>--play</code></td><td><code>off</code> (the default), <code>after</code> or <code>stream</code>.</td></tr>
+            <tr><td><code>--update</code>, <code>--discard-session</code></td><td>See <a class="link" href="#update">Updating a project</a>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="code-block reveal" style="max-width:760px; margin-top:1.3rem;">
+        <div class="head">cast.json</div>
+        <pre>{
+  "Sam": "am_adam",
+  "Ann": {"voice": "af_bella", "speed": 1.1, "fx_preset": "Radio"}
+}</pre>
+      </div>
+      <div class="prose reveal" style="margin-top:1.3rem;">
+        <p>An FX is applied only when the script or the cast names one. Everything else renders dry.</p>
+        <p>If a clip fails, or you press Ctrl+C, the output folder is left as it was before. The clips that were generated stay in the working folder under <code>cache/projects/</code>, and the error message says where.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="update" data-cc="c6">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">05 · Updating a project</span><code>--update</code> generates only what changed</h2>
+        <p><code>render new.md --update show.tbaw</code> rebuilds the project from the new script and saves it in place. A paragraph whose text and voice are unchanged keeps its audio, and <code>regenerated</code> in the result counts the clips the engine made again.</p>
+        <ul>
+          <li><strong>Kept.</strong> The project's settings, its characters with their colors and variants, the tracks with their mixer settings, and the voice of any speaker the new cast doesn't name.</li>
+          <li><strong>Lost.</strong> Edits made to clips in the app, such as moves, fades, takes and per-clip FX. The text is whatever the new script says.</li>
+          <li><strong>Refused.</strong> A project with recordings, music, subprojects or guide takes, since a script can't make those again.</li>
+          <li><strong>Unsaved changes.</strong> If the app left unsaved work in the project, the update stops with <code>unsaved_session</code>. <code>--discard-session</code> throws that work away. A project open in the app is locked and stops the update with <code>project_locked</code>.</li>
+        </ul>
+        <p>The mixdown next to the project is replaced when the project is inside <code>audio_output/headless/</code>. Anywhere else, a WAV of that name could be yours, so the new one gets a free name. If the update fails, the project and the mixdown are put back.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="playback" data-cc="c7">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">06 · Playback</span>After, or while it's being made</h2>
+        <p><code>--play after</code> plays the finished file. <code>--play stream</code> starts as soon as the first piece is ready and works with every engine. <code>say</code> streams in pieces of about 15 words, <code>render</code> a clip at a time with its pauses. An engine slower than speech leaves a silence while the next piece is made, and a line with an overlap plays after the one before it. The mixdown has the overlap.</p>
+        <p>A command waits until playback ends. <code>--detach</code> starts it as a process of its own instead, prints that process's id and returns at once. Only one detached player runs at a time: a second one waits, or with <code>--interrupt</code> stops the first. <code>stop</code> ends it. What a detached command would have printed goes to <code>audio_output/headless/player.log</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="output" data-cc="c8">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">07 · Output and exit codes</span>Made for scripts to read</h2>
+        <p>stdout holds the result and nothing else: the paths, one JSON object with <code>--json</code>, or WAV bytes with <code>say -o -</code>. Progress, status and warnings are JSON lines on stderr. An error is a line on stderr, or with <code>--json</code> the object <code>{"error", "message", "valid"}</code> on stdout, where <code>valid</code> lists the choices when you picked one that doesn't exist.</p>
+        <p>The result of <code>say</code> and <code>render</code> holds paths, the duration, the sample rate, the engine, word times where the engine has them, warnings, and whether it played. Never audio.</p>
+      </div>
+      <div class="table-wrap reveal" style="max-width:820px; margin-top:1.1rem;">
+        <table class="ref">
+          <caption>Exit codes</caption>
+          <thead><tr><th>Code</th><th>Error</th><th>When</th></tr></thead>
+          <tbody>
+            <tr><td>0</td><td></td><td>It worked.</td></tr>
+            <tr><td>2</td><td><code>bad_arguments</code>, <code>out_not_allowed</code>, <code>unsaved_session</code></td><td>Something you passed is wrong, the output path isn't allowed, or the project has unsaved changes.</td></tr>
+            <tr><td>3</td><td><code>engine_not_installed</code></td><td>The engine's packages aren't there.</td></tr>
+            <tr><td>4</td><td><code>unknown_voice</code></td><td>The engine has no voice of that name.</td></tr>
+            <tr><td>5</td><td><code>model_not_downloaded</code></td><td>A model or voice would have to be downloaded.</td></tr>
+            <tr><td>6</td><td><code>project_locked</code></td><td>The project is open somewhere else.</td></tr>
+            <tr><td>7</td><td><code>generation_failed</code></td><td>The engine, the mix or the save failed.</td></tr>
+            <tr><td>130</td><td><code>interrupted</code></td><td>Ctrl+C, or a stop.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose reveal" style="margin-top:1.3rem;">
+        <p><strong>Where files may go.</strong> <code>--out</code> and <code>--update</code> must lead inside <code>audio_output/headless/</code> or the folder you started from, with links followed. Network paths, device names and names with a colon are refused. A file that's already there is never replaced, except by <code>--update</code> as described above.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="mcp" data-cc="c2">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">08 · MCP server</span>Let an agent speak and render</h2>
+        <p>The server speaks MCP over stdio. It needs the <code>mcp</code> package, version 2, in the app's environment:</p>
+      </div>
+      <div class="code-block reveal" style="max-width:760px; margin-top:1.3rem;" data-copy>
+        <div class="head"><span>Terminal</span></div>
+        <pre>pip install -r requirements-mcp.txt</pre>
+      </div>
+      <div class="prose reveal" style="margin-top:1.3rem;">
+        <p>Your client starts it. It has to start in the KokoroGUI folder, and since many clients have no setting for that, the examples change folder first. Put your own path in, and add the block to your client's MCP configuration.</p>
+      </div>
+      <div class="code-block reveal" style="max-width:820px; margin-top:1.3rem;" data-copy>
+        <div class="head"><span>Windows</span></div>
+        <pre>{
+  "mcpServers": {
+    "kokorogui": {
+      "command": "cmd",
+      "args": ["/c", "cd /d C:\\KokoroGUI &amp;&amp; .venv\\Scripts\\python -m kokoro_gui.headless.mcp_server"]
+    }
+  }
+}</pre>
+      </div>
+      <div class="code-block reveal" style="max-width:820px; margin-top:1rem;" data-copy>
+        <div class="head"><span>macOS and Linux</span></div>
+        <pre>{
+  "mcpServers": {
+    "kokorogui": {
+      "command": "sh",
+      "args": ["-c", "cd /path/to/KokoroGUI &amp;&amp; exec .venv/bin/python -m kokoro_gui.headless.mcp_server"]
+    }
+  }
+}</pre>
+      </div>
+      <div class="prose reveal" style="margin-top:1.3rem;">
+        <p>The server runs for as long as the client's session, so a model loads once. It loads on the first call that needs it. Defaults come from <a class="link" href="#environment">environment variables</a>, which most clients let you set in an <code>env</code> block.</p>
+        <ul>
+          <li>One call generates at a time, and the next one waits. Playback goes on meanwhile, and <code>stop_playback</code> always gets through.</li>
+          <li>A render reports progress. Cancelling a call, or ending the server, stops its work, unlocks the project and leaves no output.</li>
+          <li>A failure is an error result with <code>{"error", "message", "valid"}</code>, using the error names in the table above.</li>
+          <li>Every path a tool takes, to read or to write, must be inside <code>audio_output/headless/</code> or the folder the server started in. A script from somewhere else goes in as text.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="tools" data-cc="c3">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">09 · MCP tools</span>Seven of them</h2>
+      </div>
+      <div class="table-wrap reveal" style="max-width:860px; margin-top:1.1rem;">
+        <table class="ref">
+          <caption>Tools</caption>
+          <thead><tr><th>Tool</th><th>Arguments</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>list_engines</code></td><td></td><td>The engines, whether each is installed, and the default.</td></tr>
+            <tr><td><code>list_voices</code></td><td><code>engine</code>, <code>lang_code</code></td><td>An engine's voices.</td></tr>
+            <tr><td><code>speak</code></td><td><code>text</code>, <code>engine</code>, <code>voice</code>, <code>speed</code>, <code>pitch</code>, <code>markdown</code>, <code>out</code>, <code>save</code>, <code>play</code>, <code>wait_for_playback</code>, <code>interrupt</code></td><td>What <code>say</code> does. <code>play</code> is <code>stream</code> by default here, and the call doesn't wait for it to finish.</td></tr>
+            <tr><td><code>render_script</code></td><td><code>script</code> or <code>path</code>, <code>engine</code>, <code>cast</code>, <code>out</code>, <code>update</code>, <code>discard_session</code>, <code>title</code>, <code>channels</code>, <code>align</code>, <code>play</code>, <code>wait_for_playback</code>, <code>interrupt</code></td><td>What <code>render</code> does. Pass the script's text, or the path of a <code>.txt</code> or <code>.md</code> file. <code>play</code> is <code>off</code> by default.</td></tr>
+            <tr><td><code>play</code></td><td><code>path</code>, <code>start_s</code>, <code>end_s</code>, <code>interrupt</code>, <code>wait_for_playback</code></td><td>Plays a file or a part of it, after what's already queued.</td></tr>
+            <tr><td><code>stop_playback</code></td><td></td><td>Stops what plays and drops what's queued. A render goes on. It doesn't reach a player started with <code>--detach</code>.</td></tr>
+            <tr><td><code>playback_status</code></td><td></td><td>What's playing, for how long, and how much is queued.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose reveal" style="margin-top:1.3rem;">
+        <p><code>interrupt</code> stops what is playing first. Without <code>wait_for_playback</code>, <code>played: true</code> means the audio was queued.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="environment" data-cc="c4">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">10 · Environment</span>Defaults you set once</h2>
+      </div>
+      <div class="table-wrap reveal" style="max-width:820px; margin-top:1.1rem;">
+        <table class="ref">
+          <caption>Environment variables</caption>
+          <thead><tr><th>Variable</th><th>Used by</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>KOKOROGUI_ALLOW_DOWNLOAD</code></td><td>both</td><td><code>1</code> allows model downloads.</td></tr>
+            <tr><td><code>KOKOROGUI_PLAYBACK</code></td><td>both</td><td><code>off</code> plays nothing. Results then say <code>reason: "disabled"</code>.</td></tr>
+            <tr><td><code>KOKOROGUI_ENGINE</code></td><td>MCP</td><td>The engine to use when a call names none.</td></tr>
+            <tr><td><code>KOKOROGUI_VOICE</code></td><td>MCP</td><td>The voice <code>speak</code> uses when a call names none and is on that engine.</td></tr>
+            <tr><td><code>KOKOROGUI_DEVICE</code></td><td>MCP</td><td><code>auto</code>, <code>cpu</code> or <code>cuda</code>.</td></tr>
+            <tr><td><code>KOKOROGUI_SETTINGS</code></td><td>MCP</td><td>A <code>config_qt.json</code>, read as <code>--settings</code> reads it.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="doc-section" id="limits" data-cc="c8">
+    <div class="wrap">
+      <div class="prose reveal">
+        <h2><span class="idx">11 · Limits</span>Worth knowing before a long run</h2>
+        <ul>
+          <li>A render has no length limit, and the mix is built in memory: about 2 GB for an hour of speech at 24 kHz. A <code>[pause:x]</code> takes memory too, so a mistyped huge one fails only after everything was generated.</li>
+          <li><code>cache/headless_speak/</code> grows without a limit. Options &gt; Storage doesn't show or clear it. You can delete the folder whenever nothing is running.</li>
+          <li>A character doesn't store its language. If you render with <code>--settings</code> in one language and open the project in an app set to another, its clips show as stale.</li>
+          <li>A render's working folder stays in <code>cache/projects/</code> so that an update can reuse it. The app clears it when it closes, unless it's the project you had open.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <div class="cols">
+      <div>
+        <a class="brand" href="index.html">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect width="64" height="64" rx="14" fill="var(--surface-2)" stroke="var(--border-2)"/>
+        <rect x="12" y="13" width="40" height="5" rx="2.5" fill="var(--text-3)"/>
+        <rect x="12" y="23" width="26" height="5" rx="2.5" fill="var(--c1)"/>
+        <g fill="var(--c2)"><rect x="12" y="41" width="4" height="8" rx="2"/><rect x="19" y="36" width="4" height="18" rx="2"/><rect x="26" y="39" width="4" height="12" rx="2"/></g>
+        <g fill="var(--c3)"><rect x="33" y="34" width="4" height="22" rx="2"/><rect x="40" y="39" width="4" height="12" rx="2"/><rect x="47" y="42" width="4" height="6" rx="2"/></g>
+      </svg>
+          <span class="brand-word">KokoroGUI</span>
+        </a>
+        <p class="blurb">A text-based audio workflow. Write the transcript, cast the characters, and the audio follows the text. Not affiliated with the Kokoro or Audio8 model authors.</p>
+      </div>
+      <div>
+        <h5>Product</h5>
+        <ul>
+          <li><a href="index.html#workflows">Workflows</a></li>
+          <li><a href="index.html#features">Features</a></li>
+          <li><a href="changes.html">Changes</a></li>
+          <li><a href="index.html#install">Install</a></li>
+        </ul>
+      </div>
+      <div>
+        <h5>Docs</h5>
+        <ul>
+          <li><a href="scripting.html">Tags guide</a></li>
+          <li><a href="settings.html">Settings reference</a></li>
+          <li><a href="format.html">.tbaw format</a></li>
+          <li><a href="cli.html">Command line and MCP</a></li>
+        </ul>
+      </div>
+      <div>
+        <h5>Project</h5>
+        <ul>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI" target="_blank" rel="noopener">GitHub</a></li>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/README.md" target="_blank" rel="noopener">README</a></li>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/LICENSE" target="_blank" rel="noopener">License</a></li>
+          <li><a href="https://github.com/CoffeeMethod/KokoroGUI/issues" target="_blank" rel="noopener">Issues</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="bottom">
+      <span>Apache-2.0 · KokoroGUI 4.0 beta</span>
+      <span>Kokoro by hexgrad · Audio8 models by Audio8 · Pedalboard by Spotify</span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>
