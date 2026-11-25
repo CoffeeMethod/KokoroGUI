@@ -43,8 +43,8 @@ def check_update(update) -> Optional[str]:
 
 def _known_source(project_id: str, path: str) -> str:
     """`path` as a working folder's session spells it. The app may have opened
-    the file through a link, and a folder is found by that spelling. Raises
-    `project_locked` when the folder is in use."""
+    the file through a link, and a folder (and so its lock) is found by that
+    spelling."""
     root = project_io.projects_root()
     for name in sorted(os.listdir(root)) if os.path.isdir(root) else []:
         if name != project_id and not name.startswith(project_id + "-"):
@@ -56,8 +56,6 @@ def _known_source(project_id: str, path: str) -> str:
         except (OSError, ValueError):
             same = False
         if same:
-            if project_io.is_locked(folder):
-                raise project_io.ProjectLockedError("This project is already open in another KokoroGUI window.")
             return source
     return path
 

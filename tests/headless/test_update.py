@@ -1,6 +1,7 @@
 """headless/update.py: `render_script(update=...)` on a project that is already
 there. What is kept and what is generated again, the refusals, and that a
 failure puts the bundle, the mixdown and the working folder back."""
+import datetime
 import json
 import os
 import shutil
@@ -76,11 +77,19 @@ def test_one_changed_paragraph_is_one_clip(fake, book, working_folder):
     assert [w["word"] for w in result.words] == "The door opens. Who is it? Only me, with the post.".split()
 
 
-def test_it_reopens_with_every_clip_generated_and_the_same_project_id(fake, book):
+class _Later(datetime.datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2031, 5, 6, 7, 8, 9)
+
+
+def test_it_reopens_with_every_clip_generated_and_the_same_project_id(fake, book, monkeypatch):
     first = project_io.inspect_bundle(book.project_path)
+    monkeypatch.setattr(project_io.datetime, "datetime", _Later)
     update(book, cast=CAST)
     info = project_io.inspect_bundle(book.project_path)
     assert info.project_id == first.project_id and info.manifest["created"] == first.manifest["created"]
+    assert info.manifest["modified"] == "2031-05-06T07:08:09"
     (folder,) = working_dirs()
     session = project_io.read_session(folder)
     assert not project_io.is_locked(folder) and session["dirty"] is False
@@ -337,6 +346,15 @@ def test_a_project_with_audio_a_script_cannot_make_again_is_refused(fake, book, 
     assert error.code == "bad_arguments" and "would drop" in error.message
     assert contents(book.out_dir) == before and fake.spoken == []
     assert not any(project_io.is_locked(d) for d in working_dirs())
+
+
+def test_a_refused_project_keeps_its_unsaved_changes(fake, book):
+    edit_saved(book.project_path, lambda d, _s: _bed(d))
+    (folder,) = working_dirs()
+    project_io.write_session(folder, {**project_io.read_session(folder), "dirty": True})
+    before = {**contents(folder), "lock": b""}
+    assert failing(EDITED, update=book.project_path, discard_session=True).code == "bad_arguments"
+    assert contents(folder) == before
 
 
 # -- a failure puts everything back ----------------------------------------------------------
