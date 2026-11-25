@@ -62,6 +62,7 @@
         "Edit a recording by editing its Whisper transcript",
         "Takes, review status and cue sheet export for game dialogue",
         "Audiobook projects from EPUB and PDF, one subproject per chapter",
+        "Command line and MCP server for scripts and AI agents",
         "One portable .tbaw project file"
       ]
     },
@@ -115,6 +116,14 @@
           "acceptedAnswer": {
             "@type": "Answer",
             "text": "Audiobooks from EPUB or PDF, dubbed video from subtitle files, podcasts and radio drama with music beds, and game or animation dialogue with takes and a cue sheet. See the workflows."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I use it from the command line or an AI agent?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. One command speaks text into a WAV or renders a tagged script into a project and a mixdown, and an MCP server gives an agent the same two things as tools."
           }
         },
         {
@@ -261,6 +270,7 @@
       <a href="scripting.html">Tags</a>
       <a href="settings.html">Settings</a>
       <a href="format.html">.tbaw format</a>
+      <a href="cli.html">CLI &amp; MCP</a>
     </div>
     <div class="navctas">
       <button class="icon-btn" id="themeToggle" aria-label="Toggle color theme" title="Toggle color theme">
@@ -701,6 +711,10 @@
           <p>Audiobooks from EPUB or PDF, dubbed video from subtitle files, podcasts and radio drama with music beds, and game or animation dialogue with takes and a cue sheet. See the <a class="link" href="#workflows">workflows</a>.</p>
         </details>
         <details>
+          <summary>Can I use it from the command line or an AI agent?</summary>
+          <p>Yes. One command speaks text into a WAV or renders a tagged script into a project and a mixdown, and an MCP server gives an agent the same two things as tools. See <a class="link" href="cli.html">command line and MCP</a>.</p>
+        </details>
+        <details>
           <summary>Which systems does it run on?</summary>
           <p>Windows, macOS and Linux, anywhere Python 3.11 and eSpeak NG install. A GPU speeds things up but isn't required.</p>
         </details>
@@ -798,6 +812,7 @@ sudo dnf install espeak-ng</pre>
           <li><a href="scripting.html">Tags guide</a></li>
           <li><a href="settings.html">Settings reference</a></li>
           <li><a href="format.html">.tbaw format</a></li>
+          <li><a href="cli.html">Command line and MCP</a></li>
         </ul>
       </div>
       <div>

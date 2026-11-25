@@ -56,6 +56,10 @@ with the engine replaced by `StubEngine`. Save and Open run on a thread; call
 `qt_app.wait_for_project_io()` before asserting on the result. Typing defers the timeline
 refresh; call `qt_app.flush_updates()` before reading the timeline after a keystroke.
 
+The MCP server's tests (`tests/headless/test_mcp_server.py`) skip unless the SDK is there. CI doesn't install it, so run them
+yourself when you touch `kokoro_gui/headless/`: `pip install -r requirements-mcp.txt`. Tests in `tests/headless/` use the
+`fake` and `offline` fixtures, never a real model, network or audio device.
+
 The integration suite (`pytest -m integration tests/integration -s`) does real synthesis and is
 opt-in. It isn't run in CI.
 
@@ -66,6 +70,10 @@ opt-in. It isn't run in CI.
   to pass on both OSes to merge.
 - A new setting is threaded through `QtTTSApp._assemble_config` and covered in
   `tests/gui_qt/test_qt_config_assembly.py`.
+- Logic that isn't about widgets goes in `kokoro_gui/core/`, not in a dock or `app.py`. A dock reads its widgets into plain
+  values and calls the core, and the command line calls the same function. `core/` and `headless/` never import PySide6,
+  `qt/app.py`, `qt/subprojects.py`, `qt/docks/` or `audio/transport.py`, and `tests/core/test_imports.py` and
+  `tests/headless/test_imports.py` check that.
 - If a user can see the change, update two files: a one-line bullet in the README's "What's new"
   (and its Features list if a line there is now wrong), and the full entry under "Unreleased" in
   `docs/changes.html`.
@@ -113,5 +121,7 @@ changes. `tests/plugins/toneclone.py` is a complete small example.
 - `kokoro_gui/daw/` is the document model: text, clips, tracks, characters, arrangement, dirty
   tracking, undo.
 - `kokoro_gui/audio/` is the transport, mixer and read-time FX stage.
+- `kokoro_gui/core/` is what the app does with engines, clips and configs, without widgets.
+- `kokoro_gui/headless/` is the command line and the MCP server over `core/`.
 - `kokoro_gui/qt/` is the PySide6 shell; every panel is a dock under `kokoro_gui/qt/docks/`.
 - `docs/` is the GitHub Pages site.
