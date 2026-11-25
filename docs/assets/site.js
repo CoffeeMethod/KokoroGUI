@@ -114,6 +114,12 @@
   // height. The playhead is the scroll position. The clock is how far into
   // the page you'd be if it were read aloud at 150 words a minute, as
   // HH:MM:SS:FF at 25 fps. Play scrolls the page at that pace.
+  // With data-transport="scroll" on <main> the lane scrolls sideways instead
+  // of fitting the window: a clip is SCROLL_SCALE wide per pixel of section,
+  // at least as wide as its name and at most SCROLL_MAX of the lane, so one
+  // long section can't squeeze or hide the rest.
+  var SCROLL_SCALE = 0.05;
+  var SCROLL_MAX = 0.6;
   var WORDS_PER_SECOND = 2.5;
   var COLORS = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8'];
 
@@ -153,10 +159,13 @@
         '<svg class="i-pause" viewBox="0 0 10 10" style="display:none"><path d="M2 1h2v8H2zM6 1h2v8H6z" fill="currentColor"/></svg>' +
       '</button>' +
       '<span class="tp-clock" aria-live="off">00:00:00:00</span>' +
-      '<div class="tp-lane"></div>' +
+      '<div class="tp-lane"><div class="tp-strip"></div></div>' +
       '<span class="tp-label">read aloud · 150 wpm</span>';
     document.body.appendChild(bar);
     var lane = bar.querySelector('.tp-lane');
+    var strip = bar.querySelector('.tp-strip');
+    var scrolls = main.dataset.transport === 'scroll';
+    if (scrolls) bar.classList.add('scrolls');
     var clock = bar.querySelector('.tp-clock');
     var btn = bar.querySelector('.tp-btn');
     var head = document.createElement('div');
@@ -171,13 +180,15 @@
       el.type = 'button';
       el.className = 'tp-clip ' + section.dataset.cc;
       var name = clipName(section);
-      el.textContent = name;
+      var label = document.createElement('span');
+      label.textContent = name;
+      el.appendChild(label);
       el.title = name;
       el.addEventListener('click', function(){ section.scrollIntoView({ behavior: 'smooth' }); });
-      lane.appendChild(el);
-      return { section: section, el: el, words: words, top: 0, height: 1, start: 0 };
+      strip.appendChild(el);
+      return { section: section, el: el, label: label, words: words, top: 0, height: 1, start: 0 };
     });
-    lane.appendChild(head);
+    strip.appendChild(head);
 
     function measure(){
       var total = 0;
@@ -187,8 +198,16 @@
         c.height = Math.max(1, r.height);
         c.start = total;
         total += c.words / WORDS_PER_SECOND;
-        c.el.style.flex = c.height + ' 1 0';
+        if (!scrolls) c.el.style.flex = c.height + ' 1 0';
       });
+      if (scrolls){
+        var view = lane.clientWidth;
+        var scale = Math.max(SCROLL_SCALE, view / clips.reduce(function(sum, c){ return sum + c.height; }, 0));
+        clips.forEach(function(c){
+          var fit = Math.ceil(c.label.getBoundingClientRect().width) + 16;
+          c.el.style.flex = '1 0 ' + Math.max(fit, Math.min(c.height * scale, view * SCROLL_MAX)) + 'px';
+        });
+      }
       update();
     }
 
@@ -209,9 +228,32 @@
       var secs = current.start + frac * current.words / WORDS_PER_SECOND;
       clock.textContent = timecode(secs);
       clips.forEach(function(c){ c.el.classList.toggle('on', c === current); });
-      var laneRect = lane.getBoundingClientRect();
+      var stripRect = strip.getBoundingClientRect();
       var elRect = current.el.getBoundingClientRect();
-      head.style.left = (elRect.left - laneRect.left + frac * elRect.width) + 'px';
+      var x = elRect.left - stripRect.left + frac * elRect.width;
+      head.style.left = x + 'px';
+      if (scrolls){
+        // The lane follows the playhead and stays put while you scroll the
+        // lane itself, until the page moves again.
+        lane.scrollLeft = x - lane.clientWidth * 0.4;
+        markEnds();
+      }
+    }
+
+    // Which ends of the lane have more behind them (the CSS fades those).
+    function markEnds(){
+      var max = lane.scrollWidth - lane.clientWidth;
+      lane.classList.toggle('more-left', lane.scrollLeft > 1);
+      lane.classList.toggle('more-right', lane.scrollLeft < max - 1);
+    }
+    if (scrolls){
+      lane.addEventListener('scroll', markEnds, { passive: true });
+      lane.addEventListener('wheel', function(e){
+        if (e.ctrlKey || lane.scrollWidth <= lane.clientWidth) return;
+        var d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+        e.preventDefault();
+        lane.scrollLeft += e.deltaMode === 1 ? d * 16 : d;
+      }, { passive: false });
     }
 
     // A frame's step is often under a pixel, so the position is kept as a

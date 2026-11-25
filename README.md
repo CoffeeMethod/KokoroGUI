@@ -50,7 +50,7 @@ https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
 ## What's new
 
-Unreleased:
+In 4.0.0-beta.3:
 
 -   A [command line](docs/cli.html) that speaks text into a WAV and renders a `[Speaker]:` script into a `.tbaw` and a mixdown,
     then regenerates only the paragraphs that changed when you update it
@@ -126,33 +126,6 @@ Unreleased:
 -   Record a guide take on a clip after a three-beep count-in, with a pre-roll (block menu, `R` or Rec): it plays
     without the beeps and the clip never goes stale while it's the active take
 
-In 4.0.0-beta.2:
-
--   Subtitle import, Fit to slot, the original dialogue and a reference video, for dubbing
--   A mixer: mute, solo, faders, pan, automation, fades and crossfades, in stereo
--   Takes, pauses between clips, and ripple when a regenerated clip changes length
--   A character library shared by every project, and an engine choice per character
--   Subprojects, so a book can be one project per chapter
--   Music beds with ducking, and editing a recording as text
--   Convolution reverb, markers, loops, timecode and word-by-word highlighting
--   Whisper as the default transcriber, and text split at sentence ends near a word count
--   An Engine row in Settings, a Voices tab for any engine, and each engine's own language and
-    model settings
--   Kokoro optional: a project whose engine isn't installed opens and plays, and engines can be
-    plugins
--   Transcript details (Options menu): segment boundaries, lexicon rewrites, gaps, and each clip's
-    length and status
--   Typing, scrolling and timeline updates stay fast in long projects, plus Options > Force refresh
--   A clip made from a `[Speaker:FX]:` line no longer reads the tag aloud, and the tag's FX is
-    applied to the clip
--   On Windows, an impulse response name with a colon is refused instead of loading a different file
--   Options > Settings... holds the program and project settings in an OBS-style window; the
-    Voice & Clip tab keeps only the voice
--   An FX change in a long project renders in the background instead of freezing the window, and
-    undoing a character change or a text replace copies only what the edit touched
--   Opening a `.tbaw` whose project id is a path is refused before it touches any folder, and an edit made while Save runs
-    stays Unsaved instead of being marked saved
-
 The [changes page](docs/changes.html) has the full detail for every version, including what the
 update does to existing projects.
 
@@ -163,7 +136,7 @@ need [ffmpeg](https://ffmpeg.org/download.html) on your PATH. Without it the M4B
 Export dialog.
 
 ```bash
-git clone --branch 4.0.0-beta.2 --depth 1 https://github.com/CoffeeMethod/KokoroGUI.git
+git clone --branch 4.0.0-beta.3 --depth 1 https://github.com/CoffeeMethod/KokoroGUI.git
 cd KokoroGUI
 python -m venv .venv
 .venv\Scripts\activate          # Windows
@@ -171,7 +144,7 @@ source .venv/bin/activate       # macOS / Linux
 pip install -r requirements.txt
 ```
 
-`4.0.0-beta.2` is the latest beta tag. `--branch` takes a tag name, and dropping it gets the default branch. If `torch` gives you trouble, follow
+`4.0.0-beta.3` is the latest beta tag. `--branch` takes a tag name, and dropping it gets the default branch. If `torch` gives you trouble, follow
 [pytorch.org](https://pytorch.org/get-started/locally/) for your OS and GPU.
 
 Kokoro is optional. Without the `kokoro` package (and eSpeak NG) the app
@@ -218,14 +191,14 @@ pytest                                     # fast suite, mocked, no model needed
 pytest -m integration tests/integration -s # real generation, needs eSpeak NG
 ```
 
-CI runs the fast suite on Windows, Ubuntu and macOS, without the Qt widget tests. Those run locally,
-headless. The MCP server's tests skip unless `requirements-mcp.txt` is installed, and CI doesn't install it.
+CI runs the fast suite on Windows, Ubuntu and macOS, without the Qt widget tests. Those run in a separate
+Linux job that doesn't block a merge. The MCP server's tests skip unless `requirements-mcp.txt` is installed, and CI doesn't install it.
 The integration tests write each sample next to a transcript under `tests/output/` for
 you to listen to.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Security reports go through the repository's Security tab,
+See [CONTRIBUTING.md](CONTRIBUTING.md). Pull requests go to the latest release branch, not `main`. Security reports go through the repository's Security tab,
 not Issues ([SECURITY.md](SECURITY.md)).
 
 ## Built with

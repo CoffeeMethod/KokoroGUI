@@ -12,6 +12,7 @@
 
 ## Checklist
 
+- [ ] This targets the latest release branch (for example `4.0.0-beta.3`), not `main`
 - [ ] `pytest` passes locally (the fast suite; CI runs it on Windows, Linux and macOS)
 - [ ] `ruff check .` is clean
 - [ ] New settings are threaded through `_assemble_config` and `tests/gui_qt/test_qt_config_assembly.py`

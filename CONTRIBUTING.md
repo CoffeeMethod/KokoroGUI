@@ -3,11 +3,28 @@
 Bug reports and pull requests are welcome. Questions go in Discussions, security reports through
 the Security tab (see [SECURITY.md](SECURITY.md)).
 
+## Which branch to work on
+
+`main` only changes when a release is merged into it. Don't push to `main`, and don't open a pull request against it.
+
+Work happens on a branch named after the next release, such as `4.0.0-beta.3`. Start from the one with the highest version
+number and open your pull request against it. Your change reaches `main` when that release is merged. This lists the release
+branches, highest version first:
+
+```bash
+git fetch origin
+git branch -r --list "origin/[0-9]*" --sort=-version:refname
+```
+
+Check again before you open the pull request, since a newer release branch may have appeared. If the highest one is already
+released (it has a tag by that name) and there's no newer one, ask in Discussions where your change should go.
+
 ## Setup
 
 ```bash
 git clone https://github.com/CoffeeMethod/KokoroGUI.git
 cd KokoroGUI
+git switch 4.0.0-beta.3                            # the latest release branch, see above
 python -m venv .venv && . .venv/Scripts/activate   # or .venv/bin/activate
 pip install -r requirements.txt -r requirements-test.txt
 python main.py
@@ -28,12 +45,11 @@ from your machine, so read it first.
 pytest
 ```
 
-That's the fast suite: the Kokoro pipeline is mocked, playback is mocked, no model download, runs
-in well under a minute. The Qt tests run headless (`tests/gui_qt/conftest.py` sets
+That's the fast suite: the Kokoro pipeline is mocked, playback is mocked, no model download. The Qt tests run headless (`tests/gui_qt/conftest.py` sets
 `QT_QPA_PLATFORM=offscreen`), so no display is needed. CI runs the suite on `windows-latest`,
 `ubuntu-latest` and `macos-latest` without `tests/gui_qt/` (`pytest --ignore=tests/gui_qt -p no:pytest-qt`). The GUI
 tests run in a separate `gui` job on Ubuntu, which is not a required check, so a red `gui` job doesn't block a merge.
-Run plain `pytest` before you push, `tests/gui_qt/` included (about 4 minutes).
+Run plain `pytest` before you push, `tests/gui_qt/` included (several minutes).
 
 Three conventions the suite enforces, all from `tests/conftest.py`:
 
@@ -65,9 +81,10 @@ opt-in. It isn't run in CI.
 
 ## Pull requests
 
-- Branch from `main`, one change per PR.
+- Branch from the latest release branch and target it, never `main` (see [Which branch to work on](#which-branch-to-work-on)).
+  One change per PR.
 - `pytest` green locally before you push (that includes `tests/gui_qt/`; CI runs it in a non-required job). CI has
-  to pass on both OSes to merge.
+  to pass on Windows, Linux and macOS to merge.
 - A new setting is threaded through `QtTTSApp._assemble_config` and covered in
   `tests/gui_qt/test_qt_config_assembly.py`.
 - Logic that isn't about widgets goes in `kokoro_gui/core/`, not in a dock or `app.py`. A dock reads its widgets into plain
@@ -75,8 +92,8 @@ opt-in. It isn't run in CI.
   `qt/app.py`, `qt/subprojects.py`, `qt/docks/` or `audio/transport.py`, and `tests/core/test_imports.py` and
   `tests/headless/test_imports.py` check that.
 - If a user can see the change, update two files: a one-line bullet in the README's "What's new"
-  (and its Features list if a line there is now wrong), and the full entry under "Unreleased" in
-  `docs/changes.html`.
+  (and its Features list if a line there is now wrong), and the full entry in the top version of
+  `docs/changes.html`. If that version already has a tag, start an "Unreleased" one above it.
 - Run `ruff check .` before a PR (`pip install -r requirements-test.txt` has it). It checks for
   syntax errors, undefined names, unused imports and variables, and mutable defaults, and CI runs
   it. There is no formatter: match the style of the file you're in.
