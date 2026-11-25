@@ -707,3 +707,26 @@ def test_cache_key_hit_measures_onset_and_tail_from_the_file(engine, isolated_di
     assert hit["path"] == first["path"]
     assert hit["onset_s"] == pytest.approx(first["onset_s"], abs=1e-4)
     assert hit["tail_s"] == pytest.approx(first["tail_s"], abs=1e-4)
+
+
+# -- headless (Claude/PLAN_headless_cli_mcp.md, H6) ----------------------------------
+
+
+def test_a_headless_update_of_one_paragraph_in_three_is_one_model_call(isolated_dirs, tmp_path, monkeypatch):
+    from kokoro_gui.engines.dummy import DummyModel
+    from kokoro_gui.headless.render import render_script
+
+    spoken = []
+    real = DummyModel.synthesize
+
+    def synthesize(self, text, *args):
+        spoken.append(text)
+        return real(self, text, *args)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(DummyModel, "synthesize", synthesize)
+    first = render_script("One.\n\nTwo.\n\nThree.", engine="dummy")
+    assert (first.regenerated, spoken) == (3, ["One.", "Two.", "Three."])
+    again = render_script("One.\n\nTwo, but longer.\n\nThree.", engine="dummy", update=first.project_path)
+    assert (again.clips, again.regenerated, spoken[3:]) == (3, 1, ["Two, but longer."])
+    assert [w["word"] for w in again.words] == ["One.", "Two,", "but", "longer.", "Three."]

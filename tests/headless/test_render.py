@@ -3,7 +3,6 @@ fake engine, the checks before anything is generated, and what a failure or a
 cancel leaves behind at each stage. No model and no network."""
 import json
 import os
-import socket
 import sys
 import threading
 import zipfile
@@ -18,99 +17,18 @@ from kokoro_gui.core import keys as core_keys
 from kokoro_gui.core import render as core_render
 from kokoro_gui.daw import arrangement, library, mixdown, revision
 from kokoro_gui.engine import asr, runtime
-from kokoro_gui.engine.runner import EngineRunner, ModelBase
-from kokoro_gui.engines import registry
-from kokoro_gui.engines.base import (
-    BackendHooksMixin, ConfigField, ConfigFieldType, EngineCapabilities, Synthesis, VoiceInfo, common_fields,
-)
+from kokoro_gui.headless import paths
 from kokoro_gui.headless import render as render_module
-from kokoro_gui.headless.errors import HeadlessError
 from kokoro_gui.headless.host import ALLOW_DOWNLOAD_ENV, Host
 from kokoro_gui.headless.render import render_script
 from kokoro_gui.qt import project as project_io
 
+from .support import SCRIPT, assert_nothing_left, failing, files_under, keys_of, reopen, working_dirs
+
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SCRIPT = "The door opens.\n\n[Sam]: Who is there?\n\n[Ann]: Only me, with the post."
-VOICES = {"a": ["v1", "v2"], "b": ["w1"]}
 
 
-@pytest.fixture(autouse=True)
-def offline(monkeypatch):
-    """No network. Loopback passes: asyncio's self-pipe uses it on Windows."""
-    real = socket.socket.connect
-    attempts = []
-
-    def connect(self, address):
-        if isinstance(address, tuple) and address and address[0] in ("127.0.0.1", "::1", "localhost"):
-            return real(self, address)
-        attempts.append(address)
-        raise OSError(f"network: {address}")
-
-    monkeypatch.setattr(socket.socket, "connect", connect, raising=False)
-    monkeypatch.delenv(ALLOW_DOWNLOAD_ENV, raising=False)
-    yield
-    assert attempts == []
-
-
-@pytest.fixture
-def fake(isolated_dirs):
-    """An engine "fake" whose load and speak run the test's functions. Speech
-    is 2400 frames a word, and `words` decides whether it has word times."""
-    control = SimpleNamespace(load=None, speak=None, words=True, spoken=[], voices=VOICES, closed=0)
-
-    class Model(ModelBase):
-        engine_id = "fake"
-        sample_rate = 24000
-
-        def load(self, lang_code, device):
-            if control.load:
-                control.load()
-            return True
-
-        def synthesize(self, text, voice, speed, lang_code, params):
-            control.spoken.append((text, voice, speed, lang_code))
-            if control.speak:
-                control.speak(text)
-            spoken = text.split()
-            t = np.arange(2400 * len(spoken)) / 24000.0
-            words = [[w, i * 0.1, (i + 1) * 0.1] for i, w in enumerate(spoken)] if control.words else []
-            return Synthesis((0.3 * np.sin(2 * np.pi * 330 * t)).astype(np.float32), words)
-
-        def engine_version(self):
-            return "1"
-
-    class Adapter(BackendHooksMixin):
-        id = "fake"
-        display_name = "Fake"
-        capabilities = EngineCapabilities()
-
-        def __init__(self):
-            self._engine = EngineRunner(Model())
-
-        @property
-        def engine(self):
-            return self._engine
-
-        @classmethod
-        def get_config_schema(cls):
-            return [ConfigField("lang_code", "Language", ConfigFieldType.CHOICE, default="a", group="Generation"),
-                    ConfigField("voice", "Voice", ConfigFieldType.CHOICE, default="v1", group="Generation"),
-                    *common_fields(caching_default=False)]
-
-        def builtin_voices(self, lang_code=None):
-            return [VoiceInfo(id=name, display_name=name, lang_code=code) for code, names in control.voices.items()
-                    for name in names if lang_code in (None, code)]
-
-        def cancel(self):
-            self._engine.cancel()
-
-        def stop(self):
-            control.closed += 1
-            super().stop()
-
-    registry.register_engine("fake", Adapter, display_name="Fake")
-    yield control
-    registry.unregister_engine("fake")
+pytestmark = pytest.mark.usefixtures("offline")
 
 
 @pytest.fixture
@@ -119,50 +37,6 @@ def presets(tmp_path):
     folder.mkdir(parents=True)
     (folder / "Radio.json").write_text(json.dumps({"highpass_enabled": True, "highpass_freq": 900}))
     return folder
-
-
-def files_under(folder):
-    return sorted(os.path.relpath(os.path.join(d, f), folder).replace("\\", "/")
-                  for d, _dirs, names in os.walk(folder) for f in names)
-
-
-def working_dirs():
-    root = project_io.projects_root()
-    return [os.path.join(root, name) for name in os.listdir(root)] if os.path.isdir(root) else []
-
-
-def reopen(path):
-    """The bundle from scratch: its working folder goes first."""
-    info = project_io.inspect_bundle(path)
-    project_dir = os.path.join(project_io.projects_root(), info.project_id)
-    project_io.delete_project_dir(project_dir)
-    os.makedirs(project_dir)
-    project_io.extract_small(info, project_dir)
-    project_io.extract_audio(info, project_dir)
-    return project_io.finish_open(info, project_dir)
-
-
-def keys_of(path):
-    with zipfile.ZipFile(path) as zf:
-        data = json.loads(zf.read("document.json"))
-    return [s["cache_key"] for clip in data["clips"] for s in clip["segments"]]
-
-
-def failing(script=SCRIPT, **kwargs):
-    if "host" not in kwargs:
-        kwargs.setdefault("engine", "fake")
-    with pytest.raises(HeadlessError) as caught:
-        render_script(script, **kwargs)
-    return caught.value
-
-
-def assert_nothing_left(tmp_path, working_folder):
-    """No file or folder at the output, no lock, no samples kept."""
-    assert not (tmp_path / "audio_output").exists()
-    folders = working_dirs()
-    assert len(folders) == (1 if working_folder else 0)
-    assert not any(project_io.is_locked(d) for d in folders)
-    assert post._RENDER_CACHE == {}
 
 
 # -- what a render makes -----------------------------------------------------------
@@ -529,7 +403,7 @@ def test_an_output_folder_that_cannot_be_made(fake, monkeypatch):
     def denied(*_args, **_kwargs):
         raise PermissionError("no")
 
-    monkeypatch.setattr(render_module.paths, "new_render_dir", denied)
+    monkeypatch.setattr(paths, "new_render_dir", denied)
     assert failing().code == "bad_arguments"
     assert working_dirs() == []
 

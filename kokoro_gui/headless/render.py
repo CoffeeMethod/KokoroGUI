@@ -15,6 +15,11 @@ Every failure is a `HeadlessError`. The mixdown is written under a private
 name and gets its own once the bundle is saved, and a failure or a cancel takes
 back every file and folder this call put at the output path. The working folder
 stays (grill PG24), after a failure too, and its lock is always released.
+
+With `update` the project is an existing `.tbaw`: the document is rebuilt from
+the new script (`update.py`), a paragraph whose key and files are unchanged
+keeps its segments, and the bundle is saved in place. A failure puts the bundle,
+the mixdown and the working folder back.
 """
 from __future__ import annotations
 
@@ -44,8 +49,10 @@ from . import paths
 from .clean import normalise_text
 from .errors import HeadlessError
 from .host import Host, download_gate, downloads_allowed
+from .output import Output
 from .results import RenderResult
 from .script import build_document
+from .update import Opened, carry_over, check_update, merged_cast, reuse_segments
 
 log = logging.getLogger(__name__)
 
@@ -56,20 +63,24 @@ _FILE_SUFFIXES = (".tbaw", ".json", ".wav", ".flac", ".mp3", ".ogg", ".m4b")
 
 
 class _FxPresets(Collection):
-    """The names of the FX presets in `directory`. Nothing is read until
-    something is looked up. A name counts when it is a plain file stem, its file
-    stays inside the folder and it holds preset values."""
+    """The names of the FX presets in `directory` and in an open project's
+    `fx/`, which goes first. Nothing is read until something is looked up. A
+    name counts when it is a plain file stem, its file stays inside the folder
+    and it holds preset values."""
 
-    def __init__(self, directory: str):
-        self.directory = directory
+    def __init__(self, directory: str, project_dir: Optional[str] = None):
+        self.project_dir = project_dir
+        self.directories = [os.path.join(project_dir, project_io.FX_DIR)] if project_dir else []
+        self.directories.append(directory)
 
     def __contains__(self, name) -> bool:
         if clean_stem(name) is None or name not in self._stems():
             return False
-        root = os.path.realpath(self.directory)
+        folder = next(d for d in self.directories if os.path.lexists(os.path.join(d, f"{name}.json")))
+        root = os.path.realpath(folder)
         path = os.path.realpath(os.path.join(root, f"{name}.json"))
         return os.path.dirname(path) == root and os.path.isfile(path) \
-            and bool(core_fx.load_fx_preset_values(name, None, self.directory))
+            and bool(core_fx.load_fx_preset_values(name, self.project_dir, self.directories[-1]))
 
     def __iter__(self):
         return iter(sorted(n for n in self._stems() if n in self))
@@ -77,69 +88,14 @@ class _FxPresets(Collection):
     def __len__(self) -> int:
         return sum(1 for _name in self)
 
-    def _stems(self) -> list:
-        try:
-            return [f[:-5] for f in os.listdir(self.directory) if f.endswith(".json")]
-        except OSError:
-            return []
-
-
-class _Output:
-    """The files this call writes and the folders it makes. `discard` takes
-    back exactly those; a file that was there first is never replaced."""
-
-    def __init__(self, directory: Optional[str], stem: str):
-        target = directory or paths.renders_root()
-        self._made = [d for d in _with_parents(target) if not os.path.isdir(d)]
-        self._files: list = []
-        if directory is None:
-            self.dir = paths.new_render_dir(stem)
-            self._made.append(self.dir)
-        else:
-            os.makedirs(directory, exist_ok=True)
-            self.dir = directory
-        self.project_path = os.path.join(self.dir, stem + project_io.DEFAULT_EXTENSION)
-        self.mixdown_path = os.path.join(self.dir, stem + ".wav")
-        try:
-            for path in (self.project_path, self.project_path + ".tmp", self.mixdown_path):
-                self._refuse_existing(path)
-        except HeadlessError:
-            self.discard()
-            raise
-
-    @staticmethod
-    def _refuse_existing(path: str) -> None:
-        if os.path.lexists(path):
-            raise HeadlessError("bad_arguments", f"{path} already exists")
-
-    def claim(self, *names: str) -> None:
-        """Called right before writing: another render may have taken the
-        name since the first check."""
-        for path in names:
-            self._refuse_existing(path)
-        self._files.extend(names)
-
-    def discard(self) -> None:
-        for path in self._files:
+    def _stems(self) -> set:
+        stems: set = set()
+        for directory in self.directories:
             try:
-                os.remove(path)
-            except FileNotFoundError:
-                pass
+                stems.update(f[:-5] for f in os.listdir(directory) if f.endswith(".json"))
             except OSError:
-                log.warning("couldn't remove %s", path)
-        for directory in reversed(self._made):
-            try:
-                os.rmdir(directory)
-            except OSError:  # gone, or someone else uses it
-                pass
-
-
-def _with_parents(path: str) -> list:
-    """`path` and every folder above it, outermost first."""
-    chain = [os.path.abspath(path)]
-    while os.path.dirname(chain[-1]) != chain[-1]:
-        chain.append(os.path.dirname(chain[-1]))
-    return chain[::-1]
+                continue
+        return stems
 
 
 def _bad(message: str, valid=None) -> HeadlessError:
@@ -209,18 +165,21 @@ def _cast_values(cast, key: str):
             yield name, value
 
 
-def _check_voices(cast, document, backend, lang_code) -> list:
+def _check_voices(cast, document, backend, lang_code, project_dir=None) -> list:
     """Raises `unknown_voice` for a voice the engine doesn't list in any
     language, also for a cast entry no line uses. Returns a warning per speaker
     whose voice belongs to another language. A voice is a name from the list
     and never a path, so only the backend turns one into a file."""
     known = core_engines.voice_names(backend, None)
+    store = getattr(backend, "voice_store", None)
+    local = [v for v in store.list_voices(project_dir) if v not in known] if store and project_dir else []
+    known = known + local
     used = [(c.name, (c.preset_data or {}).get("voice")) for c in document.characters]
     for name, voice in [*_cast_values(cast, "voice"), *used]:
         if voice not in known:
             what = f"no voice {voice!r}" if voice else "no default voice"
             raise HeadlessError("unknown_voice", f"{name!r}: {backend.display_name} has {what}", valid=known)
-    in_language = core_engines.voice_names(backend, lang_code)
+    in_language = core_engines.voice_names(backend, lang_code) + local
     return [f"Speaker {name!r}: {voice!r} is not a {lang_code!r} voice; it is read with that language's rules."
             for name, voice in used if voice not in in_language]
 
@@ -286,17 +245,21 @@ def _failed_clip(document, outcomes) -> Optional[HeadlessError]:
 class _Render:
     """One `render_script` call: what the stages share."""
 
-    def __init__(self, host: Host, backend, document, warnings: list, *, title: str, poll, on_progress):
+    def __init__(self, host: Host, backend, document, warnings: list, *, title: str, poll, on_progress,
+                 opened: Optional[Opened] = None):
+        self.opened = opened
         self.host = host
         self.backend = backend
         self.document = document
         self.warnings = warnings
         self.poll = poll
         self.on_progress = on_progress
-        self.project_settings = {"title": title} if title else {}
-        self.project_dir = None
-        self.project_id = None
-        self.lock = None
+        self.project_settings = dict(opened.settings) if opened else {}
+        if title:
+            self.project_settings["title"] = title
+        self.project_dir = opened.project_dir if opened else None
+        self.project_id = opened.info.project_id if opened else None
+        self.lock = opened.lock if opened else None
         self.stage = "preparing"
         self._memo: dict = {}
         self._inputs = core_config.GenerationInputs.defaults()
@@ -329,6 +292,10 @@ class _Render:
 
     # -- stages ----------------------------------------------------------------
 
+    def install_keys(self) -> None:
+        core_keys.install_key_fn(self.document, self._backend_for, self._generation_config,
+                                 self._generation_config)
+
     def begin(self) -> None:
         self.stage = "making the working folder"
 
@@ -337,8 +304,7 @@ class _Render:
             self.project_dir, self.project_id, self.lock = project_dir, project_id, lock
 
         project_io.begin_project_dir(self.document, self.project_settings, on_locked=locked)
-        core_keys.install_key_fn(self.document, self._backend_for, self._generation_config,
-                                 self._generation_config)
+        self.install_keys()
 
     def generate(self, allow_download) -> int:
         """Generates the stale clips and returns how many there were."""
@@ -358,7 +324,8 @@ class _Render:
             outcomes = self.host.generate_clips(engine_id, items, progress=progress, partial=True,
                                                 allow_download=allow_download, cancel=self.poll)
             core_generation.apply_outcomes(self.document, outcomes, self._apply)
-            self.autosave()  # what did land, also when the rest failed
+            if self.opened is None:
+                self.autosave()  # what did land, also when the rest failed
             failure = _failed_clip(self.document, outcomes)
             if failure is not None:
                 raise failure
@@ -409,12 +376,15 @@ class _Render:
     def save(self, path: str) -> None:
         self.stage = "saving"
         _stop_if_cancelled(self.poll)
+        if self.opened is not None:
+            self.opened.mark_dirty()
         self.autosave()
         try:
             result = project_io.save_project(
                 self.document, path, self.project_settings, self.project_dir, self.project_id,
                 backend_for=self.host.engines.get, fx_presets_dir=FX_PRESETS_DIR,
-                known_engine_ids=registry.list_engines(), project_fx=self._project_fx)
+                known_engine_ids=registry.list_engines(), project_fx=self._project_fx,
+                previous_manifest=self.opened.info.manifest if self.opened else None)
         except project_io.ProjectError as e:
             if isinstance(e.__context__, PermissionError):
                 # Its message points at the `.tmp`, which `discard` removes.
@@ -433,8 +403,8 @@ class _Render:
 
 
 def render_script(script: str, *, host: Optional[Host] = None, engine: Optional[str] = None,
-                  cast: Optional[Mapping] = None, out=None, title: Optional[str] = None, channels: int = 1,
-                  align: bool = False, settings: Optional[dict] = None, allow_download: Optional[bool] = None,
+                  cast: Optional[Mapping] = None, out=None, update=None, discard_session: bool = False,
+                  title: Optional[str] = None, channels: int = 1, align: bool = False, settings: Optional[dict] = None, allow_download: Optional[bool] = None,
                   on_progress: Optional[Callable[[str, int, int], None]] = None,
                   cancel: Optional[Callable[[], bool]] = None) -> RenderResult:
     """Renders `script` to `<slug>.tbaw` and `<slug>.wav` and returns where
@@ -448,6 +418,11 @@ def render_script(script: str, *, host: Optional[Host] = None, engine: Optional[
     - `out` is a folder (`paths.check_out_path`), made when it's missing. None
       makes `audio_output/headless/<stamp>_<slug>/` (grill PG22). Existing files
       are not replaced. The slug is the title's, else the script's first words.
+    - `update` is an existing `.tbaw` (the same path check) to rebuild and save
+      in place, instead of `out`. A speaker the cast doesn't name keeps the
+      project's settings. `unsaved_session` when the app left unsaved changes in
+      its working folder, unless `discard_session`. `regenerated` counts the
+      clips the engine made again.
     - `channels` is 1 or 2 (grill PG23).
     - `align` adds Whisper word times where the engine gives none, when the
       model is in the cache or downloads are allowed.
@@ -457,7 +432,7 @@ def render_script(script: str, *, host: Optional[Host] = None, engine: Optional[
 
     Raises `HeadlessError`: `bad_arguments`, `out_not_allowed`,
     `engine_not_installed`, `unknown_voice`, `model_not_downloaded`,
-    `project_locked`, `generation_failed` (mixing and saving too) or
+    `project_locked`, `unsaved_session`, `generation_failed` (mixing and saving too) or
     `interrupted`."""
     if not isinstance(script, str) or not script.strip():
         raise _bad("the script is empty" if isinstance(script, str) else "the script must be text")
@@ -468,53 +443,76 @@ def render_script(script: str, *, host: Optional[Host] = None, engine: Optional[
     if host is not None and settings is not None:
         raise _bad("pass settings to the host, not to a render on one")
     title = _clean_title(title)
+    if out is not None and update is not None:
+        raise _bad("pass out or update, not both")
     out_dir = _check_out(out)
+    update_path = check_update(update)
     poll = _poll(cancel)
 
     own_host = host is None
     if own_host:
         host = Host(settings=settings, allow_download=allow_download)
-    render = output = None
+    render = output = opened = None
     try:
         try:
             _stop_if_cancelled(poll)
             backend = host.backend(engine, allow_download=allow_download)
             engine_settings = core_engines.engine_settings(host.settings, backend.id)
-            known_fx = _FxPresets(FX_PRESETS_DIR)
+            whole_cast, kept = cast, set()
+            if update_path is not None:
+                try:
+                    opened = Opened(update_path, discard_session)
+                except (project_io.ProjectLockedError, HeadlessError):
+                    raise
+                except (project_io.ProjectError, OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+                    raise _bad(f"the project can't be opened: {e}") from e
+                whole_cast, kept = merged_cast(cast, opened.document, backend)
+            project_dir = opened.project_dir if opened else None
+            known_fx = _FxPresets(FX_PRESETS_DIR, project_dir)
             try:
-                document, warnings = build_document(script, backend, cast, engine_settings=engine_settings,
+                document, warnings = build_document(script, backend, whole_cast, engine_settings=engine_settings,
                                                     known_fx=known_fx)
             except ValueError as e:
                 raise _bad(str(e)) from e
             if not document.clips:
                 raise _bad("the script has nothing to speak")
             _stop_if_cancelled(poll)
-            warnings += _check_voices(cast, document, backend, engine_settings.get("lang_code"))
+            if opened:
+                carry_over(document, opened.document, kept)
+            warnings += _check_voices(cast, document, backend, engine_settings.get("lang_code"), project_dir)
             _check_cast_fx(cast, known_fx)
 
-            render = _Render(host, backend, document, warnings, title=title, poll=poll, on_progress=on_progress)
+            render = _Render(host, backend, document, warnings, title=title, poll=poll, on_progress=on_progress,
+                             opened=opened)
             try:
-                output = _Output(out_dir, paths.slugify(title or document.text[:paths.MAX_SLUG * 2]))
+                output = Output.for_update(opened.path) if opened else \
+                    Output(out_dir, paths.slugify(title or document.text[:paths.MAX_SLUG * 2]))
             except OSError as e:
                 raise _bad(f"the output folder can't be made: {e}") from e
+            output.check()
             # Before the working folder, so a model that isn't there leaves none.
             host.load(backend.id, allow_download=allow_download, cancel=poll)
             _stop_if_cancelled(poll)
-            render.begin()
+            if opened:
+                render.install_keys()
+                reuse_segments(document, opened.document, render._generation_config)
+            else:
+                render.begin()
             regenerated = render.generate(allow_download)
             if align:
                 render.stage = "aligning"
                 allow = downloads_allowed(host.allow_download if allow_download is None else allow_download)
                 _align_words(document, allow, poll, on_progress, warnings)
             arrangement = render.arrange()
-            part = os.path.join(output.dir, f".{render.project_id}.part")
-            output.claim(part)
+            token = render.project_id + "-" + os.urandom(4).hex()
+            part = os.path.join(output.dir, f".{token}.part")
+            output.claim(token, part)
             mixed = render.mix(arrangement, part, channels)
-            output.claim(output.project_path, output.project_path + ".tmp")
+            output.claim(token, output.project_path, output.project_path + ".tmp")
             render.save(output.project_path)
-            output.claim(output.mixdown_path)
+            output.claim(token, output.mixdown_path)
             project_io._replace_with_retries(part, output.mixdown_path)
-            return RenderResult(
+            result = RenderResult(
                 project_path=output.project_path, mixdown_path=output.mixdown_path, out_dir=output.dir,
                 duration_s=mixed.duration_s, sample_rate=backend.sample_rate, channels=channels, engine=backend.id,
                 clips=len(document.clips), regenerated=regenerated,
@@ -522,9 +520,13 @@ def render_script(script: str, *, host: Optional[Host] = None, engine: Optional[
                 words=[{"word": word, "start": round(start, 4), "end": round(end, 4)}
                        for start, end, word in word_rows(arrangement)],
                 warnings=warnings)
+            output.commit()
+            return result
         except BaseException as e:
             if output is not None:
                 output.discard()
+            if opened is not None:
+                opened.restore()
             if not isinstance(e, (Exception, KeyboardInterrupt)):
                 raise
             failure = render.failure(e) if render is not None else _mapped(e, "preparing")
@@ -537,5 +539,6 @@ def render_script(script: str, *, host: Optional[Host] = None, engine: Optional[
             if own_host:
                 host.close()  # its jobs write into the working folder
         finally:
-            if render is not None and render.lock is not None:
-                render.lock.release()
+            lock = render.lock if render is not None else opened.lock if opened is not None else None
+            if lock is not None:
+                lock.release()
