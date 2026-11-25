@@ -69,6 +69,11 @@ def _is_under(path: str, parent: str) -> bool:
         return False
 
 
+def is_render(path: str) -> bool:
+    """True for a path inside the renders root, links followed."""
+    return _is_under(_key(path), _key(renders_root()))
+
+
 _SEPS = "\\/"
 _DEVICE = re.compile(r"^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|(?:COM|LPT)[1-9¹²³])$", re.IGNORECASE)
 
