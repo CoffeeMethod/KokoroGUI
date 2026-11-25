@@ -29,6 +29,8 @@ from collections.abc import Collection, Mapping
 from dataclasses import replace
 from typing import Callable, Optional
 
+import soundfile as sf
+
 from kokoro_gui.audio import post
 from kokoro_gui.core import config as core_config
 from kokoro_gui.core import engines as core_engines
@@ -50,7 +52,9 @@ from .clean import normalise_text
 from .errors import HeadlessError
 from .host import Host, download_gate, downloads_allowed
 from .output import Output
+from .player import Playback, Player
 from .results import RenderResult
+from .scratch import scratch_path
 from .script import build_document
 from .update import Opened, carry_over, check_update, merged_cast, reuse_segments
 
@@ -246,8 +250,9 @@ class _Render:
     """One `render_script` call: what the stages share."""
 
     def __init__(self, host: Host, backend, document, warnings: list, *, title: str, poll, on_progress,
-                 opened: Optional[Opened] = None):
+                 opened: Optional[Opened] = None, playback: Optional[Playback] = None):
         self.opened = opened
+        self.playback = playback or Playback("off", None)
         self.host = host
         self.backend = backend
         self.document = document
@@ -319,19 +324,57 @@ class _Render:
             done.append(clip_id)
             _quietly(self.on_progress, "generate", len(done), total)
 
-        for engine_id, (_backend, items) in batch.groups.items():
+        for engine_id in batch.groups:
             self.host.load(engine_id, allow_download=allow_download, cancel=self.poll)
-            outcomes = self.host.generate_clips(engine_id, items, progress=progress, partial=True,
-                                                allow_download=allow_download, cancel=self.poll)
-            core_generation.apply_outcomes(self.document, outcomes, self._apply)
-            if self.opened is None:
-                self.autosave()  # what did land, also when the rest failed
-            failure = _failed_clip(self.document, outcomes)
-            if failure is not None:
-                raise failure
+        if self.playback.streaming:
+            self._stream(batch, progress, allow_download)
+        else:
+            for engine_id, (_backend, items) in batch.groups.items():
+                self._generate_items(engine_id, items, progress, allow_download)
         _stop_if_cancelled(self.poll)
         _share_timing(self.document)
         return total
+
+    def _generate_items(self, engine_id, items, progress, allow_download) -> None:
+        outcomes = self.host.generate_clips(engine_id, items, progress=progress, partial=True,
+                                            allow_download=allow_download, cancel=self.poll)
+        core_generation.apply_outcomes(self.document, outcomes, self._apply)
+        if self.opened is None:
+            self.autosave()  # what did land, also when the rest failed
+        failure = _failed_clip(self.document, outcomes)
+        if failure is not None:
+            raise failure
+
+    def _stream(self, batch, progress, allow_download) -> None:
+        """Clip by clip in arrangement order, each queued as soon as it is
+        there, with its gap before it. A clip that needed no generating (an
+        update's) is queued in its place."""
+        pending = {item[0]: (engine_id, item) for engine_id, (_backend, items) in batch.groups.items()
+                   for item in items}
+        # The gaps don't depend on the lengths, which are guesses until a clip
+        # has audio. An overlap is a negative gap, and plays as none.
+        placed = self.arrange().placed
+        self.stage = "generating"
+        end = 0.0
+        for item in placed:
+            _stop_if_cancelled(self.poll)
+            if item.clip.id in pending:
+                engine_id, work = pending[item.clip.id]
+                self._generate_items(engine_id, [work], progress, allow_download)
+            self._queue(item.clip, item.start_s - end)
+            end = item.end_s
+
+    def _queue(self, clip, gap_s: float) -> None:
+        config = core_config.post_config(self._clip_config(clip))
+        segments = sorted((s for s in clip.segments if s.audio_path), key=lambda s: s.order_index)
+        if post.is_identity(config):
+            for number, segment in enumerate(segments):
+                self.playback.add(segment.audio_path, gap_s=0.0 if number else gap_s)
+            return
+        samples, rate = core_render.rendered_clip_samples(clip, config, self.backend.sample_rate)
+        path = scratch_path()
+        sf.write(path, samples, rate)
+        self.playback.add(path, gap_s=gap_s, delete=True)
 
     @staticmethod
     def _apply(clip, results) -> None:
@@ -404,7 +447,9 @@ class _Render:
 
 def render_script(script: str, *, host: Optional[Host] = None, engine: Optional[str] = None,
                   cast: Optional[Mapping] = None, out=None, update=None, discard_session: bool = False,
-                  title: Optional[str] = None, channels: int = 1, align: bool = False, settings: Optional[dict] = None, allow_download: Optional[bool] = None,
+                  title: Optional[str] = None, channels: int = 1, align: bool = False, play: str = "off",
+                  player: Optional[Player] = None, wait_for_playback: bool = False, interrupt: bool = False,
+                  settings: Optional[dict] = None, allow_download: Optional[bool] = None,
                   on_progress: Optional[Callable[[str, int, int], None]] = None,
                   cancel: Optional[Callable[[], bool]] = None) -> RenderResult:
     """Renders `script` to `<slug>.tbaw` and `<slug>.wav` and returns where
@@ -426,6 +471,10 @@ def render_script(script: str, *, host: Optional[Host] = None, engine: Optional[
     - `channels` is 1 or 2 (grill PG23).
     - `align` adds Whisper word times where the engine gives none, when the
       model is in the cache or downloads are allowed.
+    - `play` is "off", "after" (the mixdown) or "stream" (each clip as it lands,
+      on every engine, grill PG25). A given `player` stays open and only
+      `wait_for_playback` waits for it; without one this waits. `interrupt`
+      stops what the player has.
     - `on_progress(stage, done, total)`: stages "generate", "align", "mix" and
       "save". `cancel()` is polled while the engine runs, per segment aligned, per
       clip mixed, and between the stages.
@@ -448,11 +497,13 @@ def render_script(script: str, *, host: Optional[Host] = None, engine: Optional[
     out_dir = _check_out(out)
     update_path = check_update(update)
     poll = _poll(cancel)
+    playback = Playback(play, player, wait=wait_for_playback, interrupt=interrupt)
 
     own_host = host is None
     if own_host:
         host = Host(settings=settings, allow_download=allow_download)
     render = output = opened = None
+    done = False
     try:
         try:
             _stop_if_cancelled(poll)
@@ -483,7 +534,7 @@ def render_script(script: str, *, host: Optional[Host] = None, engine: Optional[
             _check_cast_fx(cast, known_fx)
 
             render = _Render(host, backend, document, warnings, title=title, poll=poll, on_progress=on_progress,
-                             opened=opened)
+                             opened=opened, playback=playback)
             try:
                 output = Output.for_update(opened.path) if opened else \
                     Output(out_dir, paths.slugify(title or document.text[:paths.MAX_SLUG * 2]))
@@ -521,8 +572,15 @@ def render_script(script: str, *, host: Optional[Host] = None, engine: Optional[
                        for start, end, word in word_rows(arrangement)],
                 warnings=warnings)
             output.commit()
+            done = True
+            if not playback.streaming:
+                playback.add(result.mixdown_path)
+            result.played, result.reason = playback.finish(poll)
             return result
         except BaseException as e:
+            playback.abort()
+            if done:  # the files are whole; only the playing was cut short
+                raise HeadlessError("interrupted", f"playback was interrupted; the files are in {output.dir}") from e
             if output is not None:
                 output.discard()
             if opened is not None:
