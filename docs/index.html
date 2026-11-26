@@ -664,7 +664,7 @@
           <div>
             <h3>Whole audiobooks, from import to M4B</h3>
             <p>Generate is now a queue: a book fills in eight clips at a time while you keep editing, or while you work in another project. A wizard imports the book, an Outline tab tracks its chapters, and a Proof tab has Whisper check the audio against the text. Export normalizes loudness, checks presets for ACX, Apple Podcasts, Spotify and YouTube, and writes stems, transcripts, tags and M4B chapters.</p>
-            <p>Also new: a <a class="link" href="cli.html">command line and MCP server</a>, LuxTTS as an optional engine, dialogue attribution, find and replace, several clips selected at once, guide takes, fixing a flub with a clone of the speaker, filler word removal, templates and credits, character sharing, and playback at 0.5x to 2x.</p>
+            <p>Also new: a <a class="link" href="cli.html">command line and MCP server</a>, LuxTTS as an optional engine, dialogue attribution, find and replace, several clips selected at once, guide takes, fixing a flub with a clone of the speaker, filler word removal, templates and credits, character sharing, playback at 0.5x to 2x, an Exports tab, your own named workspaces, a tooltip on every control, and a window that can be translated.</p>
           </div>
         </div>
         <div class="log-item">
@@ -775,6 +775,8 @@ sudo dnf install espeak-ng</pre>
           <div><h4>A GPU is optional</h4><p>Everything runs on the CPU. Options &gt; Device picks CUDA when PyTorch finds one.</p></div>
           <div><h4>First use downloads models</h4><p>Kokoro, Audio8 and LuxTTS come from Hugging Face; Audio8 loads with <code>trust_remote_code=True</code>. The app's Whisper is about 1.6 GB and asks before it downloads. LuxTTS downloads its own smaller Reference transcriber; see <a class="link" href="settings.html#luxtts">optional installation and setup</a>.</p></div>
           <div><h4>Smaller or offline transcription</h4><p>Copy <code>.env.example</code> to <code>.env</code>. Set <code>WHISPER_MODEL</code> to <code>small</code>, <code>base</code> or <code>tiny</code>, or <code>VOSK_MODEL_PATH</code> to use Vosk.</p></div>
+          <div><h4>Kokoro is optional</h4><p>Without the <code>kokoro</code> package and eSpeak NG the app still runs Audio8 and the test engine. A Kokoro project opens and plays its audio but doesn't generate.</p></div>
+          <div><h4>M4B needs ffmpeg</h4><p>Audiobook export to M4B runs the <a class="link" href="https://ffmpeg.org/download.html" target="_blank" rel="noopener">ffmpeg</a> on your PATH. Without it the format doesn't appear in the Export dialog.</p></div>
           <div><h4>Trouble with torch?</h4><p>Follow <a class="link" href="https://pytorch.org/get-started/locally/" target="_blank" rel="noopener">pytorch.org</a> for your OS and GPU before <code>pip install -r requirements.txt</code>.</p></div>
         </div>
       </div>
