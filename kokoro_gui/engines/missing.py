@@ -18,6 +18,7 @@ from typing import Optional
 
 from kokoro_gui.engines.base import BackendHooksMixin, EngineCapabilities
 from kokoro_gui.engines.registry import get_display_name
+from kokoro_gui.i18n import tr
 
 
 class MissingEngineError(RuntimeError):
@@ -87,9 +88,9 @@ class MissingBackend(BackendHooksMixin):
     def __init__(self, engine_id: str, reason: Optional[str] = None):
         self.id = engine_id
         self.name = get_display_name(engine_id)
-        self.display_name = f"{self.name} (not installed)"
+        self.display_name = tr("{name} (not installed)", name=self.name)
         self.reason = reason
-        self.message = f"{self.name} isn't installed"
+        self.message = tr("{name} isn't installed", name=self.name)
         self._engine = _MissingEngine(self)
 
     @property

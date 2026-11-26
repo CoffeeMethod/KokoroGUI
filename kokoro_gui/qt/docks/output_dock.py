@@ -18,9 +18,10 @@ from PySide6.QtWidgets import (
 
 import playback
 from kokoro_gui.daw import exports_log
+from kokoro_gui.i18n import N_, tr
 from kokoro_gui.qt import reveal
 
-COLUMNS = ("Project", "When", "Length", "Format")
+COLUMNS = (N_("Project"), N_("When"), N_("Length"), N_("Format"))
 _ENTRY = Qt.ItemDataRole.UserRole
 
 
@@ -40,7 +41,7 @@ def format_when(stamp: float) -> str:
 
 class OutputDock(QDockWidget):
     def __init__(self, app, parent=None):
-        super().__init__("Exports", parent)
+        super().__init__(tr("Exports"), parent)
         self.setObjectName("dock_output")
         self.app = app
         self._stale = True
@@ -50,12 +51,14 @@ class OutputDock(QDockWidget):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        self.project_only = QCheckBox("This project only")
+        self.project_only = QCheckBox(tr("This project only"))
+        self.project_only.setToolTip(tr("Hide the exports of other projects."))
         self.project_only.toggled.connect(lambda _checked: self.refresh())
         layout.addWidget(self.project_only)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(list(COLUMNS))
+        self.tree.setToolTip(tr("Every export, newest first. Double-click to play one."))
+        self.tree.setHeaderLabels([tr(name) for name in COLUMNS])
         self.tree.setRootIsDecorated(False)
         self.tree.setUniformRowHeights(True)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -71,11 +74,14 @@ class OutputDock(QDockWidget):
         layout.addWidget(self.tree, 1)
 
         buttons = QHBoxLayout()
-        self.play_button = QPushButton("Play")
+        self.play_button = QPushButton(tr("Play"))
+        self.play_button.setToolTip(tr("Play the selected export."))
         self.play_button.clicked.connect(self.toggle_play)
-        self.reveal_button = QPushButton("Show in Folder")
+        self.reveal_button = QPushButton(tr("Show in Folder"))
+        self.reveal_button.setToolTip(tr("Show the selected export in your file manager."))
         self.reveal_button.clicked.connect(self.reveal_selected)
-        self.delete_button = QPushButton("Delete")
+        self.delete_button = QPushButton(tr("Delete"))
+        self.delete_button.setToolTip(tr("Delete the selected export and the files written with it. Asks first."))
         self.delete_button.clicked.connect(self.delete_selected)
         for button in (self.play_button, self.reveal_button, self.delete_button):
             buttons.addWidget(button)
@@ -108,9 +114,9 @@ class OutputDock(QDockWidget):
             rows = [r for r in rows if r["project_path"] == here]
         self.tree.clear()
         for entry in rows:
-            title = entry["project_title"] or "Untitled"
+            title = entry["project_title"] or tr("Untitled")
             name = os.path.basename(entry["path"])
-            item = QTreeWidgetItem([f"{title}: {name}" + ("  (missing)" if entry["missing"] else ""),
+            item = QTreeWidgetItem([f"{title}: {name}" + (tr("  (missing)") if entry["missing"] else ""),
                                     format_when(entry["when"]), format_length(entry["duration_s"]),
                                     entry["format"].upper()])
             item.setData(0, _ENTRY, entry)
@@ -130,7 +136,7 @@ class OutputDock(QDockWidget):
         self.play_button.setEnabled(present)
         self.reveal_button.setEnabled(present)
         self.delete_button.setEnabled(present)
-        self.play_button.setText("Stop" if present and self._playing == entry["path"] else "Play")
+        self.play_button.setText(tr("Stop") if present and self._playing == entry["path"] else tr("Play"))
 
     # -- actions ------------------------------------------------------------
 
@@ -146,7 +152,8 @@ class OutputDock(QDockWidget):
                 playback.play(entry["path"])
             except Exception as e:  # noqa: BLE001 - a format the audio library can't read
                 self._playing = None
-                self.app.set_status(f"Can't play {os.path.basename(entry['path'])}: {e}", "error")
+                self.app.set_status(tr("Can't play {file}: {error}", file=os.path.basename(entry['path']), error=e),
+                                    "error")
             else:
                 self._playing = entry["path"]
         self._sync_buttons()
@@ -166,9 +173,9 @@ class OutputDock(QDockWidget):
             return False
         listing = "\n".join(os.path.basename(t) for t in targets)
         answer = QMessageBox.question(
-            self, "Delete export",
-            f"Delete these {len(targets)} file(s) from\n{os.path.dirname(targets[0])}?\n\n{listing}\n\n"
-            "This can't be undone.",
+            self, tr("Delete export"),
+            tr("Delete these {count} file(s) from\n{folder}?\n\n{listing}\n\n"
+               "This can't be undone.", count=len(targets), folder=os.path.dirname(targets[0]), listing=listing),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
         if answer != QMessageBox.StandardButton.Yes:
             return False
@@ -183,8 +190,8 @@ class OutputDock(QDockWidget):
                 failed += 1
         if not failed:
             exports_log.forget(self.app.exports_log_file, entry["path"])
-        self.app.set_status(f"Deleted {len(targets) - failed} file(s)." if not failed
-                            else f"Couldn't delete {failed} of {len(targets)} file(s).",
+        self.app.set_status(tr("Deleted {count} file(s).", count=len(targets) - failed) if not failed
+                            else tr("Couldn't delete {failed} of {count} file(s).", failed=failed, count=len(targets)),
                             "success" if not failed else "error")
         self.rebuild()
         return True

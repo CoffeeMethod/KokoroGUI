@@ -26,15 +26,16 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.engine import text_cleanup
+from kokoro_gui.i18n import N_, tr
 
 TARGET_SECTIONS = "sections"
 TARGET_TRANSCRIPT = "transcript"
 TARGET_ADD = "add"
 TARGETS = (TARGET_SECTIONS, TARGET_TRANSCRIPT, TARGET_ADD)
 TARGET_LABELS = {
-    TARGET_SECTIONS: "New project, one subproject per section",
-    TARGET_TRANSCRIPT: "New project, one transcript",
-    TARGET_ADD: "Add to current project",
+    TARGET_SECTIONS: N_("New project, one subproject per section"),
+    TARGET_TRANSCRIPT: N_("New project, one transcript"),
+    TARGET_ADD: N_("Add to current project"),
 }
 
 PREVIEW_DELAY_MS = 150
@@ -58,7 +59,7 @@ class ImportDialog(QDialog):
         self.app = app
         self.path = path
         self.sections = [(str(title), str(text)) for title, text in sections]
-        self.setWindowTitle(f"Import {os.path.basename(path)}")
+        self.setWindowTitle(tr("Import {file}", file=os.path.basename(path)))
         self.resize(1080, 680)
 
         root = QVBoxLayout(self)
@@ -69,10 +70,11 @@ class ImportDialog(QDialog):
         left = QWidget()
         left_box = QVBoxLayout(left)
         left_box.setContentsMargins(0, 0, 0, 0)
-        left_box.addWidget(QLabel("Sections to import"))
+        left_box.addWidget(QLabel(tr("Sections to import")))
         self.section_list = QListWidget()
+        self.section_list.setToolTip(tr("The sections found in the file. Ticked ones are imported."))
         for title, text in self.sections:
-            item = QListWidgetItem(f"{title}  ({word_count(text):,} words)")
+            item = QListWidgetItem(tr("{title}  ({word_count:,} words)", title=title, word_count=word_count(text)))
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Unchecked if text_cleanup.guess_skip(title, text)
                                else Qt.CheckState.Checked)
@@ -81,8 +83,10 @@ class ImportDialog(QDialog):
         self.section_list.itemChanged.connect(lambda _item: self._update_ok())
         left_box.addWidget(self.section_list, 1)
         buttons = QHBoxLayout()
-        self.all_btn = QPushButton("All")
-        self.none_btn = QPushButton("None")
+        self.all_btn = QPushButton(tr("All"))
+        self.all_btn.setToolTip(tr("Tick every section."))
+        self.none_btn = QPushButton(tr("None"))
+        self.none_btn.setToolTip(tr("Untick every section."))
         self.all_btn.clicked.connect(lambda: self._set_all_checked(True))
         self.none_btn.clicked.connect(lambda: self._set_all_checked(False))
         buttons.addWidget(self.all_btn)
@@ -95,13 +99,14 @@ class ImportDialog(QDialog):
         right = QWidget()
         right_box = QVBoxLayout(right)
         right_box.setContentsMargins(0, 0, 0, 0)
-        rules_group = QGroupBox("Cleanup")
+        rules_group = QGroupBox(tr("Cleanup"))
         rules_box = QVBoxLayout(rules_group)
         saved = app.settings.get("import_rules")
         ticked = set(text_cleanup.enabled_rule_ids(saved))
         self.rule_checks: dict = {}
         for rule in text_cleanup.RULES:
-            check = QCheckBox(rule.label)
+            check = QCheckBox(tr(rule.label))
+            check.setToolTip(tr("Clean up the text this way. Compare Before and After to see the effect."))
             check.setChecked(rule.id in ticked)
             check.toggled.connect(lambda _on: self._schedule_preview())
             rules_box.addWidget(check)
@@ -109,8 +114,8 @@ class ImportDialog(QDialog):
         right_box.addWidget(rules_group)
 
         previews = QHBoxLayout()
-        before_box, self.before_edit = self._preview_pane("Before")
-        after_box, self.after_edit = self._preview_pane("After")
+        before_box, self.before_edit = self._preview_pane(tr("Before"))
+        after_box, self.after_edit = self._preview_pane(tr("After"))
         previews.addLayout(before_box)
         previews.addLayout(after_box)
         right_box.addLayout(previews, 1)
@@ -121,13 +126,14 @@ class ImportDialog(QDialog):
         split.setStretchFactor(1, 3)
 
         # -- bottom: the target -------------------------------------------------
-        target_group = QGroupBox("Put the text in")
+        target_group = QGroupBox(tr("Put the text in"))
         target_box = QVBoxLayout(target_group)
         self.target_radios: dict = {}
         for target in TARGETS:
             if target not in targets:
                 continue
-            radio = QRadioButton(TARGET_LABELS[target])
+            radio = QRadioButton(tr(TARGET_LABELS[target]))
+            radio.setToolTip(tr("Where the imported text goes."))
             target_box.addWidget(radio)
             self.target_radios[target] = radio
         sections_radio = self.target_radios.get(TARGET_SECTIONS)
@@ -157,6 +163,7 @@ class ImportDialog(QDialog):
         box = QVBoxLayout()
         box.addWidget(QLabel(title))
         edit = QPlainTextEdit()
+        edit.setToolTip(tr("The start of the selected section."))
         edit.setReadOnly(True)
         box.addWidget(edit, 1)
         return box, edit
@@ -216,7 +223,8 @@ class ImportDialog(QDialog):
         shown = text[:PREVIEW_CHARS]
         self.before_edit.setPlainText(shown)
         self.after_edit.setPlainText(text_cleanup.apply_rules(shown, self.enabled_rules()))
-        self.preview_note.setText(f"The preview shows the first {PREVIEW_CHARS:,} characters of this section."
+        self.preview_note.setText(tr("The preview shows the first {preview_chars:,} characters of this section.",
+                                     preview_chars=PREVIEW_CHARS)
                                   if len(text) > PREVIEW_CHARS else "")
 
     # -- result ----------------------------------------------------------------

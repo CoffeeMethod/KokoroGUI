@@ -31,6 +31,7 @@ from PySide6.QtWidgets import QMessageBox
 from kokoro_gui.daw import library as character_library
 from kokoro_gui.daw import templates as template_store
 from kokoro_gui.engine.presets import filter_fx_preset_values
+from kokoro_gui.i18n import tr
 from kokoro_gui.qt import project as project_io
 from kokoro_gui.qt.open_projects import OpenProject
 
@@ -180,7 +181,7 @@ class SubprojectsMixin:
         child_id = self.child_id_of(clip)
         parent = self.project_for(clip)
         if child_id is None or parent is None or not parent.project_dir:
-            return self._child_failed(clip, "The subproject reference is broken.", then)
+            return self._child_failed(clip, tr("The subproject reference is broken."), then)
         kind = (clip.child or {}).get("kind", "embedded")
         bundle = self.child_bundle_path(parent, clip)
         source = bundle if kind == "linked" else project_io.child_source_path(self.source_of(parent), child_id)
@@ -202,7 +203,8 @@ class SubprojectsMixin:
             if info.project_id != child_id:
                 lock.release()
                 return self._child_failed(
-                    clip, f"{os.path.basename(bundle)} is project {info.project_id}, not {child_id}.", then)
+                    clip, tr("{file} is project {project_id}, not {child_id}.", file=os.path.basename(bundle),
+                             project_id=info.project_id, child_id=child_id), then)
 
         # The dir is this child's and usable as it is: ahead of the bundle
         # (dirty), made this session (no bundle yet), or a clean extraction
@@ -217,12 +219,12 @@ class SubprojectsMixin:
             return child
         if info is None:
             lock.release()
-            what = bundle or "the subproject's file"
-            return self._child_failed(clip, f"Couldn't find {what}.", then)
+            what = bundle or tr("the subproject's file")
+            return self._child_failed(clip, tr("Couldn't find {what}.", what=what), then)
 
         project_io.wipe_project_dir(project_dir)
         try:
-            project_io.check_free_space(project_io.projects_root(), info.audio_bytes, "open the subproject")
+            project_io.check_free_space(project_io.projects_root(), info.audio_bytes, tr("open the subproject"))
             project_io.extract_small(info, project_dir)
         except (project_io.ProjectError, OSError) as e:
             lock.release()
@@ -234,7 +236,7 @@ class SubprojectsMixin:
                                                 source_path=source)
             except (OSError, ValueError, KeyError) as e:
                 lock.release()
-                return self._child_failed(clip, f"Couldn't read the subproject: {e}", then)
+                return self._child_failed(clip, tr("Couldn't read the subproject: {error}", error=e), then)
             child = self._attach_child(parent, clip, loaded, lock, bundle if kind == "linked" else None, False)
             if then is not None:
                 then(child)
@@ -243,10 +245,10 @@ class SubprojectsMixin:
         if info.audio_bytes == 0:
             return _finish()
 
-        self._begin_project_io("Opening subproject...", read_only=False)
+        self._begin_project_io(tr("Opening subproject..."), read_only=False)
 
         def _work():
-            project_io.extract_audio(info, project_dir, progress=self._io_progress("Extracting subproject"))
+            project_io.extract_audio(info, project_dir, progress=self._io_progress(tr("Extracting subproject")))
 
         def _done(_result, error):
             self._end_project_io(read_only=False)
@@ -271,14 +273,14 @@ class SubprojectsMixin:
         child_id = self.child_id_of(clip)
         if child_id:
             self._missing_children.add(child_id)
-        self.set_status(f"Subproject unavailable: {message}", "warning")
+        self.set_status(tr("Subproject unavailable: {message}", message=message), "warning")
         self.refresh_timeline()
         if (clip.child or {}).get("kind") == "linked" and not getattr(self, "_offering_relink", False):
             # NP4: a missing or wrong linked file asks for the right one.
             self._offering_relink = True
             try:
-                answer = QMessageBox.question(self, "Subproject not found",
-                                              f"{message}\nFind the subproject's file?")
+                answer = QMessageBox.question(self, tr("Subproject not found"),
+                                              tr("{message}\nFind the subproject's file?", message=message))
                 if answer == QMessageBox.StandardButton.Yes:
                     self.relink_subproject_dialog(clip)
             finally:
@@ -445,7 +447,7 @@ class SubprojectsMixin:
         if child is None or child.parent_id is None:
             return False
         if [c for c in child.document.dirty_clips() if not c.is_nested]:
-            self.set_status(f"{child.title()} has clips to generate first.", "warning")
+            self.set_status(tr("{title} has clips to generate first.", title=child.title()), "warning")
             return False
         self._autosave_one(child)
         digest = child.digest
@@ -458,7 +460,7 @@ class SubprojectsMixin:
         target = project_io.mixdown_file(child.project_dir, fmt)
         tmp = os.path.join(child.project_dir, f"{project_io.MIXDOWN}.tmp.{fmt}")
         document = child.document
-        self._begin_project_io(f"Exporting {child.title()}...", read_only=False)
+        self._begin_project_io(tr("Exporting {title}...", title=child.title()), read_only=False)
 
         def _work():
             result = mixdown(document, tmp, fmt, rate, arrangement=arrangement,
@@ -470,14 +472,14 @@ class SubprojectsMixin:
         def _done(result, error):
             self._end_project_io(read_only=False)
             if error is not None:
-                self.set_status(f"Exporting {child.title()} failed: {error}", "error")
+                self.set_status(tr("Exporting {title} failed: {error}", title=child.title(), error=error), "error")
                 if then is not None:
                     then(False)
                 return
             project_io.write_mixdown_info(child.project_dir, target, digest, result.duration_s, rate)
             child.mixdown_path, child.mixdown_digest = target, digest
             child.state_cache = None
-            self.set_status(f"Exported {child.title()}.", "success")
+            self.set_status(tr("Exported {title}.", title=child.title()), "success")
             parent = self.parent_of(child)
             if parent is not None and parent.parent_id is not None:
                 parent.state_cache = None
@@ -524,7 +526,7 @@ class SubprojectsMixin:
         timeline isn't in, else None."""
         if self.focus is self.level:
             return None
-        return f"Subproject: {self.focus.title()}"
+        return tr("Subproject: {title}", title=self.focus.title())
 
     def set_focus(self, project) -> None:
         """Points the transcript, Settings and Audio FX docks at `project`'s
@@ -699,13 +701,14 @@ class SubprojectsMixin:
         try:
             info = project_io.inspect_bundle(path)
         except project_io.ProjectError as e:
-            QMessageBox.warning(self, "Add subproject", str(e))
+            QMessageBox.warning(self, tr("Add subproject"), str(e))
             return None
         tree_ids = {p.project_id for p in self.open_projects()}
         tree_ids |= {self.child_id_of(c) for p in self.open_projects() for c in p.document.nested_clips()}
         if info.project_id in tree_ids:
-            QMessageBox.warning(self, "Add subproject",
-                                f"{os.path.basename(path)} (project {info.project_id}) is already in this project.")
+            QMessageBox.warning(self, tr("Add subproject"),
+                                tr("{file} (project {project_id}) is already in this project.",
+                                   file=os.path.basename(path), project_id=info.project_id))
             return None
         document = parent.document
         position = len(document.text) if position is None else max(0, min(int(position), len(document.text)))
@@ -726,7 +729,7 @@ class SubprojectsMixin:
     def add_subproject_dialog(self):
         from PySide6.QtWidgets import QFileDialog
 
-        path, _ = QFileDialog.getOpenFileName(self, "Add subproject", "", "KokoroGUI project (*.tbaw)")
+        path, _ = QFileDialog.getOpenFileName(self, tr("Add subproject"), "", tr("KokoroGUI project (*.tbaw)"))
         if path:
             editor = self.editor
             position = None
@@ -745,11 +748,12 @@ class SubprojectsMixin:
         try:
             info = project_io.inspect_bundle(path)
         except project_io.ProjectError as e:
-            QMessageBox.warning(self, "Relink", str(e))
+            QMessageBox.warning(self, tr("Relink"), str(e))
             return False
         if info.project_id != child_id:
-            QMessageBox.warning(self, "Relink", f"{os.path.basename(path)} is project {info.project_id}; "
-                                                f"this subproject is {child_id}.")
+            QMessageBox.warning(self, tr("Relink"), tr("{file} is project {project_id}; "
+                                                   "this subproject is {child_id}.", file=os.path.basename(path),
+                                                   project_id=info.project_id, child_id=child_id))
             return False
         parent = self.project_for(clip)
         new_child = dict(clip.child or {})
@@ -764,7 +768,7 @@ class SubprojectsMixin:
     def relink_subproject_dialog(self, clip) -> bool:
         from PySide6.QtWidgets import QFileDialog
 
-        path, _ = QFileDialog.getOpenFileName(self, "Relink subproject", "", "KokoroGUI project (*.tbaw)")
+        path, _ = QFileDialog.getOpenFileName(self, tr("Relink subproject"), "", tr("KokoroGUI project (*.tbaw)"))
         return bool(path) and self.relink_subproject(clip, path)
 
     def _write_child_bundle(self, child, target: str) -> None:
@@ -806,13 +810,13 @@ class SubprojectsMixin:
         parent.document.undo_stack.push(SetFieldCommand("clip", clip.id, "child", new_child))
         self.schedule_save()
         self.refresh_timeline()
-        self.set_status(f"{child.title()} is now {os.path.basename(path)}.")
+        self.set_status(tr("{title} is now {file}.", title=child.title(), file=os.path.basename(path)))
         return True
 
     def detach_subproject_dialog(self, clip) -> bool:
         from PySide6.QtWidgets import QFileDialog
 
-        path, _ = QFileDialog.getSaveFileName(self, "Detach subproject to", "", "KokoroGUI project (*.tbaw)")
+        path, _ = QFileDialog.getSaveFileName(self, tr("Detach subproject to"), "", tr("KokoroGUI project (*.tbaw)"))
         return bool(path) and self.detach_subproject(clip, path)
 
     def embed_subproject(self, clip) -> bool:
@@ -837,7 +841,7 @@ class SubprojectsMixin:
         child.dirty = False
         self.schedule_save()
         self.refresh_timeline()
-        self.set_status(f"{child.title()} is embedded in {parent.title()}.")
+        self.set_status(tr("{child} is embedded in {parent}.", child=child.title(), parent=parent.title()))
         return True
 
     def remove_subproject(self, clip) -> bool:
@@ -965,7 +969,7 @@ class SubprojectsMixin:
         end = start if end is None else max(start, min(int(end), text_len))
         if end > start:
             if document.overlaps_nested(start, end):
-                self.set_status("A selection holding a subproject can't become one.", "warning")
+                self.set_status(tr("A selection holding a subproject can't become one."), "warning")
                 return None
             start, end = _snap_to_clips(document, start, end)
         moved = _moved_clips(document, start, end) if end > start else []
@@ -1027,7 +1031,7 @@ class SubprojectsMixin:
         if parent is self.focus and self.editor is not None:
             self.editor.load_text(document.text)
         self.on_characters_changed()
-        self.set_status(f"New subproject: {title}.")
+        self.set_status(tr("New subproject: {title}.", title=title))
         # Queued work for the moved clips follows them into the child.
         self.requeue_moved_clips(parent, child, [c.id for c in moved])
         return child
@@ -1037,7 +1041,7 @@ class SubprojectsMixin:
         empty child at the caret's paragraph end when nothing is selected).
         Works while a generate runs; a project IO or an export refuses it."""
         if self.is_io_busy():
-            QMessageBox.warning(self, "Busy", "Finish or cancel the current job first.")
+            QMessageBox.warning(self, tr("Busy"), tr("Finish or cancel the current job first."))
             return None
         editor = self.editor
         if editor is None:
@@ -1078,7 +1082,7 @@ class SubprojectsMixin:
 
         def _build():
             made.extend(self._add_sections(sections))
-            self.set_status(f"New project with {len(made)} subproject(s). Save As to name it.")
+            self.set_status(tr("New project with {count} subproject(s). Save As to name it.", count=len(made)))
 
         self.new_project(then=_build)
         return made
@@ -1123,7 +1127,7 @@ class SubprojectsMixin:
 
         # Reads the project and writes a JSON file: fine beside a generate.
         if self.is_io_busy():
-            QMessageBox.warning(self, "Busy", "Finish or cancel the current job first.")
+            QMessageBox.warning(self, tr("Busy"), tr("Finish or cancel the current job first."))
             return None
         title = self.root.title()
         dialog = SaveTemplateDialog(self, "" if title == "Untitled" else title, self.template_sections())
@@ -1138,10 +1142,11 @@ class SubprojectsMixin:
         replacing one."""
         stem = template_store.safe_name(name)
         if stem is None:
-            self.set_status("That name can't be used for a template.", "warning")
+            self.set_status(tr("That name can't be used for a template."), "warning")
             return None
         if template_store.load_template(stem) is not None:
-            answer = QMessageBox.question(self, "Replace template", f"A template named \"{stem}\" exists. Replace it?")
+            answer = QMessageBox.question(self, tr("Replace template"),
+                                          tr("A template named \"{stem}\" exists. Replace it?", stem=stem))
             if answer != QMessageBox.StandardButton.Yes:
                 return None
         document = self.root.document
@@ -1150,9 +1155,9 @@ class SubprojectsMixin:
         try:
             saved = template_store.save_template(name, document.settings, library_ids, rows)
         except OSError as e:
-            self.set_status(f"Couldn't save the template: {e}", "error")
+            self.set_status(tr("Couldn't save the template: {error}", error=e), "error")
             return None
-        self.set_status(f"Saved template {saved}.")
+        self.set_status(tr("Saved template {saved}.", saved=saved))
         return saved
 
     def new_from_template_dialog(self):
@@ -1161,7 +1166,7 @@ class SubprojectsMixin:
 
         # A running queue goes on in the background, as for New (plan 30).
         if self.is_busy() and not (self.is_generating() and self.can_park_generation()):
-            QMessageBox.warning(self, "Busy", "Finish or cancel the current job first.")
+            QMessageBox.warning(self, tr("Busy"), tr("Finish or cancel the current job first."))
             return []
         dialog = NewFromTemplateDialog(self)
         if dialog.exec() != dialog.DialogCode.Accepted:
@@ -1194,8 +1199,8 @@ class SubprojectsMixin:
             if added:
                 self.on_characters_changed()
             made.extend(self._add_sections([(s.title, s.text) for s in template.sections]))
-            self.set_status(f"New project from template {template.name} with {len(made)} subproject(s). "
-                            "Save As to name it.")
+            self.set_status(tr("New project from template {name} with {count} subproject(s). "
+                               "Save As to name it.", name=template.name, count=len(made)))
 
         self.new_project(then=_build)
         return made
@@ -1209,7 +1214,7 @@ class SubprojectsMixin:
 
         # New subprojects at the ends, like New Subproject: fine beside a generate.
         if self.is_io_busy():
-            QMessageBox.warning(self, "Busy", "Finish or cancel the current job first.")
+            QMessageBox.warning(self, tr("Busy"), tr("Finish or cancel the current job first."))
             return []
         fields = template_store.clean_credit_fields(self.project_settings.get("credits"))
         if not fields["year"]:
@@ -1273,7 +1278,7 @@ class SubprojectsMixin:
         if self.editor is not None and parent is self.focus:
             self.editor.load_text(document.text)
         self.refresh_timeline()
-        self.set_status("Credits added." if made else "Credits are up to date.")
+        self.set_status(tr("Credits added.") if made else tr("Credits are up to date."))
         return made
 
     def new_from_ebook(self, path: str, per_chapter: bool = True) -> list:
@@ -1304,7 +1309,7 @@ class SubprojectsMixin:
         try:
             digest = project_io.autosave_to_dir(project.document, project.project_settings, project.project_dir)
         except Exception as e:  # noqa: BLE001 - autosave must never crash the UI
-            self.set_status(f"Autosave failed: {e}", "error")
+            self.set_status(tr("Autosave failed: {error}", error=e), "error")
             return
         if digest != project.digest:
             project.digest = digest
@@ -1316,7 +1321,7 @@ class SubprojectsMixin:
             try:
                 project_io.write_session(project.project_dir, session)
             except OSError as e:
-                self.set_status(f"Autosave failed: {e}", "error")
+                self.set_status(tr("Autosave failed: {error}", error=e), "error")
         project.dirty = dirty
 
     def _children_to_save(self) -> list:
@@ -1367,7 +1372,7 @@ class SubprojectsMixin:
         try:
             current = project_io.autosave_to_dir(project.document, project.project_settings, project.project_dir)
         except Exception as e:  # noqa: BLE001 - autosave must never crash the UI
-            self.set_status(f"Autosave failed: {e}", "error")
+            self.set_status(tr("Autosave failed: {error}", error=e), "error")
             current = None
         if current is not None and current != project.digest:
             project.digest = current
@@ -1381,7 +1386,8 @@ class SubprojectsMixin:
             try:
                 self._record_saved(child, plan.path, result, source_path=source)
             except OSError as e:
-                self.set_status(f"Saved, but couldn't record {child.title()}'s session: {e}", "warning")
+                self.set_status(tr("Saved, but couldn't record {title}'s session: {error}", title=child.title(),
+                                   error=e), "warning")
 
     # -- teardown --------------------------------------------------------------------
 

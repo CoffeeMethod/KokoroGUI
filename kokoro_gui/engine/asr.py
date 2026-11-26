@@ -63,11 +63,13 @@ import sys
 import tempfile
 import threading
 import wave
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import soundfile as sf
 from dotenv import find_dotenv, load_dotenv, set_key
+
+from kokoro_gui.i18n import N_, tr
 
 AUDIO8_MODEL_ID = "Audio8/Audio8-ASR-0.1B"
 # Pinned because the repo ships code we run (trust_remote_code). To bump: read the new commit with
@@ -161,29 +163,36 @@ def reload_vosk_model_path() -> str:
 class AsrEngineInfo:
     id: str
     display_name: str
-    description: str
+    description: str  # `describe()` fills its placeholders from `values`
+    values: dict = field(default_factory=dict)
+
+    def describe(self) -> str:
+        return tr(self.description, **self.values)
 
 
 ASR_ENGINES = [
     AsrEngineInfo(
         "whisper",
-        "Whisper large-v3-turbo (local, word timestamps)",
-        "faster-whisper, runs locally (int8 on CPU, float16 on CUDA). Downloads the "
-        f"model from Hugging Face on first use, about {WHISPER_MODEL_SIZES[DEFAULT_WHISPER_MODEL]}; "
-        f"set {WHISPER_MODEL_ENV_KEY} in .env for a smaller one. MIT.",
+        N_("Whisper large-v3-turbo (local, word timestamps)"),
+        N_("faster-whisper, runs locally (int8 on CPU, float16 on CUDA). Downloads the "
+           "model from Hugging Face on first use, about {size}; "
+           "set {key} in .env for a smaller one. MIT."),
+        {"size": WHISPER_MODEL_SIZES[DEFAULT_WHISPER_MODEL], "key": WHISPER_MODEL_ENV_KEY},
     ),
     AsrEngineInfo(
         "audio8",
-        "Audio8-ASR-0.1B (online, higher quality)",
-        f"Downloads {AUDIO8_MODEL_ID} from Hugging Face on first use. "
-        "CC-BY-NC-4.0 - non-commercial use only.",
+        N_("Audio8-ASR-0.1B (online, higher quality)"),
+        N_("Downloads {model} from Hugging Face on first use. "
+           "CC-BY-NC-4.0 - non-commercial use only."),
+        {"model": AUDIO8_MODEL_ID},
     ),
     AsrEngineInfo(
         "vosk",
-        "Vosk (offline)",
-        "Fully offline once a model is downloaded from "
-        f"https://alphacephei.com/vosk/models and its folder is set as "
-        f"{VOSK_MODEL_PATH_ENV_KEY} in a .env file. Apache-2.0.",
+        N_("Vosk (offline)"),
+        N_("Fully offline once a model is downloaded from "
+           "https://alphacephei.com/vosk/models and its folder is set as "
+           "{key} in a .env file. Apache-2.0."),
+        {"key": VOSK_MODEL_PATH_ENV_KEY},
     ),
 ]
 DEFAULT_ASR_ENGINE = ASR_ENGINES[0].id
@@ -218,8 +227,8 @@ def _get_model():
             from transformers import AutoModelForCausalLM, AutoProcessor
         except ImportError as e:
             raise RuntimeError(
-                "Auto-transcription needs the 'transformers' package "
-                "(pip install -r requirements.txt)."
+                tr("Auto-transcription needs the 'transformers' package "
+                   "(pip install -r requirements.txt).")
             ) from e
 
         try:
@@ -230,7 +239,8 @@ def _get_model():
                 AUDIO8_MODEL_ID, revision=AUDIO8_MODEL_REVISION, trust_remote_code=True
             )
         except Exception as e:
-            raise RuntimeError(f"Failed to load {AUDIO8_MODEL_ID}: {e}") from e
+            raise RuntimeError(tr("Failed to load {audio8_model_id}: {error}", audio8_model_id=AUDIO8_MODEL_ID,
+                                  error=e)) from e
 
         _model, _processor = model, processor
         return _model, _processor
@@ -266,7 +276,7 @@ def _transcribe_wav_audio8(wav_path: str, max_new_tokens: int = 128) -> str:
         text = processor.decode(output_ids[0][prompt_len:], skip_special_tokens=True)
         return text.strip()
     except Exception as e:
-        raise RuntimeError(f"Transcription failed: {e}") from e
+        raise RuntimeError(tr("Transcription failed: {error}", error=e)) from e
 
 
 # --- Whisper (faster-whisper) --------------------------------------------
@@ -339,18 +349,18 @@ def _get_whisper_model(name: str | None = None):
             from faster_whisper import WhisperModel
         except ImportError as e:
             raise RuntimeError(
-                "Whisper transcription needs the 'faster-whisper' package (pip install -r requirements.txt)."
+                tr("Whisper transcription needs the 'faster-whisper' package (pip install -r requirements.txt).")
             ) from e
         try:
             model = WhisperModel(name, device=device, compute_type=compute_type)
         except Exception as e:
             if device != "cuda":
-                raise RuntimeError(f"Failed to load Whisper model '{name}': {e}") from e
+                raise RuntimeError(tr("Failed to load Whisper model '{name}': {error}", name=name, error=e)) from e
             _mark_whisper_cuda_failed(e)
             try:
                 model = WhisperModel(name, device="cpu", compute_type="int8")
             except Exception as e2:
-                raise RuntimeError(f"Failed to load Whisper model '{name}': {e2}") from e2
+                raise RuntimeError(tr("Failed to load Whisper model '{name}': {e2}", name=name, e2=e2)) from e2
             device = "cpu"
         model.kokoro_device = device  # which device this instance runs on
         _whisper_models[(name, device)] = model
@@ -375,12 +385,12 @@ def _transcribe_wav_whisper(wav_path: str) -> tuple[str, list[tuple[str, float, 
         return _run_whisper(model, wav_path)
     except Exception as e:
         if getattr(model, "kokoro_device", "cpu") != "cuda":
-            raise RuntimeError(f"Transcription failed: {e}") from e
+            raise RuntimeError(tr("Transcription failed: {error}", error=e)) from e
         _mark_whisper_cuda_failed(e)
     try:
         return _run_whisper(_get_whisper_model(), wav_path)
     except Exception as e:
-        raise RuntimeError(f"Transcription failed: {e}") from e
+        raise RuntimeError(tr("Transcription failed: {error}", error=e)) from e
 
 
 def _run_whisper(model, wav_path: str) -> tuple[str, list[tuple[str, float, float]]]:
@@ -417,15 +427,15 @@ def _get_vosk_model(model_path: str):
             import vosk
         except ImportError as e:
             raise RuntimeError(
-                "Vosk transcription needs the 'vosk' package (pip install -r requirements.txt)."
+                tr("Vosk transcription needs the 'vosk' package (pip install -r requirements.txt).")
             ) from e
 
         if not model_path:
             raise RuntimeError(
-                "Vosk transcription needs a model folder. Download one from "
-                "https://alphacephei.com/vosk/models, unzip it, and set "
-                f"{VOSK_MODEL_PATH_ENV_KEY}=<path> in a .env file at the project "
-                "root (see .env.example)."
+                tr("Vosk transcription needs a model folder. Download one from "
+                   "https://alphacephei.com/vosk/models, unzip it, and set "
+                   "{vosk_model_path_env_key}=<path> in a .env file at the project "
+                   "root (see .env.example).", vosk_model_path_env_key=VOSK_MODEL_PATH_ENV_KEY)
             )
         # No existence pre-check: `vosk.Model` fails for a missing folder
         # the same way it fails for a folder without model files, and one
@@ -435,8 +445,9 @@ def _get_vosk_model(model_path: str):
             model = vosk.Model(model_path)
         except Exception as e:
             raise RuntimeError(
-                f"Couldn't load a Vosk model from '{model_path}' ({e}). The folder must exist "
-                "and hold an unzipped model from https://alphacephei.com/vosk/models."
+                tr("Couldn't load a Vosk model from '{model_path}' ({error}). The folder must exist "
+                   "and hold an unzipped model from https://alphacephei.com/vosk/models.", model_path=model_path,
+                   error=e)
             ) from e
 
         _vosk_models[model_path] = model
@@ -529,7 +540,7 @@ def _run_vosk(wav_path: str, model_path: str, with_words: bool) -> tuple[str, li
                     pieces.append(_take(recognizer.Result()))
             pieces.append(_take(recognizer.FinalResult()))
     except Exception as e:
-        raise RuntimeError(f"Transcription failed: {e}") from e
+        raise RuntimeError(tr("Transcription failed: {error}", error=e)) from e
     finally:
         if temp_path is not None:
             try:

@@ -87,14 +87,14 @@
   </nav>
 </header>
 
-<main>
+<main data-transport="scroll">
   <section class="page-head" data-clip="Changes" data-cc="c1">
     <div class="wrap">
       <span class="eyebrow c1">Changes</span>
       <h1>Every change, in full</h1>
       <p class="lede">The README keeps one line per feature. This page has the rest: where each feature lives in the app, how it behaves, and what it does to a project you already have. Newest first.</p>
       <div class="toc">
-        <a href="#unreleased">Unreleased</a>
+        <a href="#v4-0-0-beta-3">4.0.0-beta.3</a>
         <a href="#v4-0-0-beta-2">4.0.0-beta.2</a>
         <a href="#v4-0-0-beta-1">4.0.0-beta.1</a>
         <a href="#v3-2-0">3.2.0</a>
@@ -103,10 +103,18 @@
     </div>
   </section>
 
-  <section class="doc-section" id="unreleased" data-clip="Unreleased" data-cc="c1">
+  <section class="doc-section" id="v4-0-0-beta-3" data-clip="4.0.0-beta.3" data-cc="c1">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">After 4.0.0-beta.2</span>Unreleased</h2>
+        <h2><span class="idx">Tag 4.0.0-beta.3</span>4.0.0-beta.3 <span class="ver-badge">LATEST RELEASE</span></h2>
+        <p>The audiobook release. Generate is a queue you can keep working beside, a book import is a wizard, Whisper proofs the result, and Export checks it against ACX, Spotify and other targets and writes it as an M4B. There is also a command line and an MCP server. A <code>.tbaw</code> from 4.0.0-beta.1 or beta.2 opens in it, and segment keys didn't change, so no clip turns stale from the update.</p>
+      </div>
+      <div class="callout warn reveal" style="max-width:740px; margin-top:1.3rem;">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 2 20h20L12 3Z"/><path d="M12 10v4M12 17h.01"/></svg>
+        <div>
+          <p><strong>Before you open an existing project.</strong> A project whose first clip is a short line with no closing punctuation now has 1.2 s after it instead of the plain gap, so the rest of a non-hand-timed project starts about 0.85 s later. Set Gap after a heading to the Gap value in Settings &gt; Project for the old placement.</p>
+          <p>Run <code>pip install -r requirements.txt</code> again after updating. <code>pyloudnorm</code>, <code>mutagen</code> and <code>pyspellchecker</code> are new. <code>run.bat</code> does it for you.</p>
+        </div>
       </div>
 
       <div class="change-group reveal">
@@ -422,6 +430,22 @@
       </div>
 
       <div class="change-group reveal">
+        <h3>Language and tooltips</h3>
+        <ul class="change-list">
+          <li>
+            <h4>The interface can be translated</h4>
+            <p>Options &gt; Language, or Settings&hellip; &gt; General, picks the language of menus, panels, dialogs and messages. System default follows the operating system and falls back to English. A change shows after a restart. English is the only language so far.</p>
+            <p>A language is one JSON file in <code>kokoro_gui/locales/</code> with the English text as the key. <code>python scripts/i18n.py new fr "Fran&ccedil;ais"</code> starts one and <code>check</code> lists what is missing or wrong. A string with no translation, or with a broken placeholder, shows in English. <a href="https://github.com/CoffeeMethod/KokoroGUI/blob/main/CONTRIBUTING.md#translations">CONTRIBUTING</a> has the rules.</p>
+            <p>The setting is kept in <code>config_qt.json</code> and never in a project. Names of characters, tracks and subprojects, the text of credits and everything in an exported file stay as they are, so a project reads the same on every machine. The command line, the MCP server, the log and the report in Help &gt; About stay in English.</p>
+          </li>
+          <li>
+            <h4>Tooltips</h4>
+            <p>Every menu entry, button, list and field has a tooltip that says what it does, in the panels, the dialogs and the right-click menus. A greyed-out control still says why. Pointing at the label of a settings field shows the field's tooltip.</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="change-group reveal">
         <h3>Editing scope</h3>
         <ul class="change-list">
           <li>
@@ -533,7 +557,6 @@
             <h4>Gaps for chapters and headings</h4>
             <p>Options &gt; Settings&hellip; &gt; Project has two new gaps. Chapter gap is the silence before a subproject, and follows the paragraph gap until you set it. Gap after a heading (1.2 s by default) is the silence after the document's first clip when it is a heading: one line of at most 12 words that doesn't end in a full stop, <code>!</code>, <code>?</code>, <code>,</code> or <code>;</code>. A clip's own Gap before still wins, then the chapter gap, the heading gap, the paragraph gap and the plain gap, in that order. The transcript's gap labels say "chapter" or "heading" where one applies.</p>
             <p>Heading speed multiplies the heading clip's speed, so 0.90 reads a chapter title a little slower. It is 1.00, which is off, until you change it. The speed is part of the clip's key, so changing it makes the heading stale once and regenerates only that clip. A clip that becomes the first clip of the document, because you deleted what came before, picks up the heading speed the same way.</p>
-            <p><strong>Before you open an existing project.</strong> A project whose first clip is a short line with no closing punctuation now has 1.2 s after it instead of the plain gap, so the rest of a non-hand-timed project starts about 0.85 s later. Set Gap after a heading to the Gap value in Settings &gt; Project for the old placement.</p>
           </li>
           <li>
             <h4>A varied gap when the speaker changes</h4>
@@ -860,7 +883,7 @@
   <section class="doc-section" id="v4-0-0-beta-2" data-clip="4.0.0-beta.2" data-cc="c3">
     <div class="wrap">
       <div class="prose reveal">
-        <h2><span class="idx">Tag 4.0.0-beta.2</span>4.0.0-beta.2 <span class="ver-badge">LATEST RELEASE</span></h2>
+        <h2><span class="idx">Tag 4.0.0-beta.2</span>4.0.0-beta.2</h2>
         <p>The dubbing and mixing release. Subtitles come in as clips locked to their cues, tracks get a mixer, characters move into a library every project shares and each picks its own engine, and long projects stop lagging on every keystroke. A <code>.tbaw</code> from 4.0.0-beta.1 opens in it; read the box below first.</p>
       </div>
       <div class="callout warn reveal" style="max-width:740px; margin-top:1.3rem;">

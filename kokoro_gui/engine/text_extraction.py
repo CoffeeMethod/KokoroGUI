@@ -19,6 +19,8 @@ import ebooklib
 import pypdf
 from ebooklib import epub
 
+from kokoro_gui.i18n import tr
+
 # ebooklib warns on every EPUB it opens.
 warnings.filterwarnings("ignore", category=UserWarning, module="ebooklib")
 warnings.filterwarnings("ignore", category=FutureWarning, module="ebooklib")
@@ -48,20 +50,22 @@ def _mb(n: int) -> str:
 
 def _check_stop(should_stop) -> None:
     if should_stop is not None and should_stop():
-        raise ExtractionCancelled("Import cancelled.")
+        raise ExtractionCancelled(tr("Import cancelled."))
 
 
 def _check_file_size(fpath: str) -> None:
     size = os.path.getsize(fpath)
     if size > MAX_BOOK_FILE_BYTES:
         raise ExtractionLimitError(
-            f"The file is {_mb(size)}, over the {_mb(MAX_BOOK_FILE_BYTES)} limit for a book file.")
+            tr("The file is {size}, over the {limit} limit for a book file.", size=_mb(size),
+               limit=_mb(MAX_BOOK_FILE_BYTES)))
 
 
 def _check_chars(count: int) -> None:
     if count > MAX_TEXT_CHARS:
         raise ExtractionLimitError(
-            f"The book holds more than {MAX_TEXT_CHARS:,} characters of text, over the limit.")
+            tr("The book holds more than {max_text_chars:,} characters of text, over the limit.",
+               max_text_chars=MAX_TEXT_CHARS))
 
 
 def _check_epub(fpath: str) -> None:
@@ -74,16 +78,17 @@ def _check_epub(fpath: str) -> None:
         for info in archive.infolist():
             if info.file_size > MAX_EPUB_ENTRY_BYTES:
                 raise ExtractionLimitError(
-                    f"'{info.filename}' inflates to {_mb(info.file_size)}, over the "
-                    f"{_mb(MAX_EPUB_ENTRY_BYTES)} limit for one EPUB entry.")
+                    tr("'{filename}' inflates to {size}, over the "
+                       "{limit} limit for one EPUB entry.", filename=info.filename, size=_mb(info.file_size),
+                       limit=_mb(MAX_EPUB_ENTRY_BYTES)))
             if info.compress_size and info.file_size / info.compress_size > MAX_EPUB_RATIO:
                 raise ExtractionLimitError(
-                    f"'{info.filename}' is compressed more than {MAX_EPUB_RATIO} to 1, "
-                    "over the limit for an EPUB entry.")
+                    tr("'{filename}' is compressed more than {max_epub_ratio} to 1, "
+                       "over the limit for an EPUB entry.", filename=info.filename, max_epub_ratio=MAX_EPUB_RATIO))
             total += info.file_size
             if total > MAX_EPUB_TOTAL_BYTES:
                 raise ExtractionLimitError(
-                    f"The EPUB inflates to more than {_mb(MAX_EPUB_TOTAL_BYTES)}, over the limit.")
+                    tr("The EPUB inflates to more than {mb}, over the limit.", mb=_mb(MAX_EPUB_TOTAL_BYTES)))
 
 
 # Same tag syntax `TextExtractionMixin.parse_multispeaker_text` matches -
@@ -149,11 +154,12 @@ def tag_overrides(options: dict) -> tuple:
             except (TypeError, ValueError):
                 seconds = None
             if seconds is None or not math.isfinite(seconds):
-                problems.append(f"Tag option overlap:{value} isn't a number of seconds, so it was ignored.")
+                problems.append(tr("Tag option overlap:{value} isn't a number of seconds, so it was ignored.",
+                                   value=value))
             else:
                 overrides[OVERLAP_OVERRIDE_KEY] = round(min(OVERLAP_MAX_S, max(0.0, seconds)), 3)
         else:
-            problems.append(f"Unknown tag option '{key}', so it was ignored.")
+            problems.append(tr("Unknown tag option '{key}', so it was ignored.", key=key))
     return overrides, problems
 
 
@@ -266,7 +272,8 @@ def _pdf_pages(fpath: str, should_stop: Optional[Callable[[], bool]] = None) -> 
     reader = pypdf.PdfReader(fpath)
     count = len(reader.pages)
     if count > MAX_PDF_PAGES:
-        raise ExtractionLimitError(f"The PDF has {count:,} pages, over the {MAX_PDF_PAGES:,} page limit.")
+        raise ExtractionLimitError(tr("The PDF has {count:,} pages, over the {max_pdf_pages:,} page limit.",
+                                      count=count, max_pdf_pages=MAX_PDF_PAGES))
     pages, chars = [], 0
     for page in reader.pages:
         text = page.extract_text() or ""
@@ -317,7 +324,7 @@ def extract_sections(fpath: str, should_stop: Optional[Callable[[], bool]] = Non
     `should_stop`, when given, is asked between spine documents and pages;
     True raises `ExtractionCancelled`."""
     if not os.path.exists(fpath):
-        raise FileNotFoundError("File does not exist.")
+        raise FileNotFoundError(tr("File does not exist."))
     lower = fpath.lower()
     if lower.endswith(".epub"):
         return _epub_sections(fpath, should_stop)
@@ -343,7 +350,7 @@ def extract_text_from_file(fpath, should_stop: Optional[Callable[[], bool]] = No
     given, is asked between pages and spine documents and True raises
     `ExtractionCancelled`."""
     if not os.path.exists(fpath):
-        raise FileNotFoundError("File does not exist.")
+        raise FileNotFoundError(tr("File does not exist."))
 
     lower_path = fpath.lower()
 

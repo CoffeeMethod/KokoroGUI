@@ -10,6 +10,9 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLayout, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
+from kokoro_gui.i18n import tr
+
+
 
 class CollapsibleSection(QWidget):
     collapsedChanged = Signal(bool)
@@ -70,4 +73,5 @@ class CollapsibleSection(QWidget):
         text = f"{self._title}: {self._state}" if self._state else self._title
         self.header.setText(text.replace("&", "&&"))
         self.header.setAccessibleName(text)
-        self.header.setToolTip(f"{text}. Click to {'show' if self._collapsed else 'hide'} the controls.")
+        self.header.setToolTip(tr("{title}. Click to show the controls.", title=text) if self._collapsed
+                               else tr("{title}. Click to hide the controls.", title=text))

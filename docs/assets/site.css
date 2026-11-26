@@ -495,7 +495,8 @@ footer .bottom{ display: flex; justify-content: space-between; flex-wrap: wrap; 
 }
 .transport .tp-btn svg{ width: 11px; height: 11px; }
 .transport .tp-clock{ color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: .02em; flex: none; }
-.transport .tp-lane{ flex: 1; height: 22px; position: relative; display: flex; gap: 2px; min-width: 0; }
+.transport .tp-lane{ flex: 1; height: 22px; min-width: 0; }
+.transport .tp-strip{ height: 100%; position: relative; display: flex; gap: 2px; }
 .transport .tp-clip{
   height: 100%; border-radius: 3px; min-width: 3px; cursor: pointer; border: none; padding: 0 .35rem;
   background: color-mix(in srgb, var(--cc, var(--c1)) 38%, var(--surface));
@@ -508,8 +509,23 @@ footer .bottom{ display: flex; justify-content: space-between; flex-wrap: wrap; 
 .transport .tp-label{ color: var(--text-3); flex: none; }
 @media (max-width: 720px){
   .transport .tp-label{ display: none; }
-  .transport .tp-clip{ font-size: 0; padding: 0; }
+  .transport:not(.scrolls) .tp-clip{ font-size: 0; padding: 0; }
 }
+/* <main data-transport="scroll">: the lane scrolls sideways and a clip's name
+   stays in view. The padding keeps the playhead's overhang inside the scroll box. */
+.transport.scrolls .tp-lane{
+  --fl: 0px; --fr: 0px; height: 34px; padding: 6px 0; overflow-x: auto; overflow-y: hidden;
+  overscroll-behavior-x: contain; scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--fl), #000 calc(100% - var(--fr)), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 var(--fl), #000 calc(100% - var(--fr)), transparent);
+}
+.transport.scrolls .tp-lane::-webkit-scrollbar{ display: none; }
+.transport.scrolls .tp-lane.more-left{ --fl: 24px; }
+.transport.scrolls .tp-lane.more-right{ --fr: 24px; }
+.transport.scrolls .tp-strip{ width: max-content; min-width: 100%; }
+.transport.scrolls .tp-clip{ overflow: clip; }
+.transport.scrolls .tp-clip > span{ display: inline-block; position: sticky; left: .35rem; }
+.transport.scrolls .tp-lane.more-left .tp-clip > span{ left: 28px; }
 
 /* entrance animation: pure CSS, always completes, never depends on scroll/JS */
 @keyframes revealUp{ from{ opacity: 0; transform: translateY(8px); } to{ opacity: 1; transform: none; } }

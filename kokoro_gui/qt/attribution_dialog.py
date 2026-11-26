@@ -27,18 +27,20 @@ from PySide6.QtWidgets import (
 
 from kokoro_gui.daw import attribution
 from kokoro_gui.daw.undo import AssignCharacterCommand, CompositeCommand
+from kokoro_gui.i18n import N_, ntr, tr
+from kokoro_gui.qt import tips
 
 # Characters of a quote shown in the Excerpt column.
 EXCERPT_CHARS = 70
 SCOPE_SELECTION = "selection"
 SCOPE_ALL = "all"
-CONFIDENCE_LABELS = {attribution.HIGH: "High", attribution.MEDIUM: "Medium", attribution.LOW: "Low"}
+CONFIDENCE_LABELS = {attribution.HIGH: N_("High"), attribution.MEDIUM: N_("Medium"), attribution.LOW: N_("Low")}
 
 
 class AttributionDialog(QDialog):
     def __init__(self, app, document, editor, selection: Optional[tuple] = None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Attribute Dialogue")
+        self.setWindowTitle(tr("Attribute Dialogue"))
         self.setModal(False)
         self.resize(760, 520)
         self.app = app
@@ -51,31 +53,31 @@ class AttributionDialog(QDialog):
         self._chosen: list = []
 
         layout = QVBoxLayout(self)
-        intro = QLabel("Quotes with a speech tag go to the character it names. Untagged quotes in a two-person "
-                       "exchange take turns. Check the rows marked Low, then Apply. One Undo takes it all back.")
+        intro = QLabel(tr("Quotes with a speech tag go to the character it names. Untagged quotes in a two-person "
+                          "exchange take turns. Check the rows marked Low, then Apply. One Undo takes it all back."))
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
         form = QFormLayout()
         self.narrator_combo = QComboBox()
-        self.narrator_combo.addItem("Leave narration alone", None)
+        self.narrator_combo.addItem(tr("Leave narration alone"), None)
         for character in document.characters:
             self.narrator_combo.addItem(character.name, character.id)
-        self.narrator_combo.setToolTip("Who reads the text between the quotes, speech tags included.")
-        form.addRow("Narrator:", self.narrator_combo)
+        self.narrator_combo.setToolTip(tr("Who reads the text between the quotes, speech tags included."))
+        form.addRow(tr("Narrator:"), self.narrator_combo)
         self.scope_combo = QComboBox()
         if self._selection is not None:
-            self.scope_combo.addItem("Selection", SCOPE_SELECTION)
-        self.scope_combo.addItem("Whole transcript", SCOPE_ALL)
-        form.addRow("Scope:", self.scope_combo)
+            self.scope_combo.addItem(tr("Selection"), SCOPE_SELECTION)
+        self.scope_combo.addItem(tr("Whole transcript"), SCOPE_ALL)
+        form.addRow(tr("Scope:"), self.scope_combo)
         layout.addLayout(form)
 
-        self.only_uncertain = QCheckBox("Only uncertain")
-        self.only_uncertain.setToolTip("Show only the quotes the plan is least sure of.")
+        self.only_uncertain = QCheckBox(tr("Only uncertain"))
+        self.only_uncertain.setToolTip(tr("Show only the quotes the plan is least sure of."))
         layout.addWidget(self.only_uncertain)
 
         self.table = QTableWidget(0, 4, self)
-        self.table.setHorizontalHeaderLabels(["Excerpt", "Character", "Confidence", "Reason"])
+        self.table.setHorizontalHeaderLabels([tr("Excerpt"), tr("Character"), tr("Confidence"), tr("Reason")])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -101,6 +103,7 @@ class AttributionDialog(QDialog):
         self.only_uncertain.toggled.connect(lambda _on: self._apply_filter())
         self.table.currentCellChanged.connect(lambda row, _col, _prow, _pcol: self.reveal_row(row))
         self.replan()
+        tips.label_rows(self)
 
     # -- planning ----------------------------------------------------------------
 
@@ -133,13 +136,14 @@ class AttributionDialog(QDialog):
                 excerpt = excerpt[:EXCERPT_CHARS - 3] + "..."
             self.table.setItem(row, 0, QTableWidgetItem(excerpt))
             combo = QComboBox()
-            combo.addItem("Nobody", None)
+            combo.setToolTip(tr("Who speaks this quote."))
+            combo.addItem(tr("Nobody"), None)
             for character in self._document.characters:
                 combo.addItem(character.name, character.id)
             combo.setCurrentIndex(max(0, combo.findData(assignment.character_id)))
             combo.currentIndexChanged.connect(lambda _i, r=row, c=combo: self.set_character(r, c.currentData()))
             self.table.setCellWidget(row, 1, combo)
-            self.table.setItem(row, 2, QTableWidgetItem(CONFIDENCE_LABELS.get(assignment.confidence, "")))
+            self.table.setItem(row, 2, QTableWidgetItem(tr(CONFIDENCE_LABELS.get(assignment.confidence, ""))))
             self.table.setItem(row, 3, QTableWidgetItem(assignment.reason))
 
     def _apply_filter(self) -> None:
@@ -151,10 +155,11 @@ class AttributionDialog(QDialog):
         count = len(self._rows)
         unsure = sum(1 for a in self._rows if a.confidence == attribution.LOW)
         narration = len(self._assignments) - count
-        parts = [f"{count} {'quote' if count == 1 else 'quotes'}, {unsure} uncertain."]
+        parts = [ntr("{n} quote, {unsure} uncertain.", "{n} quotes, {unsure} uncertain.", count, unsure=unsure)]
         if narration:
             name = self.narrator_combo.currentText()
-            parts.append(f"{narration} narration {'stretch goes' if narration == 1 else 'stretches go'} to {name}.")
+            parts.append(ntr("{n} narration stretch goes to {name}.", "{n} narration stretches go to {name}.",
+                             narration, name=name))
         self.summary.setText(" ".join(parts))
         self.apply_button.setEnabled(bool(self.planned_commands()))
 
@@ -210,14 +215,14 @@ class AttributionDialog(QDialog):
         changed since the plan, or another project is on screen, plans
         again instead and returns False."""
         if self.app.document is not self._document:
-            self.summary.setText("Another project is on screen. Close this and open Attribute Dialogue there.")
+            self.summary.setText(tr("Another project is on screen. Close this and open Attribute Dialogue there."))
             return False
         if self.app.is_busy():
-            self.summary.setText("Finish or cancel the current job first.")
+            self.summary.setText(tr("Finish or cancel the current job first."))
             return False
         if self._document.text != self._text:
             self.replan()
-            self.summary.setText("The transcript changed, so the list was planned again. Check it and Apply.")
+            self.summary.setText(tr("The transcript changed, so the list was planned again. Check it and Apply."))
             return False
         commands = self.planned_commands()
         if not commands:
@@ -228,7 +233,7 @@ class AttributionDialog(QDialog):
         self.app.schedule_save()
         self.app.refresh_timeline()
         quotes = sum(1 for cid in self._chosen if cid is not None)
-        self.app.set_status(f"Attributed {quotes} {'quote' if quotes == 1 else 'quotes'}.", "success")
+        self.app.set_status(ntr("Attributed {n} quote.", "Attributed {n} quotes.", quotes), "success")
         self.accept()
         return True
 

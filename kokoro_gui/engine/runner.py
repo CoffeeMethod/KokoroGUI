@@ -31,6 +31,7 @@ from kokoro_gui.engine.lexicon import LexiconMixin
 from kokoro_gui.engine.presets import PresetsMixin
 from kokoro_gui.engine.srt import SrtMixin
 from kokoro_gui.engine.text_extraction import TextExtractionMixin
+from kokoro_gui.i18n import tr
 
 
 class ModelBase:
@@ -50,10 +51,10 @@ class ModelBase:
         return None
 
     def ready_message(self, lang_code: Optional[str]) -> str:
-        return f"{self.display_name} ready ({lang_code})."
+        return tr("{display_name} ready ({lang_code}).", display_name=self.display_name, lang_code=lang_code)
 
     def load_error(self, error: Exception, lang_code: Optional[str]) -> str:
-        return f"{self.display_name} failed to load: {error}"
+        return tr("{display_name} failed to load: {error}", display_name=self.display_name, error=error)
 
     def synthesize(self, text, voice, speed, lang_code, params):
         raise NotImplementedError

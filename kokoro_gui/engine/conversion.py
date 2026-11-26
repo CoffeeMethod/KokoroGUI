@@ -22,6 +22,7 @@ from kokoro_gui.engine.caching import to_numpy
 from kokoro_gui.engine.text_extraction import strip_markup
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys, filter_fx_preset_values
 from kokoro_gui.engine.time_utils import format_duration
+from kokoro_gui.i18n import tr
 
 # Below this fraction of the *current* run's own chars processed, the
 # observed-this-run rate is too noisy (one slow/fast chunk dominates it) to
@@ -235,12 +236,12 @@ class ConversionMixin:
                         progress_callback(clip_id, False)
                     return {
                         "clip_id": clip_id, "success": False, "results": [],
-                        "error": "Cancelled.", "cancelled": True,
+                        "error": tr("Cancelled."), "cancelled": True,
                     }
                 try:
                     results = await self.generate_clip_audio((index, text, config))
                     success = bool(results)
-                    error = "" if success else "Generation produced no audio (cancelled or empty text)."
+                    error = "" if success else tr("Generation produced no audio (cancelled or empty text).")
                     if progress_callback:
                         progress_callback(clip_id, success)
                     return {
@@ -312,7 +313,7 @@ class ConversionMixin:
         total_words = 0
         processed_chars = 0
         try:
-            if self.on_status: self.on_status("Preparing text...", False)
+            if self.on_status: self.on_status(tr("Preparing text..."), False)
             os.makedirs(config['out_dir'], exist_ok=True)
 
             num_workers = config.get('num_threads', 1)
@@ -337,7 +338,8 @@ class ConversionMixin:
                         # Resolve voice path for the new voice
                         seg_config['voice'] = self.resolve_voice_path(seg_config['voice'], config.get("project_dir"))
                     else:
-                        if self.on_status: self.on_status(f"Warning: Character '{speaker_name}' not found.", False)
+                        if self.on_status: self.on_status(tr("Warning: Character '{speaker_name}' not found.",
+                                                             speaker_name=speaker_name), False)
 
                 if fx_name:
                     fx_preset = self.load_fx_preset(fx_name, config.get("project_dir"))
@@ -346,7 +348,8 @@ class ConversionMixin:
                         seg_config['apply_fx'] = True
                         seg_config['fx_preset'] = fx_name
                     else:
-                        if self.on_status: self.on_status(f"Warning: FX '{fx_name}' not found.", False)
+                        if self.on_status: self.on_status(tr("Warning: FX '{fx_name}' not found.", fx_name=fx_name),
+                                                          False)
 
                 # Split this segment into sub-chunks for parallel processing
                 # Use same character limit as original
@@ -357,7 +360,7 @@ class ConversionMixin:
 
             total_chunks = len(tasks_data)
             if total_chunks == 0:
-                if self.on_status: self.on_status("No text to process.", False)
+                if self.on_status: self.on_status(tr("No text to process."), False)
                 if self.on_finish: self.on_finish()
                 return
 
@@ -374,11 +377,12 @@ class ConversionMixin:
             # near Kokoro's per-thread pipelines.
             historical_rate = generation_stats.estimate_chars_per_sec(engine_id)
 
-            if self.on_status: self.on_status(f"Queued {total_chunks} blocks. Starting {num_workers} workers...", False)
+            if self.on_status: self.on_status(tr("Queued {total_chunks} blocks. Starting {num_workers} workers...",
+                                                 total_chunks=total_chunks, num_workers=num_workers), False)
 
             if historical_rate and total_chars > 0 and self.on_progress:
                 initial_eta = format_duration(total_chars / (historical_rate * phase_weight))
-                self.on_progress(0, 0.0, initial_eta, "Estimating from past runs...")
+                self.on_progress(0, 0.0, initial_eta, tr("Estimating from past runs..."))
 
             # Progress tracker
             progress_lock = threading.Lock()
@@ -421,7 +425,8 @@ class ConversionMixin:
                 if len(clean_snip) > 40: clean_snip = clean_snip[:37] + "..."
 
                 if self.on_progress:
-                    self.on_progress(total_fraction * 100, elapsed, eta_str, f"Processing: {clean_snip}")
+                    self.on_progress(total_fraction * 100, elapsed, eta_str, tr("Processing: {clean_snip}",
+                                                                                clean_snip=clean_snip))
 
             # All generated files list
             all_generated_files = [None] * total_chunks
@@ -439,12 +444,12 @@ class ConversionMixin:
                 for i, result in enumerate(results):
                     if isinstance(result, Exception):
                         print(f"Chunk {i} failed: {result}")
-                        if self.on_status: self.on_status(f"Error in chunk {i}", True)
+                        if self.on_status: self.on_status(tr("Error in chunk {i}", i=i), True)
                     else:
                         all_generated_files[i] = result
 
             if self.cancel_event.is_set():
-                if self.on_status: self.on_status("Conversion Cancelled.", False)
+                if self.on_status: self.on_status(tr("Conversion Cancelled."), False)
                 if self.on_finish: self.on_finish()
                 return
 
@@ -454,14 +459,15 @@ class ConversionMixin:
 
             final_file_paths = [seg['path'] for seg in final_segment_list]
 
-            if self.on_status: self.on_status(f"Generated {len(final_segment_list)} segments. Processing outputs...", False)
+            if self.on_status: self.on_status(tr("Generated {count} segments. Processing outputs...",
+                                                 count=len(final_segment_list)), False)
 
             if config.get('export_subtitles', False) and final_segment_list:
                 srt_path = os.path.join(config['out_dir'], f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_combined.srt")
                 self.generate_srt(final_segment_list, srt_path)
 
             if config.get('combine', True) and final_file_paths:
-                if self.on_status: self.on_status("Merging audio files...", False)
+                if self.on_status: self.on_status(tr("Merging audio files..."), False)
 
                 fmt = config.get('format', 'wav').lower()
                 combine_path = os.path.join(config['out_dir'], f"{config.get('filename', 'output')}_{config.get('time_id', '0')}_combined.{fmt}")
@@ -470,7 +476,8 @@ class ConversionMixin:
                     total_fraction = (1.0 * phase_weight) + (frac * (1.0 - phase_weight))
                     elapsed = time.time() - start_time
                     if self.on_progress:
-                        self.on_progress(total_fraction * 100, elapsed, "00:00", f"Merging... {int(frac*100)}%")
+                        self.on_progress(total_fraction * 100, elapsed, "00:00", tr("Merging... {frac}%",
+                                                                                    frac=int(frac*100)))
 
                 await self.smart_combine(final_file_paths, combine_path, on_merge_progress)
 
@@ -481,14 +488,14 @@ class ConversionMixin:
 
                 if self.on_status: self.on_status(f"Done! Saved: {combine_path}", False)
             else:
-                 if self.on_status: self.on_status("Conversion Complete!", False)
+                 if self.on_status: self.on_status(tr("Conversion Complete!"), False)
 
             if self.on_progress:
-                self.on_progress(100, time.time() - start_time, "00:00", "Completed")
+                self.on_progress(100, time.time() - start_time, "00:00", tr("Completed"))
 
         except Exception as e:
             print(e)
-            if self.on_status: self.on_status(f"Critical Error: {e}", True)
+            if self.on_status: self.on_status(tr("Critical Error: {error}", error=e), True)
         finally:
             # Feed this run's actual throughput back into the per-engine
             # history, whether it finished, errored, or was cancelled

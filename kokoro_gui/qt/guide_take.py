@@ -31,6 +31,8 @@ from kokoro_gui.audio import recorder as recorder_module
 from kokoro_gui.daw import revision
 from kokoro_gui.daw.models import Segment
 from kokoro_gui.daw.undo import AddTakeCommand
+from kokoro_gui.i18n import tr
+from kokoro_gui.qt import tips
 
 # A recording that ends this soon after the count-in holds nothing to keep.
 MIN_TAKE_S = 0.1
@@ -49,15 +51,15 @@ def store_guide_take(app, clip_id: str, samples, sample_rate: int,
     project = app.project_of_clip_id(clip_id)
     clip = project.document.get_clip(clip_id) if project is not None else None
     if clip is None:
-        app.set_status("The clip was deleted while recording; the take was not kept.", "warning")
+        app.set_status(tr("The clip was deleted while recording; the take was not kept."), "warning")
         return None
     data = np.asarray(samples, dtype=np.float32).reshape(-1)
     seconds = len(data) / float(sample_rate)
     if seconds < count_in_s + MIN_TAKE_S:
-        app.set_status("The recording stopped before the count-in ended; nothing was kept.", "warning")
+        app.set_status(tr("The recording stopped before the count-in ended; nothing was kept."), "warning")
         return None
     if not project.project_dir:
-        app.set_status("This project has no folder to store the take in.", "warning")
+        app.set_status(tr("This project has no folder to store the take in."), "warning")
         return None
     fd, tmp = tempfile.mkstemp(suffix=".wav", prefix="guide_take_")
     os.close(fd)
@@ -66,7 +68,7 @@ def store_guide_take(app, clip_id: str, samples, sample_rate: int,
         revision.bump_files()  # a file is about to be copied into the project
         path = project_io.import_audio_file(tmp, project.project_dir)
     except (OSError, RuntimeError, project_io.ProjectError) as e:
-        app.set_status(f"Couldn't store the take: {e}", "error")
+        app.set_status(tr("Couldn't store the take: {error}", error=e), "error")
         return None
     finally:
         try:
@@ -83,7 +85,7 @@ def store_guide_take(app, clip_id: str, samples, sample_rate: int,
     app.schedule_save()
     app.refresh_timeline()
     take = int(clip.overrides.get("take", 0) or 0)
-    app.set_status(f"Recorded take {take + 1} ({end_s - start_s:.1f}s).", "info")
+    app.set_status(tr("Recorded take {take} ({end_s:.1f}s).", take=take + 1, end_s=end_s - start_s), "info")
     return segment
 
 
@@ -118,7 +120,7 @@ class GuideTakePanel(QDialog):
 
     def __init__(self, app, clip_id: str, parent=None):
         super().__init__(parent if parent is not None else app)
-        self.setWindowTitle("Record guide take")
+        self.setWindowTitle(tr("Record guide take"))
         self.setModal(False)
         self.app = app
         self.clip_id = clip_id
@@ -134,33 +136,36 @@ class GuideTakePanel(QDialog):
         layout.addWidget(self.clip_label)
         form = QFormLayout()
         self.device_combo = QComboBox()
-        self.device_combo.addItem("Default input", None)
+        self.device_combo.setToolTip(tr("The microphone to record from."))
+        self.device_combo.addItem(tr("Default input"), None)
         self._rates = {None: recorder_module.DEFAULT_SAMPLE_RATE}
         for index, name, rate in recorder_module.input_devices():
             self.device_combo.addItem(name, index)
             self._rates[index] = rate
-        form.addRow("Input:", self.device_combo)
+        form.addRow(tr("Input:"), self.device_combo)
         self.preroll_spin = QDoubleSpinBox()
         self.preroll_spin.setRange(0.0, recorder_module.COUNT_IN_S)
         self.preroll_spin.setSingleStep(0.5)
         self.preroll_spin.setSuffix(" s")
         self.preroll_spin.setValue(DEFAULT_PREROLL_S)
-        self.preroll_spin.setToolTip("How much of the timeline plays before the clip, under the count-in.")
-        form.addRow("Pre-roll:", self.preroll_spin)
+        self.preroll_spin.setToolTip(tr("How much of the timeline plays before the clip, under the count-in."))
+        form.addRow(tr("Pre-roll:"), self.preroll_spin)
         self.level_bar = QProgressBar()
         self.level_bar.setRange(0, 100)
         self.level_bar.setTextVisible(False)
-        self.level_bar.setToolTip("Input level, -60 to 0 dBFS")
-        form.addRow("Level:", self.level_bar)
+        self.level_bar.setToolTip(tr("Input level, -60 to 0 dBFS"))
+        form.addRow(tr("Level:"), self.level_bar)
         layout.addLayout(form)
         buttons = QHBoxLayout()
-        self.record_btn = QPushButton("Record")
-        self.stop_btn = QPushButton("Stop")
+        self.record_btn = QPushButton(tr("Record"))
+        self.record_btn.setToolTip(tr("Start the count-in, then record."))
+        self.stop_btn = QPushButton(tr("Stop"))
+        self.stop_btn.setToolTip(tr("Stop and keep the take."))
         self.stop_btn.setEnabled(False)
         buttons.addWidget(self.record_btn)
         buttons.addWidget(self.stop_btn)
         layout.addLayout(buttons)
-        self.status_label = QLabel("Three beeps, then your line. The beeps are cut from the take.")
+        self.status_label = QLabel(tr("Three beeps, then your line. The beeps are cut from the take."))
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
@@ -176,6 +181,7 @@ class GuideTakePanel(QDialog):
         self.record_btn.clicked.connect(self.record)
         self.stop_btn.clicked.connect(self.stop)
         self.set_clip(clip_id)
+        tips.label_rows(self)
 
     def set_clip(self, clip_id: str) -> None:
         """Points the panel at another clip; ignored while recording."""
@@ -204,16 +210,16 @@ class GuideTakePanel(QDialog):
         if self.is_recording():
             return False
         if self.app.is_io_busy():
-            self._say("Wait for the project to finish opening or saving.")
+            self._say(tr("Wait for the project to finish opening or saving."))
             return False
         if self._pending is not None:
-            self._say("The last take is still waiting to be stored.")
+            self._say(tr("The last take is still waiting to be stored."))
             return False
         if self.app.project_of_clip_id(self.clip_id) is None:
-            self._say("The clip is gone.")
+            self._say(tr("The clip is gone."))
             return False
         if not recorder_module.available():
-            self._say("No audio input: sounddevice or PortAudio is missing.")
+            self._say(tr("No audio input: sounddevice or PortAudio is missing."))
             return False
         device = self.device_combo.currentData()
         rate = int(self._rates.get(device, recorder_module.DEFAULT_SAMPLE_RATE))
@@ -237,7 +243,7 @@ class GuideTakePanel(QDialog):
             self._delay_ms = 0
         self._level_timer.start()
         self._set_controls(recording=True)
-        self._say("Recording...")
+        self._say(tr("Recording..."))
         return True
 
     def _set_controls(self, recording: bool) -> None:
@@ -279,14 +285,14 @@ class GuideTakePanel(QDialog):
         if self._pending is None:
             return
         if self.app.is_io_busy():
-            self._say("The take is stored when the project finishes saving.")
+            self._say(tr("The take is stored when the project finishes saving."))
             self._commit_timer.start(COMMIT_RETRY_MS)
             return
         samples, rate = self._pending
         self._pending = None
         segment = store_guide_take(self.app, self.clip_id, samples, rate)
-        self._say(f"Kept a {segment.duration:.1f}s take. Record again for another."
-                  if segment is not None else "Nothing was kept.")
+        self._say(tr("Kept a {duration:.1f}s take. Record again for another.", duration=segment.duration)
+                  if segment is not None else tr("Nothing was kept."))
 
     def closeEvent(self, event) -> None:
         self.stop()

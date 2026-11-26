@@ -24,13 +24,14 @@ from PySide6.QtWidgets import (
     QDockWidget, QDoubleSpinBox, QHBoxLayout, QLabel, QStackedWidget, QVBoxLayout, QWidget,
 )
 
+from kokoro_gui.i18n import N_, tr
 from kokoro_gui.qt import video_sync
 
 # False keeps QtMultimedia from loading (headless screenshot runs); the dock
 # then shows the "not available" line for any video.
 PLAYER_ENABLED = True
 
-NO_VIDEO_TEXT = "No reference video. File > Load Video... adds one."
+NO_VIDEO_TEXT = N_("No reference video. File > Load Video... adds one.")
 
 # `(QMediaPlayer, QVideoWidget)` once loaded, or the reason they can't be.
 _multimedia: tuple | str | None = None
@@ -41,7 +42,7 @@ def load_multimedia():
     QtMultimedia can't be imported here. Tried once per process."""
     global _multimedia
     if not PLAYER_ENABLED:
-        return None, "video playback is turned off for this run"
+        return None, tr("video playback is turned off for this run")
     if _multimedia is None:
         try:
             from PySide6.QtMultimedia import QMediaPlayer
@@ -57,7 +58,7 @@ def load_multimedia():
 
 class VideoDock(QDockWidget):
     def __init__(self, app, parent=None):
-        super().__init__("Video", parent)
+        super().__init__(tr("Video"), parent)
         self.setObjectName("dock_video")
         self.app = app
         self.player = None
@@ -69,21 +70,21 @@ class VideoDock(QDockWidget):
         content = QWidget()
         layout = QVBoxLayout(content)
         self.stack = QStackedWidget()
-        self.message_label = QLabel(NO_VIDEO_TEXT)
+        self.message_label = QLabel(tr(NO_VIDEO_TEXT))
         self.message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.message_label.setWordWrap(True)
         self.stack.addWidget(self.message_label)
         layout.addWidget(self.stack, 1)
 
         offset_row = QHBoxLayout()
-        offset_row.addWidget(QLabel("Offset:"))
+        offset_row.addWidget(QLabel(tr("Offset:")))
         self.offset_spin = QDoubleSpinBox()
         self.offset_spin.setRange(-86400.0, 86400.0)
         self.offset_spin.setDecimals(3)
         self.offset_spin.setSingleStep(0.1)
         self.offset_spin.setSuffix(" s")
-        self.offset_spin.setToolTip("Video time at the timeline's 0. Positive skips into the video; "
-                                    "negative starts it later.")
+        self.offset_spin.setToolTip(tr("Video time at the timeline's 0. Positive skips into the video; "
+                                       "negative starts it later."))
         self.offset_spin.setEnabled(False)
         self.offset_spin.valueChanged.connect(self._on_offset_edited)
         offset_row.addWidget(self.offset_spin)
@@ -113,12 +114,14 @@ class VideoDock(QDockWidget):
                 self.player.stop()
                 self.player.setSource(QUrl())
             if missing:
-                self._show_message(f"Reference video not found: {missing}. File > Load Video... finds it.")
+                self._show_message(tr("Reference video not found: {missing}. File > Load Video... finds it.",
+                                      missing=missing))
             else:
-                self._show_message(NO_VIDEO_TEXT)
+                self._show_message(tr(NO_VIDEO_TEXT))
             return
         if not self._ensure_player():
-            self._show_message(f"Video playback isn't available here ({self.unavailable_reason}).")
+            self._show_message(tr("Video playback isn't available here ({unavailable_reason}).",
+                                  unavailable_reason=self.unavailable_reason))
             return
         self.player.setSource(QUrl.fromLocalFile(path))
         self.stack.setCurrentWidget(self.video_widget)
@@ -156,7 +159,8 @@ class VideoDock(QDockWidget):
 
     def _on_player_error(self, _error, message: str) -> None:
         if self.path is not None:
-            self._show_message(f"Couldn't play the reference video: {message or 'unknown error'}")
+            self._show_message(tr("Couldn't play the reference video: {message}",
+                                  message=message or tr('unknown error')))
 
     # -- following the transport ----------------------------------------------------
 

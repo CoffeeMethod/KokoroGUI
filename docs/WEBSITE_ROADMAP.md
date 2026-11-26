@@ -29,7 +29,8 @@ menu, copy buttons, tab groups and the transport bar fixed to the bottom of ever
 per `<main>` section, the playhead following the scroll, a clock showing the page's read-aloud
 time at 150 words a minute, and Play scrolling at that pace. A section names its clip with
 `data-clip` and picks a color with `data-cc`; without them the bar uses the heading and cycles
-the palette. Page-local `<style>` blocks hold only layouts one page uses.
+the palette. `<main data-transport="scroll">` (only `changes.html`, where one release can be most
+of the page) makes the bar's lane scroll sideways and follow the playhead instead of fitting. Page-local `<style>` blocks hold only layouts one page uses.
 
 The site uses the words in `Claude/VOCABULARY.md` (Stale, Tag, FX, Mix, Reference, Export).
 Where the app's own label still uses an old word ("Save FX Preset...", "Generate and render"),
@@ -137,9 +138,8 @@ enumerate specific capabilities.
 The 4.0.0-beta.2 entry on `changes.html` is covered: `settings.html` documents its settings and
 menus (subprojects, subtitle import, video, convolution reverb, music beds, recordings, the
 library, Fit to slot, ripple, the unified layout, the source track), `scripting.html` has the
-`[pause:x]` section (07), and `format.html` has the bundle entries. Still to do: new shell
-screenshots (`scripts/render_screenshot.py`), since the header column is wider and the Settings
-tab grew.
+`[pause:x]` section (07), and `format.html` has the bundle entries. The shell screenshots were
+rendered for 4.0.0-beta.3.
 
 Preview with `python -m http.server 8765 --directory docs` and open `http://localhost:8765/`;
 opening `docs/index.html` straight from the filesystem works too, but a browser pane that

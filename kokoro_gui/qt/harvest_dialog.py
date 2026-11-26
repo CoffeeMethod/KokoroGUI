@@ -31,12 +31,13 @@ from PySide6.QtWidgets import (
 from kokoro_gui.daw import harvest
 from kokoro_gui.daw.harvest import ACRONYM, DIGITS, NAME, UNKNOWN, Candidate
 from kokoro_gui.engine.lexicon import apply_lexicon, normalize_rules
+from kokoro_gui.i18n import N_, tr
 
 # The rows shown, most frequent first. A book has thousands of numbers and
 # unknown words; a row costs two buttons.
 MAX_ROWS = 500
-KIND_LABELS = {NAME: "Name", ACRONYM: "Acronym", DIGITS: "Number", UNKNOWN: "Unknown word"}
-FILTER_LABELS = {NAME: "Names", ACRONYM: "Acronyms", DIGITS: "Numbers", UNKNOWN: "Unknown words"}
+KIND_LABELS = {NAME: N_("Name"), ACRONYM: N_("Acronym"), DIGITS: N_("Number"), UNKNOWN: N_("Unknown word")}
+FILTER_LABELS = {NAME: N_("Names"), ACRONYM: N_("Acronyms"), DIGITS: N_("Numbers"), UNKNOWN: N_("Unknown words")}
 WORD_COL, COUNT_COL, KIND_COL, CONTEXT_COL, SAY_COL, HEAR_COL, ADD_COL = range(7)
 
 
@@ -44,7 +45,7 @@ class HarvestDialog(QDialog):
     def __init__(self, app, parent=None):
         super().__init__(parent or app)
         self.app = app
-        self.setWindowTitle("Find words to check")
+        self.setWindowTitle(tr("Find words to check"))
         self.resize(900, 520)
         self._say: dict = {}      # word -> what the user typed in "Say it as"
         self._added: set = set()  # words whose rule this dialog wrote
@@ -61,22 +62,23 @@ class HarvestDialog(QDialog):
             QGuiApplication.restoreOverrideCursor()
 
         layout = QVBoxLayout(self)
-        intro = QLabel("Words an engine may say wrong, most frequent first. Type how each should be said, "
-                       "press Hear to check it in its sentence, then Add. Each answer becomes a whole word "
-                       "rule in the Lexicon; names and acronyms match case.")
+        intro = QLabel(tr("Words an engine may say wrong, most frequent first. Type how each should be said, "
+                          "press Hear to check it in its sentence, then Add. Each answer becomes a whole word "
+                          "rule in the Lexicon; names and acronyms match case."))
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
         filters = QHBoxLayout()
         self.kind_checks: dict = {}
         for kind in (NAME, ACRONYM, DIGITS, UNKNOWN):
-            box = QCheckBox(FILTER_LABELS[kind])
+            box = QCheckBox(tr(FILTER_LABELS[kind]))
+            box.setToolTip(tr("List words of this kind."))
             box.setChecked(True)
             if kind == UNKNOWN and self.dictionary is None:
                 box.setChecked(False)
                 box.setEnabled(False)
-                box.setToolTip("Needs the spelling dictionary for this character's language "
-                               "(the pyspellchecker package, English, Spanish, French, Italian or Portuguese).")
+                box.setToolTip(tr("Needs the spelling dictionary for this character's language "
+                                  "(the pyspellchecker package, English, Spanish, French, Italian or Portuguese)."))
             box.toggled.connect(lambda _on: self._populate())
             filters.addWidget(box)
             self.kind_checks[kind] = box
@@ -84,7 +86,10 @@ class HarvestDialog(QDialog):
         layout.addLayout(filters)
 
         self.table = QTableWidget(0, 7, self)
-        self.table.setHorizontalHeaderLabels(["Word", "Count", "Kind", "In the transcript", "Say it as", "", ""])
+        self.table.setToolTip(tr("Words the engine may say wrong. Type how to say one, hear it, then add it to "
+                                 "the Lexicon."))
+        self.table.setHorizontalHeaderLabels([tr("Word"), tr("Count"), tr("Kind"), tr("In the transcript"),
+                                              tr("Say it as"), "", ""])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked
@@ -105,8 +110,8 @@ class HarvestDialog(QDialog):
         layout.addWidget(self.summary)
 
         bottom = QHBoxLayout()
-        self.add_all_button = QPushButton("Add all filled")
-        self.add_all_button.setToolTip("Add a rule for every row that has a Say it as answer.")
+        self.add_all_button = QPushButton(tr("Add all filled"))
+        self.add_all_button.setToolTip(tr("Add a rule for every row that has a Say it as answer."))
         self.add_all_button.clicked.connect(lambda _c=False: self.add_all_filled())
         bottom.addWidget(self.add_all_button)
         bottom.addStretch(1)
@@ -155,7 +160,7 @@ class HarvestDialog(QDialog):
                 cells = (
                     (WORD_COL, candidate.word),
                     (COUNT_COL, str(candidate.count)),
-                    (KIND_COL, ", ".join(KIND_LABELS[k] for k in candidate.kinds)),
+                    (KIND_COL, ", ".join(tr(KIND_LABELS[k]) for k in candidate.kinds)),
                     (CONTEXT_COL, candidate.context),
                 )
                 for col, text in cells:
@@ -168,13 +173,13 @@ class HarvestDialog(QDialog):
                 flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
                 say.setFlags(flags if added else flags | Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(row, SAY_COL, say)
-                hear = QPushButton("Hear")
-                hear.setToolTip("Speak the sentence with this answer applied.")
+                hear = QPushButton(tr("Hear"))
+                hear.setToolTip(tr("Speak the sentence with this answer applied."))
                 hear.clicked.connect(lambda _c=False, r=row: self.hear(r))
                 self.table.setCellWidget(row, HEAR_COL, hear)
-                add = QPushButton("Added" if added else "Add")
+                add = QPushButton(tr("Added") if added else tr("Add"))
                 add.setEnabled(not added)
-                add.setToolTip("Add a whole word rule to the Lexicon.")
+                add.setToolTip(tr("Add a whole word rule to the Lexicon."))
                 add.clicked.connect(lambda _c=False, r=row: self.add(r))
                 self.table.setCellWidget(row, ADD_COL, add)
         finally:
@@ -191,11 +196,12 @@ class HarvestDialog(QDialog):
     def _sync(self) -> None:
         total = sum(1 for c in self.candidates if self._wanted(c))
         if not self.candidates:
-            self.summary.setText("Nothing to check: no names, acronyms or numbers the Lexicon doesn't cover.")
+            self.summary.setText(tr("Nothing to check: no names, acronyms or numbers the Lexicon doesn't cover."))
         elif total > len(self._shown):
-            self.summary.setText(f"Showing the {len(self._shown)} most frequent of {total}.")
+            self.summary.setText(tr("Showing the {count} most frequent of {total}.", count=len(self._shown),
+                                    total=total))
         else:
-            self.summary.setText(f"{total} to check.")
+            self.summary.setText(tr("{total} to check.", total=total))
         self.add_all_button.setEnabled(bool(self.filled_rows()))
 
     # -- rows ----------------------------------------------------------------

@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from kokoro_gui.daw import fillers
 from kokoro_gui.daw.fillers import SAFE, Filler
+from kokoro_gui.i18n import tr
 
 # Characters of the transcript shown each side of a filler.
 CONTEXT_CHARS = 36
@@ -39,20 +40,21 @@ PLAY_MARGIN_S = 0.3
 class FillerDialog(QDialog):
     def __init__(self, document, hits: list, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Remove Filler Words")
+        self.setWindowTitle(tr("Remove Filler Words"))
         self.resize(640, 440)
         self._document = document
         self._hits: list = list(hits)
         self.play_buttons: list = []
 
         layout = QVBoxLayout(self)
-        intro = QLabel("Check the fillers to cut. Each cut takes its audio with it, and one Undo "
-                       "gives them all back. Phrases that are also real words, like \"like\" "
-                       "and \"you know\", start unchecked.")
+        intro = QLabel(tr("Check the fillers to cut. Each cut takes its audio with it, and one Undo "
+                          "gives them all back. Phrases that are also real words, like \"like\" "
+                          "and \"you know\", start unchecked."))
         intro.setWordWrap(True)
         layout.addWidget(intro)
         self.table = QTableWidget(len(self._hits), 3, self)
-        self.table.setHorizontalHeaderLabels(["Filler", "In the transcript", ""])
+        self.table.setToolTip(tr("The filler words found in the recordings. Tick the ones to cut."))
+        self.table.setHorizontalHeaderLabels([tr("Filler"), tr("In the transcript"), ""])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -67,8 +69,8 @@ class FillerDialog(QDialog):
             label.setTextFormat(Qt.TextFormat.RichText)
             self.table.setCellWidget(row, 1, label)
             button = QToolButton()
-            button.setText("Play")
-            button.setToolTip("Play the filler with a moment of the recording around it")
+            button.setText(tr("Play"))
+            button.setToolTip(tr("Play the filler with a moment of the recording around it"))
             button.setEnabled(self._source_of(hit) is not None)
             button.clicked.connect(lambda _checked=False, i=row: self.play(i))
             self.table.setCellWidget(row, 2, button)
@@ -77,9 +79,11 @@ class FillerDialog(QDialog):
         layout.addWidget(self.table, 1)
 
         row = QHBoxLayout()
-        self.check_all_button = QPushButton("Check all")
+        self.check_all_button = QPushButton(tr("Check all"))
+        self.check_all_button.setToolTip(tr("Tick every filler word."))
         self.check_all_button.clicked.connect(lambda: self.set_all(True))
-        self.check_none_button = QPushButton("Uncheck all")
+        self.check_none_button = QPushButton(tr("Uncheck all"))
+        self.check_none_button.setToolTip(tr("Untick every filler word."))
         self.check_none_button.clicked.connect(lambda: self.set_all(False))
         row.addWidget(self.check_all_button)
         row.addWidget(self.check_none_button)
@@ -137,7 +141,7 @@ class FillerDialog(QDialog):
 
     def _sync(self) -> None:
         count = len(self.checked_fillers())
-        self.remove_button.setText(f"Remove {count}" if count else "Remove")
+        self.remove_button.setText(tr("Remove {count}", count=count) if count else tr("Remove"))
         self.remove_button.setEnabled(count > 0)
 
     def play(self, row: int) -> bool:

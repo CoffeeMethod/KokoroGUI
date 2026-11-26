@@ -20,6 +20,8 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional
 
+from kokoro_gui.i18n import tr
+
 CLIPS = "clips"
 SUBPROJECT = "subproject"
 # A single clip or a fit to slot asked for while a generate runs (plan 29).
@@ -134,11 +136,11 @@ def format_eta(seconds: float) -> str:
     """"under a minute", "12 min", "2 h 10 min" or "3 h"."""
     minutes = int(math.ceil(max(0.0, seconds) / 60.0))
     if minutes < 1:
-        return "under a minute"
+        return tr("under a minute")
     hours, minutes = divmod(minutes, 60)
     if not hours:
-        return f"{minutes} min"
-    return f"{hours} h {minutes} min" if minutes else f"{hours} h"
+        return tr("{minutes} min", minutes=minutes)
+    return tr("{hours} h {minutes} min", hours=hours, minutes=minutes) if minutes else f"{hours} h"
 
 
 class GenerationQueue:
@@ -341,7 +343,9 @@ def plan_items(project_id: str, entries, title: str, batch: int = BATCH_CLIPS) -
         engine_chars: dict = {}
         for _clip_id, chars, engine_id in chunk:
             engine_chars[engine_id] = engine_chars.get(engine_id, 0) + int(chars)
-        label = title if total <= batch else f"{title}, clips {start + 1}-{start + len(chunk)} of {total}"
+        label = title if total <= batch else tr(
+            "{title}, clips {first}-{last} of {total}", title=title, first=start + 1, last=start + len(chunk),
+            total=total)
         items.append(QueueItem(kind=CLIPS, project_id=project_id, clip_ids=[c for c, _n, _e in chunk], title=label,
                                chars=sum(engine_chars.values()), engine_chars=engine_chars))
     return items

@@ -15,9 +15,13 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
+from kokoro_gui.i18n import N_, tr
+
+
+
 NAME_LIMIT = 40
 EXCERPT_LIMIT = 60
-DEFAULTS_TITLE = "Defaults"
+DEFAULTS_TITLE = N_("Defaults")
 
 
 def shorten(text: str, limit: int = NAME_LIMIT) -> str:
@@ -31,7 +35,7 @@ def join_names(names) -> str:
     names = list(names)
     if len(names) < 2:
         return "".join(names)
-    return f"{', '.join(names[:-1])} and {names[-1]}"
+    return tr("{names} and {last}", names=", ".join(names[:-1]), last=names[-1])
 
 
 @dataclass(frozen=True)
@@ -46,21 +50,23 @@ def describe(app, mode: str, target, targets) -> ScopeTarget:
     context = (app.scope_text() if hasattr(app, "scope_text") else None) or ""
     focus = getattr(app, "focus", None)
     if not context and getattr(focus, "parent_id", None) is not None:
-        context = f"Subproject: {focus.title()}"
+        context = tr("Subproject: {title}", title=focus.title())
     if mode == "character":
-        return ScopeTarget(context, f"Character: {shorten(target.name)}", "")
+        return ScopeTarget(context, tr("Character: {name}", name=shorten(target.name)), "")
     if mode == "clip":
         targets = targets or [target]
         names: list = []
         for clip in targets:
             character = document.get_character(clip.character_id)
-            name = shorten(character.name) if character is not None else "no character"
+            name = shorten(character.name) if character is not None else tr("no character")
             if name not in names:
                 names.append(name)
         if len(targets) > 1:
-            return ScopeTarget(context, f"{len(targets)} clips: {shorten(', '.join(names), EXCERPT_LIMIT)}", "")
-        return ScopeTarget(context, f"Clip: {names[0]}", shorten(document.clip_text(target), EXCERPT_LIMIT))
-    return ScopeTarget(context, DEFAULTS_TITLE, "")
+            return ScopeTarget(context, tr("{count} clips: {names}", count=len(targets),
+                                              names=shorten(", ".join(names), EXCERPT_LIMIT)), "")
+        return ScopeTarget(context, tr("Clip: {name}", name=names[0]), shorten(document.clip_text(target),
+                                                                               EXCERPT_LIMIT))
+    return ScopeTarget(context, tr(DEFAULTS_TITLE), "")
 
 
 def library_note(app, character) -> str:
@@ -70,11 +76,11 @@ def library_note(app, character) -> str:
         return ""
     scope = app.character_scope(character)
     if scope == "global":
-        return "It is in the character library, so every project that uses it changes."
+        return tr("It is in the character library, so every project that uses it changes.")
     if scope == "project":
-        return "It is shared with this project's subprojects, so they change too."
+        return tr("It is shared with this project's subprojects, so they change too.")
     if scope == "missing":
-        return "Its library entry isn't on this machine, so only this project changes."
+        return tr("Its library entry isn't on this machine, so only this project changes.")
     return ""
 
 
@@ -117,4 +123,4 @@ class ScopeHeader(QWidget):
         set_hint(self.detail_label, target.detail)
         whole = "\n".join(part for part in (target.context, target.title, target.detail) if part)
         self.setToolTip(whole)
-        self.setAccessibleName(f"Editing {whole}")
+        self.setAccessibleName(tr("Editing {whole}", whole=whole))

@@ -26,10 +26,11 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QMenu, QPushButton, QVBoxLayout,
 )
 
+from kokoro_gui.i18n import N_, tr
 from kokoro_gui.qt import project as project_io
 
 MISSING_SUFFIX = " (missing)"
-TEXT_FILTER = "Documents (*.txt *.pdf *.epub)"
+TEXT_FILTER = N_("Documents (*.txt *.pdf *.epub)")
 
 
 def _format_duration(seconds: float) -> str:
@@ -43,7 +44,7 @@ class WelcomeDialog(QDialog):
     def __init__(self, app, parent=None):
         super().__init__(parent or app)
         self.app = app
-        self.setWindowTitle("Welcome")
+        self.setWindowTitle(tr("Welcome"))
         self.resize(720, 400)
 
         root = QVBoxLayout(self)
@@ -51,20 +52,22 @@ class WelcomeDialog(QDialog):
         root.addLayout(body, 1)
 
         left = QVBoxLayout()
-        left.addWidget(QLabel("Recent projects"))
+        left.addWidget(QLabel(tr("Recent projects")))
         self.list = QListWidget()
+        self.list.setToolTip(tr("Your recent projects. Double-click to open one, right-click to take it off the list."))
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._show_row_menu)
         self.list.currentItemChanged.connect(self._on_current_changed)
         self.list.itemActivated.connect(lambda item: self.choose(item.data(Qt.ItemDataRole.UserRole)))
         left.addWidget(self.list, 1)
-        self.clear_btn = QPushButton("Clear list")
+        self.clear_btn = QPushButton(tr("Clear list"))
+        self.clear_btn.setToolTip(tr("Empty the list. The project files stay."))
         self.clear_btn.clicked.connect(self.clear_recent)
         left.addWidget(self.clear_btn, 0, Qt.AlignmentFlag.AlignLeft)
         body.addLayout(left, 3)
 
         right = QVBoxLayout()
-        details = QGroupBox("Details")
+        details = QGroupBox(tr("Details"))
         form = QFormLayout(details)
         self.path_label = QLabel("-")
         self.path_label.setWordWrap(True)
@@ -74,25 +77,30 @@ class WelcomeDialog(QDialog):
         self.subprojects_label = QLabel("-")
         self.duration_label = QLabel("-")
         self.engines_label = QLabel("-")
-        form.addRow("Path:", self.path_label)
-        form.addRow("Modified:", self.modified_label)
-        form.addRow("Characters:", self.characters_label)
-        form.addRow("Clips:", self.clips_label)
-        form.addRow("Subprojects:", self.subprojects_label)
-        form.addRow("Audio:", self.duration_label)
-        form.addRow("Engines:", self.engines_label)
+        form.addRow(tr("Path:"), self.path_label)
+        form.addRow(tr("Modified:"), self.modified_label)
+        form.addRow(tr("Characters:"), self.characters_label)
+        form.addRow(tr("Clips:"), self.clips_label)
+        form.addRow(tr("Subprojects:"), self.subprojects_label)
+        form.addRow(tr("Audio:"), self.duration_label)
+        form.addRow(tr("Engines:"), self.engines_label)
         right.addWidget(details)
 
-        self.open_btn = QPushButton("Open")
+        self.open_btn = QPushButton(tr("Open"))
+        self.open_btn.setToolTip(tr("Open the selected project."))
         self.open_btn.setDefault(True)
         self.open_btn.clicked.connect(self._open_selected)
-        self.new_btn = QPushButton("New project")
+        self.new_btn = QPushButton(tr("New project"))
+        self.new_btn.setToolTip(tr("Start an empty project."))
         self.new_btn.clicked.connect(self.new_project)
-        self.new_from_template_btn = QPushButton("New from template...")
+        self.new_from_template_btn = QPushButton(tr("New from template..."))
+        self.new_from_template_btn.setToolTip(tr("Start a project from a template you saved."))
         self.new_from_template_btn.clicked.connect(self.new_from_template)
-        self.new_from_text_btn = QPushButton("New from text file...")
+        self.new_from_text_btn = QPushButton(tr("New from text file..."))
+        self.new_from_text_btn.setToolTip(tr("Start a project from a .txt, .pdf or .epub."))
         self.new_from_text_btn.clicked.connect(self._new_from_text_dialog)
-        self.open_other_btn = QPushButton("Open other...")
+        self.open_other_btn = QPushButton(tr("Open other..."))
+        self.open_other_btn.setToolTip(tr("Open a project that isn't on the list."))
         self.open_other_btn.clicked.connect(self.open_other)
         for widget in (self.open_btn, self.new_btn, self.new_from_template_btn, self.new_from_text_btn,
                        self.open_other_btn):
@@ -100,7 +108,8 @@ class WelcomeDialog(QDialog):
         right.addStretch(1)
         body.addLayout(right, 2)
 
-        self.show_at_startup = QCheckBox("Show at startup")
+        self.show_at_startup = QCheckBox(tr("Show at startup"))
+        self.show_at_startup.setToolTip(tr("Show this window each time KokoroGUI starts."))
         self.show_at_startup.setChecked(bool(app.settings.get("show_welcome", True)))
         self.show_at_startup.toggled.connect(self._on_show_toggled)
         root.addWidget(self.show_at_startup, 0, Qt.AlignmentFlag.AlignLeft)
@@ -161,7 +170,7 @@ class WelcomeDialog(QDialog):
             self.engines_label.setText(", ".join(engines) if engines else "-")
         is_current = bool(path) and self.app.project_path is not None and \
             os.path.abspath(path) == os.path.abspath(self.app.project_path)
-        self.open_btn.setText("Resume" if is_current else "Open")
+        self.open_btn.setText(tr("Resume") if is_current else tr("Open"))
         self.open_btn.setEnabled(bool(path) and (is_current or summary is not None))
 
     def _show_row_menu(self, pos) -> None:
@@ -169,7 +178,9 @@ class WelcomeDialog(QDialog):
         if item is None:
             return
         menu = QMenu(self)
-        remove = menu.addAction("Remove from list")
+        menu.setToolTipsVisible(True)
+        remove = menu.addAction(tr("Remove from list"))
+        remove.setToolTip(tr("Take it off this list. The project file stays."))
         remove.triggered.connect(lambda: self.remove_from_recent(item.data(Qt.ItemDataRole.UserRole)))
         menu.exec(self.list.mapToGlobal(pos))
 
@@ -209,7 +220,7 @@ class WelcomeDialog(QDialog):
         self.app.new_from_template_dialog()
 
     def _new_from_text_dialog(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "New project from text", filter=TEXT_FILTER)
+        path, _ = QFileDialog.getOpenFileName(self, tr("New project from text"), filter=tr(TEXT_FILTER))
         if path:
             self.new_from_text(path)
 

@@ -32,6 +32,7 @@ import numpy as np
 
 from kokoro_gui.daw import tagging, transcripts
 from kokoro_gui.daw.arrangement import Arrangement
+from kokoro_gui.i18n import tr
 
 BITRATES_KBPS = (64, 96, 128)
 DEFAULT_BITRATE_KBPS = 96
@@ -118,7 +119,7 @@ def write_m4b(samples: np.ndarray, rate: int, path: str, bitrate_kbps: Optional[
     message ends with its last lines of output."""
     ffmpeg = find_ffmpeg()
     if ffmpeg is None:
-        raise M4bError("ffmpeg isn't on PATH, so the M4B couldn't be written")
+        raise M4bError(tr("ffmpeg isn't on PATH, so the M4B couldn't be written"))
     import soundfile as sf
 
     warnings = []
@@ -128,7 +129,7 @@ def write_m4b(samples: np.ndarray, rate: int, path: str, bitrate_kbps: Optional[
             cover = tagging.check_cover(cover_path)[0]
         except tagging.CoverError as e:
             reason = str(e)
-            warnings.append(f"{reason[0].upper()}{reason[1:]}, so it was left out of the M4B")
+            warnings.append(tr("{reason}, so it was left out of the M4B", reason=reason[0].upper() + reason[1:]))
     kbps = int(bitrate_kbps) if bitrate_kbps else DEFAULT_BITRATE_KBPS
     duration_s = len(samples) / float(rate)
     out_dir = os.path.dirname(path) or "."
@@ -152,11 +153,13 @@ def write_m4b(samples: np.ndarray, rate: int, path: str, bitrate_kbps: Optional[
         try:
             subprocess.run(args, check=True, capture_output=True, timeout=timeout, **kwargs)
         except subprocess.CalledProcessError as e:
-            raise M4bError(f"ffmpeg failed (exit {e.returncode}): {_tail(e.stderr)}") from e
+            raise M4bError(tr("ffmpeg failed (exit {returncode}): {tail}", returncode=e.returncode,
+                              tail=_tail(e.stderr))) from e
         except subprocess.TimeoutExpired as e:
-            raise M4bError(f"ffmpeg took longer than {int(timeout)} s and was stopped: {_tail(e.stderr)}") from e
+            raise M4bError(tr("ffmpeg took longer than {timeout} s and was stopped: {tail}", timeout=int(timeout),
+                              tail=_tail(e.stderr))) from e
         except OSError as e:
-            raise M4bError(f"ffmpeg couldn't be started: {e}") from e
+            raise M4bError(tr("ffmpeg couldn't be started: {error}", error=e)) from e
         os.replace(partial, path)
         temps.remove(partial)
     finally:

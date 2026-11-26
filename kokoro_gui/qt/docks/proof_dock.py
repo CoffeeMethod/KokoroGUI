@@ -19,9 +19,10 @@ from PySide6.QtWidgets import (
 
 from kokoro_gui.daw import proof
 from kokoro_gui.daw.undo import SetFieldCommand
+from kokoro_gui.i18n import N_, tr
 from kokoro_gui.qt.proofing import SCOPE_ALL, SCOPE_SELECTION, SCOPE_SUBPROJECT
 
-COLUMNS = ("Clip", "Match", "First issue")
+COLUMNS = (N_("Clip"), N_("Match"), N_("First issue"))
 NEEDS_REWRITE = "needs_rewrite"
 _CLIP = Qt.ItemDataRole.UserRole
 LABEL_CHARS = 36
@@ -29,7 +30,7 @@ LABEL_CHARS = 36
 
 class ProofDock(QDockWidget):
     def __init__(self, app, parent=None):
-        super().__init__("Proof", parent)
+        super().__init__(tr("Proof"), parent)
         self.setObjectName("dock_proof")
         self.app = app
         self._rows: list = []
@@ -41,30 +42,31 @@ class ProofDock(QDockWidget):
         layout.setContentsMargins(4, 4, 4, 4)
 
         top = QHBoxLayout()
-        top.addWidget(QLabel("Run proof on"))
+        top.addWidget(QLabel(tr("Run proof on")))
         self.scope_combo = QComboBox()
-        self.scope_combo.addItem("All generated", SCOPE_ALL)
-        self.scope_combo.addItem("Selection", SCOPE_SELECTION)
-        self.scope_combo.addItem("This subproject", SCOPE_SUBPROJECT)
-        self.scope_combo.setToolTip("All generated: every generated clip on the timeline.\n"
-                                    "Selection: the selected clips.\n"
-                                    "This subproject: the clips of the selected subproject block, or of the "
-                                    "subproject you are in.")
+        self.scope_combo.addItem(tr("All generated"), SCOPE_ALL)
+        self.scope_combo.addItem(tr("Selection"), SCOPE_SELECTION)
+        self.scope_combo.addItem(tr("This subproject"), SCOPE_SUBPROJECT)
+        self.scope_combo.setToolTip(tr("All generated: every generated clip on the timeline.\n"
+                                       "Selection: the selected clips.\n"
+                                       "This subproject: the clips of the selected subproject block, or of the "
+                                       "subproject you are in."))
         top.addWidget(self.scope_combo, 1)
-        self.run_button = QPushButton("Run proof")
+        self.run_button = QPushButton(tr("Run proof"))
+        self.run_button.setToolTip(tr("Transcribe the generated audio and compare it with the text."))
         self.run_button.clicked.connect(self._on_run_clicked)
         top.addWidget(self.run_button)
         layout.addLayout(top)
 
         threshold_row = QHBoxLayout()
-        threshold_row.addWidget(QLabel("Flag below"))
+        threshold_row.addWidget(QLabel(tr("Flag below")))
         self.threshold_spin = QDoubleSpinBox()
         self.threshold_spin.setRange(proof.MIN_THRESHOLD, proof.MAX_THRESHOLD)
         self.threshold_spin.setDecimals(2)
         self.threshold_spin.setSingleStep(0.01)
         self.threshold_spin.setValue(app.proof_threshold())
-        self.threshold_spin.setToolTip("A clip is flagged when its audio matches its text less closely than this "
-                                       "(1.00 is word for word).")
+        self.threshold_spin.setToolTip(tr("A clip is flagged when its audio matches its text less closely than this "
+                                          "(1.00 is word for word)."))
         self.threshold_spin.valueChanged.connect(self._on_threshold_changed)
         threshold_row.addWidget(self.threshold_spin)
         threshold_row.addStretch(1)
@@ -74,7 +76,9 @@ class ProofDock(QDockWidget):
         layout.addLayout(threshold_row)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(list(COLUMNS))
+        self.tree.setToolTip(tr("Each proofed clip with how closely the audio matches its text. Click one to go "
+                                "to it."))
+        self.tree.setHeaderLabels([tr(name) for name in COLUMNS])
         self.tree.setRootIsDecorated(False)
         self.tree.setUniformRowHeights(True)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -91,13 +95,15 @@ class ProofDock(QDockWidget):
         layout.addWidget(self.tree, 1)
 
         actions = QHBoxLayout()
-        self.regenerate_button = QPushButton("Regenerate")
+        self.regenerate_button = QPushButton(tr("Regenerate"))
+        self.regenerate_button.setToolTip(tr("Make new audio for the selected clip."))
         self.regenerate_button.clicked.connect(self.regenerate_current)
-        self.ok_button = QPushButton("Mark OK")
-        self.ok_button.setToolTip("Take the clip off the list. It comes back if the clip is regenerated and "
-                                  "proofed again.")
+        self.ok_button = QPushButton(tr("Mark OK"))
+        self.ok_button.setToolTip(tr("Take the clip off the list. It comes back if the clip is regenerated and "
+                                     "proofed again."))
         self.ok_button.clicked.connect(self.mark_current_ok)
-        self.rewrite_button = QPushButton("Needs rewrite")
+        self.rewrite_button = QPushButton(tr("Needs rewrite"))
+        self.rewrite_button.setToolTip(tr("Give the selected clip the status Needs rewrite."))
         self.rewrite_button.clicked.connect(self.mark_current_needs_rewrite)
         for button in (self.regenerate_button, self.ok_button, self.rewrite_button):
             actions.addWidget(button)
@@ -176,9 +182,9 @@ class ProofDock(QDockWidget):
 
     def _set_footer(self, flagged: int, proofed: int) -> None:
         if proofed == 0:
-            self.footer.setText("Nothing proofed on this timeline yet.")
+            self.footer.setText(tr("Nothing proofed on this timeline yet."))
         else:
-            self.footer.setText(f"{flagged} flagged of {proofed} proofed.")
+            self.footer.setText(tr("{flagged} flagged of {proofed} proofed.", flagged=flagged, proofed=proofed))
 
     # -- rows ---------------------------------------------------------------
 
@@ -203,7 +209,7 @@ class ProofDock(QDockWidget):
             button.setEnabled(has_row)
 
     def _sync_run_button(self) -> None:
-        self.run_button.setText("Cancel" if self.app.is_proofing else "Run proof")
+        self.run_button.setText(tr("Cancel") if self.app.is_proofing else tr("Run proof"))
 
     # -- actions ------------------------------------------------------------
 

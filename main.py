@@ -14,6 +14,8 @@ from PySide6.QtWidgets import QApplication
 
 from kokoro_gui import logging_setup
 from kokoro_gui.engine import runtime
+from kokoro_gui.qt import app as qt_app
+from kokoro_gui.qt import localize, settings
 from kokoro_gui.qt.app import QtTTSApp
 from kokoro_gui.qt.crash_dialog import CrashBridge, CrashDialog
 
@@ -22,6 +24,7 @@ def main() -> int:
     runtime.prepare_storage()  # may move CACHE_DIR, so the log dir comes after it
     log_path = logging_setup.setup_logging(os.path.join(runtime.CACHE_DIR, logging_setup.LOG_SUBDIR))
     app = QApplication(sys.argv)
+    localize.apply(app, settings.load_settings(qt_app.CONFIG_FILE).get("language"))
     bridge = CrashBridge(log_path)
     logging_setup.install_excepthooks(bridge.report)
     try:

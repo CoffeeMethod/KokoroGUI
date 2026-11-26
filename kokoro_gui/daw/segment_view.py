@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from kokoro_gui.daw import arrangement
 from kokoro_gui.engine import segmenting
 from kokoro_gui.engine.lexicon import lexicon_signature, original_span, spoken as spoken_with_spans
+from kokoro_gui.i18n import N_
 
 _MEMO_SIZE = 4096
 _memo: "OrderedDict[tuple, tuple]" = OrderedDict()
@@ -178,10 +179,10 @@ def piece_at(pieces: list, offset: int):
 
 # What a piece ends at, for its tooltip ("ends at a sentence").
 LEVEL_ENDINGS = {
-    segmenting.PARAGRAPH: "a paragraph",
-    segmenting.SENTENCE: "a sentence",
-    segmenting.PAUSE: "a pause",
-    segmenting.WORD: "a word break (forced)",
+    segmenting.PARAGRAPH: N_("a paragraph"),
+    segmenting.SENTENCE: N_("a sentence"),
+    segmenting.PAUSE: N_("a pause"),
+    segmenting.WORD: N_("a word break (forced)"),
 }
 
 

@@ -11,9 +11,10 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.engine.lexicon import check_rule, normalize_rules, spoken
+from kokoro_gui.i18n import N_, tr
 
 # (label, rule mode): what the Mode column offers.
-MODE_CHOICES = (("Exact text", "literal"), ("Whole word", "word"), ("Pattern", "regex"))
+MODE_CHOICES = ((N_("Exact text"), "literal"), (N_("Whole word"), "word"), (N_("Pattern"), "regex"))
 FIND_COL, REPLACE_COL, MODE_COL, CASE_COL, DELETE_COL = range(5)
 
 
@@ -36,7 +37,7 @@ def format_reading(pairs) -> str:
     (a bare `$`) or whose form is itself (punctuation) is left out."""
     shown = [f"{token.strip()} /{spoken.strip()}/" for token, spoken in pairs
              if token.strip() and spoken.strip() and token.strip() != spoken.strip()]
-    return "  ".join(shown) if shown else "nothing to say"
+    return "  ".join(shown) if shown else tr("nothing to say")
 
 
 class LexiconDock(QDockWidget):
@@ -45,7 +46,7 @@ class LexiconDock(QDockWidget):
     explained = Signal(int, object)
 
     def __init__(self, app, parent=None):
-        super().__init__("Lexicon", parent)
+        super().__init__(tr("Lexicon"), parent)
         self.setObjectName("dock_lexicon")
         self.app = app
         self._populating = False
@@ -55,7 +56,8 @@ class LexiconDock(QDockWidget):
         layout = QVBoxLayout(content)
 
         self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Find", "Replace", "Mode", "Match case", ""])
+        self.table.setToolTip(tr("The rules, applied from top to bottom. Double-click a cell to edit it."))
+        self.table.setHorizontalHeaderLabels([tr("Find"), tr("Replace"), tr("Mode"), tr("Match case"), ""])
         columns = self.table.horizontalHeader()
         columns.setSectionResizeMode(FIND_COL, QHeaderView.ResizeMode.Stretch)
         columns.setSectionResizeMode(REPLACE_COL, QHeaderView.ResizeMode.Stretch)
@@ -67,18 +69,20 @@ class LexiconDock(QDockWidget):
         # Rules apply in the order of the row numbers: drag a number to move a rule.
         header = self.table.verticalHeader()
         header.setSectionsMovable(True)
-        header.setToolTip("Rules apply from the top. Drag a number to reorder.")
+        header.setToolTip(tr("Rules apply from the top. Drag a number to reorder."))
         header.sectionMoved.connect(self._section_moved)
         self.table.itemChanged.connect(self._item_changed)
         layout.addWidget(self.table, 1)
 
-        self.empty_label = QLabel("No rules defined.")
+        self.empty_label = QLabel(tr("No rules defined."))
         layout.addWidget(self.empty_label)
 
         order_row = QHBoxLayout()
-        self.up_button = QPushButton("Move up")
+        self.up_button = QPushButton(tr("Move up"))
+        self.up_button.setToolTip(tr("Apply the selected rule earlier."))
         self.up_button.clicked.connect(lambda _c=False: self.move_rule(self.table.currentRow(), -1))
-        self.down_button = QPushButton("Move down")
+        self.down_button = QPushButton(tr("Move down"))
+        self.down_button.setToolTip(tr("Apply the selected rule later."))
         self.down_button.clicked.connect(lambda _c=False: self.move_rule(self.table.currentRow(), 1))
         order_row.addWidget(self.up_button)
         order_row.addWidget(self.down_button)
@@ -86,26 +90,32 @@ class LexiconDock(QDockWidget):
         layout.addLayout(order_row)
 
         add_row = QHBoxLayout()
-        add_row.addWidget(QLabel("Find:"))
+        add_row.addWidget(QLabel(tr("Find:")))
         self.orig_edit = QLineEdit()
+        self.orig_edit.setToolTip(tr("The text to look for."))
         add_row.addWidget(self.orig_edit)
-        add_row.addWidget(QLabel("Replace:"))
+        add_row.addWidget(QLabel(tr("Replace:")))
         self.replace_edit = QLineEdit()
+        self.replace_edit.setToolTip(tr("What the engine reads instead."))
         add_row.addWidget(self.replace_edit)
         self.mode_combo = QComboBox()
+        self.mode_combo.setToolTip(tr("Exact text matches anywhere. Whole word skips parts of longer words. "
+                                      "Pattern is a regular expression."))
         for label, mode in MODE_CHOICES:
-            self.mode_combo.addItem(label, mode)
+            self.mode_combo.addItem(tr(label), mode)
         add_row.addWidget(self.mode_combo)
-        self.case_check = QCheckBox("Match case")
+        self.case_check = QCheckBox(tr("Match case"))
+        self.case_check.setToolTip(tr("Tell capital and small letters apart."))
         add_row.addWidget(self.case_check)
-        add_btn = QPushButton("Add Rule")
+        add_btn = QPushButton(tr("Add Rule"))
+        add_btn.setToolTip(tr("Add this rule to the end of the list."))
         add_btn.clicked.connect(self.add_rule)
         add_row.addWidget(add_btn)
         layout.addLayout(add_row)
 
-        self.harvest_button = QPushButton("Find words to check...")
-        self.harvest_button.setToolTip("List the names, acronyms, numbers and unknown words in the transcript "
-                                       "and add a rule for each one you answer.")
+        self.harvest_button = QPushButton(tr("Find words to check..."))
+        self.harvest_button.setToolTip(tr("List the names, acronyms, numbers and unknown words in the transcript "
+                                          "and add a rule for each one you answer."))
         self.harvest_button.clicked.connect(lambda _c=False: self.open_harvest())
         layout.addWidget(self.harvest_button, 0, Qt.AlignmentFlag.AlignLeft)
 
@@ -117,15 +127,16 @@ class LexiconDock(QDockWidget):
         self.error_label.setVisible(False)
         layout.addWidget(self.error_label)
 
-        note = QLabel("Rules apply in order, before generation; a change marks the clips it affects stale. "
-                      "Whole word skips a match inside a longer word. Pattern is a regular expression, and "
-                      "\\1 in Replace is its first group. Rules ignore case unless Match case is on.")
+        note = QLabel(tr("Rules apply in order, before generation; a change marks the clips it affects stale. "
+                         "Whole word skips a match inside a longer word. Pattern is a regular expression, and "
+                         "\\1 in Replace is its first group. Rules ignore case unless Match case is on."))
         note.setWordWrap(True)
         layout.addWidget(note)
 
-        layout.addWidget(QLabel("Test:"))
+        layout.addWidget(QLabel(tr("Test:")))
         self.test_edit = QLineEdit()
-        self.test_edit.setPlaceholderText("Type a sentence to see it after the rules")
+        self.test_edit.setToolTip(tr("Type text to see what your rules turn it into."))
+        self.test_edit.setPlaceholderText(tr("Type a sentence to see it after the rules"))
         self.test_edit.textChanged.connect(self.update_test)
         layout.addWidget(self.test_edit)
         self.after_label = self._result_label()
@@ -180,14 +191,14 @@ class LexiconDock(QDockWidget):
         orig = self.orig_edit.text().strip()
         rep = self.replace_edit.text().strip()
         if not orig:
-            QMessageBox.warning(self, "Error", "Original text cannot be empty.")
+            QMessageBox.warning(self, tr("Error"), tr("Original text cannot be empty."))
             return
         mode = self.mode_combo.currentData()
         case = self.case_check.isChecked()
         stored = replacement_for_storage(rep, mode)
         problem = check_rule(orig, stored, mode, case)
         if problem:
-            self._show_error(f"Rule not added: {problem}")
+            self._show_error(tr("Rule not added: {problem}", problem=problem))
             return
         self._show_error("")
         self.rules().append({"find": orig, "replace": stored, "mode": mode, "case": case})
@@ -284,10 +295,10 @@ class LexiconDock(QDockWidget):
         """Stores `rule` at `row` when it is usable. Otherwise shows why not
         and puts the old rule back in the row. The stored replacement keeps
         its meaning across a mode change, so the Replace cell is redrawn."""
-        problem = ("Find cannot be empty." if not rule["find"]
+        problem = (tr("Find cannot be empty.") if not rule["find"]
                    else check_rule(rule["find"], rule["replace"], rule["mode"], rule["case"]))
         if problem:
-            self._show_error(f"Not saved: {problem}")
+            self._show_error(tr("Not saved: {problem}", problem=problem))
             self._redraw_row(row)
             return
         self._show_error("")
@@ -336,8 +347,9 @@ class LexiconDock(QDockWidget):
                 self.table.setItem(row, REPLACE_COL, QTableWidgetItem(
                     replacement_for_display(rule["replace"], rule["mode"])))
                 combo = QComboBox()
+                combo.setToolTip(tr("How this rule finds its text."))
                 for label, mode in MODE_CHOICES:
-                    combo.addItem(label, mode)
+                    combo.addItem(tr(label), mode)
                 combo.setCurrentIndex(max(0, combo.findData(rule["mode"])))
                 combo.currentIndexChanged.connect(lambda _i, r=row, c=combo: self._mode_changed(r, c))
                 self.table.setCellWidget(row, MODE_COL, combo)
@@ -347,7 +359,7 @@ class LexiconDock(QDockWidget):
                 case_item.setCheckState(Qt.CheckState.Checked if rule["case"] else Qt.CheckState.Unchecked)
                 self.table.setItem(row, CASE_COL, case_item)
                 del_btn = QPushButton("X")
-                del_btn.setToolTip("Delete this rule")
+                del_btn.setToolTip(tr("Delete this rule"))
                 del_btn.clicked.connect(lambda _c=False, r=row: self.delete_rule(r))
                 self.table.setCellWidget(row, DELETE_COL, del_btn)
         finally:
@@ -371,7 +383,8 @@ class LexiconDock(QDockWidget):
 
     def update_test(self, *_args) -> None:
         text = self.test_edit.text()
-        self.after_label.setText(f"After your rules: {self.after_rules(text)}" if text.strip() else "")
+        self.after_label.setText(tr("After your rules: {after_rules}",
+                                    after_rules=self.after_rules(text)) if text.strip() else "")
         self._reads_token += 1  # an answer in flight is for older text
         if text.strip():
             self._reads_timer.start()
@@ -406,7 +419,7 @@ class LexiconDock(QDockWidget):
         token = self._reads_token
         # "Kokoro (local)" reads as "Kokoro".
         self._reads_name = (getattr(backend, "display_name", "") or backend.id).split(" (")[0]
-        self.reads_label.setText(f"{self._reads_name} reads: ...")
+        self.reads_label.setText(tr("{reads_name} reads: ...", reads_name=self._reads_name))
         self.reads_label.setVisible(True)
         future.add_done_callback(lambda f, t=token: self._reading_done(t, f))
 
@@ -424,6 +437,6 @@ class LexiconDock(QDockWidget):
     def _show_reading(self, token: int, pairs) -> None:
         if token != self._reads_token:
             return
-        reading = format_reading(pairs) if pairs else "not available"
-        self.reads_label.setText(f"{self._reads_name} reads: {reading}")
+        reading = format_reading(pairs) if pairs else tr("not available")
+        self.reads_label.setText(tr("{reads_name} reads: {reading}", reads_name=self._reads_name, reading=reading))
         self.reads_label.setVisible(True)

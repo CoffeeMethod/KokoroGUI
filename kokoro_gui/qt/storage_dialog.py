@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.engine import cache_admin
+from kokoro_gui.i18n import N_, tr
 from kokoro_gui.qt.reveal import reveal
 
 LIMIT_SETTING = "segment_cache_max_mb"
@@ -32,12 +33,12 @@ REFS = "refs"
 PROJECTS = "projects"
 
 ROWS = (
-    (SEGMENTS, "Generated audio cache (whole-document and JIT)"),
-    (REFS, "Audio8 reference codes"),
-    (PROJECTS, "Project working copies (managed automatically)"),
+    (SEGMENTS, N_("Generated audio cache (whole-document and JIT)")),
+    (REFS, N_("Audio8 reference codes")),
+    (PROJECTS, N_("Project working copies (managed automatically)")),
 )
 
-MEASURING = "Measuring..."
+MEASURING = N_("Measuring...")
 
 
 def trim_in_background(max_mb, folder: str, report: Callable[[str], None] = print) -> threading.Thread | None:
@@ -51,10 +52,11 @@ def trim_in_background(max_mb, folder: str, report: Callable[[str], None] = prin
         try:
             removed = cache_admin.trim_to_setting(max_mb, folder)
         except Exception as e:  # noqa: BLE001 - a trim must never take the app down
-            report(f"Couldn't trim the generated audio cache: {e}")
+            report(tr("Couldn't trim the generated audio cache: {error}", error=e))
             return
         if removed.count:
-            report(f"Trimmed the generated audio cache to {max_mb} MB: removed {cache_admin.describe(removed)}.")
+            report(tr("Trimmed the generated audio cache to {max_mb} MB: removed {describe}.", max_mb=max_mb,
+                      describe=cache_admin.describe(removed)))
 
     thread = threading.Thread(target=_work, name="cache-trim", daemon=True)
     thread.start()
@@ -68,7 +70,7 @@ class StorageDialog(QDialog):
     def __init__(self, app):
         super().__init__(app)
         self.app = app
-        self.setWindowTitle("Storage")
+        self.setWindowTitle(tr("Storage"))
         self.setObjectName("storage_dialog")
         self.resize(640, 260)
         self._thread: threading.Thread | None = None
@@ -80,13 +82,14 @@ class StorageDialog(QDialog):
         grid = QGridLayout()
         grid.setColumnStretch(0, 1)
         for row, (key, title) in enumerate(ROWS):
-            grid.addWidget(QLabel(title), row, 0)
-            size = QLabel(MEASURING)
+            grid.addWidget(QLabel(tr(title)), row, 0)
+            size = QLabel(tr(MEASURING))
             size.setObjectName(f"storage_size_{key}")
             grid.addWidget(size, row, 1)
             self.size_labels[key] = size
             if key != PROJECTS:
-                button = QPushButton("Clear...")
+                button = QPushButton(tr("Clear..."))
+                button.setToolTip(tr("Delete the files in this row. Asks first."))
                 button.setObjectName(f"storage_clear_{key}")
                 button.clicked.connect(lambda _checked=False, k=key: self.clear(k))
                 grid.addWidget(button, row, 2)
@@ -94,15 +97,15 @@ class StorageDialog(QDialog):
         layout.addLayout(grid)
 
         limit_row = QHBoxLayout()
-        limit_row.addWidget(QLabel("Keep the generated audio cache under"))
+        limit_row.addWidget(QLabel(tr("Keep the generated audio cache under")))
         self.limit_spin = QSpinBox()
         self.limit_spin.setObjectName("storage_limit")
         self.limit_spin.setRange(0, MAX_LIMIT_MB)
         self.limit_spin.setSingleStep(256)
-        self.limit_spin.setSuffix(" MB")
-        self.limit_spin.setSpecialValueText("No limit")
-        self.limit_spin.setToolTip("When the cache is over this, the least recently used audio is deleted: "
-                                   "at launch and after a whole-document or JIT generate. 0 keeps everything.")
+        self.limit_spin.setSuffix(tr(" MB"))
+        self.limit_spin.setSpecialValueText(tr("No limit"))
+        self.limit_spin.setToolTip(tr("When the cache is over this, the least recently used audio is deleted: "
+                                      "at launch and after a whole-document or JIT generate. 0 keeps everything."))
         limit = app.settings.get(LIMIT_SETTING, cache_admin.DEFAULT_MAX_MB)
         self.limit_spin.setValue(limit if isinstance(limit, int) and not isinstance(limit, bool) else 0)
         self.limit_spin.valueChanged.connect(self._on_limit_changed)
@@ -118,7 +121,7 @@ class StorageDialog(QDialog):
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
-        self.show_folder_button = QPushButton("Show cache folder")
+        self.show_folder_button = QPushButton(tr("Show cache folder"))
         self.show_folder_button.clicked.connect(self.show_cache_folder)
         buttons.addButton(self.show_folder_button, QDialogButtonBox.ButtonRole.ActionRole)
         layout.addWidget(buttons)
@@ -165,18 +168,20 @@ class StorageDialog(QDialog):
         what, result, error = payload
         self._thread = None
         if error is not None:
-            self.note.setText(f"Couldn't finish: {error}")
+            self.note.setText(tr("Couldn't finish: {error}", error=error))
         elif what == "measure":
             self._usage = result
             for key, usage in result.items():
                 self.size_labels[key].setText(cache_admin.describe(usage))
         elif what == "trim":
-            self.note.setText(f"Removed {cache_admin.describe(result)} of the least recently used audio."
-                              if result.count else "The generated audio cache is already under the limit.")
+            self.note.setText(tr("Removed {describe} of the least recently used audio.",
+                                 describe=cache_admin.describe(result))
+                              if result.count else tr("The generated audio cache is already under the limit."))
         else:  # a clear
             key, removed = result
-            noun = dict(ROWS)[key].split(" (")[0].lower()
-            message = f"Cleared {cache_admin.describe(removed)} from the {noun}."
+            usage = cache_admin.describe(removed)
+            message = tr("Cleared {usage} from the generated audio cache.", usage=usage) if key == SEGMENTS \
+                else tr("Cleared {usage} from the audio8 reference codes.", usage=usage)
             self.note.setText(message)
             self.app.set_status(message, "success")
         self._sync_buttons()
@@ -188,14 +193,15 @@ class StorageDialog(QDialog):
         working = self._thread is not None
         for button in self.clear_buttons.values():
             button.setEnabled(not working and not busy_app)
-            button.setToolTip("Wait for the current job to finish." if busy_app else "")
+            button.setToolTip(tr("Wait for the current job to finish.") if busy_app
+                              else tr("Delete the files in this row. Asks first."))
 
     # -- actions ---------------------------------------------------------------
 
     def refresh(self) -> None:
         """Measures all three folders again."""
         for label in self.size_labels.values():
-            label.setText(MEASURING)
+            label.setText(tr(MEASURING))
         segments, refs, projects = cache_admin.segment_cache_dir(), None, cache_admin.projects_dir()
         try:
             refs = cache_admin.ref_codes_dir()
@@ -217,23 +223,24 @@ class StorageDialog(QDialog):
         if key not in self.clear_buttons or self._thread is not None:
             return False
         if self.app.is_busy():
-            self.note.setText("Wait for the current job to finish before clearing a cache.")
+            self.note.setText(tr("Wait for the current job to finish before clearing a cache."))
             return False
         usage = self._usage.get(key, cache_admin.NOTHING)
         if not usage.count:
-            self.note.setText("Nothing to clear.")
+            self.note.setText(tr("Nothing to clear."))
             return False
         if key == SEGMENTS:
             folder, delete, title = cache_admin.segment_cache_dir(), cache_admin.clear_segment_cache, \
-                "Clear the generated audio cache"
-            text = (f"Delete {cache_admin.describe(usage)} of generated audio?\n\n"
-                    "Clips in your projects keep their audio. A whole-document or JIT generate "
-                    "synthesizes again what it used to find here.")
+                tr("Clear the generated audio cache")
+            text = (tr("Delete {describe} of generated audio?\n\n"
+                       "Clips in your projects keep their audio. A whole-document or JIT generate "
+                       "synthesizes again what it used to find here.", describe=cache_admin.describe(usage)))
         else:
             folder, delete, title = cache_admin.ref_codes_dir(), cache_admin.clear_ref_codes, \
-                "Clear the Audio8 reference codes"
-            text = (f"Delete {cache_admin.describe(usage)} of reference codes?\n\n"
-                    "Nothing is lost. The next generate encodes each reference again.")
+                tr("Clear the Audio8 reference codes")
+            text = (tr("Delete {describe} of reference codes?\n\n"
+                       "Nothing is lost. The next generate encodes each reference again.",
+                       describe=cache_admin.describe(usage)))
         answer = QMessageBox.question(self, title, text,
                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
                                       QMessageBox.StandardButton.Cancel)

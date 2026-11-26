@@ -25,6 +25,7 @@ from typing import Callable, Optional
 
 from kokoro_gui.engine import runtime
 from kokoro_gui.engine.paths import ensure_private_dir
+from kokoro_gui.i18n import tr
 
 
 def _safe(name) -> str:
@@ -160,7 +161,7 @@ class ReferenceStore:
         the saved wav's absolute path."""
         safe_name = self._safe_name(name)
         if not safe_name:
-            raise ValueError("Reference name must not be empty.")
+            raise ValueError(tr("Reference name must not be empty."))
         directory = self.global_dir
         ensure_private_dir(directory, fallback=False)
         out_wav = os.path.join(directory, f"{safe_name}.wav")

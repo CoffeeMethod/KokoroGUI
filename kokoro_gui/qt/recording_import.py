@@ -40,6 +40,8 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.daw import imported, subtitles
+from kokoro_gui.i18n import tr
+from kokoro_gui.qt import tips
 
 MUSIC_BED = "bed"
 RECORDING = "recording"
@@ -166,11 +168,11 @@ class ImportAudioDialog(QDialog):
 
     def __init__(self, file_name: str, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Import audio")
+        self.setWindowTitle(tr("Import audio"))
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(f"Import {file_name} as:"))
-        self.bed_radio = QRadioButton("Music bed (plays under the speech)")
-        self.recording_radio = QRadioButton("Recording to edit as text")
+        layout.addWidget(QLabel(tr("Import {file_name} as:", file_name=file_name)))
+        self.bed_radio = QRadioButton(tr("Music bed (plays under the speech)"))
+        self.recording_radio = QRadioButton(tr("Recording to edit as text"))
         self.bed_radio.setChecked(True)
         kinds = QButtonGroup(self)
         kinds.addButton(self.bed_radio)
@@ -178,10 +180,10 @@ class ImportAudioDialog(QDialog):
         layout.addWidget(self.bed_radio)
         layout.addWidget(self.recording_radio)
 
-        self.transcript_box = QGroupBox("Transcript")
+        self.transcript_box = QGroupBox(tr("Transcript"))
         box = QVBoxLayout(self.transcript_box)
-        self.whisper_radio = QRadioButton("Transcribe with Whisper")
-        self.captions_radio = QRadioButton("Caption file (SRT, VTT, ASS)")
+        self.whisper_radio = QRadioButton(tr("Transcribe with Whisper"))
+        self.captions_radio = QRadioButton(tr("Caption file (SRT, VTT, ASS)"))
         self.whisper_radio.setChecked(True)
         sources = QButtonGroup(self)
         sources.addButton(self.whisper_radio)
@@ -190,19 +192,19 @@ class ImportAudioDialog(QDialog):
         box.addWidget(self.captions_radio)
         row = QHBoxLayout()
         self.caption_edit = QLineEdit()
-        self.caption_edit.setPlaceholderText("Caption file")
-        self.browse_button = QPushButton("Browse...")
+        self.caption_edit.setPlaceholderText(tr("Caption file"))
+        self.browse_button = QPushButton(tr("Browse..."))
         self.browse_button.clicked.connect(self._browse)
         row.addWidget(self.caption_edit)
         row.addWidget(self.browse_button)
         box.addLayout(row)
-        self.refine_check = QCheckBox("Refine word timing with Whisper")
+        self.refine_check = QCheckBox(tr("Refine word timing with Whisper"))
         box.addWidget(self.refine_check)
         layout.addWidget(self.transcript_box)
 
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
                                         self)
-        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Next")
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("Next"))
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
@@ -214,7 +216,8 @@ class ImportAudioDialog(QDialog):
 
     def _browse(self) -> None:
         patterns = " ".join("*" + ext for ext in subtitles.SUBTITLE_EXTENSIONS)
-        path, _ = QFileDialog.getOpenFileName(self, "Caption file", filter=f"Captions ({patterns})")
+        path, _ = QFileDialog.getOpenFileName(self, tr("Caption file"), filter=tr("Captions ({patterns})",
+                                                                                  patterns=patterns))
         if path:
             self.caption_edit.setText(path)
             self.captions_radio.setChecked(True)
@@ -255,9 +258,9 @@ class RecordingReviewDialog(QDialog):
     hidden). `rows()` is what `ImportRecordingCommand` takes."""
 
     def __init__(self, rows: list, source: str, audio_path: str, characters: Optional[list] = None,
-                 parent=None, title: str = "Review the transcript"):
+                 parent=None, title: str = ""):
         super().__init__(parent)
-        self.setWindowTitle(title)
+        self.setWindowTitle(title or tr("Review the transcript"))
         self.resize(720, 520)
         self._rows = list(rows)
         self._source = source
@@ -266,7 +269,7 @@ class RecordingReviewDialog(QDialog):
         self.play_buttons: list = []
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Check the text of each clip. A corrected word keeps its place in the recording."))
+        layout.addWidget(QLabel(tr("Check the text of each clip. A corrected word keeps its place in the recording.")))
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         body = QWidget()
@@ -275,9 +278,10 @@ class RecordingReviewDialog(QDialog):
             line = QHBoxLayout()
             button = QToolButton()
             button.setText("▶")
-            button.setToolTip(f"Play {row.span[0]:.1f}s - {row.span[1]:.1f}s")
+            button.setToolTip(tr("Play {start:.1f}s - {end:.1f}s", start=row.span[0], end=row.span[1]))
             button.clicked.connect(lambda _checked=False, i=index: self.play(i))
             edit = QLineEdit(row.text)
+            edit.setToolTip(tr("Correct the text. A corrected word keeps its place in the recording."))
             line.addWidget(button)
             line.addWidget(edit, 1)
             lines.addLayout(line)
@@ -291,19 +295,22 @@ class RecordingReviewDialog(QDialog):
         if characters is not None:
             form = QFormLayout()
             self.character_combo = QComboBox()
+            self.character_combo.setToolTip(tr("The character the recording's clips belong to."))
             for character_id, name in characters:
                 self.character_combo.addItem(name, character_id)
-            self.character_combo.addItem(f"{UNKNOWN_SPEAKER_NAME} (new character, no voice)", UNKNOWN_SPEAKER)
-            form.addRow("Speaker", self.character_combo)
+            self.character_combo.addItem(tr("{unknown_speaker_name} (new character, no voice)",
+                                            unknown_speaker_name=UNKNOWN_SPEAKER_NAME), UNKNOWN_SPEAKER)
+            form.addRow(tr("Speaker"), self.character_combo)
             layout.addLayout(form)
         else:
-            layout.addWidget(QLabel("Speakers: as mapped from the caption file."))
+            layout.addWidget(QLabel(tr("Speakers: as mapped from the caption file.")))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Import")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("Import"))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        tips.label_rows(self)
 
     def row_count(self) -> int:
         return len(self._rows)

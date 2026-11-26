@@ -22,6 +22,8 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
+from kokoro_gui.i18n import N_, tr
+
 CUSTOM_ID = "custom"
 SPLIT_MODES = (None, "subprojects", "markers")
 
@@ -63,16 +65,16 @@ class Check:
     def needs(self) -> str:
         unit = _UNITS[self.metric]
         if self.low is not None and self.high is not None:
-            return f"{self.low:g} to {self.high:g} {unit}"
+            return tr("{low:g} to {high:g} {unit}", low=self.low, high=self.high, unit=unit)
         if self.high is not None:
-            return f"at most {self.high:g} {unit}"
-        return f"at least {self.low:g} {unit}"
+            return tr("at most {high:g} {unit}", high=self.high, unit=unit)
+        return tr("at least {low:g} {unit}", low=self.low, unit=unit)
 
     def describe(self, report) -> str:
         """"RMS -24.1 dBFS, needs -23 to -18 dBFS"."""
         value = self.value(report)
-        shown = f"{value:.1f} {_UNITS[self.metric]}" if math.isfinite(value) else "silent"
-        return f"{self.name} {shown}, needs {self.needs()}"
+        shown = f"{value:.1f} {_UNITS[self.metric]}" if math.isfinite(value) else tr("silent")
+        return tr("{name} {shown}, needs {needs}", name=tr(self.name), shown=shown, needs=self.needs())
 
 
 @dataclass(frozen=True)
@@ -93,7 +95,8 @@ def _podcast(id: str, label: str, fmt: str, channels: int, lufs: float, **values
         id, label,
         {**_BASE, "format": fmt, "sample_rate": 48000 if fmt == "wav" else 44100, "channels": channels,
          "target_lufs": lufs, "bitrate_kbps": 128, **values},
-        (Check("Loudness", "integrated_lufs", lufs - 1.0, lufs + 1.0), Check("True peak", "true_peak_dbtp", high=-1.0)),
+        (Check(N_("Loudness"), "integrated_lufs", lufs - 1.0, lufs + 1.0), Check(N_("True peak"), "true_peak_dbtp",
+                                                                                 high=-1.0)),
     )
 
 
@@ -103,8 +106,8 @@ PRESETS = (
         {**_BASE, "format": "mp3", "bitrate_kbps": 192, "sample_rate": 44100, "channels": 1,
          "normalize_mode": "rms", "target_rms_dbfs": -20.0, "limiter_dbfs": -3.5,
          "head_s": 1.0, "tail_s": 2.0, "split": "subprojects"},
-        (Check("RMS", "rms_dbfs", -23.0, -18.0), Check("Peak", "sample_peak_dbfs", high=-3.0),
-         Check("Noise floor", "noise_floor_dbfs", high=-60.0), Check("Length", "duration_min", high=120.0)),
+        (Check(N_("RMS"), "rms_dbfs", -23.0, -18.0), Check(N_("Peak"), "sample_peak_dbfs", high=-3.0),
+         Check(N_("Noise floor"), "noise_floor_dbfs", high=-60.0), Check(N_("Length"), "duration_min", high=120.0)),
         max_minutes=120.0,
     ),
     _podcast("apple", "Apple Podcasts", "mp3", 2, -16.0),

@@ -29,6 +29,7 @@ from kokoro_gui.daw.share import KEEP, REPLACE, SKIP
 from kokoro_gui.engine.paths import ensure_private_dir
 from kokoro_gui.engine.presets import filter_fx_preset_values
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
+from kokoro_gui.i18n import tr
 
 # What the library holds for a project-local item: nothing of that name
 # (ABSENT), the same thing (IDENTICAL), or something else (DIFFERENT).
@@ -123,14 +124,14 @@ def voice_item(store, engine_id: str, name, project_dir: str | None) -> LibraryI
     """The project's copy of voice `name` (`engines/<id>/voices/<name>.pt`, or the
     `.wav` and `.txt` of a Reference) against `store`'s global folder. NOT_LOCAL
     for a built-in voice, a name the project has no file for, or no store."""
-    item = LibraryItem(share.KIND_VOICE, name if isinstance(name, str) else "", "Voice", engine_id, store=store)
+    item = LibraryItem(share.KIND_VOICE, name if isinstance(name, str) else "", tr("Voice"), engine_id, store=store)
     if store is None or not project_dir or share.clean_stem(name) is None:
         return item
     local_dir = os.path.join(project_dir, *store.project_subdir.split("/"))
     if hasattr(store, "extension"):  # an embedding store: one file
-        exts, wanted, item.label = [store.extension], [store.extension], "Mix"
+        exts, wanted, item.label = [store.extension], [store.extension], tr("Mix")
     elif hasattr(store, "requires_transcript"):  # a reference store: a wav, and its transcript
-        exts, wanted, item.label = [".wav", ".txt"], [".wav"], "Reference"
+        exts, wanted, item.label = [".wav", ".txt"], [".wav"], tr("Reference")
     else:
         return item
     for ext in exts:
@@ -176,7 +177,7 @@ def fx_items(name, project_dir: str | None, fx_dir: str) -> list:
         return []
     items = []
     if local:
-        item = LibraryItem(share.KIND_FX, name, "FX", values=values)
+        item = LibraryItem(share.KIND_FX, name, tr("FX"), values=values)
         target = share._inside(fx_dir, name, ".json")
         if target is None:
             return []
@@ -188,7 +189,7 @@ def fx_items(name, project_dir: str | None, fx_dir: str) -> list:
         source = share._inside(os.path.join(project_dir, "fx", "ir"), ir, ".wav")
         target = share._inside(os.path.join(fx_dir, "ir"), ir, ".wav")
         if source and target and os.path.isfile(source):
-            items.append(LibraryItem(share.KIND_IR, ir, "Impulse response", files=[(".wav", source)],
+            items.append(LibraryItem(share.KIND_IR, ir, tr("Impulse response"), files=[(".wav", source)],
                                      status=_state_of([(source, target)])))
     return items
 
@@ -241,9 +242,9 @@ def save_to_library(items, choices: dict | None = None, *, fx_dir: str) -> CopyR
 
     def note_skip(item) -> None:
         if item.status == IDENTICAL:
-            result.skipped.append(f"{item.label} {item.name}: the library already has it")
+            result.skipped.append(tr("{label} {name}: the library already has it", label=item.label, name=item.name))
         elif item.status == DIFFERENT:
-            result.skipped.append(f"{item.label} {item.name}: left out")
+            result.skipped.append(tr("{label} {name}: left out", label=item.label, name=item.name))
 
     ordered = sorted(items, key=lambda i: {share.KIND_IR: 0, share.KIND_FX: 1}.get(i.kind, 2))
     for item in ordered:
@@ -258,12 +259,12 @@ def save_to_library(items, choices: dict | None = None, *, fx_dir: str) -> CopyR
                     item.name, lambda n: share._taken(ir_dir, n, ".wav"))
                 path = share._inside(ir_dir, stored, ".wav")
                 if path is None:
-                    raise OSError("its name can't be used as a file name")
+                    raise OSError(tr("its name can't be used as a file name"))
                 os.makedirs(ir_dir, exist_ok=True)
                 _copy_into(item.files[0][1], path)
                 if stored != item.name:
                     ir_map[item.name] = stored
-                line = f"Impulse response {stored}"
+                line = tr("Impulse response {stored}", stored=stored)
             elif item.kind == share.KIND_FX:
                 values = json.loads(json.dumps(item.values))
                 if values.get("convolution_ir") in ir_map:
@@ -273,10 +274,10 @@ def save_to_library(items, choices: dict | None = None, *, fx_dir: str) -> CopyR
                     item.name, lambda n: share._taken(fx_dir, n, ".json"))
                 path = share._inside(fx_dir, stored, ".json")
                 if path is None:
-                    raise OSError("its name can't be used as a file name")
+                    raise OSError(tr("its name can't be used as a file name"))
                 os.makedirs(fx_dir, exist_ok=True)
                 share._write_atomic(path, lambda f, v=values: f.write(json.dumps(v, indent=4).encode("utf-8")))
-                line = f"FX {stored}"
+                line = tr("FX {stored}", stored=stored)
             else:
                 store = item.store
                 main_ext = item.files[0][0]
@@ -286,11 +287,12 @@ def save_to_library(items, choices: dict | None = None, *, fx_dir: str) -> CopyR
                 for ext, source in item.files:
                     path = share._inside(store.global_dir, stored, ext)
                     if path is None:
-                        raise OSError("its name can't be used as a file name")
+                        raise OSError(tr("its name can't be used as a file name"))
                     _copy_into(source, path)
                 line = f"{item.label} {stored} ({item.engine_id})"
         except (OSError, ValueError) as e:
-            result.warnings.append(f"{item.label} {item.name!r} wasn't saved ({e}).")
+            result.warnings.append(tr("{label} {name!r} wasn't saved ({error}).", label=item.label, name=item.name,
+                                      error=e))
             continue
         if stored != item.name:
             result.renamed[item.key] = stored

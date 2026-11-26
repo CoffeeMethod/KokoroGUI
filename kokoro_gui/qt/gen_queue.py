@@ -47,6 +47,7 @@ from PySide6.QtWidgets import QApplication
 from kokoro_gui.daw import genqueue
 from kokoro_gui.daw.genqueue import GenerationQueue, QueueItem
 from kokoro_gui.daw.lanes import text_ordered_clips
+from kokoro_gui.i18n import tr
 from kokoro_gui.qt import project as project_io
 
 QUEUE_KEY = "queue"
@@ -471,15 +472,16 @@ class GenerationQueueMixin:
             self.transport_dock.set_progress(self.transport_dock.progress_bar.value(), "")
         self.set_ui_state(False)
         if cancelled:
-            self.set_status("Cancelled." if not ok else f"Cancelled after {ok} clip(s).", "warning")
+            self.set_status(tr("Cancelled.") if not ok else tr("Cancelled after {ok} clip(s).", ok=ok), "warning")
         elif self.queue_paused and queue.next_queued() is not None:
-            self.set_status(f"Paused. {waiting} clip(s) still queued.", "info")
+            self.set_status(tr("Paused. {waiting} clip(s) still queued.", waiting=waiting), "info")
         elif failed == 0 and ok:
-            self.set_status(f"Generated {ok} clip(s).", "success")
+            self.set_status(tr("Generated {ok} clip(s).", ok=ok), "success")
         elif ok == 0 and failed:
-            self.set_status(f"Batch generation failed for all {failed} clip(s).", "error")
+            self.set_status(tr("Batch generation failed for all {failed} clip(s).", failed=failed), "error")
         elif ok:
-            self.set_status(f"Generated {ok} of {ok + failed} clips ({failed} failed)", "warning")
+            self.set_status(tr("Generated {ok} of {total} clips ({failed} failed)", ok=ok, total=ok + failed,
+                               failed=failed), "warning")
         self._notify_if_long_job()
         self._restore_deferred_queue()
 
@@ -503,7 +505,7 @@ class GenerationQueueMixin:
             return
         self.queue_paused = True
         if self._queue_item is not None:
-            self.set_status("Pausing after this batch...", "warning")
+            self.set_status(tr("Pausing after this batch..."), "warning")
         self._queue_changed()
         if self._queue_item is None:
             self._queue_go_idle()
@@ -577,7 +579,8 @@ class GenerationQueueMixin:
         seconds, complete = self.generation_queue.eta_s(self._rate_for, self._queue_fraction)
         if seconds <= 0:
             return ""
-        return f"{'about' if complete else 'at least'} {genqueue.format_eta(seconds)} left"
+        left = genqueue.format_eta(seconds)
+        return tr("about {time} left", time=left) if complete else tr("at least {time} left", time=left)
 
     def _background_tree(self):
         """The parked tree the running item is for, or None."""
@@ -601,11 +604,11 @@ class GenerationQueueMixin:
             done = sum(i.clip_count for i in mine if i.state in (genqueue.DONE, genqueue.FAILED)) \
                 + extra_done + self._queue_inflight
             percent = int(done / total * 100) if total else 0
-            return percent, f"{tree.root.title()}: {done}/{total} in background"
+            return percent, tr("{title}: {done}/{total} in background", title=tree.root.title(), done=done, total=total)
         total = queue.clip_total() + self._queue_extra_total
         done = queue.clips_finished() + self._queue_extra_done + self._queue_inflight
         percent = int(done / total * 100) if total else 0
-        text = f"{done} of {total} clips"
+        text = tr("{done} of {total} clips", done=done, total=total)
         eta = self.queue_eta_text()
         return percent, f"{text}, {eta}" if eta else text
 
@@ -735,8 +738,8 @@ class GenerationQueueMixin:
         if not self._queue_restored or not self.generation_queue.pending():
             return
         count = self._queue_restored
-        self.set_status(f"{count} clip(s) were still queued when this project closed. "
-                        "Resume them in the Queue dock.", "info")
+        self.set_status(tr("{count} clip(s) were still queued when this project closed. "
+                           "Resume them in the Queue dock.", count=count), "info")
         if self.queue_dock is not None:
             self.queue_dock.show()
             self.queue_dock.raise_()

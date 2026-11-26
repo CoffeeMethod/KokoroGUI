@@ -31,6 +31,8 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
+from kokoro_gui.i18n import tr
+
 SUBTITLE_FORMATS = ("srt", "vtt", "ass", "ssa")
 # The file dialog filter, and what `format_for_path` accepts.
 SUBTITLE_EXTENSIONS = tuple("." + fmt for fmt in SUBTITLE_FORMATS)
@@ -62,7 +64,7 @@ def format_for_path(path: str) -> str:
     """The format name ("srt", "vtt", "ass", "ssa") from the extension."""
     ext = os.path.splitext(path)[1].lower().lstrip(".")
     if ext not in SUBTITLE_FORMATS:
-        raise SubtitleError(f"Not a subtitle file (.srt, .vtt, .ass, .ssa): {os.path.basename(path)}")
+        raise SubtitleError(tr("Not a subtitle file (.srt, .vtt, .ass, .ssa): {file}", file=os.path.basename(path)))
     return ext
 
 
@@ -85,10 +87,11 @@ def read_text(path: str) -> str:
     source = os.path.realpath(os.path.abspath(path))
     drive = os.path.splitdrive(source)[0]
     if not source.startswith(drive + os.sep) or not os.path.isfile(source):
-        raise SubtitleError(f"Not a file: {path}")
+        raise SubtitleError(tr("Not a file: {path}", path=path))
     size = os.path.getsize(source)
     if size > MAX_SUBTITLE_BYTES:
-        raise SubtitleError(f"{os.path.basename(source)} is {size / 1024 ** 2:.0f} MB, too big for a subtitle file.")
+        raise SubtitleError(tr("{file} is {size:.0f} MB, too big for a subtitle file.", file=os.path.basename(source),
+                               size=size / 1024 ** 2))
     with open(source, "rb") as f:
         return decode_bytes(f.read())
 
@@ -106,7 +109,7 @@ def parse_text(text: str, fmt: str) -> list:
     "srt", "vtt", "ass" or "ssa" (a leading dot and case are ignored)."""
     fmt = (fmt or "").lower().lstrip(".")
     if fmt not in SUBTITLE_FORMATS:
-        raise SubtitleError(f"Unknown subtitle format: {fmt!r}")
+        raise SubtitleError(tr("Unknown subtitle format: {fmt!r}", fmt=fmt))
     text = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     if fmt == "srt":
         cues = _parse_srt(text)
@@ -140,7 +143,7 @@ def _seconds(stamp: str) -> float:
     `MAX_CUE_SECONDS`."""
     match = _TIME_RE.fullmatch(stamp.strip())
     if match is None:
-        raise SubtitleError(f"Bad timestamp: {stamp[:40]!r}")
+        raise SubtitleError(tr("Bad timestamp: {stamp!r}", stamp=stamp[:40]))
     hours, minutes, seconds, fraction = match.groups()
     try:
         total = int(hours or 0) * 3600 + int(minutes) * 60 + int(seconds)
@@ -148,9 +151,9 @@ def _seconds(stamp: str) -> float:
             total += int(fraction) / (10 ** len(fraction))
         total = float(total)
     except (ValueError, OverflowError) as e:
-        raise SubtitleError(f"Bad timestamp: {stamp[:40]!r}") from e
+        raise SubtitleError(tr("Bad timestamp: {stamp!r}", stamp=stamp[:40])) from e
     if total > MAX_CUE_SECONDS:
-        raise SubtitleError(f"Timestamp {stamp.strip()!r} is past 48 hours.")
+        raise SubtitleError(tr("Timestamp {stamp!r} is past 48 hours.", stamp=stamp.strip()))
     return total
 
 

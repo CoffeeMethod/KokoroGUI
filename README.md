@@ -4,10 +4,9 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 
-A text-based audio workflow. Edit the words and the audio follows: write or import a transcript,
-give each line a character, and the clips land on a timeline you can mix and export. Change a word
-and only that clip generates again. It runs locally on [Kokoro](https://github.com/hexgrad/kokoro),
-with Audio8 voice cloning and optional LuxTTS support.
+A text to speech editor where the script is the project. Write or import the text, give each line a character,
+and the audio lands on a timeline you can mix and export. Change a word and only that line generates again.
+Everything runs on your own machine, free and open source.
 
 <img width="1600" height="1000" alt="KokoroGUI 4.0: transcript and settings tabs over a seconds-axis timeline and transport, dark theme" src="docs/assets/shell_dark.png" />
 
@@ -15,200 +14,55 @@ with Audio8 voice cloning and optional LuxTTS support.
 
 https://github.com/user-attachments/assets/c75e7141-5d73-40f4-b182-d4f5bc49ad1e
 
-## Features
+## Why use it
 
--   **Transcript first.** Type, paste or import `.txt`, `.pdf`, `.epub` or subtitles. Each run of
-    text belongs to a character, and only the clips whose text or voice changed need generating
-    again. Edit > Attribute Dialogue hands each quote in a book to the character its speech tag names.
--   **Timeline and mixer.** One track per character, with mute, solo, fader, pan, automation,
-    fades, markers, loops and timecode.
--   **Multiple engines.** Kokoro's named and mixable voices in 8 languages, Audio8 voice cloning,
-    and optional LuxTTS. Each character picks its own.
--   **Non-destructive FX.** A Pedalboard chain (compressor, EQ, reverb, convolution reverb, delay
-    and more) applied on playback and export, per project, character or clip.
--   **Dubbing.** Subtitle import, fit-to-slot timing, the original dialogue and a reference video
-    to play against.
--   **Recordings and music.** Edit a recording by editing its transcript, and add music beds that
-    duck under speech.
--   **Export.** One file in wav, mp3, flac, ogg or (with ffmpeg on PATH) m4b, with `.srt` subtitles and a cue sheet, optionally
-    normalized to a LUFS or RMS target under a true-peak ceiling or a peak limiter, with an MP3 bitrate, a sample rate
-    and a filename template. Presets for ACX, Apple Podcasts, Spotify and YouTube check each file, and one export can
-    write a file per subproject or marker range. Stems come per track or per character, with a dialogue stem for
-    dubbing. Transcripts (WebVTT, SRT, Podcasting 2.0 JSON, plain text), a chapters file and show notes can ride along.
-    mp3, flac and ogg files carry a title, artist, show, episode number and cover image, and an mp3 carries its chapters.
-    An M4B audiobook has a chapter per subproject. File > Measure Loudness reports the numbers.
--   **Generation queue.** Generate works through the stale clips eight at a time, so a book fills in as it goes. The
-    Queue tab lists the batches with the time left, and you can pause, reorder and resume them, even after a restart.
--   **Proofing.** The Proof tab has Whisper listen to the generated clips, compares what it heard with each clip's
-    text and lists the ones that don't match, worst first.
--   **Templates and credits.** Save a project's settings, characters and subproject titles as a template and start the next
-    episode from it. Add Credits writes the opening and closing credits an audiobook needs.
--   **Command line and MCP.** Speak text or render a tagged script to a project and a mixdown without opening the
-    window, from a terminal or from an AI agent over MCP.
--   **One-file projects.** A `.tbaw` holds the text, the audio and every voice it uses, so it opens
-    on another machine.
+-   **Edit text, not audio.** Fix a typo and that one clip regenerates. The rest of a ten-hour book stays as it is.
+-   **A full cast.** Every character gets its own voice and engine: Kokoro's voices in 8 languages, Audio8 voice
+    cloning, or LuxTTS. `[Marta]:` at the start of a line hands it to Marta, and Attribute Dialogue does it for a whole novel.
+-   **A real mixer.** One track per character with faders, pan, automation, fades, music beds that duck under speech,
+    and 17 effects applied at playback, so moving a slider never costs a regenerate.
+-   **Built for audiobooks.** Import a `.pdf` or `.epub`, let the queue fill it in while you keep editing, have Whisper
+    proof the audio against the text, and export an M4B with chapters or files that pass ACX, Apple Podcasts,
+    Spotify and YouTube loudness checks.
+-   **Dubbing and podcasts too.** Import subtitles, fit each line to its slot, play against the original video, and
+    export stems, transcripts and show notes.
+-   **One file.** A `.tbaw` holds the text, the audio and every voice it uses, so it opens on another machine.
+-   **Scriptable.** A command line and an MCP server render a tagged script to audio without opening the window.
 
-## What's new
+The [docs site](https://coffeemethod.github.io/KokoroGUI/) walks through each workflow and every setting.
 
-Unreleased:
+## What's new in 4.0.0-beta.3
 
--   A [command line](docs/cli.html) that speaks text into a WAV and renders a `[Speaker]:` script into a `.tbaw` and a mixdown,
-    then regenerates only the paragraphs that changed when you update it
--   An [MCP server](docs/cli.html#mcp), so an AI agent can speak, render and play on your machine
--   The Settings tab is now Voice & Clip. It and Audio FX name what an edit changes, their groups fold, the Transport says
-    what Preview will speak, and a greyed-out control says why
--   The right-hand panel tabs sit on top with every name in full, and scroll when they don't fit
--   Save your own named workspaces, which change only when you choose Update workspace, and reopen any closed panel
-    from Workspace > Panels
--   Open another project, or start a new one, while Generate runs: the first one keeps generating in the background into
-    its own files, and the Queue tab and the progress bar show it
--   The Qt widget tests run in CI on Linux in their own job, and the full GUI suite takes 4 minutes locally instead of 38
--   Generate fills a book in as it goes: the stale clips run eight at a time, a Queue tab lists the batches with the time
-    left, and Pause, reorder and Resume work on them, even after a restart
--   An Exports tab lists every export, newest first, with Play, Show in Folder and Delete
--   Keep editing while the queue runs: Generate, a clip's play button and Fit to slot join the queue, and Save, New
-    Subproject and Export run beside it
--   New, New from Template and Import Text into a new project wait for a save or an export, Import Text also for a
-    generate, and the whole-document and JIT generate use a project's own voice first
--   Added the optional [LuxTTS engine](docs/settings.html#luxtts).
--   A Help menu with Documentation, Keyboard Shortcuts and About, and File > Show in Folder
--   A log file, and a dialog with the traceback when something crashes
--   Importing a big book no longer freezes the window, and an oversized or malformed one is refused with the reason
--   Generate stale clips in the selection only, a taskbar alert when a long job finishes, and a
-    prompt before closing mid-generate
--   Split a clip in two at the playhead and join two clips back, from Edit, the block menu or `S`
--   Select several clips with Ctrl+click, Shift+click, a rubber band on the timeline or a text range, then set their
-    status, FX, gap or any Settings field at once, in one undo step
--   Keys for the transport and timeline (arrows, Home, End, J/K/L, Delete, Ctrl+G, Esc) that work only with the timeline
-    focused, with Ctrl+Alt versions of the arrows, Home and End for any panel, and a Snap to grid button that also snaps to markers
--   Edit > Remove Filler Words finds um, uh and the like in a recording, lets you check each one and play it, and cuts them in one undo step
--   Fix a flub in a recording with the speaker's own voice: right-click 5 to 30 s of their words to clone them with Audio8,
-    after you tick that you have their permission
--   Playback on macOS no longer clicks: the output stream asks for a fixed block there (`KOKOROGUI_BLOCKSIZE` overrides it)
--   Edit > Find (Ctrl+F) and Find and Replace (Ctrl+H) search the transcript and every open subproject, with Match case and
-    Whole word, and say how many clips Replace all will turn stale before it runs
--   Export can normalize to a LUFS target, File > Measure Loudness reports a mix, and the transport has a level meter
--   The Export dialog has tabs, an MP3 bitrate, a sample rate and a filename template, and asks before it overwrites a file
--   Export presets for ACX, Apple Podcasts, Spotify and YouTube that check each file, an RMS mode with a peak limiter,
-    head and tail silence, and one file per subproject or marker range
--   An Outline tab that lists a book's chapters with a status and a length, and proofs one in a click
--   Importing a book opens a wizard: tick the sections to keep, pick cleanup rules for page numbers, split words
-    and scene breaks, and check the result before it lands in the project
--   A Zoom to fit button, a timeline that zooms out to ten hours in one screen, and a project that reopens at its
-    last playhead, zoom, scroll and selected clip
--   Export can write a stem per track or per character and a dialogue stem without the music, all the length of the mix
--   Export can write transcripts with speaker names (WebVTT, SRT, Podcasting 2.0 JSON, plain text), a chapters file and show notes
--   Sliders for compressor and limiter release, compressor attack, reverb dry level, chorus mix and phaser depth and mix
--   Export writes tags and a cover image into mp3, flac and ogg files, and markers as chapters in an mp3
--   A Proof tab that has Whisper listen to the generated clips and flags those that don't match their text
--   Export can write an audiobook as one M4B with a chapter per subproject, the tags and the cover (needs ffmpeg on PATH)
--   Options > Storage shows the size of the generated audio cache and Audio8's reference codes, clears either, and trims the audio cache to a size limit
--   Lexicon rules can match a whole word or a regex pattern and run in an order you set, and a Test field shows a
-    sentence after the rules and how Kokoro will read it
--   Lexicon > Find words to check lists the names, acronyms and numbers in a book, plays each in its sentence, and adds
-    a whole-word rule for every answer you type
--   Options > Spellcheck underlines words the dictionary doesn't know, in the language of each clip's character
--   Edit > Characters has a Preview button that plays the character from a line of its last clip, and the Mixing tab has a Live
-    checkbox that plays the Mix again when you let go of the slider, with no file written until you save
--   The window says FX, Character, Reference, Mix and stale where it said FX Preset, Preset, voice reference, custom voice and dirty
--   Chapter and heading gaps, heading speed, a varied gap between speakers, and `[Sam, overlap:0.3]:` to start a line over the one before it
--   File > Save as Template keeps a project's settings, characters and subprojects, and New from Template starts the next
-    episode from it; File > Add Credits makes opening and closing credit subprojects from the title, author and narrator
--   Edit > Characters and the Audio FX tab export characters and FX, with their impulse responses and voice files, to one
-    `.kgshare` file, and import one from another machine, asking what to do where a name is taken
--   Save to library: a Mix, Reference, FX or impulse response that came with a project can be copied into your own library from
-    a right-click on the Audio FX, Mixing and Voice Reference lists, or from a character in Edit > Characters
--   Playback runs at 0.5x to 2x with the voices keeping their pitch (a speed box in the transport, `[` and `]`, and `L`
-    steps 1x, 1.5x, 2x), `M` drops a flag at the playhead with an optional note, and `N` jumps to the next flag
--   Save As keeps an uninstalled engine's voice files after the original `.tbaw` was deleted or moved
--   Edit > Attribute Dialogue assigns each quote to the character its tag names (`said Marta`), guesses the turns in a
-    two-person exchange, gives the narration to a narrator, and marks what it isn't sure of for you to check
--   Record a guide take on a clip after a three-beep count-in, with a pre-roll (block menu, `R` or Rec): it plays
-    without the beeps and the clip never goes stale while it's the active take
+-   Generate is a queue: a book fills in eight clips at a time while you edit, even in another project
+-   A book import wizard, an Outline tab for chapters and a Proof tab that checks the audio with Whisper
+-   Loudness normalizing, delivery presets, stems, transcripts, tags and M4B export
+-   A [command line and MCP server](docs/cli.html), and LuxTTS as an optional engine
+-   Find and replace, several clips selected at once, guide takes, filler word removal and 0.5x to 2x playback
+-   A tooltip on every control, and a window that can be translated (Options > Language)
 
-In 4.0.0-beta.2:
-
--   Subtitle import, Fit to slot, the original dialogue and a reference video, for dubbing
--   A mixer: mute, solo, faders, pan, automation, fades and crossfades, in stereo
--   Takes, pauses between clips, and ripple when a regenerated clip changes length
--   A character library shared by every project, and an engine choice per character
--   Subprojects, so a book can be one project per chapter
--   Music beds with ducking, and editing a recording as text
--   Convolution reverb, markers, loops, timecode and word-by-word highlighting
--   Whisper as the default transcriber, and text split at sentence ends near a word count
--   An Engine row in Settings, a Voices tab for any engine, and each engine's own language and
-    model settings
--   Kokoro optional: a project whose engine isn't installed opens and plays, and engines can be
-    plugins
--   Transcript details (Options menu): segment boundaries, lexicon rewrites, gaps, and each clip's
-    length and status
--   Typing, scrolling and timeline updates stay fast in long projects, plus Options > Force refresh
--   A clip made from a `[Speaker:FX]:` line no longer reads the tag aloud, and the tag's FX is
-    applied to the clip
--   On Windows, an impulse response name with a colon is refused instead of loading a different file
--   Options > Settings... holds the program and project settings in an OBS-style window; the
-    Voice & Clip tab keeps only the voice
--   An FX change in a long project renders in the background instead of freezing the window, and
-    undoing a character change or a text replace copies only what the edit touched
--   Opening a `.tbaw` whose project id is a path is refused before it touches any folder, and an edit made while Save runs
-    stays Unsaved instead of being marked saved
-
-The [changes page](docs/changes.html) has the full detail for every version, including what the
-update does to existing projects.
+The [changes page](docs/changes.html) lists everything, with what each update does to existing projects.
 
 ## Install
 
-You need Python 3.11+ and [eSpeak NG](https://github.com/espeak-ng/espeak-ng). To export M4B audiobooks you also
-need [ffmpeg](https://ffmpeg.org/download.html) on your PATH. Without it the M4B format doesn't appear in the
-Export dialog.
+You need Python 3.11+ and [eSpeak NG](https://github.com/espeak-ng/espeak-ng). M4B export also needs
+[ffmpeg](https://ffmpeg.org/download.html) on your PATH.
 
 ```bash
-git clone --branch 4.0.0-beta.2 --depth 1 https://github.com/CoffeeMethod/KokoroGUI.git
+git clone --branch 4.0.0-beta.3 --depth 1 https://github.com/CoffeeMethod/KokoroGUI.git
 cd KokoroGUI
 python -m venv .venv
 .venv\Scripts\activate          # Windows
 source .venv/bin/activate       # macOS / Linux
 pip install -r requirements.txt
+python main.py                  # or double-click run.bat on Windows
 ```
 
-`4.0.0-beta.2` is the latest beta tag. `--branch` takes a tag name, and dropping it gets the default branch. If `torch` gives you trouble, follow
-[pytorch.org](https://pytorch.org/get-started/locally/) for your OS and GPU.
+If `torch` gives you trouble, install it from [pytorch.org](https://pytorch.org/get-started/locally/) for your OS
+and GPU. Models download from Hugging Face the first time you use them, and the app asks before the 1.6 GB
+Whisper download. The [install guide](docs/index.html#install) covers smaller Whisper models, the offline Vosk
+engine and running without Kokoro.
 
-Kokoro is optional. Without the `kokoro` package (and eSpeak NG) the app
-runs Audio8 and the test engine, and a Kokoro project opens and plays but doesn't generate.
-
-Models download from Hugging Face the first time you use them. Whisper, the transcriber, is about
-1.6 GB and the app asks first. For a smaller one, copy `.env.example` to `.env` and set
-`WHISPER_MODEL` to `small`, `base` or `tiny`. `VOSK_MODEL_PATH` there switches on the offline
-Vosk engine.
-
-Looking for 3.2.0, the old one-text-box app? It's frozen. Clone the `3.2.0` tag with `--branch 3.2.0` and follow
-the README in that checkout. Only `presets/` and `custom_voices/` carry over between the two.
-
-## Usage
-
-Run `python main.py`, or double-click `run.bat` on Windows.
-
-1.  Pick a recent project from the welcome dialog, or start a new one.
-2.  Type or import text, select a range and choose a character. Or type `[Marta]:` at the start
-    of a line, and Generate > Auto-split turns a tagged transcript into clips.
-3.  Press Generate. Only stale clips generate.
-4.  Press Space to play. Drag clips on the timeline to move them.
-5.  File > Export writes the audio file. File > Save writes the `.tbaw`.
-
-Without the window, from the same folder:
-
-```bash
-python -m kokoro_gui.headless say "Hello there." --play stream
-python -m kokoro_gui.headless render episode.md --cast Sam=am_adam --cast Ann=af_bella
-```
-
-Models download only with `--allow-download`. For an AI agent, `pip install -r requirements-mcp.txt` and point its MCP client
-at `python -m kokoro_gui.headless.mcp_server`. [Command line and MCP](docs/cli.html) has every option and the client
-configuration.
-
-The [docs site](docs/index.html) covers the workflows, every setting, tags and the `.tbaw`
-format.
+Want 3.2.0, the old one-text-box app? Clone with `--branch 3.2.0`. Only `presets/` and `custom_voices/` carry over.
 
 ## Tests
 
@@ -218,15 +72,10 @@ pytest                                     # fast suite, mocked, no model needed
 pytest -m integration tests/integration -s # real generation, needs eSpeak NG
 ```
 
-CI runs the fast suite on Windows, Ubuntu and macOS, without the Qt widget tests. Those run locally,
-headless. The MCP server's tests skip unless `requirements-mcp.txt` is installed, and CI doesn't install it.
-The integration tests write each sample next to a transcript under `tests/output/` for
-you to listen to.
-
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Security reports go through the repository's Security tab,
-not Issues ([SECURITY.md](SECURITY.md)).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Pull requests go to the latest release branch, not `main`. Report security
+issues through the repository's Security tab, not Issues ([SECURITY.md](SECURITY.md)).
 
 ## Built with
 

@@ -13,6 +13,8 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
+from kokoro_gui.i18n import N_
+
 PAUSE_MARKER = "[pause:1.5]"
 
 # A line that is only a page number: digits ("12", "- 12 -"), "Page 12" or
@@ -115,13 +117,13 @@ def _strip_whitespace(text: str) -> str:
 
 
 RULES: list = [
-    CleanupRule("page_numbers", "Drop page numbers (lines of only a number, a roman numeral or \"Page N\")",
+    CleanupRule("page_numbers", N_("Drop page numbers (lines of only a number, a roman numeral or \"Page N\")"),
                 True, _page_numbers),
-    CleanupRule("hyphen_joins", "Join words split by a hyphen at a line break", True, _hyphen_joins),
-    CleanupRule("soft_wraps", "Join wrapped lines inside a paragraph (for PDFs)", False, _soft_wraps),
-    CleanupRule("scene_breaks", "Turn \"* * *\" lines into a 1.5 second pause", True, _scene_breaks),
-    CleanupRule("collapse_blank_lines", "Collapse runs of blank lines to one", True, _collapse_blank_lines),
-    CleanupRule("strip_whitespace", "Strip trailing spaces", True, _strip_whitespace),
+    CleanupRule("hyphen_joins", N_("Join words split by a hyphen at a line break"), True, _hyphen_joins),
+    CleanupRule("soft_wraps", N_("Join wrapped lines inside a paragraph (for PDFs)"), False, _soft_wraps),
+    CleanupRule("scene_breaks", N_("Turn \"* * *\" lines into a 1.5 second pause"), True, _scene_breaks),
+    CleanupRule("collapse_blank_lines", N_("Collapse runs of blank lines to one"), True, _collapse_blank_lines),
+    CleanupRule("strip_whitespace", N_("Strip trailing spaces"), True, _strip_whitespace),
 ]
 
 RULE_IDS = tuple(rule.id for rule in RULES)

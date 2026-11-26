@@ -47,6 +47,7 @@ from kokoro_gui.daw import library_copy
 from kokoro_gui.engine.asr import (
     ASR_ENGINES, get_vosk_model_path, reload_vosk_model_path, set_vosk_model_path, transcribe_wav,
 )
+from kokoro_gui.i18n import tr
 from kokoro_gui.qt import asr_prompt, share_dialogs
 from kokoro_gui.qt.docks.scrolling import scrollable
 from kokoro_gui.qt.docks.voice_header import engine_header
@@ -86,7 +87,7 @@ class VoiceCloneDock(QDockWidget):
     saveFinished = Signal(bool, str)
 
     def __init__(self, app, parent=None):
-        super().__init__("Voices", parent)
+        super().__init__(tr("Voices"), parent)
         self.setObjectName("dock_voice_clone")
         self.app = app
         # The engine this editor was built for, and its reference store;
@@ -105,28 +106,31 @@ class VoiceCloneDock(QDockWidget):
         header, self.engine_combo = engine_header(app, self.backend_id)
         layout.addLayout(header)
 
-        layout.addWidget(QLabel("<b>WAV file</b>"))
+        layout.addWidget(QLabel(tr("<b>WAV file</b>")))
         wav_row = QHBoxLayout()
         self.wav_path_edit = QLineEdit()
+        self.wav_path_edit.setToolTip(tr("A .wav recording of the voice to clone."))
         wav_row.addWidget(self.wav_path_edit, 1)
-        browse_btn = QPushButton("Browse...")
+        browse_btn = QPushButton(tr("Browse..."))
+        browse_btn.setToolTip(tr("Choose a recording."))
         browse_btn.clicked.connect(self._browse_wav)
         wav_row.addWidget(browse_btn)
         layout.addLayout(wav_row)
 
-        transcript_label = QLabel("<b>Transcript</b> (review/edit before saving)")
+        transcript_label = QLabel(tr("<b>Transcript</b> (review/edit before saving)"))
         layout.addWidget(transcript_label)
         self.transcript_edit = QPlainTextEdit()
+        self.transcript_edit.setToolTip(tr("What is said in the recording, word for word."))
         self.transcript_edit.setFixedHeight(100)
-        self.transcript_edit.setPlaceholderText("Type the Reference transcript or click Auto-Transcribe.")
+        self.transcript_edit.setPlaceholderText(tr("Type the Reference transcript or click Auto-Transcribe."))
         layout.addWidget(self.transcript_edit)
 
         engine_row = QHBoxLayout()
-        engine_row.addWidget(QLabel("ASR Engine:"))
+        engine_row.addWidget(QLabel(tr("ASR Engine:")))
         self.asr_engine_combo = QComboBox()
         for info in ASR_ENGINES:
-            self.asr_engine_combo.addItem(info.display_name, info.id)
-        self.asr_engine_combo.setToolTip("\n\n".join(f"{i.display_name}: {i.description}" for i in ASR_ENGINES))
+            self.asr_engine_combo.addItem(tr(info.display_name), info.id)
+        self.asr_engine_combo.setToolTip("\n\n".join(f"{tr(i.display_name)}: {i.describe()}" for i in ASR_ENGINES))
         saved_engine_idx = self.asr_engine_combo.findData(self.app.settings.get("asr_engine", ASR_ENGINES[0].id))
         self.asr_engine_combo.setCurrentIndex(saved_engine_idx if saved_engine_idx >= 0 else 0)
         self.asr_engine_combo.currentIndexChanged.connect(self._on_asr_engine_changed)
@@ -136,22 +140,23 @@ class VoiceCloneDock(QDockWidget):
         self.vosk_row = QWidget()
         vosk_row_layout = QHBoxLayout(self.vosk_row)
         vosk_row_layout.setContentsMargins(0, 0, 0, 0)
-        vosk_row_layout.addWidget(QLabel("Vosk Model:"))
+        vosk_row_layout.addWidget(QLabel(tr("Vosk Model:")))
         self.vosk_model_edit = QLineEdit()
         self.vosk_model_edit.setToolTip(
-            "Folder of an unzipped model from https://alphacephei.com/vosk/models.\n"
-            "Save writes this to VOSK_MODEL_PATH in a .env file at the project root."
+            tr("Folder of an unzipped model from https://alphacephei.com/vosk/models.\n"
+               "Save writes this to VOSK_MODEL_PATH in a .env file at the project root.")
         )
         vosk_row_layout.addWidget(self.vosk_model_edit, 1)
-        vosk_browse_btn = QPushButton("Browse...")
+        vosk_browse_btn = QPushButton(tr("Browse..."))
+        vosk_browse_btn.setToolTip(tr("Choose the folder of a Vosk model."))
         vosk_browse_btn.clicked.connect(self._browse_vosk_model)
         vosk_row_layout.addWidget(vosk_browse_btn)
-        vosk_save_btn = QPushButton("Save")
-        vosk_save_btn.setToolTip("Write this path to VOSK_MODEL_PATH in .env.")
+        vosk_save_btn = QPushButton(tr("Save"))
+        vosk_save_btn.setToolTip(tr("Write this path to VOSK_MODEL_PATH in .env."))
         vosk_save_btn.clicked.connect(self._save_vosk_model_path)
         vosk_row_layout.addWidget(vosk_save_btn)
-        vosk_reload_btn = QPushButton("Reload")
-        vosk_reload_btn.setToolTip("Discard unsaved edits and re-read VOSK_MODEL_PATH from .env.")
+        vosk_reload_btn = QPushButton(tr("Reload"))
+        vosk_reload_btn.setToolTip(tr("Discard unsaved edits and re-read VOSK_MODEL_PATH from .env."))
         vosk_reload_btn.clicked.connect(self._reload_vosk_model_path)
         vosk_row_layout.addWidget(vosk_reload_btn)
         layout.addWidget(self.vosk_row)
@@ -159,7 +164,8 @@ class VoiceCloneDock(QDockWidget):
         self._sync_vosk_model_edit()
         self.vosk_row.setVisible(self.asr_engine_combo.currentData() == "vosk")
 
-        self.transcribe_btn = QPushButton("\U0001F3A4 Auto-Transcribe")
+        self.transcribe_btn = QPushButton(tr("\U0001F3A4 Auto-Transcribe"))
+        self.transcribe_btn.setToolTip(tr("Fill in the transcript from the recording."))
         self.transcribe_btn.clicked.connect(self._on_transcribe_clicked)
         layout.addWidget(self.transcribe_btn)
 
@@ -167,15 +173,17 @@ class VoiceCloneDock(QDockWidget):
         layout.addWidget(self.status_label)
 
         save_row = QHBoxLayout()
-        save_row.addWidget(QLabel("Save As:"))
+        save_row.addWidget(QLabel(tr("Save As:")))
         self.name_edit = QLineEdit()
+        self.name_edit.setToolTip(tr("A name for this Reference."))
         save_row.addWidget(self.name_edit, 1)
-        save_btn = QPushButton("Save Reference")
+        save_btn = QPushButton(tr("Save Reference"))
+        save_btn.setToolTip(tr("Keep the recording and its transcript as a Reference."))
         save_btn.clicked.connect(self._on_save_clicked)
         save_row.addWidget(save_btn)
         layout.addLayout(save_row)
 
-        layout.addWidget(QLabel("<b>Saved References:</b>"))
+        layout.addWidget(QLabel(tr("<b>Saved References:</b>")))
         self.list_scroll = QScrollArea()
         self.list_scroll.setWidgetResizable(True)
         self.list_scroll.setMinimumHeight(120)
@@ -190,7 +198,7 @@ class VoiceCloneDock(QDockWidget):
     # --- reference audio / transcript -----------------------------------
 
     def _browse_wav(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select a WAV file", filter="Audio (*.wav)")
+        path, _ = QFileDialog.getOpenFileName(self, tr("Select a WAV file"), filter=tr("Audio (*.wav)"))
         if path:
             self.wav_path_edit.setText(path)
 
@@ -207,14 +215,14 @@ class VoiceCloneDock(QDockWidget):
         self.vosk_model_edit.setText(get_vosk_model_path())
 
     def _browse_vosk_model(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Select Vosk model folder")
+        path = QFileDialog.getExistingDirectory(self, tr("Select Vosk model folder"))
         if path:
             self.vosk_model_edit.setText(path)
             self._save_vosk_model_path()
 
     def _save_vosk_model_path(self) -> None:
         set_vosk_model_path(self.vosk_model_edit.text())
-        self.status_label.setText("Saved VOSK_MODEL_PATH to .env.")
+        self.status_label.setText(tr("Saved VOSK_MODEL_PATH to .env."))
 
     def _reload_vosk_model_path(self) -> None:
         reload_vosk_model_path()
@@ -234,23 +242,24 @@ class VoiceCloneDock(QDockWidget):
         non-file, a file over `MAX_REFERENCE_BYTES` and a non-.wav name."""
         path = path.strip()
         if not path:
-            QMessageBox.warning(self, "Error", "Select a WAV file first.")
+            QMessageBox.warning(self, tr("Error"), tr("Select a WAV file first."))
             return None
         if _is_network_path(path):
-            QMessageBox.warning(self, "Error", "Network paths aren't supported; copy the file locally first.")
+            QMessageBox.warning(self, tr("Error"), tr("Network paths aren't supported; copy the file locally first."))
             return None
         real = os.path.realpath(path)
         if _is_network_path(real):
-            QMessageBox.warning(self, "Error", "Network paths aren't supported; copy the file locally first.")
+            QMessageBox.warning(self, tr("Error"), tr("Network paths aren't supported; copy the file locally first."))
             return None
         if not os.path.isfile(real):
-            QMessageBox.warning(self, "Error", "Select a WAV file first.")
+            QMessageBox.warning(self, tr("Error"), tr("Select a WAV file first."))
             return None
         if os.path.splitext(real)[1].lower() != ".wav":
-            QMessageBox.warning(self, "Error", "The file must be a .wav file.")
+            QMessageBox.warning(self, tr("Error"), tr("The file must be a .wav file."))
             return None
         if os.path.getsize(real) > MAX_REFERENCE_BYTES:
-            QMessageBox.warning(self, "Error", f"The WAV file is over {MAX_REFERENCE_BYTES // (1024 * 1024)} MB.")
+            QMessageBox.warning(self, tr("Error"), tr("The WAV file is over {max_reference_bytes} MB.",
+                                                      max_reference_bytes=MAX_REFERENCE_BYTES // (1024 * 1024)))
             return None
         return real
 
@@ -262,7 +271,7 @@ class VoiceCloneDock(QDockWidget):
         engine = self.asr_engine_combo.currentData() or ASR_ENGINES[0].id
         vosk_model_path = self.vosk_model_edit.text().strip()
         if engine == "vosk" and not vosk_model_path:
-            QMessageBox.warning(self, "Error", "Enter a Vosk model folder first.")
+            QMessageBox.warning(self, tr("Error"), tr("Enter a Vosk model folder first."))
             return
 
         downloading = False
@@ -275,11 +284,12 @@ class VoiceCloneDock(QDockWidget):
                              if self.asr_engine_combo.itemData(i) != "whisper")
                 self.asr_engine_combo.setCurrentIndex(other)
                 self.status_label.setText(
-                    f"Switched to {self.asr_engine_combo.currentText()}. Click Auto-Transcribe to use it.")
+                    tr("Switched to {currenttext}. Click Auto-Transcribe to use it.",
+                       currenttext=self.asr_engine_combo.currentText()))
                 return
 
         self.transcribe_btn.setEnabled(False)
-        self.status_label.setText("Downloading Whisper model..." if downloading else "Transcribing...")
+        self.status_label.setText(tr("Downloading Whisper model...") if downloading else tr("Transcribing..."))
         # The worker thread can't be interrupted. Retiring the dock or
         # starting another run bumps the token, and `_on_transcribe_finished`
         # drops this run's result when it finally arrives.
@@ -322,10 +332,11 @@ class VoiceCloneDock(QDockWidget):
         self.transcribe_btn.setEnabled(True)
         if success:
             self.transcript_edit.setPlainText(payload)
-            self.status_label.setText("Transcribed - review/edit before saving.")
+            self.status_label.setText(tr("Transcribed - review/edit before saving."))
         else:
             # The asr module's own errors already say "Transcription failed".
-            prefix = "" if payload.startswith("Transcription failed") else "Transcription failed: "
+            prefix = "" if payload.startswith(tr("Transcription failed: {error}",
+                                                 error="").strip()) else tr("Transcription failed: ")
             self.status_label.setText(f"{prefix}{payload}")
 
     # --- saved references (name -> wav+transcript sidecar pair) ---------
@@ -335,16 +346,17 @@ class VoiceCloneDock(QDockWidget):
         transcript = self.transcript_edit.toPlainText().strip()
 
         if not name:
-            QMessageBox.warning(self, "Error", "Enter a name for this Reference.")
+            QMessageBox.warning(self, tr("Error"), tr("Enter a name for this Reference."))
             return
         wav_path = self._checked_wav_path(self.wav_path_edit.text())
         if wav_path is None:
             return
         if not transcript and getattr(self.store, "requires_transcript", True):
-            QMessageBox.warning(self, "Error", "Enter or auto-transcribe a transcript first.")
+            QMessageBox.warning(self, tr("Error"), tr("Enter or auto-transcribe a transcript first."))
             return
         if name in self.store.list_references():
-            if QMessageBox.question(self, "Overwrite", f"Reference '{name}' exists. Overwrite?") != QMessageBox.StandardButton.Yes:
+            if QMessageBox.question(self, tr("Overwrite"), tr("Reference '{name}' exists. Overwrite?",
+                                                              name=name)) != QMessageBox.StandardButton.Yes:
                 return
 
         try:
@@ -355,7 +367,7 @@ class VoiceCloneDock(QDockWidget):
 
     def _on_save_finished(self, success: bool, payload: str) -> None:
         if success:
-            self.status_label.setText(f"Saved: {payload}")
+            self.status_label.setText(tr("Saved: {payload}", payload=payload))
             self.refresh_list()
             character = self.app.active_character()
             if character is not None and character.backend_id == self.backend_id:
@@ -363,18 +375,18 @@ class VoiceCloneDock(QDockWidget):
             if self._library_item(payload).status != library_copy.NOT_LOCAL:
                 # The project's own copy is read first (grill TB3); this save went to the library.
                 self.status_label.setText(self.status_label.text()
-                                          + " This project's own copy of it is still the one used here.")
+                                          + tr(" This project's own copy of it is still the one used here."))
         else:
-            self.status_label.setText(f"Save failed: {payload}")
+            self.status_label.setText(tr("Save failed: {payload}", payload=payload))
 
     def _use_reference(self, name: str) -> None:
         """Explicitly assign a saved Reference to the active character."""
         if self.app.is_busy():
-            QMessageBox.warning(self, "Busy", "Cancel the current job before changing a voice.")
+            QMessageBox.warning(self, tr("Busy"), tr("Cancel the current job before changing a voice."))
             return
         character = self.app.active_character()
         if character is None:
-            QMessageBox.warning(self, "No character", "Add a character in Edit > Characters first.")
+            QMessageBox.warning(self, tr("No character"), tr("Add a character in Edit > Characters first."))
             return
         if character.backend_id != self.backend_id:
             if not self.app.set_character_engine(character, self.backend_id):
@@ -382,7 +394,7 @@ class VoiceCloneDock(QDockWidget):
         character.preset_data["voice"] = name
         self.app.set_engine_setting(self.backend_id, "voice", name)
         self.app.commit_character_edit(character)
-        self.status_label.setText(f"Using {name} for {character.name}.")
+        self.status_label.setText(tr("Using {name} for {character}.", name=name, character=character.name))
 
     def _load_reference(self, name: str) -> None:
         """Loads a saved reference back into the editable fields above, for
@@ -401,7 +413,7 @@ class VoiceCloneDock(QDockWidget):
         """Copies the project's own copy of Reference `name` into the library
         (plan 41). Returns the `CopyResult` or None."""
         return share_dialogs.save_items_to_library(self.app, self, [self._library_item(name)],
-                                                   title="Save Reference to library")
+                                                   title=tr("Save Reference to library"))
 
     def reference_menu(self, name: str):
         """The right-click menu of a Reference row."""
@@ -423,36 +435,40 @@ class VoiceCloneDock(QDockWidget):
         # alongside the global store; a name in both is the project's.
         names = self.store.list_references(getattr(self.app, "project_dir", None))
         if not names:
-            self._list_layout.addWidget(QLabel("No saved References yet."))
+            self._list_layout.addWidget(QLabel(tr("No saved References yet.")))
             return
 
         for name in names:
             row = QFrame()
             row_layout = QHBoxLayout(row)
             load_btn = QPushButton(name)
+            load_btn.setToolTip(tr("Load this Reference into the fields above. Right-click to copy it into the "
+                                   "library."))
             load_btn.setFlat(True)
             load_btn.clicked.connect(lambda _c=False, n=name: self._load_reference(n))
             row_layout.addWidget(load_btn, 1)
             if self._library_item(name).status != library_copy.NOT_LOCAL:
-                tag = QLabel("in this project")
-                tag.setToolTip("This Reference came with the project. Right-click to save it to the library.")
+                tag = QLabel(tr("in this project"))
+                tag.setToolTip(tr("This Reference came with the project. Right-click to save it to the library."))
                 row_layout.addWidget(tag)
             row.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             row.customContextMenuRequested.connect(lambda pos, r=row, n=name: self._show_reference_menu(r, n, pos))
-            use_btn = QPushButton("Use")
-            use_btn.setToolTip("Assign this saved Reference to the active character.")
+            use_btn = QPushButton(tr("Use"))
+            use_btn.setToolTip(tr("Assign this saved Reference to the active character."))
             use_btn.clicked.connect(lambda _c=False, n=name: self._use_reference(n))
             row_layout.addWidget(use_btn)
             del_btn = QPushButton("✕")
+            del_btn.setToolTip(tr("Delete this Reference."))
             del_btn.clicked.connect(lambda _c=False, n=name: self.delete_reference(n))
             row_layout.addWidget(del_btn)
             self._list_layout.addWidget(row)
 
     def delete_reference(self, name: str) -> None:
-        if QMessageBox.question(self, "Confirm", f"Delete Reference '{name}'?") != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, tr("Confirm"), tr("Delete Reference '{name}'?",
+                                                        name=name)) != QMessageBox.StandardButton.Yes:
             return
         try:
             self.store.delete_reference(name)
             self.refresh_list()
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to delete: {e}")
+            QMessageBox.critical(self, tr("Error"), tr("Failed to delete: {error}", error=e))

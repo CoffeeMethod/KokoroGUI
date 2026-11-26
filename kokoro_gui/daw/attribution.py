@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Iterable, Optional
 
+from kokoro_gui.i18n import tr
+
 HIGH = "high"
 MEDIUM = "medium"
 LOW = "low"
@@ -336,12 +338,12 @@ def _narration(text: str, lo: int, hi: int) -> list:
 
 def _tag_reason(tag: Optional[Tag]) -> str:
     if tag is None:
-        return "No tag"
+        return tr("No tag")
     if tag.speaker is not None:
-        return f"Tag: {tag.text}"
+        return tr("Tag: {text}", text=tag.text)
     if tag.pronoun is not None:
-        return f"Pronoun tag: {tag.text}"
-    return f"Not a character: {tag.other}"
+        return tr("Pronoun tag: {text}", text=tag.text)
+    return tr("Not a character: {other}", other=tag.other)
 
 
 def plan(text: str, characters, narrator_id: Optional[str] = None, start: int = 0,
@@ -398,7 +400,7 @@ def plan(text: str, characters, narrator_id: Optional[str] = None, start: int = 
             if row[2] is None:
                 name = by_id[speaker].name
                 row[2], row[3] = speaker, MEDIUM
-                row[4] = f"Same paragraph as {name}" + (f" ({row[1].text})" if row[1] else "")
+                row[4] = tr("Same paragraph as {name}", name=name) + (f" ({row[1].text})" if row[1] else "")
 
     # Step 3: turn-taking inside a run of quoted paragraphs.
     run: list = []
@@ -448,4 +450,4 @@ def _alternate(run: list, by_id: dict) -> None:
         other = b if speaker == a else a
         for row in unit.rows:
             row[2], row[3] = speaker, MEDIUM
-            row[4] = f"Turn-taking with {by_id[other].name}" + (f" ({row[1].text})" if row[1] else "")
+            row[4] = tr("Turn-taking with {name}", name=by_id[other].name) + (f" ({row[1].text})" if row[1] else "")

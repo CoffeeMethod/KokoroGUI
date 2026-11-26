@@ -98,6 +98,7 @@ from kokoro_gui.daw.undo import CompositeCommand, SetFieldCommand
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS
 from kokoro_gui.engines.base import SHARED_CONFIG_KEYS
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
+from kokoro_gui.i18n import N_, tr
 from kokoro_gui.qt import fx_resolve, scope_target, spec
 from kokoro_gui.qt.docks.scope_fields import (
     MIXED, MIXED_LABEL, MixedCheckBox, MixedSpinBox, ScopeFields, common_value, mark_mixed,
@@ -114,19 +115,24 @@ _INTERNAL_ONLY_KEYS = ("apply_fx", "fx_preset")
 # schema keys.
 _HAND_BUILT_STATE_KEYS = ("volume", "pitch", "normalize", "trim_silence")
 
-TITLE = "Voice & Clip"
+TITLE = N_("Voice & Clip")
 # The schema group that is the Voice box itself, and the ones that fold.
-VOICE_GROUP = "Generation"
-MODEL_GROUP = "Model"
+VOICE_GROUP = N_("Generation")
+MODEL_GROUP = N_("Model")
 # What each hand-built field is called in the "Set on this clip" hint.
-HAND_BUILT_LABELS = {"volume": "Volume", "pitch": "Pitch", "fx_preset": "FX", "apply_fx": "Enable FX",
-                     "normalize": "Normalize", "trim": "Trim Silence"}
+HAND_BUILT_LABELS = {"volume": N_("Volume"), "pitch": N_("Pitch"), "fx_preset": N_("FX"), "apply_fx": N_("Enable FX"),
+                     "normalize": N_("Normalize"), "trim": N_("Trim Silence")}
 ENABLE_FX_TIPS = {
-    "none": "The main switch. Off, no FX run, whatever a character or clip is set to.",
-    "character": "Run the FX on this character's clips. The main switch is Enable FX with nothing selected.",
-    "clip": "Run the FX on this clip. The main switch is Enable FX with nothing selected.",
+    "none": N_("The main switch. Off, no FX run, whatever a character or clip is set to."),
+    "character": N_("Run the FX on this character's clips. The main switch is Enable FX with nothing selected."),
+    "clip": N_("Run the FX on this clip. The main switch is Enable FX with nothing selected."),
 }
-BUSY_FIELD_TIP = "Off while a generate runs."
+VOLUME_TIP = N_("How loud the voice is. 1.00 leaves it as it was generated.")
+PITCH_TIP = N_("Raise or lower the voice, in semitones.")
+# Shown on a checkbox while nothing says where its value comes from.
+CHECK_TIPS = {"normalize": N_("Raise the audio until its loudest peak is near full level."),
+              "trim": N_("Cut the silence at the start and end of the audio.")}
+BUSY_FIELD_TIP = N_("Off while a generate runs.")
 
 
 class SettingsDock(QDockWidget):
@@ -178,7 +184,7 @@ class SettingsDock(QDockWidget):
 
         # --- Voice: the Engine row and the schema fields (moved from
         # GenerationDock) ---
-        self.schema_group = QGroupBox("Voice")
+        self.schema_group = QGroupBox(tr("Voice"))
         self.schema_layout = QVBoxLayout(self.schema_group)
         layout.addWidget(self.schema_group)
 
@@ -186,7 +192,7 @@ class SettingsDock(QDockWidget):
         self.engine_row = engine_row = QWidget()
         engine_form = QFormLayout(engine_row)
         engine_form.setContentsMargins(0, 0, 0, 0)
-        self.engine_label = QLabel("Engine:")
+        self.engine_label = QLabel(tr("Engine:"))
         self.engine_combo = QComboBox()
         for label, engine_id in self.app.engine_choices():
             self.engine_combo.addItem(label, engine_id)
@@ -205,29 +211,34 @@ class SettingsDock(QDockWidget):
 
         # --- Audio control (volume/pitch/FX preset - hand-built, moved
         # from GenerationDock) ---
-        self.audio_group = audio_group = QGroupBox("Audio")
+        self.audio_group = audio_group = QGroupBox(tr("Audio"))
         audio_form = QFormLayout(audio_group)
         self.volume_spin = MixedSpinBox()
+        self.volume_spin.setToolTip(tr(VOLUME_TIP))
         self.volume_spin.setRange(0.1, 2.0)
         self.volume_spin.setSingleStep(0.1)
-        audio_form.addRow("Volume:", self.volume_spin)
+        audio_form.addRow(tr("Volume:"), self.volume_spin)
 
         self.pitch_spin = MixedSpinBox()
+        self.pitch_spin.setToolTip(tr(PITCH_TIP))
         self.pitch_spin.setRange(-12, 12)
         self.pitch_spin.setSingleStep(1)
-        audio_form.addRow("Pitch (st):", self.pitch_spin)
+        audio_form.addRow(tr("Pitch (st):"), self.pitch_spin)
 
         fx_row = QWidget()
         fx_row_layout = QHBoxLayout(fx_row)
         fx_row_layout.setContentsMargins(0, 0, 0, 0)
         self.fx_preset_combo = QComboBox()
-        self.apply_fx_check = MixedCheckBox(HAND_BUILT_LABELS["apply_fx"])
+        self.fx_preset_combo.setToolTip(tr("The FX to run on this voice."))
+        self.apply_fx_check = MixedCheckBox(tr(HAND_BUILT_LABELS["apply_fx"]))
         fx_row_layout.addWidget(self.fx_preset_combo, 1)
         fx_row_layout.addWidget(self.apply_fx_check)
-        audio_form.addRow("FX:", fx_row)
+        audio_form.addRow(tr("FX:"), fx_row)
 
-        self.normalize_check = MixedCheckBox("Normalize")
-        self.trim_check = MixedCheckBox("Trim Silence")
+        self.normalize_check = MixedCheckBox(tr("Normalize"))
+        self.normalize_check.setToolTip(tr("Raise the audio until its loudest peak is at full level."))
+        self.trim_check = MixedCheckBox(tr("Trim Silence"))
+        self.trim_check.setToolTip(tr("Cut the silence at the start and end of the audio."))
         toggles_row = QWidget()
         toggles_layout = QHBoxLayout(toggles_row)
         toggles_layout.setContentsMargins(0, 0, 0, 0)
@@ -244,7 +255,7 @@ class SettingsDock(QDockWidget):
 
         # The clip's gap, take, status, note and source text (phase 2).
         # Shown in clip scope only.
-        self.scope_group = QGroupBox("Clip")
+        self.scope_group = QGroupBox(tr("Clip"))
         scope_layout = QVBoxLayout(self.scope_group)
         self.scope_fields = ScopeFields(self.app)
         scope_layout.addWidget(self.scope_fields)
@@ -311,9 +322,9 @@ class SettingsDock(QDockWidget):
         """Docked, the title is drawn with mnemonics (title bar, tab), so the
         ampersand is doubled; a floating window with the system's own title
         bar shows it as typed. The Panels entry is a menu item either way."""
-        doubled = TITLE.replace("&", "&&")
+        doubled = tr(TITLE).replace("&", "&&")
         system_bar = floating and QGuiApplication.platformName() != "xcb"
-        self.setWindowTitle(TITLE if system_bar else doubled)
+        self.setWindowTitle(tr(TITLE) if system_bar else doubled)
         self.toggleViewAction().setText(doubled)
 
     def _target_signature(self) -> tuple:
@@ -342,28 +353,32 @@ class SettingsDock(QDockWidget):
         self._refresh_override_marks()
         scope_target.set_hint(self.scope_hint, self._scope_hint_text())
         scope_target.set_hint(self.engine_hint, self._engine_hint_text())
-        self.apply_fx_check.setToolTip(ENABLE_FX_TIPS[self._mode])
+        self.apply_fx_check.setToolTip(tr(ENABLE_FX_TIPS[self._mode]))
 
     def _scope_hint_text(self) -> str:
         if self._mode == "character":
             name = scope_target.shorten(self._target.name)
             note = scope_target.library_note(self.app, self._target)
-            return f"Edits reach every clip of {name} that doesn't set its own value. {note}".strip()
+            return tr("Edits reach every clip of {name} that doesn't set its own value. {note}",
+                      name=name, note=note).strip()
         if self.several:
-            return f"An edit sets that value on all {len(self._targets)} clips, as one undo step."
+            return tr("An edit sets that value on all {count} clips, as one undo step.", count=len(self._targets))
         if self._mode == "clip":
             source = self._inherited_from()
             names = self._override_names()
             if not names:
-                return f"Nothing is set on this clip, so every value follows {source}. An edit here changes this clip only."
-            return f"Set on this clip: {scope_target.join_names(names)}. The rest follows {source}."
-        shared = "shared by every project"
+                return tr("Nothing is set on this clip, so every value follows {source}. An edit here changes this "
+                          "clip only.", source=source)
+            return tr("Set on this clip: {join_names}. The rest follows {source}.",
+                      join_names=scope_target.join_names(names), source=source)
+        shared = tr("shared by every project")
         if self.app.selection.kind == "range":
-            return f"The selected text starts outside a clip, so edits change the defaults, {shared}."
+            return tr("The selected text starts outside a clip, so edits change the defaults, {shared}.", shared=shared)
         if self.app.selection.kind == "clip" and self.scope_header.context_label.text():
             # A subproject's block: the docks show its document.
-            return f"Select a clip inside the subproject to edit it. Edits here change the defaults, {shared}."
-        return "Shared by every project. A character or clip that sets its own value keeps it."
+            return tr("Select a clip inside the subproject to edit it. Edits here change the defaults, {shared}.",
+                      shared=shared)
+        return tr("Shared by every project. A character or clip that sets its own value keeps it.")
 
     def _engine_hint_text(self) -> str:
         character = self._scope_character() if self._mode == "clip" else None
@@ -371,20 +386,28 @@ class SettingsDock(QDockWidget):
             return ""
         name = scope_target.shorten(character.name)
         note = scope_target.library_note(self.app, character)
-        return f"Engine changes the character {name}, so every clip of {name} follows. {note}".strip()
+        return tr("Engine changes the character {name}, so every clip of {name} follows. {note}",
+                  name=name, note=note).strip()
 
     def _inherited_from(self) -> str:
         character = self.app.document.get_character(self._target.character_id)
-        return "the defaults" if character is None else f"{scope_target.shorten(character.name)} and the defaults"
+        return tr("the defaults") if character is None else tr("{name} and the defaults",
+                                                               name=scope_target.shorten(character.name))
 
     def _schema_labels(self) -> dict:
         """key -> field label, for the schema fields a clip can set."""
         return {f.key: f.label for f in self.shown_backend().get_config_schema()
                 if f.key in ALLOWED_PRESET_KEYS and self.schema_form.widget_for(f.key) is not None}
 
+    def _control_tip(self, key: str) -> str:
+        """The tooltip of the control a row label belongs to."""
+        control = {"volume": self.volume_spin, "pitch": self.pitch_spin,
+                   "fx_preset": self.fx_preset_combo}.get(key) or self.schema_form.widget_for(key)
+        return control.toolTip() if control is not None else ""
+
     def _override_names(self) -> list:
         labels = {**self._schema_labels(), **HAND_BUILT_LABELS}
-        return [label for key, label in labels.items() if key in (self._target.overrides or {})]
+        return [tr(label) for key, label in labels.items() if key in (self._target.overrides or {})]
 
     def _refresh_override_marks(self) -> None:
         """Marks the values set on the selected clip (or on some or all of the
@@ -396,31 +419,35 @@ class SettingsDock(QDockWidget):
             if widget is None:
                 continue
             mark, tip = "", ""
+            name = tr(name)
             if self._mode == "clip":
                 count = sum(key in (clip.overrides or {}) for clip in self._targets)
                 if count and count == len(self._targets):
-                    mark, tip = (" (clips)" if self.several else " (clip)"), "Set on the selected clip"
-                    tip += "s." if self.several else "."
+                    mark = tr(" (clips)") if self.several else tr(" (clip)")
+                    tip = tr("Set on the selected clips.") if self.several else tr("Set on the selected clip.")
                 elif count:
-                    mark, tip = " (some clips)", f"Set on {count} of the {len(self._targets)} selected clips."
+                    mark, tip = tr(" (some clips)"), tr("Set on {count} of the {total} selected clips.",
+                                                      count=count, total=len(self._targets))
                 else:
                     character = self._scope_character()
                     from_character = character is not None and key in character.preset_data
-                    tip = f"From {scope_target.shorten(character.name)}." if from_character else "From the defaults."
+                    tip = tr("From the defaults.")
+                    if from_character:
+                        tip = tr("From {name}.", name=scope_target.shorten(character.name))
                     if self.several and character is None:
-                        tip = "From each clip's character, or the defaults."
+                        tip = tr("From each clip's character, or the defaults.")
             elif self._mode == "character":
-                tip = "Set on this character." if key in self._target.preset_data else "From the defaults."
-            unit = " (st)" if key == "pitch" else ""
+                tip = tr("Set on this character.") if key in self._target.preset_data else tr("From the defaults.")
+            unit = tr(" (st)") if key == "pitch" else ""
             if isinstance(widget, QLabel):
                 # A schema label never had the colon the hand-built rows have.
                 colon = ":" if key in HAND_BUILT_LABELS else ""
                 widget.setText(f"{name}{unit}{mark}{colon}")
-                widget.setToolTip(tip)
+                widget.setToolTip(tip or self._control_tip(key))
             else:
                 widget.setText(f"{name}{mark}")
                 if key != "apply_fx":
-                    widget.setToolTip(tip)
+                    widget.setToolTip(tip or tr(CHECK_TIPS.get(key, "")))
             if bool(widget.property("overridden")) != bool(mark):
                 # Bold comes from the stylesheet, which beats `setFont` here.
                 widget.setProperty("overridden", bool(mark))
@@ -429,9 +456,9 @@ class SettingsDock(QDockWidget):
 
     def set_generating(self, generating: bool) -> None:
         """Volume and pitch are fixed while a generate runs."""
-        for spin in (self.volume_spin, self.pitch_spin):
+        for spin, tip in ((self.volume_spin, VOLUME_TIP), (self.pitch_spin, PITCH_TIP)):
             spin.setEnabled(not generating)
-            spin.setToolTip(BUSY_FIELD_TIP if generating else "")
+            spin.setToolTip(tr(BUSY_FIELD_TIP) if generating else tr(tip))
 
     def _selected_clips(self) -> list:
         """The selected clips that still exist, the primary (`_target`) last."""
@@ -482,19 +509,19 @@ class SettingsDock(QDockWidget):
         if self._mode in ("character", "clip"):
             character = self._scope_character()
             engine_id = (character.backend_id if character is not None else None) or DEFAULT_ENGINE_ID
-            label, enabled = "Engine:", character is not None
-            tip = ("The engine this character speaks with." if self._mode == "character"
-                   else "The engine this clip's character speaks with. Every clip of the character follows.")
+            label, enabled = tr("Engine:"), character is not None
+            tip = (tr("The engine this character speaks with.") if self._mode == "character"
+                   else tr("The engine this clip's character speaks with. Every clip of the character follows."))
             if self.several and character is None:
                 shared = common_value(self._targets, self._clip_engine_id)
                 engine_id = None if shared is MIXED else shared
-                tip = ("The selected clips have different characters. "
-                       "Select one character's clips to change its engine.")
+                tip = (tr("The selected clips have different characters. "
+                          "Select one character's clips to change its engine."))
             elif character is None:
-                tip = "This clip has no character. Assign one to pick its engine."
+                tip = tr("This clip has no character. Assign one to pick its engine.")
         else:
-            engine_id, label, enabled, tip = (self.app.default_engine_id, "Engine for new characters:", True,
-                                              "The engine a new character gets. The fields below are its defaults.")
+            engine_id, label, enabled, tip = (self.app.default_engine_id, tr("Engine for new characters:"), True,
+                                              tr("The engine a new character gets. The fields below are its defaults."))
         self.engine_label.setText(label)
         self.engine_combo.setEnabled(enabled)
         self.engine_combo.setToolTip(tip)
@@ -599,7 +626,7 @@ class SettingsDock(QDockWidget):
         self.reference_voice_label.setVisible(is_reference)
         if is_reference:
             self.reference_voice_label.setText(
-                f"Voice: {values.get('voice') or 'None selected'} (choose in Voices)")
+                tr("Voice: {get} (choose in Voices)", get=values.get('voice') or tr('None selected')))
         # "voice" is resolved here: its options depend on the language and
         # the files on disk. Every other choice list is the schema's own.
         overrides = {"voice": voice_choices}
@@ -636,8 +663,8 @@ class SettingsDock(QDockWidget):
                 widget = self.schema_form.widget_for(f.key)
                 if widget is not None:
                     widget.setEnabled(False)
-                    widget.setToolTip(f"{backend.display_name}'s own setting, for every character and project. "
-                                      "Edit it with nothing selected.")
+                    widget.setToolTip(tr("{display_name}'s own setting, for every character and project. "
+                                         "Edit it with nothing selected.", display_name=backend.display_name))
         if self.several:
             self._mark_mixed_schema_fields(schema)
 
@@ -661,7 +688,7 @@ class SettingsDock(QDockWidget):
                     widget = self.schema_form.widget_for(f.key)
                     if widget is not None and f.key not in SHARED_CONFIG_KEYS:
                         widget.setEnabled(False)
-                        widget.setToolTip("The selected clips use different engines.")
+                        widget.setToolTip(tr("The selected clips use different engines."))
         finally:
             self._constructing_schema_form = False
 
@@ -678,7 +705,8 @@ class SettingsDock(QDockWidget):
     def refresh_voice_choices(self) -> None:
         if getattr(self.shown_backend(), "voice_kind", None) == "reference":
             self.reference_voice_label.setText(
-                f"Voice: {self._current_schema_values().get('voice') or 'None selected'} (choose in Voices)")
+                tr("Voice: {get} (choose in Voices)", get=self._current_schema_values().get('voice') or tr('None '
+                                                                                                           'selected')))
             return
         lang_code = self.schema_form.values().get("lang_code")
         voices = self.app.get_all_voices(lang_code, backend=self.shown_backend())
@@ -753,7 +781,7 @@ class SettingsDock(QDockWidget):
         for w in widgets.values():
             w.blockSignals(True)
         try:
-            mixed_entry = self.fx_preset_combo.findText(MIXED_LABEL)
+            mixed_entry = self.fx_preset_combo.findText(tr(MIXED_LABEL))
             if mixed_entry >= 0:
                 self.fx_preset_combo.removeItem(mixed_entry)
             self.volume_spin.setValue(base["volume"])
@@ -863,6 +891,7 @@ class SettingsDock(QDockWidget):
         self.fx_preset_combo.clear()
         for name in presets:
             # The placeholder shows as "No FX" but stays the stored value.
-            self.fx_preset_combo.addItem(fx_resolve.PLACEHOLDER_LABEL if name == fx_resolve.PLACEHOLDER else name, name)
+            self.fx_preset_combo.addItem(tr(fx_resolve.PLACEHOLDER_LABEL) if name == fx_resolve.PLACEHOLDER else name,
+                                         name)
         self.fx_preset_combo.setCurrentIndex(0)
         self.fx_preset_combo.blockSignals(False)

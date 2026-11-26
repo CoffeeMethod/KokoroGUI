@@ -55,11 +55,12 @@ from kokoro_gui.engine import runtime
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
 from kokoro_gui.engine.caching import RESERVED_SUFFIX, compute_cache_key, effective_speed
 from kokoro_gui.engine.presets import filter_fx_preset_values, ir_safe_name, resolve_ir
+from kokoro_gui.i18n import N_, tr
 
 MAX_RECENT = 10
-PROJECT_FILTER = "KokoroGUI project (*.tbaw *.json)"
-VIDEO_FILTER = "Video (*.mp4 *.mov *.mkv *.webm *.avi *.m4v);;All files (*)"
-AUDIO_FILTER = "Audio (*.wav *.flac *.ogg *.mp3 *.aiff *.aif);;All files (*)"
+PROJECT_FILTER = N_("KokoroGUI project (*.tbaw *.json)")
+VIDEO_FILTER = N_("Video (*.mp4 *.mov *.mkv *.webm *.avi *.m4v);;All files (*)")
+AUDIO_FILTER = N_("Audio (*.wav *.flac *.ogg *.mp3 *.aiff *.aif);;All files (*)")
 DEFAULT_EXTENSION = ".tbaw"
 
 FORMAT = "tbaw"
@@ -227,7 +228,7 @@ def project_dir_in_cache(project_dir: str) -> bool:
 
 def _check_project_dir(project_dir: str) -> str:
     if not project_dir_in_cache(project_dir):
-        raise ProjectError("Refusing to open: the project's working folder would be outside the project cache.")
+        raise ProjectError(tr("Refusing to open: the project's working folder would be outside the project cache."))
     return project_dir
 
 
@@ -375,23 +376,24 @@ def read_manifest_from(zf: zipfile.ZipFile) -> dict:
     try:
         manifest = json.loads(zf.read(MANIFEST).decode("utf-8"))
     except KeyError:
-        raise ProjectError("Not a KokoroGUI project: no manifest.json in the bundle.")
+        raise ProjectError(tr("Not a KokoroGUI project: no manifest.json in the bundle."))
     except (json.JSONDecodeError, UnicodeDecodeError):
-        raise ProjectError("The bundle's manifest.json is not valid JSON.")
+        raise ProjectError(tr("The bundle's manifest.json is not valid JSON."))
     if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
-        raise ProjectError("Not a KokoroGUI project: the manifest's format isn't \"tbaw\".")
+        raise ProjectError(tr("Not a KokoroGUI project: the manifest's format isn't \"tbaw\"."))
     version = manifest.get("version", 0)
     if not isinstance(version, int) or version > SUPPORTED_VERSION:
-        raise ProjectError(f"This project was made with a newer KokoroGUI (bundle version {version}, "
-                           f"this build reads up to {SUPPORTED_VERSION}).")
+        raise ProjectError(tr("This project was made with a newer KokoroGUI (bundle version {version}, "
+                              "this build reads up to {supported_version}).", version=version,
+                              supported_version=SUPPORTED_VERSION))
     requires = manifest.get("requires", []) or []
     unknown = [str(r) for r in requires if str(r) not in SUPPORTED_FEATURES]
     if unknown:
-        raise ProjectError("This project needs a feature this KokoroGUI doesn't have: " + ", ".join(unknown))
+        raise ProjectError(tr("This project needs a feature this KokoroGUI doesn't have: ") + ", ".join(unknown))
     if not manifest.get("project_id"):
         manifest["project_id"] = new_project_id()
     elif safe_project_id(manifest["project_id"]) is None:
-        raise ProjectError("Refusing to open: the bundle's project id isn't a plain name.")
+        raise ProjectError(tr("Refusing to open: the bundle's project id isn't a plain name."))
     return manifest
 
 
@@ -422,12 +424,12 @@ def validate_entries(zf: zipfile.ZipFile, project_dir: str) -> list:
     for info in zf.infolist():
         name = info.filename
         if not _entry_name_is_safe(name):
-            raise ProjectError(f"Refusing to open: the bundle has an unsafe entry name ({name!r}).")
+            raise ProjectError(tr("Refusing to open: the bundle has an unsafe entry name ({name!r}).", name=name))
         if _is_symlink_entry(info):
-            raise ProjectError(f"Refusing to open: the bundle contains a symlink ({name!r}).")
+            raise ProjectError(tr("Refusing to open: the bundle contains a symlink ({name!r}).", name=name))
         target = os.path.realpath(os.path.join(root, *name.replace("\\", "/").split("/")))
         if target != root and not target.startswith(root + os.sep):
-            raise ProjectError(f"Refusing to open: an entry resolves outside the project dir ({name!r}).")
+            raise ProjectError(tr("Refusing to open: an entry resolves outside the project dir ({name!r}).", name=name))
         entries.append(info)
     return entries
 
@@ -451,28 +453,30 @@ def check_free_space(path: str, needed: int, what: str) -> None:
     margin = 32 * 1024 * 1024
     available = free_space(path)
     if available < needed + margin:
-        raise ProjectError(f"Not enough free space to {what}: needs about {needed // (1024 * 1024)} MB, "
-                           f"{available // (1024 * 1024)} MB free on {os.path.dirname(os.path.abspath(path)) or path}.")
+        raise ProjectError(tr("Not enough free space to {what}: needs about {needed} MB, "
+                              "{available} MB free on {folder}.", what=what, needed=needed // (1024 * 1024),
+                              available=available // (1024 * 1024),
+                              folder=os.path.dirname(os.path.abspath(path)) or path))
 
 
 def inspect_bundle(path: str) -> BundleInfo:
     """Step 1 and 3 of Open: the manifest, validated entries and the audio
     byte count, all from the central directory."""
     if not path or not os.path.isfile(path):
-        raise ProjectError(f"{path} doesn't exist.")
+        raise ProjectError(tr("{path} doesn't exist.", path=path))
     try:
         zf = zipfile.ZipFile(path)
     except (OSError, zipfile.BadZipFile):
-        raise ProjectError(f"{os.path.basename(path)} isn't a readable .tbaw bundle.")
+        raise ProjectError(tr("{file} isn't a readable .tbaw bundle.", file=os.path.basename(path)))
     with zf:
         manifest = read_manifest_from(zf)
         project_id = manifest["project_id"]
         entries = validate_entries(zf, _check_project_dir(os.path.join(projects_root(), project_id)))
         if DOCUMENT not in zf.namelist():
-            raise ProjectError("The bundle has no document.json.")
+            raise ProjectError(tr("The bundle has no document.json."))
         if any(e.filename.endswith(".pt") for e in entries) and not torch_weights_only_available():
-            raise ProjectError("This bundle carries a voice mix (.pt) and this machine's torch is older than 2.6, "
-                               "which can't load it safely. Upgrade torch to open it.")
+            raise ProjectError(tr("This bundle carries a voice mix (.pt) and this machine's torch is older than 2.6, "
+                                  "which can't load it safely. Upgrade torch to open it."))
         audio_bytes = sum(e.file_size for e in entries if e.filename.replace("\\", "/").startswith(_HEAVY_PREFIXES))
     stat = os.stat(path)
     return BundleInfo(path=os.path.abspath(path), manifest=manifest, project_id=project_id, entries=entries,
@@ -512,7 +516,7 @@ def choose_project_dir(project_id: str, source_path: str | None) -> str:
     `ProjectError` for an id that isn't a plain name or a dir that resolves
     outside `projects_root()`, before anything is locked or written."""
     if safe_project_id(project_id) is None:
-        raise ProjectError("Refusing to open: the project id isn't a plain name.")
+        raise ProjectError(tr("Refusing to open: the project id isn't a plain name."))
     root = projects_root()
     suffix = 1
     while True:
@@ -554,7 +558,7 @@ class ProjectLock:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             handle.close()
-            raise ProjectLockedError("This project is already open in another KokoroGUI window.")
+            raise ProjectLockedError(tr("This project is already open in another KokoroGUI window."))
         self._handle = handle
         return self
 
@@ -943,15 +947,15 @@ def _load_dir(project_dir: str) -> tuple:
     imported_missing = {rel for rel in missing if _is_imported_path(rel) or rel in missing_imported}
     generated_missing = [rel for rel in missing if rel not in imported_missing]
     if generated_missing:
-        notices.append(f"{len(generated_missing)} audio file(s) missing from the bundle; "
-                       f"those clips will regenerate.")
+        notices.append(tr("{count} audio file(s) missing from the bundle; "
+                          "those clips will regenerate.", count=len(generated_missing)))
     if imported_missing:
-        notices.append(f"{len(imported_missing)} imported audio file(s) missing from the bundle; "
-                       f"their clips play nothing until the file is imported again.")
+        notices.append(tr("{count} imported audio file(s) missing from the bundle; "
+                          "their clips play nothing until the file is imported again.", count=len(imported_missing)))
     # The source track stays project-relative in the document and resolves
     # at use time (`source_track_path`); a missing one is only a notice.
     if source_track_settings(document.settings) is not None and source_track_path(document, project_dir) is None:
-        notices.append("the source track is missing from the bundle; import it again to hear the original")
+        notices.append(tr("the source track is missing from the bundle; import it again to hear the original"))
     return document, project_settings, notices
 
 
@@ -981,8 +985,9 @@ def finish_open(info: BundleInfo, project_dir: str, engine_versions: dict | None
         made_with = block.get("version")
         installed = (engine_versions or {}).get(engine_id)
         if made_with and installed and made_with != installed:
-            notices.append(f"generated with {engine_id} {made_with}, this machine has {installed}; "
-                           f"regenerated clips will use {installed}")
+            notices.append(tr("generated with {engine_id} {made_with}, this machine has {installed}; "
+                              "regenerated clips will use {installed}", engine_id=engine_id, made_with=made_with,
+                              installed=installed))
 
     if not recovered:
         document_bytes, project_bytes = serialize_for_dir(document, project_settings, project_dir)
@@ -1076,11 +1081,12 @@ def import_audio_file(src_path: str, project_dir: str, max_bytes: int = MAX_IMPO
     source = os.path.realpath(os.path.abspath(src_path))
     drive = os.path.splitdrive(source)[0]
     if not source.startswith(drive + os.sep) or not os.path.isfile(source):
-        raise ProjectError(f"Not a file: {src_path}")
+        raise ProjectError(tr("Not a file: {src_path}", src_path=src_path))
     size = os.path.getsize(source)
     if size > max_bytes:
-        raise ProjectError(f"{os.path.basename(source)} is {size / 1024 ** 3:.1f} GB; "
-                           f"the import limit is {max_bytes / 1024 ** 3:.1f} GB.")
+        raise ProjectError(tr("{file} is {size:.1f} GB; "
+                              "the import limit is {max_bytes:.1f} GB.", file=os.path.basename(source),
+                              size=size / 1024 ** 3, max_bytes=max_bytes / 1024 ** 3))
     h = hashlib.sha256()
     with open(source, "rb") as f:
         for block in iter(lambda: f.read(1024 * 1024), b""):
@@ -1394,32 +1400,33 @@ def collect_assets(document: Document, backend_for, project_dir: str | None, fx_
     for backend_id, names in sorted(used_voice_names(document).items()):
         backend = backend_for(backend_id)
         if backend is None:
-            warnings.append(f"engine {backend_id!r} isn't installed; its voices aren't bundled")
+            warnings.append(tr("engine {backend_id!r} isn't installed; its voices aren't bundled",
+                               backend_id=backend_id))
             continue
         try:
             found, meta = backend.collect_project_assets(set(names), project_dir)
         except Exception as e:  # noqa: BLE001 - one backend's failure shouldn't stop a Save
-            warnings.append(f"{backend_id}: couldn't collect voice files ({e})")
+            warnings.append(tr("{backend_id}: couldn't collect voice files ({error})", backend_id=backend_id, error=e))
             found, meta = [], {}
         bundled = {os.path.splitext(os.path.basename(a.bundle_path))[0] for a in found}
         for name in sorted(names):
             if os.path.basename(name) not in bundled and backend.resolve_voice_file(name, project_dir) is None \
                     and getattr(backend.capabilities, "supports_voice_cloning", False):
-                warnings.append(f"voice reference {name!r} not found; not bundled")
+                warnings.append(tr("voice reference {name!r} not found; not bundled", name=name))
         assets.extend((a.bundle_path, a.source_path) for a in found)
         engines[backend_id] = {"version": backend.engine_version(), "meta": dict(meta or {})}
     for name in sorted(used_fx_preset_names(document)):
         safe = os.path.basename(name)
         source = _fx_preset_source(name, project_dir, fx_presets_dir)
         if source is None:
-            warnings.append(f"FX preset {name!r} not found; not bundled")
+            warnings.append(tr("FX preset {name!r} not found; not bundled", name=name))
             continue
         assets.append((f"{FX_DIR}/{safe}.json", os.path.abspath(source)))
     ir_dir = os.path.join(fx_presets_dir, FX_IR_NAME)
     for name in sorted(used_fx_ir_names(document, project_dir, fx_presets_dir, project_fx)):
         source = resolve_ir(name, project_dir, ir_dir)
         if source is None:
-            warnings.append(f"impulse response {name!r} not found; not bundled")
+            warnings.append(tr("impulse response {name!r} not found; not bundled", name=name))
             continue
         assets.append((f"{FX_DIR}/{FX_IR_NAME}/{ir_safe_name(name)}.wav", source))
     return assets, engines, warnings
@@ -1560,8 +1567,8 @@ def plan_save(document: Document, project_settings: dict, path: str, project_dir
     if options["include_video"] and video_settings(project_settings) is not None:
         video_file = video_to_bundle(project_settings, path, project_dir, previous_manifest, previous_session)
         if video_file is None:
-            warnings.append("reference video not found or not picked on this machine (File > Load Video); "
-                            "not bundled")
+            warnings.append(tr("reference video not found or not picked on this machine (File > Load Video); "
+                               "not bundled"))
     now = datetime.datetime.now().replace(microsecond=0).isoformat()
     created = (previous_manifest or {}).get("created") or now
     manifest = {
@@ -1791,7 +1798,7 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
             except OSError:
                 continue
             from_dir.append((bundle_path, source))
-    check_free_space(plan.path, needed, "save the project")
+    check_free_space(plan.path, needed, tr("save the project"))
 
     tmp = plan.path + ".tmp"
     parent = os.path.dirname(plan.path)
@@ -1831,8 +1838,8 @@ def write_bundle(plan: SavePlan, known_engine_ids, progress=None) -> SaveResult:
                     done += os.path.getsize(source)
         _replace_with_retries(tmp, plan.path)
     except PermissionError as e:
-        raise ProjectError(f"Couldn't replace {plan.path} (another program holds it): {e}. "
-                           f"The new version is at {tmp}.")
+        raise ProjectError(tr("Couldn't replace {path} (another program holds it): {error}. "
+                              "The new version is at {tmp}.", path=plan.path, error=e, tmp=tmp))
     except BaseException:
         try:
             os.remove(tmp)

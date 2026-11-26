@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional, Protocol, runtime_checkable
 
+from kokoro_gui.i18n import N_
+
 
 class ConfigFieldType(str, Enum):
     """Widget shape a GUI should render for a `ConfigField`."""
@@ -63,6 +65,7 @@ class ConfigField:
     step: Optional[float] = None
     choices: Optional[list] = None
     group: str = "General"
+    tooltip: str = ""  # English, marked with `N_`; the form translates it
 
 
 @dataclass(frozen=True)
@@ -114,15 +117,20 @@ def segmentation_fields() -> list:
     from kokoro_gui.engine import segmenting
 
     return [
-        ConfigField("segment_target_words", "Target Words per Segment", ConfigFieldType.INT,
+        ConfigField("segment_target_words", N_("Target Words per Segment"), ConfigFieldType.INT,
                     default=segmenting.DEFAULT_TARGET_WORDS, min=segmenting.MIN_TARGET_WORDS,
-                    max=segmenting.MAX_TARGET_WORDS, step=5, group="Generation"),
-        ConfigField("segment_at_paragraphs", "Split at Paragraphs", ConfigFieldType.BOOL,
-                    default=True, group="Generation"),
-        ConfigField("segment_at_sentences", "Split at Sentences", ConfigFieldType.BOOL,
-                    default=True, group="Generation"),
-        ConfigField("segment_at_pauses", "Split at Pauses (, ; : dashes)", ConfigFieldType.BOOL,
-                    default=True, group="Generation"),
+                    max=segmenting.MAX_TARGET_WORDS, step=5, group=N_("Generation"),
+                    tooltip=N_("The engine speaks long text in pieces. Each piece ends at the sentence end "
+                               "nearest to this many words.")),
+        ConfigField("segment_at_paragraphs", N_("Split at Paragraphs"), ConfigFieldType.BOOL,
+                    default=True, group=N_("Generation"),
+                    tooltip=N_("Start a new piece at a blank line.")),
+        ConfigField("segment_at_sentences", N_("Split at Sentences"), ConfigFieldType.BOOL,
+                    default=True, group=N_("Generation"),
+                    tooltip=N_("Pieces end at sentence ends.")),
+        ConfigField("segment_at_pauses", N_("Split at Pauses (, ; : dashes)"), ConfigFieldType.BOOL,
+                    default=True, group=N_("Generation"),
+                    tooltip=N_("A sentence that is too long may be cut at a comma, semicolon, colon or dash.")),
     ]
 
 
@@ -133,20 +141,25 @@ def common_fields(speed_range=(0.5, 2.0), max_threads: int = 32, pitch: bool = T
     output format, parallel threads and the segment cache. A backend
     appends its own fields after these."""
     fields = [
-        ConfigField("speed", "Speed", ConfigFieldType.SLIDER,
-                    default=1.0, min=speed_range[0], max=speed_range[1], step=0.1, group="Generation"),
+        ConfigField("speed", N_("Speed"), ConfigFieldType.SLIDER,
+                    default=1.0, min=speed_range[0], max=speed_range[1], step=0.1, group=N_("Generation"),
+                    tooltip=N_("How fast the voice speaks. 1.0 is its own speed.")),
     ]
     if pitch:
-        fields.append(ConfigField("pitch", "Pitch", ConfigFieldType.SLIDER,
-                                  default=0.0, min=-12, max=12, step=1, group="Audio"))
+        fields.append(ConfigField("pitch", N_("Pitch"), ConfigFieldType.SLIDER,
+                                  default=0.0, min=-12, max=12, step=1, group=N_("Audio"),
+                                  tooltip=N_("Raise or lower the voice, in semitones.")))
     fields.extend([
         *segmentation_fields(),
-        ConfigField("format", "Output Format", ConfigFieldType.CHOICE,
-                    default="wav", choices=list(COMMON_OUTPUT_FORMAT_CHOICES), group="Generation"),
-        ConfigField("num_threads", "Parallel Threads", ConfigFieldType.INT,
-                    default=1, min=1, max=max_threads, step=1, group="Advanced"),
-        ConfigField("caching", "Enable Segment Cache", ConfigFieldType.BOOL,
-                    default=caching_default, group="Advanced"),
+        ConfigField("format", N_("Output Format"), ConfigFieldType.CHOICE,
+                    default="wav", choices=list(COMMON_OUTPUT_FORMAT_CHOICES), group=N_("Generation"),
+                    tooltip=N_("The audio format of generated files.")),
+        ConfigField("num_threads", N_("Parallel Threads"), ConfigFieldType.INT,
+                    default=1, min=1, max=max_threads, step=1, group=N_("Advanced"),
+                    tooltip=N_("How many pieces are generated at once. More uses more memory.")),
+        ConfigField("caching", N_("Enable Segment Cache"), ConfigFieldType.BOOL,
+                    default=caching_default, group=N_("Advanced"),
+                    tooltip=N_("Keep generated audio, so text that didn't change isn't generated again.")),
     ])
     return fields
 

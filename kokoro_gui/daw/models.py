@@ -42,6 +42,7 @@ from kokoro_gui.daw.revision import Tracked
 from kokoro_gui.daw.undo import UndoStack
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
+from kokoro_gui.i18n import tr
 
 # Small fixed palette cycled by migration.py when assigning default
 # highlight colors to characters created from existing presets - not a
@@ -685,16 +686,16 @@ class Document(Tracked):
         can. A subproject, a music bed and a clip placed by timestamp
         refuse, and the cut must leave text on both sides."""
         if clip.has_placeholder:
-            return "A subproject or an audio file can't be split."
+            return tr("A subproject or an audio file can't be split.")
         if clip.timeline_timestamp is not None:
-            return "A clip placed on the timeline can't be split. Unpin it first."
+            return tr("A clip placed on the timeline can't be split. Unpin it first.")
         extent = self.clip_extent(clip.id)
         if extent is None:
-            return "The clip has no text."
+            return tr("The clip has no text.")
         text = self.clip_text(clip)
         cut = offset - extent[0]
         if not 0 < cut < len(text) or not text[:cut].strip() or not text[cut:].strip():
-            return "Cut between two words, with text on both sides."
+            return tr("Cut between two words, with text on both sides.")
         return None
 
     def split_clip(self, clip_id: str, offset: int, new_id: Optional[str] = None) -> Clip:
@@ -744,19 +745,19 @@ class Document(Tracked):
         neither may be a subproject or a music bed, and `second` can't be
         placed by timestamp."""
         if first.has_placeholder or second.has_placeholder:
-            return "A subproject or an audio file can't be joined."
+            return tr("A subproject or an audio file can't be joined.")
         if first.source != second.source or first.character_id != second.character_id:
-            return "Only two clips with the same character and kind join."
+            return tr("Only two clips with the same character and kind join.")
         if second.timeline_timestamp is not None:
-            return "A clip placed on the timeline can't be joined. Unpin it first."
+            return tr("A clip placed on the timeline can't be joined. Unpin it first.")
         first_extent, second_extent = self.clip_extent(first.id), self.clip_extent(second.id)
         if first_extent is None or second_extent is None or first_extent[1] > second_extent[0]:
-            return "The second clip must follow the first."
+            return tr("The second clip must follow the first.")
         if self.text[first_extent[1]:second_extent[0]].strip():
-            return "There is text between the two clips."
+            return tr("There is text between the two clips.")
         for run, _start, _end in self.index().runs_in(first_extent[1], second_extent[0]):
             if run.clip_id is not None:
-                return "Another clip sits between the two."
+                return tr("Another clip sits between the two.")
         return None
 
     def join_clips(self, first_id: str, second_id: str) -> Clip:

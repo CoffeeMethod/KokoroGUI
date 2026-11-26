@@ -24,14 +24,15 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.daw import genqueue
+from kokoro_gui.i18n import N_, tr
 
-COLUMNS = ("Item", "Clips", "State", "Time left")
+COLUMNS = (N_("Item"), N_("Clips"), N_("State"), N_("Time left"))
 STATE_LABELS = {
-    genqueue.QUEUED: "Queued", genqueue.RUNNING: "Generating", genqueue.DONE: "Done",
-    genqueue.FAILED: "Failed", genqueue.CANCELLED: "Cancelled",
+    genqueue.QUEUED: N_("Queued"), genqueue.RUNNING: N_("Generating"), genqueue.DONE: N_("Done"),
+    genqueue.FAILED: N_("Failed"), genqueue.CANCELLED: N_("Cancelled"),
 }
 _ITEM_ID = Qt.ItemDataRole.UserRole
-ELSEWHERE = "(in another project)"
+ELSEWHERE = N_("(in another project)")
 
 
 class _ItemTree(QTreeWidget):
@@ -59,7 +60,7 @@ class _ItemTree(QTreeWidget):
 
 class QueueDock(QDockWidget):
     def __init__(self, app, parent=None):
-        super().__init__("Queue", parent)
+        super().__init__(tr("Queue"), parent)
         self.setObjectName("dock_queue")
         self.app = app
         self._stale = True  # rows not rebuilt since the last change
@@ -69,10 +70,11 @@ class QueueDock(QDockWidget):
         layout.setContentsMargins(4, 4, 4, 4)
 
         buttons = QHBoxLayout()
-        self.pause_button = QPushButton("Pause")
+        self.pause_button = QPushButton(tr("Pause"))
+        self.pause_button.setToolTip(tr("Stop after the batch that is running, or go on with the rest."))
         self.pause_button.clicked.connect(self.app.toggle_queue_pause)
-        self.cancel_button = QPushButton("Cancel all")
-        self.cancel_button.setToolTip("Stop the batch that is running and drop everything still queued.")
+        self.cancel_button = QPushButton(tr("Cancel all"))
+        self.cancel_button.setToolTip(tr("Stop the batch that is running and drop everything still queued."))
         self.cancel_button.clicked.connect(self.app.cancel_queue_clicked)
         buttons.addWidget(self.pause_button)
         buttons.addWidget(self.cancel_button)
@@ -84,7 +86,9 @@ class QueueDock(QDockWidget):
         layout.addWidget(self.summary)
 
         self.tree = _ItemTree()
-        self.tree.setHeaderLabels(list(COLUMNS))
+        self.tree.setToolTip(tr("What is waiting to be generated, in order. Drag a queued row to move it, "
+                                "right-click for more."))
+        self.tree.setHeaderLabels([tr(name) for name in COLUMNS])
         self.tree.setRootIsDecorated(False)
         self.tree.setUniformRowHeights(True)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -134,8 +138,8 @@ class QueueDock(QDockWidget):
 
     def item_row_text(self, item) -> tuple:
         clips = "subproject" if item.kind == genqueue.SUBPROJECT else str(item.clip_count)
-        title = item.title if self.app.item_in_open_project(item) else f"{item.title} {ELSEWHERE}"
-        return title, clips, STATE_LABELS.get(item.state, item.state), self._eta_text(item)
+        title = item.title if self.app.item_in_open_project(item) else f"{item.title} {tr(ELSEWHERE)}"
+        return title, clips, tr(STATE_LABELS.get(item.state, item.state)), self._eta_text(item)
 
     def _grey(self, row, item) -> None:
         """Greys a row whose item is another project's and names that
@@ -147,7 +151,8 @@ class QueueDock(QDockWidget):
         root_id = self.app.queue_root_id(item.project_id, strict=True)
         tree = self.app.parked_projects.get(root_id) if root_id is not None else None
         name = tree.root.title() if tree is not None else (project.title() if project is not None else "")
-        tip = f"Generating in the background for {name}." if name else "For a project that is no longer open."
+        tip = tr("Generating in the background for {name}.", name=name) if name else tr("For a project that is no "
+                                                                                        "longer open.")
         for column in range(len(COLUMNS)):
             row.setForeground(column, color)
             row.setToolTip(column, tip)
@@ -184,11 +189,11 @@ class QueueDock(QDockWidget):
             else:
                 count = app.queue_pending_clip_count()
                 eta = app.queue_eta_text()
-                self.summary.setText(f"{count} clip(s) waiting" + (f", {eta}" if eta else "")
-                                     + (" (paused)" if app.queue_paused else ""))
+                self.summary.setText(tr("{count} clip(s) waiting", count=count) + (f", {eta}" if eta else "")
+                                     + (tr(" (paused)") if app.queue_paused else ""))
         else:
-            self.summary.setText("Nothing queued. Generate adds the stale clips here." if not queue.items
-                                 else "Nothing left to do.")
+            self.summary.setText(tr("Nothing queued. Generate adds the stale clips here.") if not queue.items
+                                 else tr("Nothing left to do."))
 
     def _sync_buttons(self) -> None:
         app = self.app
@@ -197,10 +202,11 @@ class QueueDock(QDockWidget):
         self.cancel_button.setEnabled(pending)
         if app.queue_paused:
             idle = not app.queue_active
-            self.pause_button.setText(f"Resume generating {app.queue_pending_clip_count()} clips" if idle
-                                      else "Resume")
+            self.pause_button.setText(tr("Resume generating {queue_pending_clip_count} clips",
+                                         queue_pending_clip_count=app.queue_pending_clip_count()) if idle
+                                      else tr("Resume"))
         else:
-            self.pause_button.setText("Pause")
+            self.pause_button.setText(tr("Pause"))
 
     # -- items -------------------------------------------------------------------
 
@@ -232,6 +238,9 @@ class QueueDock(QDockWidget):
         if item is None or item.state != genqueue.QUEUED:
             return None
         menu = QMenu(self)
-        menu.addAction("Move to top", lambda: self.app.queue_item_to_top(item))
-        menu.addAction("Remove", lambda: self.app.remove_queue_item(item))
+        menu.setToolTipsVisible(True)
+        top = menu.addAction(tr("Move to top"), lambda: self.app.queue_item_to_top(item))
+        top.setToolTip(tr("Generate this next."))
+        remove = menu.addAction(tr("Remove"), lambda: self.app.remove_queue_item(item))
+        remove.setToolTip(tr("Take this out of the queue. Its clips stay stale."))
         return menu

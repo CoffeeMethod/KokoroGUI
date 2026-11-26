@@ -42,6 +42,7 @@ from kokoro_gui.engine import presets as engine_presets
 from kokoro_gui.engine.paths import ensure_private_dir
 from kokoro_gui.engine.presets import ALLOWED_PRESET_KEYS, filter_allowed_keys, filter_fx_preset_values
 from kokoro_gui.engines.registry import DEFAULT_ENGINE_ID
+from kokoro_gui.i18n import tr
 
 FORMAT = "kokorogui-share"
 VERSION = 1
@@ -148,16 +149,16 @@ def _validate_entries(zf: zipfile.ZipFile) -> list:
     for info in zf.infolist():
         name = info.filename
         if not _entry_name_is_safe(name):
-            raise ShareError(f"Refusing to open: the share file has an unsafe entry name ({name!r}).")
+            raise ShareError(tr("Refusing to open: the share file has an unsafe entry name ({name!r}).", name=name))
         if _is_symlink_entry(info):
-            raise ShareError(f"Refusing to open: the share file contains a symlink ({name!r}).")
+            raise ShareError(tr("Refusing to open: the share file contains a symlink ({name!r}).", name=name))
         target = os.path.realpath(os.path.join(root, *name.replace("\\", "/").split("/")))
         if target != root and not target.startswith(root + os.sep):
-            raise ShareError(f"Refusing to open: an entry resolves outside its folder ({name!r}).")
+            raise ShareError(tr("Refusing to open: an entry resolves outside its folder ({name!r}).", name=name))
         if info.flag_bits & 0x1:
-            raise ShareError(f"Refusing to open: the share file has an encrypted entry ({name!r}).")
+            raise ShareError(tr("Refusing to open: the share file has an encrypted entry ({name!r}).", name=name))
         if name in seen:
-            raise ShareError(f"Refusing to open: the share file lists {name!r} twice.")
+            raise ShareError(tr("Refusing to open: the share file lists {name!r} twice.", name=name))
         seen.add(name)
         entries.append(info)
     return entries
@@ -366,13 +367,13 @@ def export_share(path: str, characters=(), *, fx_names=(), include_fx: bool = Tr
     for name in wanted_fx:
         source = _fx_source(name, project_dir, fx_dir)
         if source is None:
-            report.warnings.append(f"FX {name!r} wasn't found; left out.")
+            report.warnings.append(tr("FX {name!r} wasn't found; left out.", name=name))
             continue
         try:
             with open(source, "r", encoding="utf-8") as f:
                 raw = json.load(f)
         except (OSError, ValueError, RecursionError) as e:
-            report.warnings.append(f"FX {name!r} couldn't be read ({e}); left out.")
+            report.warnings.append(tr("FX {name!r} couldn't be read ({error}); left out.", name=name, error=e))
             continue
         values = filter_fx_preset_values(raw)
         members[f"fx/{name}.json"] = ("bytes", json.dumps(values, indent=2).encode("utf-8"))
@@ -382,7 +383,8 @@ def export_share(path: str, characters=(), *, fx_names=(), include_fx: bool = Tr
             ir_stem = clean_stem(ir)
             ir_path = engine_presets.resolve_ir(ir, project_dir, ir_dir) if ir_stem else None
             if ir_path is None:
-                report.warnings.append(f"Impulse response {ir!r} (used by FX {name!r}) wasn't found; left out.")
+                report.warnings.append(tr("Impulse response {ir!r} (used by FX {name!r}) wasn't found; left out.",
+                                          ir=ir, name=name))
             elif f"fx/ir/{ir_stem}.wav" not in members:
                 members[f"fx/ir/{ir_stem}.wav"] = ("file", ir_path)
                 report.irs.append(ir_stem)
@@ -404,7 +406,8 @@ def export_share(path: str, characters=(), *, fx_names=(), include_fx: bool = Tr
                     file_name = os.path.basename(asset.bundle_path)
                     kind = classify_entry(f"voices/{engine_id}/{file_name}")
                     if kind is None:
-                        report.warnings.append(f"Voice file {file_name!r} has a name a share file can't carry; left out.")
+                        report.warnings.append(tr("Voice file {file_name!r} has a name a share file can't carry; "
+                                                  "left out.", file_name=file_name))
                         continue
                     members[f"voices/{engine_id}/{file_name}"] = ("file", asset.source_path)
                     added = True
@@ -418,13 +421,15 @@ def export_share(path: str, characters=(), *, fx_names=(), include_fx: bool = Tr
         size = len(payload) if how == "bytes" else os.path.getsize(payload)
         kind = classify_entry(arcname)
         if kind is None or size > _entry_cap(kind):
-            raise ShareError(f"{arcname} is too big for a share file ({size // (1024 * 1024)} MB).")
+            raise ShareError(tr("{arcname} is too big for a share file ({size} MB).", arcname=arcname,
+                                size=size // (1024 * 1024)))
         total += size
     if len(members) + 1 > MAX_ENTRIES:
-        raise ShareError(f"A share file holds at most {MAX_ENTRIES} files.")
+        raise ShareError(tr("A share file holds at most {max_entries} files.", max_entries=MAX_ENTRIES))
     if total > MAX_TOTAL_BYTES:
-        raise ShareError(f"Everything selected is {total // (1024 * 1024)} MB; a share file holds at most "
-                         f"{MAX_TOTAL_BYTES // (1024 * 1024)} MB.")
+        raise ShareError(tr("Everything selected is {total} MB; a share file holds at most "
+                            "{max_total_bytes} MB.", total=total // (1024 * 1024),
+                            max_total_bytes=MAX_TOTAL_BYTES // (1024 * 1024)))
 
     tmp = path + ".tmp"
     try:
@@ -476,7 +481,7 @@ def _read_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo, cap: int) -> bytes:
     with zf.open(info) as f:
         data = f.read(cap + 1)
     if len(data) > cap:
-        raise ShareError(f"Refusing to open: {info.filename!r} is bigger than it says.")
+        raise ShareError(tr("Refusing to open: {filename!r} is bigger than it says.", filename=info.filename))
     return data
 
 
@@ -498,22 +503,24 @@ def inspect_share(path: str) -> ShareInfo:
     Raises `ShareError` (with a message for the user) for a file that isn't a
     share file or that breaks a limit."""
     if not path or not os.path.isfile(path):
-        raise ShareError(f"{path} doesn't exist.")
+        raise ShareError(tr("{path} doesn't exist.", path=path))
     try:
         zf = zipfile.ZipFile(path)
     except (OSError, zipfile.BadZipFile):
-        raise ShareError(f"{os.path.basename(path)} isn't a readable share file.") from None
+        raise ShareError(tr("{file} isn't a readable share file.", file=os.path.basename(path))) from None
     with zf:
         entries = _validate_entries(zf)
         if len(entries) > MAX_ENTRIES:
-            raise ShareError(f"Refusing to open: the share file has {len(entries)} entries (the limit is {MAX_ENTRIES}).")
+            raise ShareError(tr("Refusing to open: the share file has {count} entries (the limit is {max_entries}).",
+                                count=len(entries), max_entries=MAX_ENTRIES))
         total = sum(e.file_size for e in entries)
         if total > MAX_TOTAL_BYTES:
-            raise ShareError(f"Refusing to open: the share file expands to {total // (1024 * 1024)} MB "
-                             f"(the limit is {MAX_TOTAL_BYTES // (1024 * 1024)} MB).")
+            raise ShareError(tr("Refusing to open: the share file expands to {total} MB "
+                                "(the limit is {max_total_bytes} MB).", total=total // (1024 * 1024),
+                                max_total_bytes=MAX_TOTAL_BYTES // (1024 * 1024)))
         if any(e.filename.endswith(".pt") for e in entries) and not _torch_weights_only_available():
-            raise ShareError("This share file carries a voice Mix (.pt) and this machine's torch is older than 2.6, "
-                             "which can't load it safely. Upgrade torch to import it.")
+            raise ShareError(tr("This share file carries a voice Mix (.pt) and this machine's torch is older than 2.6, "
+                                "which can't load it safely. Upgrade torch to import it."))
         by_name = {}
         info = ShareInfo(path=os.path.abspath(path))
         for entry in entries:
@@ -523,26 +530,30 @@ def inspect_share(path: str) -> ShareInfo:
                     info.ignored += 1
                 continue
             if entry.file_size > _entry_cap(kind):
-                raise ShareError(f"Refusing to open: {entry.filename!r} is {entry.file_size // (1024 * 1024)} MB, "
-                                 f"over the {_entry_cap(kind) // (1024 * 1024) or 1} MB limit for that kind of file.")
+                raise ShareError(tr("Refusing to open: {filename!r} is {file_size} MB, "
+                                    "over the {entry_cap} MB limit for that kind of file.", filename=entry.filename,
+                                    file_size=entry.file_size // (1024 * 1024),
+                                    entry_cap=_entry_cap(kind) // (1024 * 1024) or 1))
             by_name[entry.filename.replace("\\", "/")] = (kind, entry)
         if SHARE_JSON not in by_name:
-            raise ShareError(f"{os.path.basename(path)} isn't a KokoroGUI share file (no {SHARE_JSON}).")
+            raise ShareError(tr("{file} isn't a KokoroGUI share file (no {share_json}).", file=os.path.basename(path),
+                                share_json=SHARE_JSON))
         manifest = _read_json(zf, by_name[SHARE_JSON][1], MAX_MANIFEST_BYTES)
         if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
-            raise ShareError(f"{os.path.basename(path)} isn't a KokoroGUI share file.")
+            raise ShareError(tr("{file} isn't a KokoroGUI share file.", file=os.path.basename(path)))
         version = manifest.get("version")
         if isinstance(version, bool) or not isinstance(version, int) or version > VERSION:
-            raise ShareError("This share file was made by a newer KokoroGUI. Update to import it.")
+            raise ShareError(tr("This share file was made by a newer KokoroGUI. Update to import it."))
 
         raw_characters = manifest.get("characters")
         for raw in raw_characters if isinstance(raw_characters, list) else []:
             if len(info.characters) >= MAX_CHARACTERS:
-                info.warnings.append(f"Only the first {MAX_CHARACTERS} characters are read.")
+                info.warnings.append(tr("Only the first {max_characters} characters are read.",
+                                        max_characters=MAX_CHARACTERS))
                 break
             character = clean_character(raw, info.warnings)
             if character is None:
-                info.warnings.append("A character with no usable name was ignored.")
+                info.warnings.append(tr("A character with no usable name was ignored."))
             else:
                 info.characters.append(character)
 
@@ -551,18 +562,18 @@ def inspect_share(path: str) -> ShareInfo:
             if kind[0] == "fx":
                 raw = _read_json(zf, entry, MAX_FX_BYTES)
                 if not isinstance(raw, dict):
-                    info.warnings.append(f"FX {kind[1]!r} isn't a readable FX file; ignored.")
+                    info.warnings.append(tr("FX {kind!r} isn't a readable FX file; ignored.", kind=kind[1]))
                     continue
                 info.fx[kind[1]] = filter_fx_preset_values(raw)
             elif kind[0] == "ir":
                 if not _looks_like_wav(zf, entry):
-                    info.warnings.append(f"Impulse response {kind[1]!r} isn't a wav file; ignored.")
+                    info.warnings.append(tr("Impulse response {kind!r} isn't a wav file; ignored.", kind=kind[1]))
                     continue
                 info.irs.append(kind[1])
             elif kind[0] == "voice":
                 _, engine_id, name, ext = kind
                 if ext == ".wav" and not _looks_like_wav(zf, entry):
-                    info.warnings.append(f"Voice file {name}.wav isn't a wav file; ignored.")
+                    info.warnings.append(tr("Voice file {name}.wav isn't a wav file; ignored.", name=name))
                     continue
                 voices.setdefault((engine_id, name), SharedVoice(engine_id, name)).files[ext] = entry_name
         info.voices = [voices[key] for key in sorted(voices)]
@@ -591,6 +602,7 @@ class ImportItem:
 @dataclass
 class ImportResult:
     imported: list = field(default_factory=list)  # one line per item written
+    imported_kinds: set = field(default_factory=set)  # the `KIND_*`s among them
     renamed: dict = field(default_factory=dict)  # key -> the name it was stored under
     skipped: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
@@ -660,21 +672,21 @@ def plan_import(info: ShareInfo, *, library, fx_dir: str | None = None, store_fo
     with zipfile.ZipFile(info.path) as zf:
         for name in sorted(info.fx):
             path = _inside(fx_dir, name, ".json")
-            item = ImportItem(KIND_FX, f"{KIND_FX}:{name}", name, label="FX")
+            item = ImportItem(KIND_FX, f"{KIND_FX}:{name}", name, label=tr("FX"))
             if path and os.path.isfile(path):
                 item.same = _fx_values_on_disk(path) == info.fx[name]
                 item.clash = not item.same
             items.append(item)
         for name in sorted(info.irs):
             path = _inside(os.path.join(fx_dir, "ir"), name, ".wav")
-            item = ImportItem(KIND_IR, f"{KIND_IR}:{name}", name, label="Impulse response")
+            item = ImportItem(KIND_IR, f"{KIND_IR}:{name}", name, label=tr("Impulse response"))
             if path and os.path.isfile(path):
                 item.same = _zip_matches_file(zf, f"fx/ir/{name}.wav", path)
                 item.clash = not item.same
             items.append(item)
         for voice in info.voices:
             item = ImportItem(KIND_VOICE, f"{KIND_VOICE}:{voice.engine_id}:{voice.name}", voice.name, voice.engine_id,
-                              "Mix" if ".pt" in voice.files else "Reference")
+                              tr("Mix") if ".pt" in voice.files else tr("Reference"))
             store = store_for(voice.engine_id)
             plan = _voice_plan(voice, store)
             if isinstance(plan, str):
@@ -684,7 +696,7 @@ def plan_import(info: ShareInfo, *, library, fx_dir: str | None = None, store_fo
                 for ext, entry_name in plan:
                     path = _inside(store.global_dir, voice.name, ext)
                     if path is None:
-                        item.unavailable = "its name can't be used as a file name"
+                        item.unavailable = tr("its name can't be used as a file name")
                         break
                     if not os.path.isfile(path):
                         states.append("new")
@@ -701,20 +713,20 @@ def _voice_plan(voice: SharedVoice, store):
     """`[(ext, entry name), ...]` for the files of `voice` its engine's store
     takes, or a string saying why none can be imported."""
     if store is None:
-        return f"{voice.engine_id} isn't installed here"
+        return tr("{engine_id} isn't installed here", engine_id=voice.engine_id)
     if hasattr(store, "extension"):  # EmbeddingStore: one file, the engine's extension
         entry_name = voice.files.get(store.extension)
-        return [(store.extension, entry_name)] if entry_name else "it has no file for this engine"
+        return [(store.extension, entry_name)] if entry_name else tr("it has no file for this engine")
     if hasattr(store, "requires_transcript"):  # ReferenceStore: a wav, and its transcript
         if ".wav" not in voice.files:
-            return "it has no wav"
+            return tr("it has no wav")
         plan = [(".wav", voice.files[".wav"])]
         if ".txt" in voice.files:
             plan.append((".txt", voice.files[".txt"]))
         elif store.requires_transcript:
-            return "it has no transcript"
+            return tr("it has no transcript")
         return plan
-    return f"{voice.engine_id} keeps no voice files"
+    return tr("{engine_id} keeps no voice files", engine_id=voice.engine_id)
 
 
 def _write_atomic(path: str, writer) -> None:
@@ -743,7 +755,7 @@ def _extract(zf: zipfile.ZipFile, entry_name: str, path: str, cap: int) -> None:
                     return
                 written += len(chunk)
                 if written > cap:
-                    raise ShareError(f"{entry_name!r} is bigger than it says.")
+                    raise ShareError(tr("{entry_name!r} is bigger than it says.", entry_name=entry_name))
                 out.write(chunk)
 
     _write_atomic(path, write)
@@ -810,22 +822,24 @@ def import_share(info: ShareInfo, choices: dict, *, library, fx_dir: str | None 
             stored = name if action == REPLACE else _free_name(name, lambda n: _taken(ir_dir, n, ".wav"))
             path = _inside(ir_dir, stored, ".wav")
             if path is None:
-                result.skipped.append(f"{name}: its name can't be used as a file name")
+                result.skipped.append(tr("{name}: its name can't be used as a file name", name=name))
                 continue
             try:
                 os.makedirs(ir_dir, exist_ok=True)
                 _extract(zf, f"fx/ir/{name}.wav", path, MAX_IR_BYTES)
             except (ShareError, OSError) as e:
-                result.warnings.append(f"Impulse response {name!r} wasn't imported ({e}).")
+                result.warnings.append(tr("Impulse response {name!r} wasn't imported ({error}).", name=name, error=e))
                 continue
             if not _ir_is_usable(path):
                 os.remove(path)
-                result.warnings.append(f"Impulse response {name!r} isn't audio the FX chain can load; left out.")
+                result.warnings.append(tr("Impulse response {name!r} isn't audio the FX chain can load; left out.",
+                                          name=name))
                 continue
             if stored != name:
                 ir_map[name] = stored
                 result.renamed[key] = stored
-            result.imported.append(f"Impulse response {stored}")
+            result.imported.append(tr("Impulse response {name}", name=stored))
+            result.imported_kinds.add(KIND_IR)
         for name in sorted(fresh.fx):
             key = f"{KIND_FX}:{name}"
             if items[key].same:
@@ -839,18 +853,19 @@ def import_share(info: ShareInfo, choices: dict, *, library, fx_dir: str | None 
             stored = name if action == REPLACE else _free_name(name, lambda n: _taken(fx_dir, n, ".json"))
             path = _inside(fx_dir, stored, ".json")
             if path is None:
-                result.skipped.append(f"{name}: its name can't be used as a file name")
+                result.skipped.append(tr("{name}: its name can't be used as a file name", name=name))
                 continue
             try:
                 os.makedirs(fx_dir, exist_ok=True)
                 _write_atomic(path, lambda f, v=values: f.write(json.dumps(v, indent=4).encode("utf-8")))
             except OSError as e:
-                result.warnings.append(f"FX {name!r} wasn't imported ({e}).")
+                result.warnings.append(tr("FX {name!r} wasn't imported ({error}).", name=name, error=e))
                 continue
             if stored != name:
                 fx_map[name] = stored
                 result.renamed[key] = stored
-            result.imported.append(f"FX {stored}")
+            result.imported.append(tr("FX {name}", name=stored))
+            result.imported_kinds.add(KIND_FX)
         for voice in fresh.voices:
             key = f"{KIND_VOICE}:{voice.engine_id}:{voice.name}"
             if items[key].same:
@@ -868,15 +883,16 @@ def import_share(info: ShareInfo, choices: dict, *, library, fx_dir: str | None 
                 for ext, entry_name in plan:
                     path = _inside(store.global_dir, stored, ext)
                     if path is None:
-                        raise ShareError("its name can't be used as a file name")
+                        raise ShareError(tr("its name can't be used as a file name"))
                     _extract(zf, entry_name, path, _VOICE_EXTENSIONS[ext])
             except (ShareError, OSError) as e:
-                result.warnings.append(f"Voice {voice.name!r} wasn't imported ({e}).")
+                result.warnings.append(tr("Voice {name!r} wasn't imported ({error}).", name=voice.name, error=e))
             else:
                 if stored != voice.name:
                     voice_map[(voice.engine_id, voice.name)] = stored
                     result.renamed[key] = stored
-                result.imported.append(f"Voice {stored} ({voice.engine_id})")
+                result.imported.append(tr("Voice {name} ({engine})", name=stored, engine=voice.engine_id))
+            result.imported_kinds.add(KIND_VOICE)
 
     existing = {c.name.casefold(): c for c in library.list()}
     for index, character in enumerate(fresh.characters):
@@ -900,5 +916,6 @@ def import_share(info: ShareInfo, choices: dict, *, library, fx_dir: str | None 
         existing[new.name.casefold()] = new
         if new.name != character.name:
             result.renamed[key] = new.name
-        result.imported.append(f"Character {new.name}")
+        result.imported.append(tr("Character {name}", name=new.name))
+        result.imported_kinds.add(KIND_CHARACTER)
     return result

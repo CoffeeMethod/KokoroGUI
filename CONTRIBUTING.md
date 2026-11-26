@@ -3,11 +3,28 @@
 Bug reports and pull requests are welcome. Questions go in Discussions, security reports through
 the Security tab (see [SECURITY.md](SECURITY.md)).
 
+## Which branch to work on
+
+`main` only changes when a release is merged into it. Don't push to `main`, and don't open a pull request against it.
+
+Work happens on a branch named after the next release, such as `4.0.0-beta.3`. Start from the one with the highest version
+number and open your pull request against it. Your change reaches `main` when that release is merged. This lists the release
+branches, highest version first:
+
+```bash
+git fetch origin
+git branch -r --list "origin/[0-9]*" --sort=-version:refname
+```
+
+Check again before you open the pull request, since a newer release branch may have appeared. If the highest one is already
+released (it has a tag by that name) and there's no newer one, ask in Discussions where your change should go.
+
 ## Setup
 
 ```bash
 git clone https://github.com/CoffeeMethod/KokoroGUI.git
 cd KokoroGUI
+git switch 4.0.0-beta.3                            # the latest release branch, see above
 python -m venv .venv && . .venv/Scripts/activate   # or .venv/bin/activate
 pip install -r requirements.txt -r requirements-test.txt
 python main.py
@@ -28,12 +45,11 @@ from your machine, so read it first.
 pytest
 ```
 
-That's the fast suite: the Kokoro pipeline is mocked, playback is mocked, no model download, runs
-in well under a minute. The Qt tests run headless (`tests/gui_qt/conftest.py` sets
+That's the fast suite: the Kokoro pipeline is mocked, playback is mocked, no model download. The Qt tests run headless (`tests/gui_qt/conftest.py` sets
 `QT_QPA_PLATFORM=offscreen`), so no display is needed. CI runs the suite on `windows-latest`,
 `ubuntu-latest` and `macos-latest` without `tests/gui_qt/` (`pytest --ignore=tests/gui_qt -p no:pytest-qt`). The GUI
 tests run in a separate `gui` job on Ubuntu, which is not a required check, so a red `gui` job doesn't block a merge.
-Run plain `pytest` before you push, `tests/gui_qt/` included (about 4 minutes).
+Run plain `pytest` before you push, `tests/gui_qt/` included (several minutes).
 
 Three conventions the suite enforces, all from `tests/conftest.py`:
 
@@ -65,9 +81,10 @@ opt-in. It isn't run in CI.
 
 ## Pull requests
 
-- Branch from `main`, one change per PR.
+- Branch from the latest release branch and target it, never `main` (see [Which branch to work on](#which-branch-to-work-on)).
+  One change per PR.
 - `pytest` green locally before you push (that includes `tests/gui_qt/`; CI runs it in a non-required job). CI has
-  to pass on both OSes to merge.
+  to pass on Windows, Linux and macOS to merge.
 - A new setting is threaded through `QtTTSApp._assemble_config` and covered in
   `tests/gui_qt/test_qt_config_assembly.py`.
 - Logic that isn't about widgets goes in `kokoro_gui/core/`, not in a dock or `app.py`. A dock reads its widgets into plain
@@ -75,11 +92,50 @@ opt-in. It isn't run in CI.
   `qt/app.py`, `qt/subprojects.py`, `qt/docks/` or `audio/transport.py`, and `tests/core/test_imports.py` and
   `tests/headless/test_imports.py` check that.
 - If a user can see the change, update two files: a one-line bullet in the README's "What's new"
-  (and its Features list if a line there is now wrong), and the full entry under "Unreleased" in
-  `docs/changes.html`.
+  (and its Features list if a line there is now wrong), and the full entry in the top version of
+  `docs/changes.html`. If that version already has a tag, start an "Unreleased" one above it.
 - Run `ruff check .` before a PR (`pip install -r requirements-test.txt` has it). It checks for
   syntax errors, undefined names, unused imports and variables, and mutable defaults, and CI runs
   it. There is no formatter: match the style of the file you're in.
+
+## Translations
+
+The interface's text is in `kokoro_gui/locales/`, one JSON file per language. `en.json` is the template, and the English text
+is the key. Start a language with its code and its own name:
+
+```bash
+python scripts/i18n.py new fr "Français"
+```
+
+Then fill in the empty strings in `kokoro_gui/locales/fr.json`, or give the file to a translator or an AI. A string left empty
+shows in English. The rules:
+
+- Change the values, never the keys.
+- Keep every `{placeholder}` as it is, `{seconds:.1f}` included. It can move within the sentence.
+- Keep the spaces and line breaks at the start and end of a string. Some strings are joined to others.
+- Keep HTML tags and their `href`. Keep file patterns such as `(*.wav)`, `;;` in a file dialog's list, and `[Speaker]:`.
+- `&` before a letter is the key that opens a menu entry (Alt+letter). Pick a letter of the translated word that no other entry
+  of that menu uses. `&&` is a plain ampersand.
+- `plurals` holds the forms the language needs (`one`, `few`, `many` and so on). `{n}` is the count. A form that says the
+  number in words can leave it out.
+- `"`, `\n` and `\\` stay escaped, since the file is JSON.
+
+```bash
+python scripts/i18n.py check fr
+```
+
+`check` lists what is missing or wrong. An entry with a wrong placeholder is skipped when the app loads the file, so that string
+shows in English. Pick the language in Options > Language and restart. A `new` file shows up there without a code change.
+
+When you write code:
+
+- Wrap text a person reads in `tr("...")`, with placeholders instead of an f-string: `tr("Saved {name}.", name=name)`. Use
+  `ntr("{n} clip", "{n} clips", count)` for a count.
+- A table built while a module loads marks its text with `N_("...")`, and whoever shows it calls `tr()`.
+- Text that is stored in a project or a settings file, sent to an engine or written into an exported file isn't translated.
+- Run `python scripts/i18n.py extract` after you add or change a string and commit the result. `tests/test_i18n.py` fails until
+  you do.
+- A button, field or menu entry gets a tooltip (`tests/gui_qt/test_language_and_tooltips.py`).
 
 ## Adding an engine
 

@@ -32,10 +32,14 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.daw import library_copy
+from kokoro_gui.i18n import N_, tr
 from kokoro_gui.qt import share_dialogs
 from kokoro_gui.qt.docks.scrolling import scrollable
 from kokoro_gui.qt.docks.voice_header import engine_header
 
+# (label, the engine's name for it): how two voices are combined.
+OPERATIONS = ((N_("mix"), "mix"), (N_("add"), "add"), (N_("subtract"), "subtract"), (N_("multiply"), "multiply"),
+              (N_("divide"), "divide"))
 # How long a keyboard or wheel change to the slider (or a combo) waits for
 # the next one before a live preview starts.
 LIVE_DEBOUNCE_MS = 400
@@ -55,7 +59,7 @@ class MixingDock(QDockWidget):
     mixFinished = Signal(bool, str)
 
     def __init__(self, app, parent=None):
-        super().__init__("Voices", parent)
+        super().__init__(tr("Voices"), parent)
         self.setObjectName("dock_mixing")
         self.app = app
         # The engine this editor was built for; app.py rebuilds the dock when
@@ -79,22 +83,26 @@ class MixingDock(QDockWidget):
         lang_items = list(self.backend.get_languages())
 
         sel_grid = QGridLayout()
-        sel_grid.addWidget(QLabel("Voice A:"), 0, 0)
+        sel_grid.addWidget(QLabel(tr("Voice A:")), 0, 0)
         self.lang_a_combo = QComboBox()
+        self.lang_a_combo.setToolTip(tr("Show only the voices of this language for voice A."))
         self.voice_a_combo = QComboBox()
+        self.voice_a_combo.setToolTip(tr("The first voice of the mix."))
         for label, code in lang_items:
-            self.lang_a_combo.addItem(label, code)
+            self.lang_a_combo.addItem(tr(label), code)
         self.lang_a_combo.currentIndexChanged.connect(lambda _i: self._refresh_voice_list(self.lang_a_combo, self.voice_a_combo))
         self.lang_a_combo.currentIndexChanged.connect(self._queue_live)
         self.voice_a_combo.currentTextChanged.connect(self._queue_live)
         sel_grid.addWidget(self.lang_a_combo, 0, 1)
         sel_grid.addWidget(self.voice_a_combo, 0, 2)
 
-        sel_grid.addWidget(QLabel("Voice B:"), 1, 0)
+        sel_grid.addWidget(QLabel(tr("Voice B:")), 1, 0)
         self.lang_b_combo = QComboBox()
+        self.lang_b_combo.setToolTip(tr("Show only the voices of this language for voice B."))
         self.voice_b_combo = QComboBox()
+        self.voice_b_combo.setToolTip(tr("The second voice of the mix."))
         for label, code in lang_items:
-            self.lang_b_combo.addItem(label, code)
+            self.lang_b_combo.addItem(tr(label), code)
         self.lang_b_combo.setCurrentIndex(0)
         self.lang_b_combo.currentIndexChanged.connect(lambda _i: self._refresh_voice_list(self.lang_b_combo, self.voice_b_combo))
         self.lang_b_combo.currentIndexChanged.connect(self._queue_live)
@@ -108,18 +116,21 @@ class MixingDock(QDockWidget):
             self.voice_b_combo.setCurrentIndex(1)
 
         op_row = QHBoxLayout()
-        op_row.addWidget(QLabel("Operation:"))
+        op_row.addWidget(QLabel(tr("Operation:")))
         self.op_combo = QComboBox()
-        self.op_combo.addItems(["mix", "add", "subtract", "multiply", "divide"])
+        self.op_combo.setToolTip(tr("How the two voices are combined. Mix blends them. The others are experiments."))
+        for label, op in OPERATIONS:
+            self.op_combo.addItem(tr(label), op)
         self.op_combo.currentTextChanged.connect(self._update_ratio_label)
         self.op_combo.currentTextChanged.connect(self._queue_live)
         op_row.addWidget(self.op_combo)
         op_row.addStretch(1)
         layout.addLayout(op_row)
 
-        self.ratio_label = QLabel("Mix: 50% A / 50% B")
+        self.ratio_label = QLabel(tr("Mix: 50% A / 50% B"))
         layout.addWidget(self.ratio_label)
         self.ratio_slider = QSlider(Qt.Orientation.Horizontal)
+        self.ratio_slider.setToolTip(tr("How much of each voice goes into the mix."))
         self.ratio_slider.setRange(0, 100)
         self.ratio_slider.setValue(50)
         self.ratio_slider.valueChanged.connect(self._update_ratio_label)
@@ -129,28 +140,32 @@ class MixingDock(QDockWidget):
         self._update_ratio_label()
 
         prev_row = QHBoxLayout()
-        prev_row.addWidget(QLabel("Preview Language:"))
+        prev_row.addWidget(QLabel(tr("Preview Language:")))
         self.preview_lang_combo = QComboBox()
+        self.preview_lang_combo.setToolTip(tr("The language the preview is spoken in."))
         for label, code in lang_items:
             self.preview_lang_combo.addItem(label, code)
         self.preview_lang_combo.currentIndexChanged.connect(self._queue_live)
         prev_row.addWidget(self.preview_lang_combo)
-        preview_btn = QPushButton("\U0001F50A Preview")
+        preview_btn = QPushButton(tr("\U0001F50A Preview"))
+        preview_btn.setToolTip(tr("Hear the mix without saving it."))
         preview_btn.clicked.connect(self.preview_mix)
         prev_row.addWidget(preview_btn)
-        self.live_check = QCheckBox("Live")
-        self.live_check.setToolTip("Preview again when you let go of the slider or change a voice, "
-                                   "a language or the operation.")
+        self.live_check = QCheckBox(tr("Live"))
+        self.live_check.setToolTip(tr("Preview again when you let go of the slider or change a voice, "
+                                      "a language or the operation."))
         self.live_check.toggled.connect(self._on_live_toggled)
         prev_row.addWidget(self.live_check)
         prev_row.addStretch(1)
         layout.addLayout(prev_row)
 
         save_row = QHBoxLayout()
-        save_row.addWidget(QLabel("Mix name:"))
+        save_row.addWidget(QLabel(tr("Mix name:")))
         self.mix_name_edit = QLineEdit()
+        self.mix_name_edit.setToolTip(tr("A name for the Mix: letters, digits, - and _."))
         save_row.addWidget(self.mix_name_edit, 1)
-        save_btn = QPushButton("Create && Save")
+        save_btn = QPushButton(tr("Create && Save"))
+        save_btn.setToolTip(tr("Save the mix as a voice that characters can use."))
         save_btn.clicked.connect(self.mix_voice_action)
         save_row.addWidget(save_btn)
         layout.addLayout(save_row)
@@ -158,7 +173,7 @@ class MixingDock(QDockWidget):
         self.mix_status_label = QLabel("")
         layout.addWidget(self.mix_status_label)
 
-        layout.addWidget(QLabel("<b>Mixes:</b>"))
+        layout.addWidget(QLabel(tr("<b>Mixes:</b>")))
         self.list_scroll = QScrollArea()
         self.list_scroll.setWidgetResizable(True)
         self.list_scroll.setMinimumHeight(120)
@@ -180,13 +195,13 @@ class MixingDock(QDockWidget):
 
     def _update_ratio_label(self, *_args) -> None:
         p = self.ratio_slider.value()
-        op = self.op_combo.currentText()
+        op = self.op_combo.currentData()
         if op == "mix":
-            self.ratio_label.setText(f"Mix: {100 - p}% A / {p}% B")
+            self.ratio_label.setText(tr("Mix: {a}% A / {b}% B", a=100 - p, b=p))
         elif op == "divide":
-            self.ratio_label.setText(f"Op: Divide | Influence: {p}% (unstable and VERY LOUD)")
+            self.ratio_label.setText(tr("Op: Divide | Influence: {percent}% (unstable and VERY LOUD)", percent=p))
         else:
-            self.ratio_label.setText(f"Op: {op.capitalize()} | Influence: {p}%")
+            self.ratio_label.setText(tr("Op: {capitalize} | Influence: {p}%", capitalize=op.capitalize(), p=p))
 
     def _refresh_voice_list(self, lang_combo: QComboBox, voice_combo: QComboBox) -> None:
         code = lang_combo.currentData()
@@ -216,7 +231,7 @@ class MixingDock(QDockWidget):
         saved = sorted(store.list_voices())
         project_only = [n for n in sorted(store.list_voices(self._project_dir())) if n not in saved]
         if not saved and not project_only:
-            self._list_layout.addWidget(QLabel("No Mixes yet."))
+            self._list_layout.addWidget(QLabel(tr("No Mixes yet.")))
         else:
             for cv in saved + project_only:
                 row = QFrame()
@@ -224,11 +239,12 @@ class MixingDock(QDockWidget):
                 row_layout.addWidget(QLabel(cv))
                 row_layout.addStretch(1)
                 if self._library_item(cv).status != library_copy.NOT_LOCAL:
-                    tag = QLabel("in this project")
-                    tag.setToolTip("This Mix came with the project. Right-click to save it to the library.")
+                    tag = QLabel(tr("in this project"))
+                    tag.setToolTip(tr("This Mix came with the project. Right-click to save it to the library."))
                     row_layout.addWidget(tag)
                 if cv in saved:
                     del_btn = QPushButton("X")
+                    del_btn.setToolTip(tr("Delete this Mix."))
                     del_btn.clicked.connect(lambda _c=False, v=cv: self.delete_custom_voice(v))
                     row_layout.addWidget(del_btn)
                 row.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -246,7 +262,7 @@ class MixingDock(QDockWidget):
         """Copies the project's own copy of Mix `name` into the library (plan 41).
         Returns the `CopyResult` or None."""
         return share_dialogs.save_items_to_library(self.app, self, [self._library_item(name)],
-                                                   title="Save Mix to library")
+                                                   title=tr("Save Mix to library"))
 
     def mix_menu(self, name: str):
         """The right-click menu of a Mix row."""
@@ -256,13 +272,14 @@ class MixingDock(QDockWidget):
         self.mix_menu(name).exec(row.mapToGlobal(pos))
 
     def delete_custom_voice(self, name: str) -> None:
-        if QMessageBox.question(self, "Confirm", f"Delete Mix '{name}'?") != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, tr("Confirm"), tr("Delete Mix '{name}'?",
+                                                        name=name)) != QMessageBox.StandardButton.Yes:
             return
         try:
             self.backend.voice_store.delete(name)
             self.refresh_voice_lists()
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to delete: {e}")
+            QMessageBox.critical(self, tr("Error"), tr("Failed to delete: {error}", error=e))
 
     # -- preview --------------------------------------------------------------
 
@@ -272,7 +289,7 @@ class MixingDock(QDockWidget):
 
     def _live_signature(self) -> tuple:
         return (self.voice_a_combo.currentText(), self.voice_b_combo.currentText(), self._ratio_value(),
-                self.op_combo.currentText(), self.preview_lang_combo.currentData())
+                self.op_combo.currentData(), self.preview_lang_combo.currentData())
 
     def _on_live_toggled(self, on: bool) -> None:
         self._live_timer.stop()
@@ -305,7 +322,7 @@ class MixingDock(QDockWidget):
         v1 = self.voice_a_combo.currentText()
         v2 = self.voice_b_combo.currentText()
         ratio = self._ratio_value()
-        op = self.op_combo.currentText()
+        op = self.op_combo.currentData()
         preview_lang = self.preview_lang_combo.currentData()
         backend = self.backend
 
@@ -322,7 +339,7 @@ class MixingDock(QDockWidget):
         os.close(fd)
         self._preview_path = tmp_audio_path
 
-        self.mix_status_label.setText("Generating preview...")
+        self.mix_status_label.setText(tr("Generating preview..."))
 
         async def _run_preview():
             # In memory: nothing lands in the voice store.
@@ -330,7 +347,7 @@ class MixingDock(QDockWidget):
             if not success:
                 return False, msg
             success = await backend.preview_mix(tensor, tmp_voice_name, text, tmp_audio_path, preview_lang)
-            return success, "" if success else "The engine made no audio."
+            return success, "" if success else tr("The engine made no audio.")
 
         def _done(future):
             try:
@@ -370,30 +387,31 @@ class MixingDock(QDockWidget):
                 self._remove_file(path)
             return
         if success:
-            self.mix_status_label.setText("Playing preview...")
+            self.mix_status_label.setText(tr("Playing preview..."))
             playback.stop()
             playback.play(path)
         else:
-            self.mix_status_label.setText(f"Preview failed: {err}")
+            self.mix_status_label.setText(tr("Preview failed: {error}", error=err))
 
     def mix_voice_action(self) -> None:
         v1 = self.voice_a_combo.currentText()
         v2 = self.voice_b_combo.currentText()
         ratio = self._ratio_value()
-        op = self.op_combo.currentText()
+        op = self.op_combo.currentData()
         name = self.mix_name_edit.text().strip()
 
         if not name:
-            QMessageBox.warning(self, "Error", "Please enter a name for the new Mix.")
+            QMessageBox.warning(self, tr("Error"), tr("Please enter a name for the new Mix."))
             return
         if not re.match(r"^[a-zA-Z0-9_-]+$", name):
-            QMessageBox.warning(self, "Error", "Invalid name. Use alphanumeric, _, - only.")
+            QMessageBox.warning(self, tr("Error"), tr("Invalid name. Use alphanumeric, _, - only."))
             return
         if name in self.app.get_all_voices(backend=self.backend):
-            if QMessageBox.question(self, "Overwrite", f"Mix '{name}' exists. Overwrite?") != QMessageBox.StandardButton.Yes:
+            if QMessageBox.question(self, tr("Overwrite"), tr("Mix '{name}' exists. Overwrite?",
+                                                              name=name)) != QMessageBox.StandardButton.Yes:
                 return
 
-        self.mix_status_label.setText("Mixing...")
+        self.mix_status_label.setText(tr("Mixing..."))
         self.app.set_ui_state(True)
         self._pending_name = name
 
@@ -411,7 +429,7 @@ class MixingDock(QDockWidget):
     def _on_mix_finished(self, success: bool, msg: str) -> None:
         self.app.set_ui_state(False)
         if success:
-            self.mix_status_label.setText(f"Saved: {self._pending_name}")
+            self.mix_status_label.setText(tr("Saved: {pending_name}", pending_name=self._pending_name))
             self.refresh_voice_lists()
         else:
-            self.mix_status_label.setText(f"Error: {msg}")
+            self.mix_status_label.setText(tr("Error: {msg}", msg=msg))

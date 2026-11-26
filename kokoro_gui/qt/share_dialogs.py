@@ -31,9 +31,13 @@ from PySide6.QtWidgets import (
 
 from kokoro_gui.daw import library_copy, revision, share
 from kokoro_gui.engines import registry
+from kokoro_gui.i18n import N_, ntr, tr
 
-FILE_FILTER = f"KokoroGUI share files (*{share.EXTENSION});;All files (*)"
-_CHOICES = (("Keep both", share.KEEP), ("Replace", share.REPLACE), ("Skip", share.SKIP))
+_CHOICES = ((N_("Keep both"), share.KEEP), (N_("Replace"), share.REPLACE), (N_("Skip"), share.SKIP))
+
+
+def file_filter() -> str:
+    return tr("KokoroGUI share files (*{extension});;All files (*)", extension=share.EXTENSION)
 
 
 class ExportShareDialog(QDialog):
@@ -43,16 +47,18 @@ class ExportShareDialog(QDialog):
     start (all of them when empty). `selected_characters()`,
     `selected_fx()` and `options()` are the answers."""
 
-    def __init__(self, parent, characters=(), fx_names=(), preselect=(), title: str = "Export"):
+    def __init__(self, parent, characters=(), fx_names=(), preselect=(), title: str = ""):
         super().__init__(parent)
-        self.setWindowTitle(title)
+        self.setWindowTitle(title or tr("Export"))
         self.resize(380, 420)
         self._characters = list(characters)
         layout = QVBoxLayout(self)
         self.character_list = QListWidget()
+        self.character_list.setToolTip(tr("The characters to put in the file."))
         self.fx_list = QListWidget()
+        self.fx_list.setToolTip(tr("The FX to put in the file."))
         if self._characters:
-            layout.addWidget(QLabel("Characters to export:"))
+            layout.addWidget(QLabel(tr("Characters to export:")))
             for character in self._characters:
                 item = QListWidgetItem(character.name)
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -63,7 +69,7 @@ class ExportShareDialog(QDialog):
         else:
             self.character_list.hide()
         if fx_names:
-            layout.addWidget(QLabel("FX to export:"))
+            layout.addWidget(QLabel(tr("FX to export:")))
             for name in fx_names:
                 item = QListWidgetItem(name)
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -73,9 +79,11 @@ class ExportShareDialog(QDialog):
             layout.addWidget(self.fx_list, 1)
         else:
             self.fx_list.hide()
-        self.include_fx = QCheckBox("Include the FX these characters use")
+        self.include_fx = QCheckBox(tr("Include the FX these characters use"))
+        self.include_fx.setToolTip(tr("Add the FX the ticked characters use, with their impulse responses."))
         self.include_fx.setChecked(True)
-        self.include_voices = QCheckBox("Include their voice files (Mixes and References)")
+        self.include_voices = QCheckBox(tr("Include their voice files (Mixes and References)"))
+        self.include_voices.setToolTip(tr("Add the voice files, so the characters sound the same on another machine."))
         self.include_voices.setChecked(True)
         if self._characters:
             layout.addWidget(self.include_fx)
@@ -83,7 +91,7 @@ class ExportShareDialog(QDialog):
         else:
             self.include_fx.hide()
             self.include_voices.hide()
-        layout.addWidget(QLabel("A voice file is the voice itself. Leave it out if the other person has it."))
+        layout.addWidget(QLabel(tr("A voice file is the voice itself. Leave it out if the other person has it.")))
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
@@ -118,17 +126,18 @@ class ImportShareDialog(QDialog):
     only). `choices()` maps each ticked row's key to Keep both, Replace or
     Skip."""
 
-    COLUMNS = ["Import", "Kind", "Name", "If the name is taken"]
+    COLUMNS = [N_("Import"), N_("Kind"), N_("Name"), N_("If the name is taken")]
 
-    def __init__(self, parent, info, items, kinds=None, title: str = "Import", header: str | None = None):
+    def __init__(self, parent, info, items, kinds=None, title: str = "", header: str | None = None):
         super().__init__(parent)
-        self.setWindowTitle(title)
+        self.setWindowTitle(title or tr("Import"))
         self.resize(560, 380)
         self.items = [item for item in items if kinds is None or item.kind in kinds]
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(header or f"{os.path.basename(info.path)} holds:"))
+        layout.addWidget(QLabel(header or tr("{file} holds:", file=os.path.basename(info.path))))
         self.table = QTableWidget(len(self.items), 4)
-        self.table.setHorizontalHeaderLabels(self.COLUMNS)
+        self.table.setToolTip(tr("Tick what to take."))
+        self.table.setHorizontalHeaderLabels([tr(name) for name in self.COLUMNS])
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
@@ -139,15 +148,17 @@ class ImportShareDialog(QDialog):
         layout.addWidget(self.table, 1)
         notes = list(info.warnings)
         if info.ignored:
-            notes.append(f"{info.ignored} other file{'s' if info.ignored != 1 else ''} in it will not be used.")
+            notes.append(ntr("{n} other file in it will not be used.", "{n} other files in it will not be used.",
+                             info.ignored))
         self.notes = QPlainTextEdit("\n".join(notes))
+        self.notes.setToolTip(tr("What in this file can't be used, and why."))
         self.notes.setReadOnly(True)
         self.notes.setMaximumHeight(70)
         self.notes.setVisible(bool(notes))
         layout.addWidget(self.notes)
         if "character" in {item.kind for item in self.items}:
-            layout.addWidget(QLabel("Imported characters go into the character library. "
-                                    "Add > From library... puts them in a project."))
+            layout.addWidget(QLabel(tr("Imported characters go into the character library. "
+                                       "Add > From library... puts them in a project.")))
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
@@ -169,19 +180,20 @@ class ImportShareDialog(QDialog):
             cell.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self.table.setItem(row, column, cell)
         if item.unavailable:
-            self.table.setItem(row, 3, self._note(f"Can't import: {item.unavailable}"))
+            self.table.setItem(row, 3, self._note(tr("Can't import: {unavailable}", unavailable=item.unavailable)))
         elif item.same:
-            self.table.setItem(row, 3, self._note(self.SAME_NOTE))
+            self.table.setItem(row, 3, self._note(tr(self.SAME_NOTE)))
         elif item.clash:
             combo = QComboBox()
+            combo.setToolTip(tr("What to do when the name is already taken."))
             for label, value in _CHOICES:
-                combo.addItem(label, value)
+                combo.addItem(tr(label), value)
             self.table.setCellWidget(row, 3, combo)
             self._combos[item.key] = combo
         else:
             self.table.setItem(row, 3, self._note(""))
 
-    SAME_NOTE = "Already here"
+    SAME_NOTE = N_("Already here")
 
     @staticmethod
     def _note(text: str) -> QTableWidgetItem:
@@ -214,25 +226,27 @@ class SaveToLibraryDialog(ImportShareDialog):
     a different form a choice: Keep both, Replace, Skip. `choices()` is the
     same map."""
 
-    COLUMNS = ["Save", "Kind", "Name", "If the library has one"]
-    SAME_NOTE = "The library has it"
+    COLUMNS = [N_("Save"), N_("Kind"), N_("Name"), N_("If the library has one")]
+    SAME_NOTE = N_("The library has it")
 
-    def __init__(self, parent, items, title: str = "Save to library"):
-        super().__init__(parent, _NoInfo(), items, None, title, header="This project carries:")
+    def __init__(self, parent, items, title: str = ""):
+        super().__init__(parent, _NoInfo(), items, None, title or tr("Save to library"),
+                         header=tr("This project carries:"))
 
 
-def save_items_to_library(app, parent, items, *, title: str = "Save to library"):
+def save_items_to_library(app, parent, items, *, title: str = ""):
     """Copies project-local `items` into the library. Asks only when one of them
     differs from the library's copy of the same name. Returns the
     `CopyResult`, or None when there was nothing to save or the user
     cancelled. Says what happened in a message."""
+    title = title or tr("Save to library")
     items = [item for item in items if item.status != library_copy.NOT_LOCAL]
     if not items:
-        QMessageBox.information(parent, title, "Everything here is already stored outside this project.")
+        QMessageBox.information(parent, title, tr("Everything here is already stored outside this project."))
         return None
     if all(item.same for item in items):
-        QMessageBox.information(parent, title, "The library already has "
-                                + ("this" if len(items) == 1 else "all of these") + ".")
+        QMessageBox.information(parent, title, tr("The library already has this.") if len(items) == 1
+                                else tr("The library already has all of these."))
         return None
     choices: dict = {}
     if any(item.clash for item in items):
@@ -247,8 +261,8 @@ def save_items_to_library(app, parent, items, *, title: str = "Save to library")
         app.refresh_voice_choices()
     if app.fx_dock is not None and any(item.kind != share.KIND_VOICE for item in items):
         app.fx_dock.refresh_presets()
-    lines = [f"Saved {len(result.saved)} item{'s' if len(result.saved) != 1 else ''} to the library."
-             if result.saved else "Nothing was saved."]
+    lines = [ntr("Saved {n} item to the library.", "Saved {n} items to the library.", len(result.saved))
+             if result.saved else tr("Nothing was saved.")]
     lines.extend(result.saved)
     lines.extend(result.skipped)
     lines.extend(result.warnings)
@@ -261,13 +275,15 @@ def library_menu(parent, items, on_save) -> QMenu:
     live only while `items` (`library_copy.LibraryItem`s) holds something the
     library lacks or holds differently. `on_save()` runs when it is chosen."""
     menu = QMenu(parent)
+    menu.setToolTipsVisible(True)
     local = [item for item in items if item.status != library_copy.NOT_LOCAL]
-    action = menu.addAction("Save to library")
+    action = menu.addAction(tr("Save to library"))
+    action.setToolTip(tr("Copy it out of this project, so other projects can use it."))
     if not local:
-        action.setText("Save to library (not stored in this project)")
+        action.setText(tr("Save to library (not stored in this project)"))
         action.setEnabled(False)
     elif all(item.same for item in local):
-        action.setText("Save to library (the library has it)")
+        action.setText(tr("Save to library (the library has it)"))
         action.setEnabled(False)
     else:
         action.triggered.connect(lambda _checked=False: on_save())
@@ -297,26 +313,26 @@ def _refresh_after_import(app, result) -> None:
     """Every list that could show what came in: voices, the FX combos, the
     linked characters (a replaced library entry reaches the open project)."""
     revision.bump_files()
-    if any(line.startswith("Voice ") for line in result.imported):
+    if share.KIND_VOICE in result.imported_kinds:
         app.refresh_voice_choices()
     if app.fx_dock is not None:
         app.fx_dock.refresh_presets()
-    if any(line.startswith("Character ") for line in result.imported):
+    if share.KIND_CHARACTER in result.imported_kinds:
         app.resolve_library()
 
 
-def export_to_file(app, parent, *, characters=(), fx_names=(), preselect=(), title: str = "Export Characters",
-                   path: str | None = None):
+def export_to_file(app, parent, *, characters=(), fx_names=(), preselect=(), title: str = "", path: str | None = None):
     """Asks what to put in, where to save it, and writes it. Returns the
     `ExportReport`, or None when the user cancelled or the export failed (a
     message says why). `path` skips the save dialog."""
+    title = title or tr("Export Characters")
     dialog = ExportShareDialog(parent, characters, fx_names, preselect, title)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return None
     chosen, chosen_fx = dialog.selected_characters(), dialog.selected_fx()
     include_fx, include_voices = dialog.options()
     if path is None:
-        path, _filter = QFileDialog.getSaveFileName(parent, title, _default_file_name(chosen, chosen_fx), FILE_FILTER)
+        path, _filter = QFileDialog.getSaveFileName(parent, title, _default_file_name(chosen, chosen_fx), file_filter())
         if not path:
             return None
     if not path.lower().endswith(share.EXTENSION):
@@ -326,31 +342,33 @@ def export_to_file(app, parent, *, characters=(), fx_names=(), preselect=(), tit
                                     include_voices=include_voices, project_dir=getattr(app, "project_dir", None),
                                     fx_dir=_fx_dir())
     except (share.ShareError, OSError) as e:
-        QMessageBox.critical(parent, title, f"Couldn't write the share file: {e}")
+        QMessageBox.critical(parent, title, tr("Couldn't write the share file: {error}", error=e))
         return None
     parts = []
     if report.characters:
-        parts.append(f"{report.characters} character{'s' if report.characters != 1 else ''}")
+        parts.append(ntr("{n} character", "{n} characters", report.characters))
     if report.fx:
-        parts.append(f"{len(report.fx)} FX")
+        parts.append(tr("{count} FX", count=len(report.fx)))
     if report.irs:
-        parts.append(f"{len(report.irs)} impulse response{'s' if len(report.irs) != 1 else ''}")
+        parts.append(ntr("{n} impulse response", "{n} impulse responses", len(report.irs)))
     if report.voices:
-        parts.append(f"{len(report.voices)} voice{'s' if len(report.voices) != 1 else ''}")
-    message = f"Saved {', '.join(parts) or 'an empty share file'} to {os.path.basename(path)}."
+        parts.append(ntr("{n} voice", "{n} voices", len(report.voices)))
+    message = tr("Saved {what} to {file}.", what=", ".join(parts) or tr("an empty share file"),
+                 file=os.path.basename(path))
     if report.warnings:
         message += "\n\n" + "\n".join(report.warnings)
     QMessageBox.information(parent, title, message)
     return report
 
 
-def import_from_file(app, parent, *, kinds=None, title: str = "Import Characters", path: str | None = None):
+def import_from_file(app, parent, *, kinds=None, title: str = "", path: str | None = None):
     """Asks for a share file, shows what it holds and imports the ticked
     rows. Returns the `ImportResult`, or None when the user cancelled or the
     file was refused (a message says why). `kinds` limits the rows
     (`share.KIND_*`); `path` skips the open dialog."""
+    title = title or tr("Import Characters")
     if path is None:
-        path, _filter = QFileDialog.getOpenFileName(parent, title, "", FILE_FILTER)
+        path, _filter = QFileDialog.getOpenFileName(parent, title, "", file_filter())
         if not path:
             return None
     try:
@@ -361,7 +379,7 @@ def import_from_file(app, parent, *, kinds=None, title: str = "Import Characters
     items = share.plan_import(info, library=app.character_library, fx_dir=_fx_dir())
     dialog = ImportShareDialog(parent, info, items, kinds, title)
     if not dialog.items:
-        QMessageBox.information(parent, title, "There is nothing of that kind in this share file.")
+        QMessageBox.information(parent, title, tr("There is nothing of that kind in this share file."))
         return None
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return None
@@ -371,10 +389,10 @@ def import_from_file(app, parent, *, kinds=None, title: str = "Import Characters
     try:
         result = share.import_share(info, choices, library=app.character_library, fx_dir=_fx_dir())
     except (share.ShareError, OSError) as e:
-        QMessageBox.critical(parent, title, f"Nothing was imported: {e}")
+        QMessageBox.critical(parent, title, tr("Nothing was imported: {error}", error=e))
         return None
     _refresh_after_import(app, result)
-    lines = [f"Imported {len(result.imported)} item{'s' if len(result.imported) != 1 else ''}."]
+    lines = [ntr("Imported {n} item.", "Imported {n} items.", len(result.imported))]
     lines.extend(result.imported)
     lines.extend(result.skipped)
     lines.extend(result.warnings)

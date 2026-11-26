@@ -31,15 +31,20 @@ from PySide6.QtWidgets import (
 )
 
 from kokoro_gui.daw import textsearch
+from kokoro_gui.i18n import N_, ntr, tr
 
 SEARCH_DEBOUNCE_MS = 150
 # The longest selection a Ctrl+F carries into the find field.
 MAX_PREFILL = 200
-BUSY_TEXT = "Paused while a generate runs"
+BUSY_TEXT = N_("Paused while a generate runs")
 
 
-def _count(n: int, one: str, many: str) -> str:
-    return f"{n} {one if n == 1 else many}"
+def _matches(n: int) -> str:
+    return ntr("{n} match", "{n} matches", n)
+
+
+def _clips(n: int) -> str:
+    return ntr("{n} clip", "{n} clips", n)
 
 
 def summary_text(plans: list, closed: int = 0) -> str:
@@ -51,14 +56,14 @@ def summary_text(plans: list, closed: int = 0) -> str:
     clips = sum(p.clips for p in plans)
     stale = sum(p.stale for p in plans)
     recordings = sum(p.recordings for p in plans)
-    text = f"Replaces {_count(matches, 'match', 'matches')} in {_count(clips, 'clip', 'clips')}"
+    text = tr("Replaces {matches} in {clips}", matches=_matches(matches), clips=_clips(clips))
     if len(plans) > 1:
-        text += f" across {len(plans)} projects"
+        text += tr(" across {count} projects", count=len(plans))
     text += "."
     if stale:
-        text += f" {_count(stale, 'clip', 'clips')} will turn stale."
+        text += tr(" {clips} will turn stale.", clips=_clips(stale))
     if recordings:
-        text += f" {_count(recordings, 'recording', 'recordings')} will split."
+        text += ntr(" {n} recording will split.", " {n} recordings will split.", recordings)
     return text
 
 
@@ -90,24 +95,27 @@ class FindBar(QWidget):
 
         top = QHBoxLayout()
         self.find_edit = QLineEdit()
-        self.find_edit.setPlaceholderText("Find")
+        self.find_edit.setToolTip(tr("The text to look for."))
+        self.find_edit.setPlaceholderText(tr("Find"))
         self.find_edit.setClearButtonEnabled(True)
         self.find_edit.setMinimumWidth(80)
         top.addWidget(self.find_edit, 1)
-        self.match_case_check = QCheckBox("Match case")
-        self.whole_word_check = QCheckBox("Whole word")
+        self.match_case_check = QCheckBox(tr("Match case"))
+        self.match_case_check.setToolTip(tr("Tell capital and small letters apart."))
+        self.whole_word_check = QCheckBox(tr("Whole word"))
+        self.whole_word_check.setToolTip(tr("Skip matches inside longer words."))
         top.addWidget(self.match_case_check)
         top.addWidget(self.whole_word_check)
         self.counter_label = QLabel()
         self.counter_label.setProperty("muted", True)
         self.counter_label.setMinimumWidth(70)
         top.addWidget(self.counter_label)
-        self.previous_btn = QPushButton("Previous")
-        self.previous_btn.setToolTip("The match before this one (Shift+F3, Shift+Enter).")
-        self.next_btn = QPushButton("Next")
-        self.next_btn.setToolTip("The next match (F3, Enter).")
-        self.close_btn = QPushButton("Close")
-        self.close_btn.setToolTip("Close the find bar (Esc).")
+        self.previous_btn = QPushButton(tr("Previous"))
+        self.previous_btn.setToolTip(tr("The match before this one (Shift+F3, Shift+Enter)."))
+        self.next_btn = QPushButton(tr("Next"))
+        self.next_btn.setToolTip(tr("The next match (F3, Enter)."))
+        self.close_btn = QPushButton(tr("Close"))
+        self.close_btn.setToolTip(tr("Close the find bar (Esc)."))
         for button in (self.previous_btn, self.next_btn, self.close_btn):
             top.addWidget(button)
         layout.addLayout(top)
@@ -116,13 +124,15 @@ class FindBar(QWidget):
         replace_layout = QHBoxLayout(self.replace_row)
         replace_layout.setContentsMargins(0, 0, 0, 0)
         self.replace_edit = QLineEdit()
-        self.replace_edit.setPlaceholderText("Replace with")
+        self.replace_edit.setToolTip(tr("What to put in place of each match."))
+        self.replace_edit.setPlaceholderText(tr("Replace with"))
         self.replace_edit.setMinimumWidth(80)
         replace_layout.addWidget(self.replace_edit, 1)
-        self.replace_btn = QPushButton("Replace")
-        self.replace_btn.setToolTip("Replace the selected match and go to the next one.")
-        self.replace_all_btn = QPushButton("Replace all")
-        self.replace_all_btn.setToolTip("Replace every match in every searched project. Each project undoes on its own.")
+        self.replace_btn = QPushButton(tr("Replace"))
+        self.replace_btn.setToolTip(tr("Replace the selected match and go to the next one."))
+        self.replace_all_btn = QPushButton(tr("Replace all"))
+        self.replace_all_btn.setToolTip(tr("Replace every match in every searched project. Each project undoes on "
+                                           "its own."))
         replace_layout.addWidget(self.replace_btn)
         replace_layout.addWidget(self.replace_all_btn)
         layout.addWidget(self.replace_row)
@@ -135,7 +145,7 @@ class FindBar(QWidget):
         self.projects_list = QListWidget()
         self.projects_list.setObjectName("find_projects")
         self.projects_list.setMaximumHeight(84)
-        self.projects_list.setToolTip("Matches in the other projects. Double-click one to show it.")
+        self.projects_list.setToolTip(tr("Matches in the other projects. Double-click one to show it."))
         layout.addWidget(self.projects_list)
         self.closed_label = QLabel()
         self.closed_label.setProperty("muted", True)
@@ -307,26 +317,27 @@ class FindBar(QWidget):
             self.editor.set_find_matches(self._hits, current)
         needle = self.find_edit.text()
         if self._busy:
-            self.counter_label.setText(BUSY_TEXT)
+            self.counter_label.setText(tr(BUSY_TEXT))
         elif not needle:
             self.counter_label.setText("")
         elif not self._hits:
-            self.counter_label.setText("No matches")
+            self.counter_label.setText(tr("No matches"))
         elif current is None:
-            self.counter_label.setText(_count(len(self._hits), "match", "matches"))
+            self.counter_label.setText(_matches(len(self._hits)))
         else:
-            self.counter_label.setText(f"{current + 1} of {len(self._hits)}")
+            self.counter_label.setText(tr("{current} of {count}", current=current + 1, count=len(self._hits)))
         has_hits = bool(self._hits)
         self.next_btn.setEnabled(has_hits)
         self.previous_btn.setEnabled(has_hits)
         self.projects_list.clear()
         for project, hits in self._others:
-            item = QListWidgetItem(f"{project.title()}: {_count(len(hits), 'match', 'matches')}")
+            item = QListWidgetItem(f"{project.title()}: {_matches(len(hits))}")
             item.setData(Qt.ItemDataRole.UserRole, project.project_id)
             self.projects_list.addItem(item)
         self.projects_list.setVisible(bool(self._others))
         self.closed_label.setText(
-            f"{_count(self._closed_children, 'subproject', 'subprojects')} not opened, so not searched."
+            ntr("{n} subproject not opened, so not searched.", "{n} subprojects not opened, so not searched.",
+                self._closed_children)
             if self._closed_children and needle and not self._busy else "")
         self.closed_label.setVisible(bool(self.closed_label.text()))
         self._update_summary()
@@ -422,9 +433,9 @@ class FindBar(QWidget):
         if others:
             names = ", ".join(f"{project.title()} ({plan.matches})" for project, plan in others)
             answer = QMessageBox.question(
-                self.app, "Replace all",
-                summary_text([plan for _project, plan in plans]) + f"\n\nIn the other projects: {names}.\n"
-                "Each project undoes its own replacement.")
+                self.app, tr("Replace all"),
+                summary_text([plan for _project, plan in plans]) + tr("\n\nIn the other projects: {names}.\n"
+                   "Each project undoes its own replacement.", names=names))
             if answer != QMessageBox.StandardButton.Yes:
                 return 0
         replaced = 0
@@ -442,10 +453,10 @@ class FindBar(QWidget):
             QApplication.restoreOverrideCursor()
         clips = sum(plan.clips for _project, plan in plans)
         stale = sum(plan.stale for _project, plan in plans)
-        message = f"Replaced {_count(replaced, 'match', 'matches')} in {_count(clips, 'clip', 'clips')}"
+        message = tr("Replaced {matches} in {clips}", matches=_matches(replaced), clips=_clips(clips))
         if len(plans) > 1:
-            message += f" across {len(plans)} projects"
-        message += f"; {_count(stale, 'clip', 'clips')} turned stale." if stale else "."
+            message += tr(" across {count} projects", count=len(plans))
+        message += tr("; {clips} turned stale.", clips=_clips(stale)) if stale else "."
         self.app.set_status(message, "success")
         self.app.schedule_save()
         self.app.refresh_timeline()
